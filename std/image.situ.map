@@ -71,6 +71,10 @@ struct image_header size=20 repr=ValueConverted atomic=NonAtomic
   image_header.section_count             offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   image_header.section_offset            offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
+struct image_holds size=8 repr=ValueConverted
+  image_holds.placement                  offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_holds.shape                      offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
 struct image_index size=16 repr=ValueConverted atomic=NonAtomic
   image_index.placement                  offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_index.entry_bits                 offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

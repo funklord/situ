@@ -118,6 +118,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	holds_of,
 	walks_to_the_frame_end,
 	inside_a_nested_member,
 )
@@ -634,6 +635,7 @@ class Emitter:
 				lines.extend(self._no_parameter_accessor(struct, entry))
 				continue
 			lines.extend(self._getter(struct, entry))
+			lines.extend(self._holds_view(struct, entry.placement))
 
 		lines.extend(self._region_runs(struct))
 		lines.extend(self._nested_text_values(struct))
@@ -9586,7 +9588,8 @@ class Emitter:
 		"""
 		groups: list[tuple[str, list[str]]] = []
 		for entry in own_entries(struct):
-			lines = self._member_checks(struct, entry)
+			lines = [*self._member_checks(struct, entry),
+			         *self._holds_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue
@@ -10172,6 +10175,30 @@ class Emitter:
 	def _rust_type(self, scalar: ScalarType) -> str:
 		width = _storage_width(scalar.bits)
 		return f"i{width}" if scalar.signed else f"u{width}"
+
+	def _holds_view(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
+		held = holds_of(placement)
+		if held is None:
+			return []
+		name  = _ident(local_name(struct, placement))
+		child = _pascal(held)
+		return [
+			"",
+			f"\t/// The `{held}` {placement.path} holds, framed by its bytes.",
+			f"\tpub fn {name}_view(&self) -> Result<{child}<'_>> {{",
+			f"\t\t{child}::new(self.{name}())",
+			"\t}",
+		]
+
+	def _holds_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What a held struct says about the bytes that frame it (26.898)."""
+		if holds_of(placement) is None:
+			return []
+		name = _ident(local_name(struct, placement))
+		return [f"\t\tself.{name}_view()?.validate()?;"]
 
 	def _member_checks(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:

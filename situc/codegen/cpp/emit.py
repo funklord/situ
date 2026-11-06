@@ -124,6 +124,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	holds_of,
 	walks_to_the_frame_end,
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
@@ -7068,7 +7069,8 @@ class Emitter:
 		`http.request_line.method` had a span, a length, no setter and nothing
 		saying so (26.35).
 		"""
-		lines  = self._member(struct, entry)
+		lines  = [*self._member(struct, entry),
+		          *self._holds_view(struct, entry.placement)]
 		mutate = entry.vector.get(Axis.MUTATE)
 
 		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
@@ -9461,6 +9463,54 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _holds_view(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
+		held = holds_of(placement)
+		if held is None:
+			return []
+		name  = bare_name(local_name(struct, placement))
+		child = f"::{self.namespace}::{self._struct_class(held)}"
+		return [
+			"",
+			f"\t/** The `{held}` {placement.path} holds, framed by its bytes. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_view({child} &out)"
+			" const noexcept",
+			"\t{",
+			"\t\tsitu_view_t raw;",
+			"\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(),",
+			f"\t\t\t{name}_offset(),"
+			f" static_cast<std::uint32_t>({name}().size()), &raw);",
+			"",
+			"\t\tif (e == SITU_OK) {",
+			f"\t\t\tout = {child}(raw);",
+			"\t\t}",
+			"\t\treturn static_cast<::situ::rt::err>(e);",
+			"\t}",
+		]
+
+	def _holds_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What a held struct says about the bytes that frame it (26.898)."""
+		held = holds_of(placement)
+		if held is None:
+			return []
+		name  = bare_name(local_name(struct, placement))
+		child = f"::{self.namespace}::{self._struct_class(held)}"
+		return [
+			"\t\t{",
+			f"\t\t\t{child} _held;",
+			f"\t\t\tif (const ::situ::rt::err e = this->{name}_view(_held);"
+			" e != ::situ::rt::err::ok) {",
+			"\t\t\t\treturn e;",
+			"\t\t\t}",
+			"\t\t\tif (const ::situ::rt::err e = _held.validate();"
+			" e != ::situ::rt::err::ok) {",
+			"\t\t\t\treturn e;",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
 		"""One group per member that `validate` says anything about.
 
@@ -9478,7 +9528,8 @@ class Emitter:
 			# property of the whole thing and has no field to name.
 			groups.append(("", depth))
 		for entry in own_entries(struct):
-			lines = self._check(struct, entry)
+			lines = [*self._check(struct, entry),
+			         *self._holds_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue

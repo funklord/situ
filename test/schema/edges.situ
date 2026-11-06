@@ -2596,3 +2596,27 @@ struct length_table {
 	u8   chunks[sum(chunk_lens)];
 	u8   after_chunks;
 }
+
+// A run of bytes holding a struct (26.898): records a byte length frames, and
+// records with a trailer after them. A count counts elements and `[remaining]`
+// is the frame's, so nothing else says "these records take N bytes".
+struct held_record {
+	u8  kind [max = 100];
+	u8  len;
+	u8  data[len];
+}
+
+struct held_records {
+	held_record  all[remaining];
+}
+
+struct holds_counted {
+	u8  total;
+	u8  records[total] [holds = held_records];
+	u8  after;
+}
+
+struct holds_to_the_tail {
+	u8   records[remaining] [holds = held_records];
+	u16  crc;
+}

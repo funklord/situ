@@ -1391,14 +1391,14 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	# The schema count is asserted with it, so that a new schema fails here
 	# and the failure says to re-measure. That is the only moment anybody
 	# does -- and it worked: `example/coap` arriving is what moved these
-	# from 45 and 760 to 46 and 776, `example/pes` to 47 and 867, and
-	# `example/radiotap` to 48 and 950.
-	assert len(SCHEMAS) == 48, (
+	# from 45 and 760 to 46 and 776, `example/pes` to 47 and 867,
+	# `example/radiotap` to 48 and 950, and `example/tls` to 49 and 987.
+	assert len(SCHEMAS) == 49, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 48; re-measure and re-pin both")
+		f"measured over 49; re-measure and re-pin both")
 
-	assert both >= 940, (
-		f"the differential compares {both} members, down from 950; "
+	assert both >= 977, (
+		f"the differential compares {both} members, down from 987; "
 		f"C asks about {asked} and the walker renders {walked}")
 	assert both * 100 >= asked * 91, (
 		f"only {100 * both // asked}% of what C asks is compared, "

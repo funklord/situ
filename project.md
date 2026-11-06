@@ -1331,6 +1331,20 @@ Where the element has no extent situ can compute -- a `[remaining]` member
 inside it consumes whatever view it is given, so a second element has nowhere
 to begin -- no accessors are emitted and the header says why.
 
+A count counts elements, so a length in BYTES over records needs a frame.
+`[holds]` puts one on a run of bytes:
+
+```situ
+struct extension      { u16 kind; u16 length; u8 data[length]; }
+struct extension_list { extension all[remaining]; }
+struct hello          { u16 total; u8 exts[total] [holds = extension_list]; }
+struct guarded        { u8 body[remaining] [holds = extension_list]; u32 crc; }
+```
+
+To its parent the member is a run of bytes, measured as one. The held struct
+sees exactly those bytes, `validate` descends into it, and each backend gives
+a `<member>_view`. See `doc/decision/26.898-a-run-of-bytes-holds-a-struct.md`.
+
 ### 8.6.4 Optional whitespace, and tokens compared without case
 
 Two attributes on a delimited member, both saying the same kind of thing: the

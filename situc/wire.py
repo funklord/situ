@@ -36,7 +36,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import paths_in
 from situc.diagnostics import SituError
 from situc.expr import Env, evaluate
-from situc.traverse import own_members
+from situc.traverse import holds_of, own_members
 from situc.unparse import expr_to_source, kernel_to_source
 
 #: Bumped from 0, which 0041 kept because new facts on existing lines are
@@ -451,6 +451,8 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		facts.append(f"cap={placement.delimiter_cap}")
 	if placement.tail_bytes:
 		facts.append(f"leaves={placement.tail_bytes}")
+	if (held := holds_of(placement)) is not None:
+		facts.append(f"holds={held}")
 	if placement.since is not None:
 		facts.append(f"since={placement.since}")
 	if placement.varint is not None:
@@ -1402,7 +1404,7 @@ def _compare_member(struct: str, index: int, was: str | None,
 INTERPRETATION = (
 	"big", "little", "native", "msb_first", "lsb_first",
 	"radix=", "scaled", "peek", "sized-by=", "varint=", "codec=", "encoding=",
-	"nonce=", "key=", "pad-to=",
+	"nonce=", "key=", "pad-to=", "holds=",
 	"endian-from=", "quote=", "escape=", "trim=", "fold-case",
 	"nul_terminated",
 	# Where the bytes are, where the run stops, and what the checksum field

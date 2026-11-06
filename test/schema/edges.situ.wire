@@ -297,10 +297,27 @@ struct held_material size=17..272
   ~         16        u8         tag
   tag covers: sealed sealed.body
 
+struct held_record size=2..257
+  @0x0000   1         u8         kind  max=100
+  @0x0001   1         u8         len
+  @0x0002   0..255    u8         data  sized-by=len
+
+struct held_records size=0..
+  @0x0000   0..       held_record all  sized-by=remaining
+
 struct holds_arg_only size=2..257
   @0x0000   1         u8         lead
   @0x0001   0..255    arg_only   one  args width=2
   ~         1         u8         trailer
+
+struct holds_counted size=2..257
+  @0x0000   1         u8         total
+  @0x0001   0..255    u8         records  sized-by=total holds=held_records
+  ~         1         u8         after
+
+struct holds_to_the_tail size=2..
+  @0x0000   0..       u8         records  sized-by=remaining leaves=2 holds=held_records
+  ~         2         u16        crc  big
 
 struct hop size=2
   @0x0000   1         u8         kind

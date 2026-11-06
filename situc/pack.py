@@ -66,6 +66,7 @@ TLV_BYTES	= 16
 TLV_RULE_BYTES	= 28
 INDEX_BYTES	= 20
 ARGUMENT_BYTES	= 16
+HOLDS_BYTES	= 8
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
@@ -146,6 +147,8 @@ SECTION_KERNEL_TABLES	= 27
 #: What a parent hands a child (0068): `image_argument`, one row per
 #: (member, child parameter).
 SECTION_ARGUMENTS	= 28
+#: The struct a run of bytes holds (26.898): `image_holds`, one row per run.
+SECTION_HOLDS		= 29
 
 #: `image_placement.flags`
 OFFSET_KNOWN		= 1 << 0
@@ -1627,6 +1630,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# reason this needed no opcode. The predicate's owner is the struct
 	# every path in it names, which `wellformed.check_whens` has already
 	# held to one.
+	# The struct a run of bytes holds (26.898).
+	holds_blob = bytearray()
+	for _owner, placement in rows:
+		child = traverse.holds_of(placement)
+		if child is not None:
+			holds_blob += _struct.pack(
+				"<II", placement_index[placement.path], struct_index[child])
+
 	# Ahead of `validatable` below, and that is the whole reason it sits
 	# here rather than beside the relations it resembles. A `refuse` is part
 	# of the verdict (0051), so a struct carrying one this image cannot
@@ -2581,7 +2592,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		for name, _rstruct in order:
 			if not validatable[name]:
 				continue
-			for inner in nests.get(name, ()):
+			framed = [traverse.holds_of(entry.placement)
+			          for entry in _rstruct.entries]
+			for inner in (*nests.get(name, ()), *filter(None, framed)):
 				if not validatable.get(inner, False):
 					validatable[name] = False
 					changed = True
@@ -3053,6 +3066,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_TLV_RULES, tlv_rules_blob, TLV_RULE_BYTES),
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
 			(SECTION_ARGUMENTS, arguments_blob, ARGUMENT_BYTES),
+			(SECTION_HOLDS, holds_blob, HOLDS_BYTES),
 			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
 			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),

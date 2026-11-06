@@ -1,0 +1,56 @@
+# situ wire signature v3
+# schema: tls.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian big
+target buffer
+
+enum content_type : u8 unknown=error
+  change_cipher_spec=20 alert=21 handshake=22 application_data=23
+
+enum handshake_type : u8 unknown=error
+  client_hello=1 server_hello=2
+
+struct client_hello size=43..131396
+  @0x0000   2         u16        legacy_version  big min=768 max=771
+  @0x0002   32        u8         random  big
+  @0x0022   1         u8         session_id_length  max=32
+  @0x0023   0..32     u8         session_id  sized-by=session_id_length
+  ~         2         u16        suites_length  big min=2 max=65534
+  ~         2..65534  u8         suites  big sized-by=suites_length
+  ~         1         u8         compression_length  min=1
+  ~         1..255    u8         compression  sized-by=compression_length
+  ~         2         u16        extensions_length  big
+  ~         0..65535  u8         extensions  sized-by=extensions_length holds=extension_list
+
+struct extension size=4..65539
+  @0x0000   2         u16        kind  big
+  @0x0002   2         u16        length  big
+  @0x0004   0..65535  u8         data  sized-by=length
+
+struct extension_list size=0..
+  @0x0000   0..       extension  all  sized-by=remaining
+
+struct handshake size=4..16777219
+  @0x0000   1         handshake_type kind  must_eq=1
+  @0x0001   3         u24        length  big
+  @0x0004   0..16777215 u8         body  sized-by=length holds=client_hello
+
+struct record size=5..16389
+  @0x0000   1         content_type kind  must_eq=22
+  @0x0001   2         u16        legacy_version  big min=768 max=771
+  @0x0003   2         u16        length  big max=16384
+  @0x0005   0..16384  u8         fragment  sized-by=length holds=handshake

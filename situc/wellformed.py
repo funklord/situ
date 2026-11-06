@@ -78,6 +78,7 @@ def check(schema: ast.Schema) -> None:
 	check_when_calls(schema)
 	check_member_arguments(schema)
 	check_parameter_nesting(schema)
+	check_holds(schema)
 	check_varint_arms(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
@@ -2554,6 +2555,13 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 			        "the message gives, which the content already is (8.6)")
 		return None
 
+	if attr.name == "holds":
+		if isinstance(member, ast.Field) and member.type_ref.name == "u8" \
+				and (member.array is not None or member.until is not None):
+			return None
+		return ("a run of `u8` -- the bytes the frame gives the struct "
+		        "(26.898)")
+
 	if attr.name == "must_be_zero":
 		if isinstance(member, ast.Reserved):
 			return None
@@ -2709,7 +2717,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 	"no_rmw", "truncated", "size", "trim", "case_insensitive",
-	"nul_terminated", "must_be_zero",
+	"nul_terminated", "must_be_zero", "holds",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
@@ -3750,6 +3758,73 @@ def arms_of(struct: ast.StructDecl) -> list[ast.Member]:
 	return [arm.member for member in struct.members
 	        if isinstance(member, ast.Variant)
 	        for arm in member.arms if arm.member is not None]
+
+
+def _holds_name(member: ast.Member) -> ast.Attr | None:
+	"""A member's `[holds = T]`, where it has one (26.898)."""
+	return next((attr for attr in getattr(member, "attrs", ())
+	             if attr.name == "holds"), None)
+
+
+def check_holds(schema: ast.Schema) -> None:
+	"""`[holds = T]` names a struct the run can frame alone (26.898).
+
+	A member of the struct itself, because a parent reaches it through a view
+	accessor and an arm or a region has none. A child taking arguments has
+	nowhere to be handed them. A child that can reach its own parent would
+	validate to a depth the bytes choose, and `depth` has not been built for
+	this edge.
+	"""
+	decls = {struct.name: struct for struct in schema.structs()}
+	edges: dict[str, set[str]] = {}
+	for struct in decls.values():
+		edges[struct.name] = set()
+		for member in _walk_members(struct.members):
+			held = _holds_name(member)
+			if isinstance(member, ast.Field) \
+					and member.type_ref.scalar is None:
+				edges[struct.name].add(member.type_ref.name)
+			if held is not None and isinstance(held.value, ast.NameRef):
+				edges[struct.name].add(held.value.name)
+
+	for struct in decls.values():
+		for member in _walk_members(struct.members):
+			attr = _holds_name(member)
+			if attr is None:
+				continue
+			value = attr.value
+			if not isinstance(value, ast.NameRef) or value.name not in decls:
+				raise error("`[holds]` names a struct", attr.span,
+				            label = "not a struct of this schema")
+			if member not in struct.members:
+				raise error(
+					"`[holds]` is built on a member of the struct itself",
+					attr.span,
+					label = "inside an arm or a region",
+					notes = ["nest a struct that carries the run (26.898)"])
+			child = decls[value.name]
+			if any(isinstance(held, ast.Field) and held.parameter
+			       for held in child.members):
+				raise error(
+					f"`{child.name}` takes arguments, and `[holds]` hands "
+					"it none", attr.span,
+					label = "held here",
+					notes = ["a held struct stands on its bytes alone "
+					         "(26.898)"])
+			seen: set[str] = set()
+			todo = [value.name]
+			while todo:
+				name = todo.pop()
+				if name == struct.name:
+					raise error(
+						f"`{value.name}` can hold `{struct.name}` again",
+						attr.span,
+						label = "held here",
+						notes = ["how deep it goes would be the message's "
+						         "to choose (26.898)"])
+				if name not in seen:
+					seen.add(name)
+					todo.extend(edges.get(name, ()))
 
 
 def _reads_a_parameter(struct: ast.StructDecl, member: ast.Field) -> bool:

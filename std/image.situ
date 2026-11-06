@@ -71,6 +71,7 @@ enum image_section_tag : u32 {
 	tlv_rules    = 24,     // how a `tlv` item's value says where it ends
 	messages     = 25,     // what a schema says about a message (0051)
 	arguments    = 28,     // what a parent hands a child (0068)
+	holds        = 29,     // the struct a run of bytes holds (26.898)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -570,6 +571,13 @@ struct image_argument {
 	u32  parameter;
 	u32  code;
 	u32  argument_pad;
+}
+
+// The struct a run of bytes holds (26.898). `placement` is the run and
+// `shape` the struct, framed by exactly the run's bytes.
+struct image_holds {
+	u32  placement;
+	u32  shape;
 }
 
 struct image_index {

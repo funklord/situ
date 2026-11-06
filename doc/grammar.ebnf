@@ -190,6 +190,8 @@ arm_body	= "error" ";" | "opaque" ";" | member ;
  * when it holds "=" or "," at depth 1, or a lone attribute name that means
  * something bare and is not immediately followed by "(". A name that always
  * takes a value is a size: `u32 size; u8 data[size];` (26.886). *)
+(* 26.898. `[holds = T]` on a run of `u8`: the struct those bytes hold, framed
+ * by exactly them, so `[remaining]` inside it ends where the run ends. *)
 (* Section 8.6.1 and decision 0059. `max` after the brackets bounds a run
  * whose length comes from the frame: `u8 tail[remaining] max 470`. It counts
  * ELEMENTS, as the brackets do, where `until D max N` counts BYTES, as a scan

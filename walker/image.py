@@ -39,6 +39,7 @@ DEPTHS = 21
 RELATIONS, RELATION_MUSTS = 18, 19
 MESSAGES = 25
 ARGUMENTS = 28
+HOLDS = 29
 PINNED_RUNS = 20
 
 #: `image_check`
@@ -474,6 +475,8 @@ class Image:
 	#: [(the child's parameter placement, the program computing it)],
 	#: the program compiled against the parent.
 	arguments: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+	#: The struct a run of bytes holds (26.898): run placement -> struct.
+	holds: dict[int, int] = field(default_factory=dict)
 	#: Per recursive struct, `(depth, limit)`: what the format allows and
 	#: what the schema asks a reader to spend (0054). Absent for a struct
 	#: that does not name itself, which is nearly all of them -- so an
@@ -763,6 +766,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			where, parameter, code = _struct.unpack_from(
 				"<III", blob, at + i * stride)
 			image.arguments.setdefault(where, []).append((parameter, code))
+
+	if HOLDS in found:
+		at, records, stride = found[HOLDS]
+		for i in range(records):
+			where, shape = _struct.unpack_from("<II", blob, at + i * stride)
+			image.holds[where] = shape
 
 	if DEPTHS in found:
 		at, records, stride = found[DEPTHS]

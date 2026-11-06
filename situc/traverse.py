@@ -1627,6 +1627,7 @@ def containment_order(structs: dict[str, "ResolvedStruct"],
 			named = entry.placement.type_name
 			if named is not None and named != name:
 				visit(named)
+			visit(holds_of(entry.placement) or "")
 		order.append(name)
 
 	for name in roots:
@@ -2143,6 +2144,18 @@ def nests_one_struct(structs: dict[str, ResolvedStruct],
 	# probing `required` over counts written as arithmetic (26.744).
 	return (placement.array_count is None and placement.sized_by is None
 	        and placement.size_expr is None)
+
+
+def holds_of(placement: Placement) -> str | None:
+	"""The struct a run of bytes holds, or None (26.898).
+
+	`u8 exts[total] [holds = ext_list];` is a run of bytes in every way a
+	parent measures it, and the struct it names is framed by those bytes:
+	`[remaining]` inside it ends where the run ends.
+	"""
+	held = next((attr.value for attr in placement.attrs
+	             if attr.name == "holds"), None)
+	return held.name if isinstance(held, ast.NameRef) else None
 
 
 def walks_to_the_frame_end(placement: Placement) -> bool:

@@ -211,6 +211,11 @@ typedef struct {
 	uint32_t       argument_count;
 	uint32_t       argument_stride;
 
+	/* The struct a run of bytes holds (26.898): one row per run. */
+	const uint8_t *holds;
+	uint32_t       holds_count;
+	uint32_t       holds_stride;
+
 	/* What the schema says about a message beyond its layout (0051): one
 	 * row per `when`, keyed by the shape whose members its predicate
 	 * reads. Only the `refuse` rows change a verdict -- `warn` and `note`

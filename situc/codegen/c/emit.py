@@ -118,6 +118,7 @@ from situc.traverse import (
 	tlv_admitted_tags,
 	tlv_single_tags,
 	walk_order,
+	holds_of,
 	walks_to_the_frame_end,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -1901,7 +1902,8 @@ class Emitter:
 		declined it has already said why, and two refusals read as two
 		problems.
 		"""
-		lines  = self._field(struct, entry)
+		lines  = [*self._field(struct, entry),
+		          *self._holds_view(struct, entry.placement)]
 		mutate = entry.vector.get(Axis.MUTATE)
 
 		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
@@ -11523,7 +11525,8 @@ class Emitter:
 			# field refused" has no field to name here.
 			groups.append(("", depth))
 		for entry in struct.entries:
-			lines = self._checks_for(struct, entry)
+			lines = [*self._checks_for(struct, entry),
+			         *self._holds_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue
@@ -13587,6 +13590,54 @@ class Emitter:
 			f"\t\t\tif ((situ_base(view))[at + i] != {expect}) {{",
 			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
+
+	def _holds_view(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
+		held = holds_of(placement)
+		if held is None:
+			return []
+		local = c_name(self._local(struct, placement))
+		tail  = self._member_tail(struct, placement)
+		args  = self._member_args(struct, placement)
+		return [
+			"",
+			f"/* {placement.path} holds a `{held}`: a view of exactly these",
+			" * bytes, so `[remaining]` inside it ends where they do. */",
+			"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'view')}"
+			f"(situ_view_t view, situ_view_t *out{tail})",
+			"{",
+			"\treturn situ_view_sub(view, "
+			f"{self._base_expression(struct, placement)}, "
+			f"{ident(self.prefix, struct.name, local, 'len')}(view{args}), "
+			"out);",
+			"}",
+		]
+
+	def _holds_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What a held struct says about the bytes that frame it (26.898)."""
+		held = holds_of(placement)
+		if held is None:
+			return []
+		local = c_name(self._local(struct, placement))
+		return [
+			f"\t/* {placement.path} holds a `{held}` -- its own constraints */",
+			"\t{",
+			"\t\tsitu_view_t nested;",
+			f"\t\tsitu_err_t err = {ident(self.prefix, struct.name, local, 'view')}"
+			f"(view, &nested{self._member_args(struct, placement)});",
+			"",
+			"\t\tif (err != SITU_OK) {",
+			"\t\t\treturn err;",
+			"\t\t}",
+			f"\t\terr = {ident(self.prefix, held, 'validate')}(nested);",
+			"\t\tif (err != SITU_OK) {",
+			"\t\t\treturn err;",
 			"\t\t}",
 			"\t}",
 		]

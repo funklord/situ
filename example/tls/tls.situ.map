@@ -1,0 +1,47 @@
+# situ capability map v1
+# schema: tls.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct client_hello size=43..131396 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  client_hello.legacy_version            offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  client_hello.random                    offset=AbsoluteStatic(0x02) size=Fixed(32) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  client_hello.session_id_length         offset=AbsoluteStatic(0x22) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  client_hello.session_id                offset=AbsoluteStatic(0x23) size=Bounded(0, 32) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  client_hello.suites_length             offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  client_hello.suites                    offset=Dynamic size=Bounded(2, 65534) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  client_hello.compression_length        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  client_hello.compression               offset=Dynamic size=Bounded(1, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  client_hello.extensions_length         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  client_hello.extensions                offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct extension size=4..65539 mutate=Shifting repr=ValueConverted
+  extension.kind                         offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  extension.length                       offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  extension.data                         offset=AbsoluteStatic(0x04) size=Bounded(0, 65535) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct extension_list size=0.. access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  extension_list.all                     offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  extension_list.all[]                   offset=FrameStatic(0x00) size=Bounded(4, 65539) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
+  extension_list.all[].kind              offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  extension_list.all[].length            offset=FrameStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  extension_list.all[].data              offset=FrameStatic(0x04) size=Bounded(0, 65535) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct handshake size=4..16777219 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  handshake.kind                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  handshake.length                       offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  handshake.body                         offset=AbsoluteStatic(0x04) size=Bounded(0, 16777215) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct record size=5..16389 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  record.kind                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  record.legacy_version                  offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.length                          offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.fragment                        offset=AbsoluteStatic(0x05) size=Bounded(0, 16384) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

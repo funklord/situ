@@ -177,6 +177,8 @@ ATTRIBUTE_NAMES = frozenset({
 	# section 8.2 - 8.6: layout and representation
 	"allow_straddle", "require_aligned", "encoding", "nul_terminated",
 	"endian", "bit_order", "size",
+	# 26.898: the struct a run of bytes holds
+	"holds",
 	# doc/decision/0054: what makes a recursive type describable. `depth` is
 	# the format's own limit and `limit` is this build's cap, and they are two
 	# names because a message deeper than the first is malformed while one
@@ -244,7 +246,7 @@ ATTRIBUTE_NAMES = frozenset({
 VALUE_ATTRIBUTES = frozenset({
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "must_eq", "encoding", "endian", "bit_order",
-	"self_as", "tag_order", "on_read", "on_write",
+	"self_as", "tag_order", "on_read", "on_write", "holds",
 })
 
 def _alignment_of(member: ast.Member | None) -> int | None:

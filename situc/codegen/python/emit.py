@@ -119,6 +119,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	holds_of,
 	walks_to_the_frame_end,
 	inside_a_nested_member,
 )
@@ -3918,7 +3919,8 @@ class Emitter:
 		commonest case there is (26.35).
 		"""
 		lines  = [*self._maker(struct, entry.placement),
-		          *self._member(struct, entry)]
+		          *self._member(struct, entry),
+		          *self._holds_view(struct, entry.placement)]
 		mutate = entry.vector.get(Axis.MUTATE)
 
 		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
@@ -8486,6 +8488,31 @@ class Emitter:
 		return any(member for struct in self.resolved.structs.values()
 		           for member, _ in self._check_groups(struct))
 
+	def _holds_view(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
+		held = holds_of(placement)
+		if held is None:
+			return []
+		name = py_name(local_name(struct, placement))
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}_view(self) -> {held}:",
+			f"\t\t\"\"\"The `{held}` {placement.path} holds, framed by its"
+			" bytes.\"\"\"",
+			f"\t\treturn {held}(self._msg, self._at + self.{name}_offset,",
+			f"\t\t\tlen(self.{name}))",
+		]
+
+	def _holds_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What a held struct says about the bytes that frame it (26.898)."""
+		if holds_of(placement) is None:
+			return []
+		name = py_name(local_name(struct, placement))
+		return [f"\t\tself.{name}_view.validate()"]
+
 	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
 		"""One group per member that `validate` says anything about.
 
@@ -8497,7 +8524,8 @@ class Emitter:
 		"""
 		groups: list[tuple[str, list[str]]] = []
 		for entry in own_entries(struct):
-			lines = self._check(struct, entry)
+			lines = [*self._check(struct, entry),
+			         *self._holds_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) or _PROPAGATES.match(one)
 			           for one in lines):
 				groups.append(("", lines))

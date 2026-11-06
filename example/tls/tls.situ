@@ -1,0 +1,60 @@
+// A TLS ClientHello, from the record down to its extensions (RFC 8446 4.1.2,
+// 4.2; RFC 5246 6.2.1).
+//
+// `extensions` is why this example exists. Its length field counts BYTES and
+// what it frames is a run of records whose sizes each record states, so a
+// count cannot say it and `[remaining]` is the wrong frame: the list ends
+// where the field says. `[holds]` is that sentence (26.898).
+
+target buffer;
+endian big;
+
+enum content_type : u8 {
+	change_cipher_spec = 20,
+	alert              = 21,
+	handshake          = 22,
+	application_data   = 23,
+}
+
+enum handshake_type : u8 {
+	client_hello = 1,
+	server_hello = 2,
+}
+
+struct extension {
+	u16  kind;
+	u16  length;
+	u8   data[length];
+}
+
+struct extension_list {
+	extension  all[remaining];
+}
+
+struct client_hello {
+	u16  legacy_version [min = 0x0300, max = 0x0303];
+	u8   random[32];
+	u8   session_id_length [max = 32];
+	u8   session_id[session_id_length];
+	// Two bytes each, and the count is in bytes, so an odd one is malformed.
+	// RFC 8446 says at least one suite.
+	u16  suites_length [min = 2, max = 65534];
+	u8   suites[suites_length];
+	u8   compression_length [min = 1];
+	u8   compression[compression_length];
+	u16  extensions_length;
+	u8   extensions[extensions_length] [holds = extension_list];
+}
+
+struct handshake {
+	handshake_type  kind [must_eq = handshake_type.client_hello];
+	u24             length;
+	u8              body[length] [holds = client_hello];
+}
+
+struct record {
+	content_type  kind [must_eq = content_type.handshake];
+	u16           legacy_version [min = 0x0300, max = 0x0303];
+	u16           length [max = 16384];
+	u8            fragment[length] [holds = handshake];
+}

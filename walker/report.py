@@ -1155,6 +1155,29 @@ def _validate(image: Image, view: View, struct_index: int,
 			if why == "constraint":
 				return fail(ERR_CONSTRAINT, index, ARM_SELECTED)
 
+		# A run of bytes holding a struct frames it with exactly those
+		# bytes, so the inner limit is the run's end and nothing past it
+		# (26.898).
+		if index in image.holds:
+			framed   = image.holds[index]
+			inner_at = view.at + offset_bits(view, index) // 8
+			try:
+				reach = size_bits(view, index) // BITS_PER_BYTE
+			except Unplaceable:
+				break
+			except Refused:
+				return fail(ERR_BOUNDS, index)
+			if inner_at + reach > view.limit:
+				return fail(ERR_BOUNDS, index)
+			floor = image.structs[framed].size_min_bits
+			if floor != NONE and reach * BITS_PER_BYTE < floor:
+				return fail(ERR_BOUNDS, index)
+			verdict = _validate(image, View(image, view.buffer, framed,
+			                                inner_at, inner_at + reach),
+			                    framed)
+			if verdict is None or verdict:
+				return verdict
+
 		# A nested member is `validate` called through, and its error is
 		# returned as it stands: C propagates the inner code rather than
 		# folding it into CONSTRAINT.

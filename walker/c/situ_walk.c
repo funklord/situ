@@ -22,6 +22,7 @@
 #define TAG_SKIPS      22u
 #define TAG_MESSAGES   25u
 #define TAG_ARGUMENTS  28u
+#define TAG_HOLDS      29u
 #define TAG_RELATIONS  18u
 #define TAG_RELATION_MUSTS 19u
 
@@ -48,6 +49,7 @@
 #define MESSAGE_READS   17u
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
 #define ARGUMENT_READS  12u	/* `<III`: placement, parameter, code */
+#define HOLDS_READS      8u	/* `<II`: placement, shape */
 /* How many arguments a parent may hand one child (0068), which sizes the
  * array a descent keeps them in. A child taking more is UNSUPPORTED. */
 #define SITU_WALK_ARGUMENTS_MAX 8u
@@ -252,6 +254,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->arguments       = image + offset;
 			out->argument_count  = items;
 			out->argument_stride = stride;
+		} else if (kind == TAG_HOLDS) {
+			if (stride < HOLDS_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->holds        = image + offset;
+			out->holds_count  = items;
+			out->holds_stride = stride;
 		} else if (kind == TAG_DEPTHS) {
 			if (stride < DEPTH_READS) {
 				return SITU_WALK_MALFORMED;
@@ -5540,6 +5549,42 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 						return SITU_WALK_OK;
 					}
 				}
+			}
+		}
+
+		/* A run of bytes holding a struct frames it with exactly those
+		 * bytes, so the inner `len` is the run's and nothing past it
+		 * (26.898). */
+		for (uint32_t h = 0u; h < image->holds_count; h++) {
+			const uint8_t *row   = image->holds + h * image->holds_stride;
+			situ_walk_err  inner = SITU_WALK_OK;
+
+			if (u32_at(row) != index) {
+				continue;
+			}
+			if (at / 8u > len || wide / 8u > len - at / 8u) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			const uint32_t   child = u32_at(row + 4);
+			const uint8_t   *shape_row = image->structs
+			                             + child * image->struct_stride;
+			if (image->struct_stride >= 20u
+			                && u32_at(shape_row + 16) != SITU_WALK_NONE
+			                && wide < u32_at(shape_row + 16)) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			err = validate_deep(image, message + at / 8u, wide / 8u, child,
+			                    depth + 1u, &inner, why);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (inner != SITU_WALK_OK) {
+				*verdict = inner;
+				return SITU_WALK_OK;
 			}
 		}
 
