@@ -630,6 +630,7 @@ u8   fixed[4];                        // a count
 u8   rest[remaining];                 // to the end of the frame
 u8   body[remaining] max 470;         // and no further, or the frame is refused
 u8   cipher[remaining]; u8 tag[16];   // the frame less the fixed members after it
+u8   exts[total] [holds = ext_list];  // these bytes are a struct: its [remaining] ends here
 u8   chunks[sum(lens)];               // what a table of lengths adds up to
 u8   name[]    until ':';             // to a delimiter, written as a character
 u8   value[]   until "\r\n" | '\n';    // or to whichever of several comes first
@@ -773,9 +774,9 @@ answer where the interior is not described at all.
 
 Small on purpose, because everything in it has to be evaluable by the layout
 solver *and* by four backends *and* by a table walk. Field references,
-arithmetic, comparisons, and seven builtins: `min`, `max` and `align_up` over
-values; `size`, `offset` and `count` over the layout; `sum` over a table of
-lengths.
+arithmetic, comparisons, and eight builtins: `min`, `max` and `align_up` over
+values; `popcount` over a bitmap; `size`, `offset` and `count` over the layout;
+`sum` over a table of lengths.
 
 ```situ
 u8       body[length - 8];              // arithmetic over a field already read

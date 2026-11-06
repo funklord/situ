@@ -4201,7 +4201,9 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 			label = "runs to the end of the frame",
 			notes = [f"`{(movable or after)[0].name}` has no bytes to occupy "
 			         "unless a run of bytes leaves them: what follows has to "
-			         "be fixed-size, and the run a run of `u8` (26.894)"],
+			         "be fixed-size, and the run a run of `u8` (26.894)",
+			         "for records: `u8 body[remaining] [holds = T];`, with "
+			         "the run inside `T` (26.898)"],
 		)
 	layout.placements[at] = replace(
 		run, tail_bytes=sum(held.size_bits for held in after) // BITS_PER_BYTE)

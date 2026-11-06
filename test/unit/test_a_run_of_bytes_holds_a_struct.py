@@ -199,3 +199,12 @@ def test_both_walkers_stop_at_the_ceiling(tmp_path: Path) -> None:
 		assert python_verdict(image, message, shape) == wanted, message.hex()
 		assert c_verdict(tmp_path, image, message, shape) == wanted, \
 			message.hex()
+
+
+def test_the_refusal_of_records_before_a_tail_names_the_answer() -> None:
+	with pytest.raises(SituError) as refused:
+		solve(parse_text("target buffer;\nendian big;\n"
+		                 "struct r { u8 a; }\n"
+		                 "struct s { r all[remaining]; u16 crc; }\n"))
+	assert any("[holds = T]" in note for note in refused.value.diagnostic.notes)
+
