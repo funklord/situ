@@ -1471,7 +1471,8 @@ class Parser:
 			raise error(
 				f"varint type `{name.text}` does not declare an encoding",
 				self.span_from(start),
-				label = "expected `encoding = leb128;`, `be128;` or `quic;`",
+				label = "expected `encoding = leb128;`, `be128;`, `quic;`, `der;`,"
+				        " `compactsize;` or `lenenc;`",
 			)
 		if max_bits is None:
 			raise error(
@@ -1514,6 +1515,18 @@ class Parser:
 					label = "expected 6, 14, 30 or 62",
 					notes = ["one, two, four or eight bytes, less the two bits"
 					         " that say which"],
+				)
+			return
+
+		if decl.encoding in ast.MARKED:
+			if decl.declared_max_bytes is not None:
+				raise error(
+					f"`{name.text}` declares `max_bytes` on a"
+					f" `{decl.encoding.value}` encoding",
+					decl.span,
+					label = "`max_bits` decides it",
+					notes = ["the marker says the length, so the widest value"
+					         " is the longest encoding"],
 				)
 			return
 

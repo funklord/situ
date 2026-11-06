@@ -1557,6 +1557,15 @@ def varint_run_at(view: View, index: int, element: int) -> int:
 	raise Refused(f"element {element} is past the {count} this run holds")
 
 
+#: The image's code for a marked integer, and its table: `(direct, first,
+#: widths, big)`. `ast.MARKED` says what each is.
+MARKED = {
+	200: (0x80, 0x81, (1, 2, 3, 4, 5, 6, 7, 8), True),
+	201: (0xFD, 0xFD, (2, 4, 8), False),
+	202: (0xFB, 0xFC, (2, 3, 8), False),
+}
+
+
 def varint(view: View, index: int) -> tuple[int, int]:
 	"""Decode one varint: the bytes it consumed and the value it holds.
 
@@ -1649,6 +1658,10 @@ def _minimal_length(view: View, index: int, value: int) -> int:
 	if big and terminal == 0:
 		return next(size for size, bits in ((1, 6), (2, 14), (4, 30))
 		            if value < 1 << bits) if value < 1 << 30 else 8
+	if big and terminal in MARKED:
+		direct, _, widths, _ = MARKED[terminal]
+		return 1 if value < direct else next(
+			(n + 1 for n in widths if value < 1 << (8 * n)), 0)
 	count = 1
 	while value >= 0x80:
 		value >>= 7
@@ -1704,6 +1717,22 @@ def decode_varint(view: View, start: int, max_bytes: int,
 		size = 1 << (data[0] >> 6)
 		return size, int.from_bytes(data[:size], "big") \
 			& ((1 << (size * BITS_PER_BYTE - 2)) - 1)
+
+	# A marked integer, which the image says as big with a form's code where a
+	# last group's bits would be (26.921). Its table is held here, as a walker
+	# is handed nothing else.
+	if big and terminal_bits in MARKED:
+		direct, first, widths, order = MARKED[terminal_bits]
+		if not data:
+			raise Refused("the buffer ends mid-varint")
+		if data[0] < direct:
+			return 1, data[0]
+		if not 0 <= data[0] - first < len(widths) \
+				or widths[data[0] - first] + 1 > len(data):
+			raise Refused("the buffer ends mid-varint")
+		size = widths[data[0] - first]
+		return size + 1, int.from_bytes(data[1:size + 1],
+		                                "big" if order else "little")
 
 	acc = 0
 	for i, byte in enumerate(data):

@@ -1032,6 +1032,131 @@ pub fn zigzag_encode(value: i64) -> u64 {
 	((value << 1) ^ (value >> 63)) as u64
 }
 
+/// A marked integer's table: a first byte below `direct` is the value, and
+/// marker `first + i` says `widths[i]` bytes hold it.
+struct Marked {
+	direct: u8,
+	first: u8,
+	widths: &'static [usize],
+	big: bool,
+}
+
+const DER: Marked = Marked { direct: 0x80, first: 0x81,
+                             widths: &[1, 2, 3, 4, 5, 6, 7, 8], big: true };
+const COMPACTSIZE: Marked = Marked { direct: 0xFD, first: 0xFD,
+                                     widths: &[2, 4, 8], big: false };
+const LENENC: Marked = Marked { direct: 0xFB, first: 0xFC,
+                                widths: &[2, 3, 8], big: false };
+
+fn marked_get(form: &Marked, bytes: &[u8], at: usize, max_bytes: usize)
+		-> Option<(u64, usize)> {
+	let byte = *bytes.get(at)?;
+
+	if byte < form.direct {
+		return Some((byte as u64, 1));
+	}
+	if byte < form.first {
+		return None;
+	}
+
+	let n = *form.widths.get((byte - form.first) as usize)?;
+	if n + 1 > max_bytes || n + 1 > bytes.len() - at {
+		return None;
+	}
+
+	let mut acc: u64 = 0;
+	for (i, one) in bytes[at + 1..at + 1 + n].iter().enumerate() {
+		acc |= (*one as u64) << (8 * if form.big { n - 1 - i } else { i });
+	}
+	Some((acc, n + 1))
+}
+
+fn marked_len(form: &Marked, value: u64) -> usize {
+	if value < form.direct as u64 {
+		return 1;
+	}
+	for n in form.widths {
+		if *n >= 8 || value < 1u64 << (8 * *n) {
+			return *n + 1;
+		}
+	}
+	0
+}
+
+fn marked_put(form: &Marked, out: &mut [u8], value: u64) -> usize {
+	let total = marked_len(form, value);
+
+	if total == 0 || total > out.len() {
+		return 0;
+	}
+	if total == 1 {
+		out[0] = value as u8;
+		return 1;
+	}
+
+	let n = total - 1;
+	let at = form.widths.iter().position(|one| *one == n).unwrap_or(0);
+	out[0] = form.first + at as u8;
+	for i in 0..n {
+		out[1 + i] = (value >> (8 * if form.big { n - 1 - i } else { i })) as u8;
+	}
+	total
+}
+
+/// A definite length, X.690 8.1.3.
+#[inline]
+pub fn varint_der_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	marked_get(&DER, bytes, at, max_bytes)
+}
+
+/// The shortest encoding under `varint_der_get`.
+#[inline]
+pub fn varint_der_len(value: u64) -> usize {
+	marked_len(&DER, value)
+}
+
+/// Encode a definite length.
+#[inline]
+pub fn varint_der_put(out: &mut [u8], value: u64) -> usize {
+	marked_put(&DER, out, value)
+}
+
+/// Bitcoin's CompactSize.
+#[inline]
+pub fn varint_compactsize_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	marked_get(&COMPACTSIZE, bytes, at, max_bytes)
+}
+
+/// The shortest encoding under `varint_compactsize_get`.
+#[inline]
+pub fn varint_compactsize_len(value: u64) -> usize {
+	marked_len(&COMPACTSIZE, value)
+}
+
+/// Encode a CompactSize.
+#[inline]
+pub fn varint_compactsize_put(out: &mut [u8], value: u64) -> usize {
+	marked_put(&COMPACTSIZE, out, value)
+}
+
+/// MySQL's length-encoded integer.
+#[inline]
+pub fn varint_lenenc_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	marked_get(&LENENC, bytes, at, max_bytes)
+}
+
+/// The shortest encoding under `varint_lenenc_get`.
+#[inline]
+pub fn varint_lenenc_len(value: u64) -> usize {
+	marked_len(&LENENC, value)
+}
+
+/// Encode a length-encoded integer.
+#[inline]
+pub fn varint_lenenc_put(out: &mut [u8], value: u64) -> usize {
+	marked_put(&LENENC, out, value)
+}
+
 /// Decode one QUIC varint (RFC 9000, section 16): the top two bits of the first
 /// byte say one, two, four or eight bytes and the rest is the value, high byte
 /// first.

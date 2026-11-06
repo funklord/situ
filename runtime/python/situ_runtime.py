@@ -999,6 +999,104 @@ def zigzag_encode(value: int) -> int:
 	return (value << 1) ^ (value >> 63) if value < 0 else value << 1
 
 
+#: A marked integer's tables: `(direct, first, widths, big)`. A first byte below
+#: `direct` is the value, and marker `first + i` says `widths[i]` bytes hold it.
+_DER         = (0x80, 0x81, (1, 2, 3, 4, 5, 6, 7, 8), True)
+_COMPACTSIZE = (0xFD, 0xFD, (2, 4, 8), False)
+_LENENC      = (0xFB, 0xFC, (2, 3, 8), False)
+
+
+def _marked_get(form: tuple[int, int, tuple[int, ...], bool], data: Buffer,
+		at: int, max_bytes: int) -> tuple[int, int] | None:
+	"""Decode one marked integer, or None where it is cut short, no marker, or
+	longer than `max_bytes`."""
+	direct, first, widths, big = form
+	if at >= len(data):
+		return None
+	byte = data[at]
+	if byte < direct:
+		return byte, 1
+	if not 0 <= byte - first < len(widths):
+		return None
+	n = widths[byte - first]
+	if n + 1 > max_bytes or at + 1 + n > len(data):
+		return None
+	held = bytes(data[at + 1:at + 1 + n])
+	return int.from_bytes(held, "big" if big else "little"), n + 1
+
+
+def _marked_len(form: tuple[int, int, tuple[int, ...], bool],
+		value: int) -> int:
+	"""The shortest encoding of `value`, 0 past the widest."""
+	if value < form[0]:
+		return 1
+	return next((n + 1 for n in form[2] if value < 1 << (8 * n)), 0)
+
+
+def _marked_put(form: tuple[int, int, tuple[int, ...], bool], out: bytearray,
+		at: int, value: int) -> int:
+	"""Encode one marked integer minimally: bytes written, 0 for want of room."""
+	direct, first, widths, big = form
+	total = _marked_len(form, value)
+	if total == 0 or at + total > len(out):
+		return 0
+	if total == 1:
+		out[at] = value
+		return 1
+	out[at] = first + widths.index(total - 1)
+	out[at + 1:at + total] = value.to_bytes(total - 1,
+	                                        "big" if big else "little")
+	return total
+
+
+def varint_der_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""A definite length, X.690 8.1.3."""
+	return _marked_get(_DER, data, at, max_bytes)
+
+
+def varint_der_len(value: int) -> int:
+	"""The shortest encoding under `varint_der_get`."""
+	return _marked_len(_DER, value)
+
+
+def varint_der_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode a definite length at `at`."""
+	return _marked_put(_DER, out, at, value)
+
+
+def varint_compactsize_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""Bitcoin's CompactSize."""
+	return _marked_get(_COMPACTSIZE, data, at, max_bytes)
+
+
+def varint_compactsize_len(value: int) -> int:
+	"""The shortest encoding under `varint_compactsize_get`."""
+	return _marked_len(_COMPACTSIZE, value)
+
+
+def varint_compactsize_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode a CompactSize at `at`."""
+	return _marked_put(_COMPACTSIZE, out, at, value)
+
+
+def varint_lenenc_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""MySQL's length-encoded integer."""
+	return _marked_get(_LENENC, data, at, max_bytes)
+
+
+def varint_lenenc_len(value: int) -> int:
+	"""The shortest encoding under `varint_lenenc_get`."""
+	return _marked_len(_LENENC, value)
+
+
+def varint_lenenc_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode a length-encoded integer at `at`."""
+	return _marked_put(_LENENC, out, at, value)
+
+
 def varint_quic_get(data: Buffer, at: int,
 		max_bytes: int) -> tuple[int, int] | None:
 	"""Decode one QUIC varint (RFC 9000, section 16).

@@ -894,6 +894,10 @@ zero count (26.733), then all four declined it until the walk arrived.
 the top two bits of the first byte say one, two, four or eight bytes, so
 `max_bits` is 6, 14, 30 or 62 and `max_bytes` is refused (26.919).
 
+**And three have a marker.** `encoding = der`, `compactsize` and `lenenc` are one
+read over three published tables: a first byte below a threshold is the value, and
+above it a marker for how many bytes hold it (26.921).
+
 **Two encodings, and what a declared `max_bytes` means.** `be128` is the same
 shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
 SQLite's record varints. A format may also cap the encoded length below what
@@ -8299,6 +8303,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.921 A first byte can say how wide the number is
+
+Moved to `doc/decision/26.921-a-first-byte-can-say-how-wide-the-number-is.md`.
 
 ### 26.920 A header can end in its body's length
 

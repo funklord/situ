@@ -1,0 +1,42 @@
+# situ capability map v1
+# schema: bitcoin.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct input size=41..18446744073709551664 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  input.previous_hash                    offset=AbsoluteStatic(0x00) size=Fixed(32) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  input.previous_index                   offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  input.script_length                    offset=AbsoluteStatic(0x24) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  input.script                           offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  input.sequence                         offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct output size=9..18446744073709551632 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  output.value                           offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  output.script_length                   offset=AbsoluteStatic(0x08) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  output.script                          offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct transaction size=10..680564733841876928070447347433528623066 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  transaction.version                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  transaction.input_count                offset=AbsoluteStatic(0x04) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  transaction.inputs                     offset=Dynamic size=Bounded(0, 340282366920938464330371578896117137360) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  transaction.inputs[]                   offset=FrameStatic(0x00) size=Bounded(41, 18446744073709551664) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  transaction.inputs[].previous_hash     offset=FrameStatic(0x00) size=Fixed(32) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  transaction.inputs[].previous_index    offset=FrameStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  transaction.inputs[].script_length     offset=FrameStatic(0x24) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable
+  transaction.inputs[].script            offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  transaction.inputs[].sequence          offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  transaction.output_count               offset=Dynamic size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable
+  transaction.outputs                    offset=Dynamic size=Bounded(0, 340282366920938463740075768537411485680) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  transaction.outputs[]                  offset=FrameStatic(0x00) size=Bounded(9, 18446744073709551632) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  transaction.outputs[].value            offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  transaction.outputs[].script_length    offset=FrameStatic(0x08) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable
+  transaction.outputs[].script           offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  transaction.lock_time                  offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable

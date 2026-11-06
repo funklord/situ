@@ -1,0 +1,39 @@
+# situ wire signature v3
+# schema: x509.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+varint der_length : der bits=32 bytes=5 minimal
+
+struct certificate size=2..4294967301
+  @0x0000   2..6      item_header outer  big
+  ~         0..4294967295 u8         body  sized-by=outer.length
+
+struct item_header size=2..6
+  @0x0000   1         u8         tag
+  @0x0001   1..5      der_length length  varint=der_length
+
+struct items size=0..
+  @0x0000   0..       tlv        parts
+  parts tlv decode kind: tag
+  parts tlv identity: kind
+  parts tlv select: kind
+  parts tlv size default: prefixed der_length
+  parts tlv duplicates: allowed
+  parts tlv unknown: error

@@ -1251,6 +1251,39 @@ class VarintEncoding(Enum):
 	#: (RFC 9000, section 16). No continuation bit, so `max_bits` is one of
 	#: four widths and the length is known from the first byte.
 	QUIC   = "quic"
+	#: A first byte below a threshold is the value, and above it a marker for
+	#: how many bytes hold it. One read, three published tables: see `MARKED`.
+	DER         = "der"
+	COMPACTSIZE = "compactsize"
+	LENENC      = "lenenc"
+
+
+@dataclass(frozen=True)
+class MarkedForm:
+	"""One table of a marked integer, which each reader holds a copy of.
+
+	A first byte below `direct` is the value. `first` is the first marker, and
+	marker `first + i` says `widths[i]` bytes follow. Anything else is no
+	number in this form: BER's indefinite 0x80, MySQL's NULL at 0xFB.
+	"""
+
+	#: What the image says in place of the bits a last group carries.
+	code: int
+	direct: int
+	first: int
+	widths: tuple[int, ...]
+	big: bool
+
+
+MARKED = {
+	#: X.690, 8.1.3: the definite form, with a length of up to eight bytes.
+	VarintEncoding.DER: MarkedForm(200, 0x80, 0x81, (1, 2, 3, 4, 5, 6, 7, 8),
+	                               True),
+	#: Bitcoin's CompactSize.
+	VarintEncoding.COMPACTSIZE: MarkedForm(201, 0xFD, 0xFD, (2, 4, 8), False),
+	#: MySQL's length-encoded integer.
+	VarintEncoding.LENENC: MarkedForm(202, 0xFB, 0xFC, (2, 3, 8), False),
+}
 
 
 class VarintTransform(Enum):
@@ -1287,6 +1320,9 @@ class VarintDecl(Decl):
 		"""
 		if self.encoding is VarintEncoding.QUIC:
 			return (self.max_bits + 2) // 8
+		if self.encoding in MARKED:
+			return 1 + min(width for width in MARKED[self.encoding].widths
+			               if width * 8 >= self.max_bits)
 		if self.declared_max_bytes is not None:
 			return self.declared_max_bytes
 		return (self.max_bits + 6) // 7
@@ -1303,6 +1339,8 @@ class VarintDecl(Decl):
 		"""
 		if self.encoding is VarintEncoding.QUIC:
 			return 0
+		if self.encoding in MARKED:
+			return MARKED[self.encoding].code
 		return self.max_bits - 7 * (self.max_bytes - 1)
 
 	@property

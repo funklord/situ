@@ -1,0 +1,51 @@
+// X.509: a certificate as DER, down to its first level of items.
+//
+// SOURCE. ITU-T X.690, cited by section:
+//
+//   8.1.2.2  the identifier octet: class, constructed, tag number
+//   8.1.3    the length octets: short form below 0x80, or 0x80 plus how many
+//            octets hold it, high octet first
+//   10.1     DER: the definite form, in the fewest octets
+//
+// RFC 5280, 4.1: a Certificate is a SEQUENCE of tbsCertificate,
+// signatureAlgorithm and signatureValue.
+//
+// WHY THIS ONE. BER's length is a number whose width its first byte chooses,
+// and it sizes everything in X.509, SNMP and LDAP. A `variant` on that byte
+// reads it and cannot hand it to `u8 body[...]`, as each arm is a different field.
+//
+// NOT HERE. A tag number past 30 takes more octets, and the indefinite form
+// (`0x80`) is BER's and refused by `encoding = der`. The item's value is its
+// bytes: this is one level, and a walker of the tree would hold a run of itself.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+varint_type der_length {
+	encoding = der;
+	max_bits = 32;
+	minimal;
+}
+
+// The header every item opens with, and which the body is sized by.
+struct item_header {
+	u8 tag;
+	der_length length;
+}
+
+struct certificate {
+	item_header outer;
+	u8 body[outer.length];
+}
+
+// The three items of `certificate.body`.
+struct items {
+	tlv parts (
+		tag_type       = u8,
+		tag_decode     = { kind = tag },
+		tag_identity   = kind,
+		value_size     = switch (kind) { default: prefixed(der_length) },
+		duplicate_tags = allowed,
+	);
+}

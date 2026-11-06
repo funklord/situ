@@ -1940,6 +1940,149 @@ static inline uint32_t situ_varint_be_put(uint8_t *p, uint32_t avail,
 }
 
 /* Encoded length of a value, so a writer can tell whether it still fits. */
+/* A marked integer: a first byte below `direct` is the value, and marker
+ * `first + i` says `widths[i]` bytes hold it, in the order `big` says. `widths`
+ * is a nibble per marker, low first. Anything else is no number in this form:
+ * BER's indefinite 0x80, MySQL's NULL at 0xFB.
+ *
+ * Returns bytes consumed, or 0 where the buffer ends inside it, the marker is
+ * no marker, or the whole is longer than `max_bytes`. */
+static inline uint32_t situ_varint_marked_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint32_t direct, uint32_t first, uint32_t count,
+        uint32_t widths, int big, uint64_t *out)
+{
+	uint64_t acc = 0;
+	uint32_t n;
+	uint32_t i;
+
+	if (avail == 0u) {
+		return 0;
+	}
+	if (p[0] < direct) {
+		*out = p[0];
+		return 1u;
+	}
+	if (p[0] < first || p[0] - first >= count) {
+		return 0;
+	}
+
+	n = (widths >> (4u * (p[0] - first))) & 0xFu;
+	if (n + 1u > avail || n + 1u > max_bytes) {
+		return 0;
+	}
+	for (i = 0u; i < n; i++) {
+		acc |= (uint64_t)p[1u + i] << (8u * (big ? n - 1u - i : i));
+	}
+
+	*out = acc;
+	return n + 1u;
+}
+
+/* The shortest encoding of a value under `situ_varint_marked_get`. */
+static inline uint32_t situ_varint_marked_len(uint64_t value, uint32_t direct,
+        uint32_t count, uint32_t widths)
+{
+	uint32_t i;
+
+	if (value < direct) {
+		return 1u;
+	}
+	for (i = 0u; i < count; i++) {
+		const uint32_t n = (widths >> (4u * i)) & 0xFu;
+
+		if (n >= 8u || value < (UINT64_C(1) << (8u * n))) {
+			return n + 1u;
+		}
+	}
+	return 0;
+}
+
+/* Encode one marked integer minimally. Returns bytes written, or 0 if there is
+ * no room. */
+static inline uint32_t situ_varint_marked_put(uint8_t *p, uint32_t avail,
+        uint64_t value, uint32_t direct, uint32_t first, uint32_t count,
+        uint32_t widths, int big)
+{
+	const uint32_t total = situ_varint_marked_len(value, direct, count, widths);
+	uint32_t i;
+	uint32_t at = 0u;
+
+	if (total == 0u || total > avail) {
+		return 0;
+	}
+	if (total == 1u) {
+		p[0] = (uint8_t)value;
+		return 1u;
+	}
+	while (((widths >> (4u * at)) & 0xFu) != total - 1u) {
+		at++;
+	}
+	p[0] = (uint8_t)(first + at);
+	for (i = 0u; i < total - 1u; i++) {
+		p[1u + i] = (uint8_t)(value
+		            >> (8u * (big ? total - 2u - i : i)));
+	}
+	return total;
+}
+
+/* The three published tables. `ast.MARKED` names each, and each reader holds a
+ * copy, since a walker carries no table of its own to be handed. */
+#define SITU_DER_FORM         0x80u, 0x81u, 8u, 0x87654321u, 1
+#define SITU_COMPACTSIZE_FORM 0xFDu, 0xFDu, 3u, 0x842u, 0
+#define SITU_LENENC_FORM      0xFBu, 0xFCu, 3u, 0x832u, 0
+
+static inline uint32_t situ_varint_der_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_marked_get(p, avail, max_bytes, SITU_DER_FORM, out);
+}
+
+static inline uint32_t situ_varint_der_len(uint64_t value)
+{
+	return situ_varint_marked_len(value, 0x80u, 8u, 0x87654321u);
+}
+
+static inline uint32_t situ_varint_der_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	return situ_varint_marked_put(p, avail, value, SITU_DER_FORM);
+}
+
+static inline uint32_t situ_varint_compactsize_get(const uint8_t *p,
+        uint32_t avail, uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_marked_get(p, avail, max_bytes, SITU_COMPACTSIZE_FORM,
+	                              out);
+}
+
+static inline uint32_t situ_varint_compactsize_len(uint64_t value)
+{
+	return situ_varint_marked_len(value, 0xFDu, 3u, 0x842u);
+}
+
+static inline uint32_t situ_varint_compactsize_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	return situ_varint_marked_put(p, avail, value, SITU_COMPACTSIZE_FORM);
+}
+
+static inline uint32_t situ_varint_lenenc_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_marked_get(p, avail, max_bytes, SITU_LENENC_FORM, out);
+}
+
+static inline uint32_t situ_varint_lenenc_len(uint64_t value)
+{
+	return situ_varint_marked_len(value, 0xFBu, 3u, 0x832u);
+}
+
+static inline uint32_t situ_varint_lenenc_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	return situ_varint_marked_put(p, avail, value, SITU_LENENC_FORM);
+}
+
 /* Decode one QUIC varint (RFC 9000, section 16): the top two bits of the
  * first byte say one, two, four or eight bytes and the rest is the value, high
  * byte first. Returns bytes consumed, or 0 if the buffer ends inside it or the

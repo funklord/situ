@@ -1,0 +1,43 @@
+// Bitcoin: a transaction in its original serialization.
+//
+// SOURCE. The serialization `CTransaction` writes, as Bitcoin Core's
+// `primitives/transaction.h` lays it out, before segregated witness: a
+// version, the inputs, the outputs and a lock time, little-endian throughout,
+// with every count and script length a CompactSize (`serialize.h`).
+//
+// WHY THIS ONE. A CompactSize is a value below 0xFD and otherwise a marker for
+// two, four or eight bytes, and here it is a count of records of no one size,
+// each holding another as a length. The vector is the genesis coinbase, whose
+// double SHA-256 is the published transaction id, so its bytes are not ours.
+
+target buffer;
+endian little;
+
+varint_type compact_size {
+	encoding = compactsize;
+	max_bits = 64;
+	minimal;
+}
+
+struct input {
+	u8 previous_hash[32];
+	u32 previous_index;
+	compact_size script_length;
+	u8 script[script_length];
+	u32 sequence;
+}
+
+struct output {
+	u64 value;
+	compact_size script_length;
+	u8 script[script_length];
+}
+
+struct transaction {
+	u32 version;
+	compact_size input_count;
+	input inputs[input_count];
+	compact_size output_count;
+	output outputs[output_count];
+	u32 lock_time;
+}

@@ -20,7 +20,10 @@ def varint_stem(declared: ast.VarintDecl | None) -> str:
 		return "varint"
 	return {ast.VarintEncoding.LEB128: "varint",
 	        ast.VarintEncoding.BE128:  "varint_be",
-	        ast.VarintEncoding.QUIC:   "varint_quic"}[declared.encoding]
+	        ast.VarintEncoding.QUIC:   "varint_quic",
+	        ast.VarintEncoding.DER:    "varint_der",
+	        ast.VarintEncoding.COMPACTSIZE: "varint_compactsize",
+	        ast.VarintEncoding.LENENC: "varint_lenenc"}[declared.encoding]
 
 
 def varint_limits(declared: ast.VarintDecl | None, suffix: str = "") -> str:

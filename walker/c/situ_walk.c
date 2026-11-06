@@ -898,6 +898,28 @@ static situ_walk_err parse_scaled(const uint8_t *data, uint32_t len,
 
 #define VARINT_MINIMAL 0x01u
 #define VARINT_BIG     0x02u
+
+/* A marked integer's table: a first byte below `direct` is the value, and
+ * marker `first + i` says `widths[i]` bytes hold it. The image says which by a
+ * code where a last group's bits would be. `ast.MARKED` says what each is. */
+typedef struct marked_form {
+	uint8_t direct;
+	uint8_t first;
+	uint8_t count;
+	uint8_t big;
+	uint8_t widths[8];
+} marked_form;
+
+static const marked_form *marked_of(uint32_t code)
+{
+	static const marked_form forms[] = {
+		{ 0x80u, 0x81u, 8u, 1u, { 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u } },
+		{ 0xFDu, 0xFDu, 3u, 0u, { 2u, 4u, 8u, 0u, 0u, 0u, 0u, 0u } },
+		{ 0xFBu, 0xFCu, 3u, 0u, { 2u, 3u, 8u, 0u, 0u, 0u, 0u, 0u } },
+	};
+
+	return code >= 200u && code <= 202u ? &forms[code - 200u] : NULL;
+}
 /* The TRANSFORM, which the image had no bit for until 26.687 -- so this
  * walker answered a `svar`'s raw groups where four backends answer the
  * decoded value, reading -1 as 1 and 1 as -2. Bit 1 existed and nobody
@@ -1032,6 +1054,20 @@ static situ_walk_err varint_admissible(const uint8_t *rules,
 		      : raw < (1u << 30) ? 4u : 8u;
 		return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
 	}
+	const marked_form *form = (rules[10] & VARINT_BIG) != 0u
+	                          ? marked_of(rules[9]) : NULL;
+	if (form != NULL) {
+		if (raw >= form->direct) {
+			for (uint32_t i = 0u; i < form->count; i++) {
+				least = form->widths[i] + 1u;
+				if (form->widths[i] >= 8u
+				    || raw < ((uint64_t)1 << (8u * form->widths[i]))) {
+					break;
+				}
+			}
+		}
+		return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
+	}
 	while (raw >= 0x80u) {
 		raw >>= 7;
 		least++;
@@ -1134,6 +1170,34 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
 			held = (held << 8) | message[at + i];
 		}
 		*consumed = size;
+		*value    = held;
+		return SITU_WALK_OK;
+	}
+
+	/* A marked integer, which the image says as big with a form's code where
+	 * a last group's bits would be (26.921). */
+	const marked_form *form = big ? marked_of(terminal_bits) : NULL;
+	if (form != NULL) {
+		if (avail == 0u) {
+			return SITU_WALK_BOUNDS;
+		}
+		const uint8_t lead = message[at];
+		if (lead < form->direct) {
+			*consumed = 1u;
+			*value    = lead;
+			return SITU_WALK_OK;
+		}
+		if (lead < form->first || lead - form->first >= form->count
+		    || form->widths[lead - form->first] + 1u > avail) {
+			return SITU_WALK_BOUNDS;
+		}
+		const uint32_t size = form->widths[lead - form->first];
+		uint64_t held = 0u;
+		for (uint32_t i = 0u; i < size; i++) {
+			const uint32_t shift = form->big ? size - 1u - i : i;
+			held |= (uint64_t)message[at + 1u + i] << (shift * 8u);
+		}
+		*consumed = size + 1u;
 		*value    = held;
 		return SITU_WALK_OK;
 	}

@@ -1,0 +1,25 @@
+# situ capability map v1
+# schema: x509.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct certificate size=2..4294967301 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  certificate.outer                      offset=AbsoluteStatic(0x00) size=Bounded(2, 6) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  certificate.outer.tag                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  certificate.outer.length               offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  certificate.body                       offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct item_header size=2..6 mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic
+  item_header.tag                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  item_header.length                     offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+
+struct items size=0.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
+  items.parts                            offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical

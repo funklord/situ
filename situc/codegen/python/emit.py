@@ -1687,7 +1687,8 @@ class Emitter:
 			            if rule.kind == "prefixed"
 			            and rule.length_type in declared)
 
-		order   = ("varint", "varint_be", "varint_quic")
+		order   = ("varint", "varint_be", "varint_compactsize", "varint_der",
+		           "varint_lenenc", "varint_quic")
 		reads   = {varint_stem(decl) for decl in read}
 		lengths = {varint_stem(decl) for decl in members if decl.minimal}
 		needed  = [f"{stem}_get" for stem in order if stem in reads]
