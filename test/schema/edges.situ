@@ -2579,3 +2579,11 @@ struct sealed_tail {
 	}
 	tag u8[16];
 }
+
+// A text format's last line, which nothing obliges to end in a newline
+// (26.895): the frame's end stands for the delimiter. `line` and `final` both,
+// so that a sweep meets one with something after it and one without.
+struct last_line {
+	u8  head_line[] until "\n" | end max 16;
+	u8  rest_line[] until "\n" | end;
+}

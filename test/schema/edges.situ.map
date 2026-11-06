@@ -412,6 +412,10 @@ struct labelled size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanoni
   labelled.code                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   labelled.sequence                      offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
+struct last_line size=2.. access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  last_line.head_line                    offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  last_line.rest_line                    offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+
 struct link size=4..1024 mutate=Shifting
   link.kind                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   link.units                             offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

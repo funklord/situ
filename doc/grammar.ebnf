@@ -203,7 +203,7 @@ size_expr	= expr | "remaining" ;
  * delimiter is a string literal rather than an expression: it would
  * otherwise have to be evaluated against the data it is being looked for
  * in. `max` bounds the scan. *)
-until		= ( "until" | "before" ) delimiter { "|" delimiter }
+until		= ( "until" | "before" ) delimiter { "|" delimiter } [ "|" "end" ]
 		  [ "max" expr ] ;
 delimiter	= string | char ;
 pin		= "@" expr ;

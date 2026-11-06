@@ -330,8 +330,9 @@ def _width(placement: Placement) -> str:
 		# one puts the delimiter inside the member and the other leaves it
 		# for the next.
 		word = "until" if placement.delimiter_consumed else "before"
-		return f"{word}:" + "|".join(one.hex()
-		                             for one in placement.delimiters)
+		spelled = "|".join(one.hex() for one in placement.delimiters)
+		return f"{word}:{spelled}" + ("|end" if placement.delimiter_or_end
+		                              else "")
 	if placement.size_max_bits != placement.size_bits:
 		hi = ("" if placement.size_max_bits is None
 		      else str(placement.size_max_bits // BITS_PER_BYTE))

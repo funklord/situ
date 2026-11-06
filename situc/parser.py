@@ -2841,9 +2841,17 @@ class Parser:
 		found: list[bytes] = []
 		shown: list[str]   = []
 		seen: dict[bytes, Span] = {}
+		or_end = False
 
 		while True:
 			token = self.current
+
+			# The end of the frame as one more place to stop (26.895). A soft
+			# word after a `|`, where only a delimiter could stand.
+			if found and token.is_ident("end"):
+				self.advance()
+				or_end = True
+				break
 
 			if token.kind is TokenKind.CHAR:
 				# A delimiter that is one character rather than one byte,
@@ -2899,7 +2907,8 @@ class Parser:
 			cap = self.parse_expr()
 
 		return ast.Until(self.span_from(start), tuple(found), cap = cap,
-		                 consumed = consumed, shown = tuple(shown))
+		                 consumed = consumed, shown = tuple(shown),
+		                 or_end = or_end)
 
 	def _character_bytes(self, token: Token) -> bytes:
 		"""A character literal as the bytes the schema's encodings agree on.

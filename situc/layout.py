@@ -477,6 +477,8 @@ class Placement:
 	#: `before`. The scan is the same and only the span differs, so this is
 	#: read wherever a span adds the delimiter's length and nowhere else.
 	delimiter_consumed: bool	= True
+	#: `until "\n" | end`: the frame's end may stand for the delimiter.
+	delimiter_or_end: bool		= False
 	#: The array's size expression as source, where it is not a bare field
 	#: reference. `sized_by` holds a path and holds nothing for
 	#: `data[(len + 1) * 8 - 2]`, so a backend reading only that emitted a
@@ -2611,6 +2613,7 @@ class Solver:
 			delimiters         = member.until.delimiters if member.until else (),
 			delimiter_consumed = (member.until.consumed if member.until
 			                      else True),
+			delimiter_or_end   = bool(member.until and member.until.or_end),
 			skip               = skip.values if skip else (),
 			skip_shown         = skip.shown if skip else (),
 			skip_declared      = bool(skip and skip.declared),

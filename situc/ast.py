@@ -240,6 +240,10 @@ class Until(Node):
 	#: is identical and only the span differs, which is why this is a flag
 	#: on the delimiter rather than a second construct.
 	consumed: bool		= True
+	#: `until "\n" | end`: the frame's end may stand for the delimiter, so
+	#: `validate` does not ask for one (26.895). A text format's last line
+	#: is the case: nothing obliges it to end in a newline.
+	or_end: bool		= False
 	#: Each delimiter as the schema wrote it, `'a'` or `"ab"` including the
 	#: quotes. The bytes are what everything computes with; this is what the
 	#: unparser prints, so a schema written with characters comes back with

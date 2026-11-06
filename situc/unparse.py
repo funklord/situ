@@ -732,7 +732,8 @@ def _until_to_source(until: "ast.Until | None") -> str:
 		f'"{_escape(one.decode("latin-1"))}"' for one in until.delimiters)
 	cap  = f" max {expr_to_source(until.cap)}" if until.cap is not None else ""
 	word = "until" if until.consumed else "before"
-	return f" {word} {body}{cap}"
+	end  = " | end" if until.or_end else ""
+	return f" {word} {body}{end}{cap}"
 
 
 def _while_to_source(repeat: "ast.While | None") -> str:

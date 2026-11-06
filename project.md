@@ -637,7 +637,7 @@ size_expr     = expr | "remaining" ;
    delimiter is a string literal rather than an expression: it would
    otherwise have to be evaluated against the data it is being looked
    for in. `max` bounds the scan. *)
-until         = ( "until" | "before" ) delimiter { "|" delimiter }
+until         = ( "until" | "before" ) delimiter { "|" delimiter } [ "|" "end" ]
                 [ "max" expr ] ;
 delimiter     = string | char ;
 
@@ -8266,6 +8266,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.895 The end of the frame as a delimiter
+
+Moved to `doc/decision/26.895-the-end-of-the-frame-as-a-delimiter.md`.
 
 ### 26.894 Fixed members may follow a `[remaining]` run
 

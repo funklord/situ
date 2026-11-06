@@ -1882,13 +1882,15 @@ def must_be_terminated(placement: "Placement") -> bool:
 	`before`: the delimiter belongs to whatever comes next, and whether
 	there is a next is the enclosing structure's business rather than this
 	member's. A JSON number at the end of a document has no separator after
-	it and is not malformed.
+	it and is not malformed. Nor for `until "\\n" | end`, which says the last
+	one may stop at the end of the frame instead (26.895).
 
 	One decision, five readers -- four backends and the packer -- because
 	each of them emits or records this check, and five answers to it is how
 	they come apart.
 	"""
-	return bool(placement.delimiters) and placement.delimiter_consumed
+	return (bool(placement.delimiters) and placement.delimiter_consumed
+	        and not placement.delimiter_or_end)
 
 
 def has_computable_extent(structs: dict[str, ResolvedStruct],

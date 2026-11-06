@@ -375,6 +375,10 @@ struct labelled size=22
   @0x0010   4         u8         code  big encoding=ascii
   @0x0014   2         u16        sequence  big
 
+struct last_line size=2..
+  @0x0000   until:0a|end u8         head_line  cap=16
+  ~         until:0a|end u8         rest_line
+
 struct link size=4..1024
   @0x0000   1         u8         kind
   @0x0001   1         u8         units
