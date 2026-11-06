@@ -4905,6 +4905,142 @@ static int element_validatable(const situ_walk_image *image, uint32_t shape)
 	return 1;
 }
 
+/* Whether this shape states a `[depth]`, so a cycle reaches it. */
+static int has_depth(const situ_walk_image *image, uint32_t shape)
+{
+	for (uint32_t i = 0u; i < image->depth_count; i++) {
+		if (u32_at(image->depths + (size_t)i * image->depth_stride) == shape) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* The struct a run of bytes at `index` holds, or SITU_WALK_NONE. */
+static uint32_t held_struct(const situ_walk_image *image, uint32_t index)
+{
+	for (uint32_t h = 0u; h < image->holds_count; h++) {
+		const uint8_t *row = image->holds + h * image->holds_stride;
+
+		if (u32_at(row) == index) {
+			return u32_at(row + 4);
+		}
+	}
+	return SITU_WALK_NONE;
+}
+
+/* Answer SITU_WALK_UNSUPPORTED where a cycle through a run of bytes nests too
+ * far: `report._nesting_within`, for its reason. The generated `nesting`,
+ * asked where `check` asks it, because nothing measures a `[holds]` run's
+ * interior. Everything but this build's ceiling means the walk stops here. */
+static situ_walk_err nesting_within(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t depth)
+{
+	if (depth > depth_ceiling(image, shape)) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	uint32_t first = 0u;
+	uint32_t total = 0u;
+
+	if (situ_walk_members(image, shape, &first, &total) != SITU_WALK_OK) {
+		return SITU_WALK_OK;
+	}
+	for (uint32_t index = first; index < first + total; index++) {
+		situ_walk_placement one;
+
+		if (situ_walk_placement_at(image, index, &one) != SITU_WALK_OK) {
+			continue;
+		}
+		const uint32_t framed = held_struct(image, index);
+		const uint32_t child  = framed != SITU_WALK_NONE ? framed
+		                                                 : one.type_struct;
+		uint32_t       start  = 0u;
+
+		if (child == SITU_WALK_NONE || !has_depth(image, child)) {
+			continue;
+		}
+		situ_walk_err err = offset_bits_deep(image, message, len, shape,
+		                                     index, depth, &start);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK || start % 8u || start / 8u > len) {
+			continue;
+		}
+		start /= 8u;
+
+		if (framed != SITU_WALK_NONE) {
+			uint32_t wide = 0u;
+
+			err = size_bits_deep(image, message, len, shape, index, depth,
+			                     &wide);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK || wide / 8u > len - start) {
+				continue;
+			}
+			err = nesting_within(image, message + start, wide / 8u, child,
+			                     depth + 1u);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			continue;
+		}
+		if (one.array_count == SITU_WALK_NONE
+		    && one.size_code == SITU_WALK_NONE) {
+			err = nesting_within(image, message + start, len - start, child,
+			                     depth + 1u);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			continue;
+		}
+
+		int64_t  count = -1;	/* negative: to the end of the frame */
+		uint32_t at    = start;
+		uint32_t end   = len;
+
+		if (one.array_count != SITU_WALK_NONE) {
+			count = one.array_count;
+		} else {
+			int64_t  value = 0;
+			walk_ctx ctx   = {image, message, len, shape, depth};
+
+			if (situ_walk_eval(image, one.size_code, ctx_load, &ctx,
+			                   (int64_t)(len - start), &value)
+			    != SITU_WALK_OK) {
+				continue;
+			}
+			if (!size_code_is_bytes(image, one.size_code)) {
+				count = value < 0 ? 0 : value;
+			} else if (value >= 0 && value < (int64_t)(len - start)) {
+				end = start + (uint32_t)value;
+			}
+		}
+		for (int64_t n = 0; at < end && (count < 0 || n < count); n++) {
+			uint32_t extent = 0u;
+
+			err = nesting_within(image, message + at, end - at, child,
+			                     depth + 1u);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			err = struct_extent(image, message + at, end - at, child,
+			                    depth + 1u, &extent);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK || extent == 0u || extent > end - at) {
+				break;
+			}
+			at += extent;
+		}
+	}
+	return SITU_WALK_OK;
+}
+
 /* Every element of a run of structs, through its own validator.
  *
  * The four backends' `_element_validation` and `report._run_elements`, one
@@ -5211,6 +5347,13 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 	 * were validated and the deepest of nine was refused (26.791). */
 	if (depth > depth_ceiling(image, shape)) {
 		return SITU_WALK_UNSUPPORTED;
+	}
+	if (image->holds_count != 0u && has_depth(image, shape)) {
+		situ_walk_err deep = nesting_within(image, message, len, shape, 0u);
+
+		if (deep != SITU_WALK_OK) {
+			return deep;
+		}
 	}
 
 	/* The image says whether it carries every check for this struct. Where
@@ -5563,7 +5706,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				continue;
 			}
 			if (at / 8u > len || wide / 8u > len - at / 8u) {
-				record(why, index, SITU_WALK_NO_CHECK);
+				record(why, index, CHECK_FITS_FRAME);
 				*verdict = SITU_WALK_BOUNDS;
 				return SITU_WALK_OK;
 			}

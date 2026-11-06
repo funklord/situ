@@ -8296,6 +8296,22 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.901 A walk reads nothing past its view
+
+Moved to `doc/decision/26.901-a-walk-reads-nothing-past-its-view.md`.
+
+### 26.900 A dissector Wireshark can load
+
+Moved to `doc/decision/26.900-a-dissector-wireshark-can-load.md`.
+
+### 26.899 `popcount` counts a bitmap
+
+Moved to `doc/decision/26.899-popcount-counts-a-bitmap.md`.
+
+### 26.898 A run of bytes holds a struct
+
+Moved to `doc/decision/26.898-a-run-of-bytes-holds-a-struct.md`.
+
 ### 26.897 An invariant is a refusal too
 
 Moved to `doc/decision/26.897-an-invariant-is-a-refusal-too.md`.

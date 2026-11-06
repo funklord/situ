@@ -4918,10 +4918,19 @@ class Emitter:
 		for peer in cycle:
 			name = ident(self.prefix, peer, "extent")
 			deep = ident(self.prefix, peer, "nesting")
+			peer_struct = self.resolved.structs.get(peer)
+			# Only a peer that has an extent. A cycle through `[holds]` can
+			# pass through a struct no run walks: `held_boxes` is reached
+			# by the bytes that hold it, so nothing asks how long it is and
+			# `_struct_extent` defines nothing. The prototype alone is
+			# `-Werror=unused-function`, the trap 26.679 records below.
+			if peer_struct is None or self._struct_extent(peer_struct):
+				lines.extend([
+					f"static inline uint32_t {name}(situ_view_t view);",
+					f"static inline uint32_t {name}_at(situ_view_t view,"
+					" uint32_t depth);",
+				])
 			lines.extend([
-				f"static inline uint32_t {name}(situ_view_t view);",
-				f"static inline uint32_t {name}_at(situ_view_t view,"
-				" uint32_t depth);",
 				# The nesting probe bounces round the cycle the same way and
 				# needs the same declarations. It declared itself and only
 				# itself, which is all a self-cycle needs and one short of
@@ -4956,7 +4965,6 @@ class Emitter:
 			# was read off `canonical.situ`, which is imported, and
 			# generalised to every cycle -- one schema's shape taken for
 			# the rule.
-			peer_struct = self.resolved.structs.get(peer)
 			if peer_struct is not None and self._imported(peer):
 				tail = self._argument_tail(peer_struct)
 				lines.extend([
@@ -5276,6 +5284,16 @@ class Emitter:
 		         f"\tif (depth >= {limit}u) {{",
 		         "\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
 		         "\t}"]
+		# The plain branch's guard, for its reason (26.322): a walk hands
+		# this whatever remains of the frame, one byte of it included, and
+		# the lengths are read out of the fixed prefix. `validate` reached
+		# past a one-byte message through `all_fits` here (26.901).
+		if constant and deep:
+			lines.extend([
+				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+				f"\t\treturn {constant}u;\t/* the lengths below are not"
+				" here to read */",
+				"\t}"])
 		lines.extend(f"\textent = extent + ({term});" for term in deep)
 		lines.extend(ending)
 		lines.extend(["\treturn extent;", "}", "",
@@ -9851,6 +9869,17 @@ class Emitter:
 			target.placement.scalar, target.placement,
 			self._value_base(struct, target.placement, gated=held != "view"),
 			offset=self._value_offset(target.placement))
+		# A driver the message places can be past the view: the walk hands
+		# `extent` whatever remains of the frame, and this load is the one
+		# read on that path with no bound of its own. `get` answers zero
+		# there; so does this (26.901).
+		fits = self._fits(struct, target.placement,
+		                  self._scalar_bytes(target.placement.scalar), held,
+		                  gated=held != "view")
+		if fits is not None:
+			kind   = ("int64_t" if target.placement.scalar.signed
+			          else "uint64_t")
+			loaded = f"(({fits}) ? ({kind})({loaded}) : ({kind})0)"
 		# A signed scalar can drive a count, and a negative one must not
 		# become four billion on the way to the clamp.
 		return (leaf(loaded, target.placement.scalar.signed), True)

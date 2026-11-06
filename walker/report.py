@@ -847,11 +847,55 @@ def _read_for_relation(view: View, index: int) -> int:
 _descent = [0]
 
 
+def _nesting_within(view: View, depth: int = 0) -> None:
+	"""Raise `TooDeep` where a cycle through a run of bytes nests too far.
+
+	The generated `nesting`, asked where `check` asks it: first, and of the
+	whole message. A cycle through members needs no such thing, since
+	measuring the first member already follows it down; nothing measures a
+	`[holds]` run's interior. Without this a message both too deep and cut
+	short was `cannot-say` or a constraint to the four backends and a bounds
+	refusal here (26.901).
+
+	Followed as they follow it: through what the cycle reaches, whether or
+	not the rest of the message is sound, and not into an arm.
+	"""
+	image = view.image
+	if depth > _ceiling(image, view.struct):
+		raise TooDeep("nested deeper than this walker follows")
+	for index in image.members(view.shape):
+		placement = image.placements[index]
+		child     = image.holds.get(index, placement.type_struct)
+		if child not in image.depths or placement.kind != FIELD:
+			continue
+		try:
+			at = view.at + offset_bits(view, index) // BITS_PER_BYTE
+			if index in image.holds:
+				reach = size_bits(view, index) // BITS_PER_BYTE
+				spans = [(at, reach)] if at + reach <= view.limit else []
+			elif is_run(image, index):
+				spans = _run_elements(view, index) or []
+			else:
+				spans = [(at, view.limit - at)]
+		except TooDeep:
+			raise
+		except (Refused, Unplaceable):
+			continue
+		for start, size in spans:
+			_nesting_within(View(image, view.buffer, child, start,
+			                     start + size), depth + 1)
+
+
 def _validate(image: Image, view: View, struct_index: int,
 		found: list[tuple[int, int]] | None = None) -> int | None:
 	"""`_validate_here`, refused past the ceiling as the C walker refuses."""
 	if _descent[0] > _ceiling(image, struct_index):
 		return None
+	if image.holds and struct_index in image.depths:
+		try:
+			_nesting_within(view)
+		except TooDeep:
+			return None
 	_descent[0] += 1
 	try:
 		return _validate_here(image, view, struct_index, found)
@@ -1187,7 +1231,7 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			except Refused:
 				return fail(ERR_BOUNDS, index)
 			if inner_at + reach > view.limit:
-				return fail(ERR_BOUNDS, index)
+				return fail(ERR_BOUNDS, index, FITS_FRAME)
 			floor = image.structs[framed].size_min_bits
 			if floor != NONE and reach * BITS_PER_BYTE < floor:
 				return fail(ERR_BOUNDS, index)

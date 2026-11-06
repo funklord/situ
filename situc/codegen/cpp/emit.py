@@ -3654,6 +3654,14 @@ class Emitter:
 		# belong in `validate`.
 		limit = declared_depth(self.schema, struct.name) + 1
 		deep  = self._extent_terms(struct, depth="depth")
+		sums  = deep or terms
+		# The plain form's floor, for its reason: a walk hands this whatever
+		# remains of the frame, and `validate` reached past a one-byte
+		# message through `all_fits` here (26.901).
+		floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {sums[0]}u)) {{",
+		          f"\t\t\treturn {sums[0]}u;",
+		          "\t\t}"]
+		         if len(sums) > 1 and sums[0] != "0" else [])
 		return [*head,
 		        "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t depth)"
 		        " const noexcept",
@@ -3661,7 +3669,8 @@ class Emitter:
 		        f"\t\tif (depth >= {limit}u) {{",
 		        "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
 		        "\t\t}",
-		        f"\t\treturn {' + '.join(deep or terms)};",
+		        *floor,
+		        f"\t\treturn {' + '.join(sums)};",
 		        "\t}",
 		        "",
 		        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
