@@ -9154,6 +9154,10 @@ class Emitter:
 				])
 				continue
 
+			# Read through the view: an extent lives on it and not on this
+			# `Mut`, and `size(s.body)` named one that did not exist here,
+			# so the schema compiled in three backends and not in this one.
+			value  = value.replace("self.", "self.as_ref().")
 			scalar = entry.placement.scalar
 			rtype  = self._field_type(entry.placement, writing=True)
 			bit    = f"Self::DIRTY_{base.upper()}"
