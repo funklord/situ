@@ -37,7 +37,7 @@ import re
 from dataclasses import dataclass, field
 
 from situc import ast
-from situc.codegen import refuse_parameters
+from situc.codegen import refuse_only_arguments, refuse_parameters
 from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
 from situc.traverse import invalidating_members
@@ -162,6 +162,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# First, so that a vectors file is not validated against a schema this
 	# cannot serve -- the refusal is about the schema, not the vectors.
 	refuse_parameters(schema, {case.struct for case in cases})
+	refuse_only_arguments(schema, resolved)
 
 	seen: dict[str, Case] = {}
 	for case in cases:

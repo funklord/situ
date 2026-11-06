@@ -37,7 +37,8 @@ from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (enclosing_arm, has_computable_extent, indexed_elements,
+from situc.traverse import (data_sized, enclosing_arm,
+                            has_computable_extent, indexed_elements,
                             inside_an_unresolved_arm,
                             measured_from_a_moving_base, own_entries)
 from situc.types import ScalarKind
@@ -82,9 +83,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	for struct in checked:
 		lines.extend(_short_buffer(basename, struct))
 		for entry in own_entries(struct):
-			lines.extend(_occupies(basename, struct, entry.placement))
-			lines.extend(_round_trip(basename, enums, struct, entry))
-			lines.extend(_decodes(basename, enums, struct, entry.placement))
+			if not data_sized(entry.placement):
+				lines.extend(_occupies(basename, struct, entry.placement))
+				lines.extend(_round_trip(basename, enums, struct, entry))
+				lines.extend(_decodes(basename, enums, struct,
+				                      entry.placement))
 			lines.extend(_nested_start(basename, resolved, struct,
 			                           entry.placement))
 		# **Once per struct and over `struct.entries`, not `own_entries`**,
@@ -1107,7 +1110,8 @@ def _nested_start(basename: str, resolved: ResolvedSchema,
 		        ""]
 	assert offset_bits is not None, "the None case is named above"
 
-	size   = struct.layout.size_bytes
+	# Wide enough for a child an argument sizes, which the minimum has not got.
+	size   = buffer_size(struct.layout) or struct.layout.size_bytes
 	offset = offset_bits // BITS_PER_BYTE
 	member = py_name(placement.name)
 	name   = py_name(f"{struct.name}_{placement.name}")

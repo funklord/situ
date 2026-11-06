@@ -25,7 +25,8 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.codegen import (byte_run, comparable, enum_constants,
-                           refuse_parameters, tally)
+                           refuse_only_arguments, refuse_parameters,
+                           tally)
 from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
 from situc.codegen.cpp.emit import ctype
@@ -42,6 +43,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	without a special case.
 	"""
 	refuse_parameters(schema, {case.struct for case in cases})
+	refuse_only_arguments(schema, resolved)
 
 	seen: dict[str, Case] = {}
 	for case in cases:

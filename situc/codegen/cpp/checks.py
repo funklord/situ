@@ -29,11 +29,13 @@ from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
                            required_run, reserved_policy, selected_arms)
 from situc.codegen.c.frame import framed_structs
 from situc.capability import Axis
-from situc.codegen.c.names import c_name
+from situc.codegen.c.names import bare_name, c_name
+from situc.codegen.cpp.names import class_name
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (enclosing_arm, has_computable_extent,
+from situc.traverse import (data_sized, enclosing_arm,
+                            has_computable_extent,
                             inside_an_unresolved_arm,
                             measured_from_a_moving_base, own_entries)
 from situc.types import ScalarKind
@@ -60,9 +62,9 @@ def _acquire(struct: ResolvedStruct, extent: int, label: str) -> list[str]:
 	return [
 		f"\tstd::uint8_t raw[{extent}u] = {{}};",
 		f"\t::situ::rt::message msg(raw, {extent}u);",
-		f"\t::situ::{struct.name} view;",
+		f"\t::situ::{class_name(struct)} view;",
 		"",
-		f"\tif (::situ::{struct.name}::at(msg, 0u{length}, view) != {OK}) {{",
+		f"\tif (::situ::{class_name(struct)}::at(msg, 0u{length}, view) != {OK}) {{",
 		*_fail(label, "the bytes take no view"),
 		"\t}",
 	]
@@ -84,9 +86,9 @@ def _short_buffer(struct: ResolvedStruct) -> list[str]:
 		"{",
 		f"\tstd::uint8_t raw[{max(short, 1)}u] = {{}};",
 		f"\t::situ::rt::message msg(raw, {short}u);",
-		f"\t::situ::{struct.name} view;",
+		f"\t::situ::{class_name(struct)} view;",
 		"",
-		f"\tif (::situ::{struct.name}::at(msg, 0u{length}, view) == {OK}) {{",
+		f"\tif (::situ::{class_name(struct)}::at(msg, 0u{length}, view) == {OK}) {{",
 		*_fail(f"{struct.name}", f"{short} bytes yielded a view"),
 		"\t}",
 		"}",
@@ -154,7 +156,7 @@ def _decodes(enums: set[str], struct: ResolvedStruct,
 		"",
 		# Unsigned, both sides: a `u64` whose top bit is set is past every
 		# `int64_t`, and the pattern's last byte sets it in little endian.
-		f"\tif (static_cast<std::uint64_t>(view.{c_name(placement.name)}())"
+		f"\tif (static_cast<std::uint64_t>(view.{bare_name(placement.name)}())"
 		f" != {expected & (1 << 64) - 1}ull) {{",
 		*_fail(label, "does not decode its own bytes"),
 		"\t}",
@@ -575,7 +577,7 @@ def _occupies(struct: ResolvedStruct, placement: Placement) -> list[str]:
 
 	label  = placement.path
 	name   = c_name(placement.path)
-	getter = c_name(placement.name)
+	getter = bare_name(placement.name)
 	return [
 		f"/* {placement.path} claims bytes {first}..{last}. Every byte of",
 		" * the claim must reach it and no other byte may. */",
@@ -632,7 +634,7 @@ def _framing(resolved: ResolvedSchema, basename: str) -> list[str]:
 		extent = struct.layout.size_bytes
 		whole  = extent * 2
 		name   = c_name(struct.name)
-		reader = f"::situ::{struct.name}_reader"
+		reader = f"::situ::{class_name(struct)}_reader"
 		lines += [
 			f"/* Two whole {struct.name} messages pushed one byte at a time,",
 			" * which cuts the stream at every boundary it has. Exactly two",
@@ -646,7 +648,7 @@ def _framing(resolved: ResolvedSchema, basename: str) -> list[str]:
 			f"\tstd::uint8_t back[{whole}u];",
 			f"\t{reader} reader(back, static_cast<std::uint32_t>"
 			"(sizeof back));",
-			f"\t::situ::{struct.name} view;",
+			f"\t::situ::{class_name(struct)} view;",
 			"\tstd::uint32_t seen = 0u;",
 			"",
 			"\tfor (std::uint32_t i = 0u; i < "
@@ -678,7 +680,7 @@ def _framing(resolved: ResolvedSchema, basename: str) -> list[str]:
 			f"\tstd::uint8_t back[{extent}u];",
 			f"\t{reader} reader(back, static_cast<std::uint32_t>"
 			"(sizeof back));",
-			f"\t::situ::{struct.name} view;",
+			f"\t::situ::{class_name(struct)} view;",
 			"",
 			"\tif (reader.push(stream, static_cast<std::uint32_t>"
 			f"(sizeof stream)) != {OK}) {{",
@@ -741,7 +743,7 @@ def _round_trip(resolved: ResolvedSchema, enums: set[str],
 
 	label  = placement.path
 	name   = c_name(placement.path)
-	getter = c_name(placement.name)
+	getter = bare_name(placement.name)
 	length = "" if struct.layout.is_fixed_size else f", {extent}u"
 	return [
 		f"/* The map calls {placement.path} writable in place: writing it",
@@ -758,7 +760,7 @@ def _round_trip(resolved: ResolvedSchema, enums: set[str],
 		"	 * field bumps the message generation. Whether bytes",
 		"	 * MOVED is asked of `raw` below, which no generation",
 		"	 * affects. */",
-		f"	if (::situ::{struct.name}::at(msg, 0u{length}, view)"
+		f"	if (::situ::{class_name(struct)}::at(msg, 0u{length}, view)"
 		f" != {OK}) {{",
 		*_fail(label, "no view after the write"),
 		"	}",
@@ -808,7 +810,8 @@ def _nested_start(resolved: ResolvedSchema, struct: ResolvedStruct,
 			and not has_computable_extent(resolved.structs, nested):
 		return []
 
-	extent = struct.layout.size_bytes
+	# Wide enough for a child an argument sizes, which the minimum has not got.
+	extent = buffer_size(struct.layout) or struct.layout.size_bytes
 	offset = placement.offset_bits // BITS_PER_BYTE
 	label  = placement.path
 	name   = c_name(placement.path)
@@ -820,9 +823,9 @@ def _nested_start(resolved: ResolvedSchema, struct: ResolvedStruct,
 		f"static void check_{name}_starts_where_the_map_says(void)",
 		"{",
 		*_acquire(struct, extent, label),
-		f"\t::situ::{placement.type_name} inner;",
+		f"\t::situ::{class_name(nested)} inner;",
 		"",
-		f"\tif (view.{c_name(placement.name)}(inner) != {OK}) {{",
+		f"\tif (view.{bare_name(placement.name)}(inner) != {OK}) {{",
 		*_fail(label, "no sub-view"),
 		"\t}",
 		"\t/* The map's offset, measured from the parent rather than",
@@ -884,9 +887,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 		take(_short_buffer(struct))
 		for entry in own_entries(struct):
-			take(_occupies(struct, entry.placement))
-			take(_round_trip(resolved, enums, struct, entry))
-			take(_decodes(enums, struct, entry.placement))
+			if not data_sized(entry.placement):
+				take(_occupies(struct, entry.placement))
+				take(_round_trip(resolved, enums, struct, entry))
+				take(_decodes(enums, struct, entry.placement))
 			take(_nested_start(resolved, struct, entry.placement))
 		for entry in struct.entries:
 			take(_reserved(resolved, struct, entry.placement, extent))

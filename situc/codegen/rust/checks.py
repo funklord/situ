@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.capability import Axis
-from situc.codegen import (CHECK_KINDS, PROBE_BYTES, buffer_size,
+from situc.codegen import (CHECK_KINDS, PROBE_BYTES,
+                           buffer_size,
                            digit_pattern,
                            passes_unknown, placed_bytes, refuse_only_arguments,
                            takes_arguments,
@@ -31,7 +32,8 @@ from situc.codegen.rust.emit import _ident, _pascal
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (enclosing_arm, inside_an_unresolved_arm,
+from situc.traverse import (data_sized, enclosing_arm,
+                            inside_an_unresolved_arm,
                             measured_from_a_moving_base, own_entries)
 from situc.types import ScalarKind
 
@@ -723,6 +725,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 		bodies.extend(_short_buffer(basename, struct))
 		for entry in own_entries(struct):
+			if data_sized(entry.placement):
+				continue
 			bodies.extend(_occupies(basename, enums, struct,
 			                        entry.placement))
 			bodies.extend(_round_trip(basename, enums, struct, entry))

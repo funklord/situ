@@ -30,7 +30,7 @@ from situc import __version__, ast
 from situc.codegen import refuse_only_arguments, takes_arguments
 from situc.codegen.python.emit import py_name
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import own_entries
+from situc.traverse import offset_unresolvable, own_entries
 
 
 def _readable(struct: ResolvedStruct, placement: object) -> bool:
@@ -44,10 +44,17 @@ def _readable(struct: ResolvedStruct, placement: object) -> bool:
 		return False
 	if getattr(placement, "arguments", None):
 		return False
+	# A run of records has an `_at` and a `_count` and no property.
+	if getattr(placement, "scalar", None) is None and any(
+			getattr(placement, one, None)
+			for one in ("sized_by", "size_expr", "array_count",
+			            "repeat_while")):
+		return False
 	return True
 
 
-def _one(basename: str, struct: ResolvedStruct) -> list[str]:
+def _one(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> list[str]:
 	"""One struct's harness: acquire, validate, read everything."""
 	name   = py_name(struct.name)
 	extent = struct.layout.size_bytes
@@ -56,7 +63,9 @@ def _one(basename: str, struct: ResolvedStruct) -> list[str]:
 	reads = [f"\t\tsink(view.{py_name(entry.placement.name)})"
 	         for entry in own_entries(struct)
 	         if _readable(struct, entry.placement)
-	         and entry.placement.kind == "field"]
+	         and entry.placement.kind == "field"
+	         and not offset_unresolvable(resolved.structs, struct,
+	                                     entry.placement)]
 
 	return [
 		f"def fuzz_{name}(data: bytes) -> None:",
@@ -107,7 +116,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	bodies: list[str] = []
 	for struct in fuzzable:
-		bodies.extend(_one(basename, struct))
+		bodies.extend(_one(basename, resolved, struct))
 
 	names = [py_name(struct.name) for struct in fuzzable]
 	lines = [

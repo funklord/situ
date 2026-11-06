@@ -24,7 +24,7 @@ from situc.codegen.c.names import c_name
 from situc.codegen.rust.emit import _ident, _pascal
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.types import ScalarKind
-from situc.traverse import own_entries
+from situc.traverse import data_sized, own_entries
 
 
 def _one(basename: str, enums: set[str],
@@ -54,6 +54,7 @@ def _one(basename: str, enums: set[str],
 		if placement.kind != "field" or placement.scalar is None:
 			continue
 		if (placement.array_count is not None
+				or data_sized(placement)
 				or placement.radix is not None
 				or placement.type_name in enums
 				or placement.size_max_bits != placement.size_bits

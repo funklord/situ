@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast as python_ast
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -2951,13 +2952,13 @@ SKIPS = [
 	("situc.codegen.c.tamper",  ("schema", "resolved", "name")),
 ]
 
-#: REFUSES either, mixed schema included.
+#: REFUSES a struct a vector names, and any schema with nothing else in it.
 #:
-#: Empty until 2026-10-27, and kept as a named cell so that a generator
-#: which genuinely should decline outright had somewhere to go. It now has
-#: an inhabitant, and the cell being there is what gave it one -- see
-#: `test_the_vector_generator_declines_a_mixed_schema_too` for why
-#: declining is right for it.
+#: It once declined every schema holding a parameter, on the ground that a
+#: refusal keyed on what a schema declares is one message where a refusal
+#: keyed on the vectors is two (26.707). Then `example/mqtt` stated its packet
+#: identifier and that ground cost the vector suites of two real protocols in
+#: four languages, for a struct no vector names (26.912).
 #:
 #: `c/tamper` sat here once on the stated ground that nothing sweeps it
 #: over the corpus, so a `parameter` in `edges.situ` would cost it
@@ -2968,7 +2969,9 @@ SKIPS = [
 #: -- the construct landing in `edges.situ` turned a passing sweep red,
 #: which is the whole reason for putting it there.
 REFUSES: list[tuple[str, tuple[str, ...]]] = [
-	("situc.codegen.c.vectors", ("schema", "resolved", "cases", "name")),
+	(f"situc.codegen.{language}.vectors",
+	 ("schema", "resolved", "cases", "name"))
+	for language in ("c", "cpp", "python", "rust")
 ]
 
 #: The old name, kept for `situc pack`, which is not a codegen module.
@@ -3042,38 +3045,34 @@ def test_a_generator_that_skips_refuses_when_the_skip_empties_it(
 
 @pytest.mark.parametrize("module,shape", REFUSES,
                          ids=[one for one, _ in REFUSES])
-def test_the_vector_generator_declines_a_mixed_schema_too(
+def test_a_vector_naming_an_argued_struct_is_declined(
 		module: str, shape: tuple[str, ...]) -> None:
-	"""The cell that was empty, and the reason its inhabitant is there.
+	"""What a vector names decides, and a neighbour's parameter does not.
 
-	The other two cells are kinder and this one is right anyway. A
-	golden-vector suite names its structs in a file somebody wrote, so a
-	schema with one argued struct and vectors only for the others could be
-	served -- which is what `c/checks` and `c/fuzz` do, filter and then
-	refuse only what the filter emptied.
-
-	**It declines outright instead, and the reason is that the alternative
-	is a capability rather than a filter.** A vector naming the argued
-	struct cannot be generated at all: `validate` takes the argument tail
-	and the accessors a vector calls are ones the C backend does not emit
-	for a parameter, since it occupies no bytes and they would read the
-	member after it. So the choice is not "serve part of this file" but
-	"serve this file unless it mentions the argued struct", and a refusal
-	keyed on what a schema DECLARES is the family's one message, where a
-	refusal keyed on which vectors happen to be present is a second one to
-	keep in step. Teaching it to pass an argument is the standing work the
-	family defers; until then this is a loud no rather than a quiet
-	half-yes (26.707).
-
-	Asserted on the mixed schema as well as the all-argued one, because the
-	mixed case is the whole of what makes this cell different from `SKIPS`.
+	A vector naming the argued struct cannot be generated at all: `validate`
+	takes the argument tail, and nothing in a vector file supplies it. That
+	stays a loud no. All three cases are asserted because each passes alone
+	for a wrong reason: refusing everything passes the first and the third,
+	refusing nothing passes the second (26.912, narrowing 26.707).
 	"""
-	for only in (False, True):
-		with pytest.raises(SituError) as refused:
-			_call(module, shape, only=only)
-		assert "parameter n" in str(refused.value)
-		assert any("decision 0050" in note
-		           for note in refused.value.diagnostic.notes)
+	generate = __import__(module, fromlist=["generate"]).generate
+
+	def called(only: bool, names: list[str]) -> object:
+		schema, resolved = _argued(only)
+		held = {"schema": schema, "resolved": resolved, "name": "unit",
+		        "cases": [SimpleNamespace(struct=one) for one in names]}
+		return generate(*[held[one] for one in shape])
+
+	with pytest.raises(SituError) as refused:
+		called(False, ["argued"])
+	assert "parameter n" in str(refused.value)
+	assert any("decision 0050" in note
+	           for note in refused.value.diagnostic.notes)
+
+	assert called(False, []) is not None
+
+	with pytest.raises(SituError):
+		called(True, [])
 
 
 def _parameter_schema() -> tuple[ast.Schema, ResolvedSchema]:
@@ -3112,8 +3111,11 @@ def test_every_generator_is_either_taking_an_argument_or_refusing_one(
 		tree = python_ast.parse(one.read_text(encoding="utf-8"))
 		calls = (node for node in python_ast.walk(tree)
 		         if isinstance(node, python_ast.Call))
-		if any(isinstance(call.func, python_ast.Name)
-		       and call.func.id == "refuse_parameters" for call in calls):
+		if one != root / "situc" / "codegen" / "__init__.py" and any(
+				isinstance(call.func, python_ast.Name)
+				and call.func.id in ("refuse_parameters",
+				                     "refuse_only_arguments")
+				for call in calls):
 			found.add(str(one.relative_to(root))[:-len(".py")]
 			          .replace("/", "."))
 
