@@ -1855,8 +1855,11 @@ def _extent_functions(resolved: ResolvedSchema) -> list[str]:
 	"""Every measurable struct's extent, in an order Lua accepts.
 
 	`local function` binds where it is written, so one calling another has to
-	come after it. Containment is acyclic -- a struct cannot contain itself --
-	so a struct is emitted once everything it names has been.
+	come after it, and a struct is emitted once everything it names has been.
+	That means its arms too: reading members alone, `ipv4_option` came before
+	the `sized_option` an arm names, and `tcp_option` worked because of how
+	its name sorts (26.913). A struct that can contain itself has no extent,
+	so waiting on one would be a cycle and is not asked for.
 	"""
 	pending = dict(sorted(resolved.structs.items()))
 	lines: list[str] = []
@@ -1864,9 +1867,11 @@ def _extent_functions(resolved: ResolvedSchema) -> list[str]:
 
 	while pending:
 		ready = [name for name, struct in pending.items()
-		         if all(held.type_name in done
-		                or held.type_name not in resolved.structs
-		                for held in own_members(struct))]
+		         if all(held.placement.type_name in done
+		                or held.placement.type_name not in resolved.structs
+		                or is_recursive(resolved.structs,
+		                                held.placement.type_name)
+		                for held in struct.entries)]
 		if not ready:
 			break			# a cycle the resolver should have refused
 		for name in ready:

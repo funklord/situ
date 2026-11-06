@@ -1,4 +1,4 @@
-"""TCP's options are records, read as tshark reads them (26.913).
+"""TCP's and IPv4's options are records, read as tshark reads them (26.913).
 
 `[holds]` inside the checksum's `authenticated` block, over a SYN laid out as
 Linux sends it. `TSHARK` is that tool's decode of these bytes, through
@@ -86,3 +86,33 @@ def test_a_length_below_its_own_two_bytes_is_refused(tcp: ModuleType) -> None:
 	"""RFC 9293 3.1 counts the kind and length, so 1 is no length at all."""
 	with pytest.raises(ConstraintError):
 		segment(tcp, bytes.fromhex("0201" "0000")).validate()
+
+
+#: Router Alert, No Operation, Record Route, End of Option List and padding.
+IPV4 = ("49000024000100" "004006ee87c0000201c6336407"
+        "94040000" "01" "07070400000000" "00000000")
+
+#: `tshark -T fields -e ip.opt.type -e ip.opt.len -e ip.opt.ptr`, through
+#: `text2pcap -l 101`. It stops at End of Option List, and the padding after
+#: that reads here as more of them.
+TSHARK_IPV4 = {"kinds": [148, 1, 7, 0], "lengths": [4, 7], "pointer": 4}
+
+
+def test_ipv4_options_read_as_tshark_reads_them() -> None:
+	"""The same grammar in the other header, kinds with their high bits set."""
+	source, resolved, _ = analyse(ROOT / "example" / "ipv4" / "ipv4.situ")
+	module = ModuleType("ipv4_under_test")
+	exec(generate(parse(source), resolved, "ipv4").module, module.__dict__)  # noqa: S102
+
+	data = bytearray.fromhex(IPV4)
+	view = module.ipv4_header.at(Message(data), 0, len(data))
+	view.validate()
+	held = view.options_view
+	items = [held.all(at) for at in range(held.all_count)]
+	kinds = [item.kind for item in items]
+	assert kinds[:kinds.index(0) + 1] == TSHARK_IPV4["kinds"]
+	assert not any(kinds[kinds.index(0):])
+
+	sized = [item.body_sized for item in items if item.kind > 1]
+	assert [one.length for one in sized] == TSHARK_IPV4["lengths"]
+	assert sized[1].value[0] == TSHARK_IPV4["pointer"]

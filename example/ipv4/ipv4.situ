@@ -78,7 +78,7 @@ struct ipv4_header [allow_straddle] {
 		// that subtraction legal. Every field before them keeps AbsoluteStatic;
 		// nothing after them would, and there is nothing after them, which is the
 		// same shape UDP has and for the same reason.
-		u8        options[(ihl - 5) * 4];
+		u8        options[(ihl - 5) * 4] [holds = option_list];
 	}
 }
 
@@ -108,3 +108,26 @@ assert no_tag_invalidation(ipv4_header.time_to_live);
 // length the data decides -- and where inside it the checksum's own bytes are.
 // The algorithm stays the caller's (13.1).
 require in_place_dirty(ipv4_header.time_to_live);
+
+// RFC 791 3.1: an option is one byte, or a kind and a length that counts both,
+// and only End of Option List and No Operation are the first. The same grammar
+// as TCP's, so the same shape, framed by the bytes `ihl` gives it (26.913).
+struct nothing { }
+
+struct sized_option {
+	u8  length [min = 2];
+	u8  value[length - 2];
+}
+
+struct ipv4_option {
+	u8  kind;
+	variant body switch (kind) {
+		case 0:  nothing       end_of_list;
+		case 1:  nothing       no_operation;
+		default: sized_option  sized;
+	}
+}
+
+struct option_list {
+	ipv4_option  all[remaining];
+}

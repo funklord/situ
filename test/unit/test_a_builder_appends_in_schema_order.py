@@ -3073,7 +3073,7 @@ int main(void)
 	situ_err_t    err;
 	const uint8_t src[4] = { 192, 168, 0, 1 };
 	const uint8_t dst[4] = { 192, 168, 0, 199 };
-	const uint8_t opt[3] = { 0, 0, 0 };
+	const uint8_t opt[4] = { 0, 0, 0, 0 };
 
 	err = situ_ipv4_header_build(buf, sizeof buf, 4u, 0u, 0u,
 	                             0x0073u, 0x0000u, 1u, 0u, 0u, 0x40u,

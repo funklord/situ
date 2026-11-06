@@ -43,5 +43,26 @@ struct ipv4_header size=20..60
   @0x000a   2         u8         header_checksum  codec=internet_checksum self_as=0
   @0x000c   4         ipv4_address source  big
   @0x0010   4         ipv4_address destination  big
-  @0x0014   0..40     u8         options  sized-by=(ihl-5)*4
+  @0x0014   0..40     u8         options  sized-by=(ihl-5)*4 holds=option_list
   header_checksum covers: <reserved0> destination destination.octets dont_fragment dscp ecn fragment_offset header identification ihl more_fragments options protocol source source.octets time_to_live total_length version
+
+struct ipv4_option size=1..255
+  @0x0000   1         u8         kind
+  @0x0001   0..254    variant    body
+  body switch: kind
+  body case 0: end_of_list nothing
+  body case 1: no_operation nothing
+  body case default: sized sized_option
+
+struct nothing size=0
+
+struct option_list size=0..
+  @0x0000   0..       ipv4_option all  sized-by=remaining
+  body switch: kind
+  body case 0: end_of_list
+  body case 1: no_operation
+  body case default: sized
+
+struct sized_option size=1..254
+  @0x0000   1         u8         length  min=2
+  @0x0001   0..253    u8         value  sized-by=length-2
