@@ -412,6 +412,33 @@ struct b [depth = {DEEP}] {{ u8 n; u8 body[n] [holds = b]; }}
 """, lambda n: bytes(range(min(n, 200), 0, -1)) + b"\x00"),
 
 	# Two recursive members side by side: a tree, so the work is the bytes.
+	# A `tlv` region runs to the end of its view, so the struct holding it is
+	# measured by the view: C summed zero for one, and the rest had no extent.
+	"tlv_behind": (HEAD + f"""
+varint_type pb {{ encoding = leb128; max_bits = 64; }}
+struct nothing {{ }}
+struct x [depth = {DEEP}] {{
+	u8 k;
+	variant c switch (k) {{
+		case 1:  x inner;
+		default: nothing none;
+	}}
+	tlv f (
+		tag_type = pb,
+		tag_decode = {{ field = tag >> 3, wire = tag & 0x7 }},
+		tag_identity = field,
+		value_size = switch (wire) {{
+			case 0: self_delimiting,
+			case 2: prefixed(pb),
+			default: error,
+		}},
+		duplicate_tags = allowed,
+		known = {{ 1 : {{ name = aa, wire = 0, type = pb }}, }},
+		unknown = preserve
+	);
+}}
+""", lambda n: b"\x01" * n + b"\x00" + b"\x08\x07" * (n + 1)),
+
 	"two_arms": (HEAD + f"""
 struct nothing {{ }}
 struct b [depth = {DEEP}] {{
@@ -832,7 +859,7 @@ AGREEING = ("member", "between", "arm", "handed", "length_behind",
             "varint_behind", "digits_behind", "dotted_behind", "sum_behind",
             "lead", "two_arms", "sexpr", "counted", "delimited",
             "json_whole", "varint_while", "enum_while", "pad_behind",
-            "digits_fixed")
+            "digits_fixed", "tlv_behind")
 
 
 @pytest.mark.parametrize("shape", AGREEING)

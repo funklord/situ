@@ -1902,8 +1902,8 @@ def ends_in_the_frame(structs: dict[str, ResolvedStruct],
 		always: bool = False) -> bool:
 	"""Whether one instance runs to the end of whatever view it is handed.
 
-	Directly, through a `[remaining]` member, or through a nested member or an
-	arm that does. Such a struct is measured by the view, so it can be a
+	Directly, through a `[remaining]` member or a `tlv` region, or through a
+	nested member or an arm that does. Such a struct is measured by the view, so it can be a
 	parent's last member and it has no length of its own: not an element of a
 	run, where the first would take the rest, and not a thing a prefix of a
 	stream can be asked about (26.907).
@@ -1916,7 +1916,7 @@ def ends_in_the_frame(structs: dict[str, ResolvedStruct],
 	seen = seen | {struct.name}
 
 	def reaches(one: Placement) -> bool:
-		if one.sized_by == "remaining":
+		if one.sized_by == "remaining" or one.kind == "tlv":
 			return True
 		inner = structs.get(one.type_name or "")
 		return inner is not None and nests_one_struct(structs, one) \

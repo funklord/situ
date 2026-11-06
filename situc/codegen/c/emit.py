@@ -5387,6 +5387,10 @@ class Emitter:
 			                              steps, limit, head)
 		deep  = [self._length_expression(struct, placement, depth="depth")
 		         for placement in variable]
+		# The view above, which this list is built without: a recursive struct
+		# ending in its frame came out as zero bytes long.
+		if terms == ["view.limit"]:
+			deep = ["view.limit"]
 		taken = self._argument_tail(struct)
 		lines = [*head,
 		         f"static inline uint32_t {name}_at(situ_view_t view,"
