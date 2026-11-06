@@ -24,6 +24,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -288,8 +289,8 @@ def test_a_bit_packed_field_gets_its_byte_span_and_mask() -> None:
 	are read through the bytes they live in and masked."""
 	text = emit("struct s { u4 version; u4 ihl; u8 tos; }\n")
 
-	assert 'ProtoField.uint8("s.version", "version", base.DEC, nil, 0xf0)' in text
-	assert 'ProtoField.uint8("s.ihl", "ihl", base.DEC, nil, 0xf)' in text
+	assert 'ProtoField.uint8("situ.s.version", "version", base.DEC, nil, 0xf0)' in text
+	assert 'ProtoField.uint8("situ.s.ihl", "ihl", base.DEC, nil, 0xf)' in text
 	assert "subtree:add(s.fields.version, tvb(0, 1))" in text
 	assert "subtree:add(s.fields.ihl, tvb(0, 1))" in text
 
@@ -302,7 +303,7 @@ def test_a_straddling_field_is_read_through_both_bytes() -> None:
 	}
 	""")
 
-	assert 'ProtoField.uint16("s.fragment_offset"' in text
+	assert 'ProtoField.uint16("situ.s.fragment_offset"' in text
 	assert "0x1fff)" in text
 	assert "subtree:add(s.fields.fragment_offset, tvb(0, 2))" in text
 
@@ -376,7 +377,7 @@ def test_a_reserved_field_loses_its_synthetic_brackets() -> None:
 
 	# `<` on its own is Lua's less-than, which the bounds check uses.
 	assert "<reserved" not in text
-	assert 'ProtoField.uint8("s.reserved0", "reserved0"' in text
+	assert 'ProtoField.uint8("situ.s.reserved0", "reserved0"' in text
 
 
 def test_registers_are_not_dissected() -> None:
@@ -722,8 +723,8 @@ def test_a_delimited_member_is_a_bytes_field() -> None:
 	number."""
 	lua = emit('struct s { u8 name[] until ":"; u8 rest[remaining]; }')
 
-	assert 'ProtoField.bytes("s.name", "name")' in lua
-	assert "ProtoField.uint8(\"s.name\"" not in lua
+	assert 'ProtoField.bytes("situ.s.name", "name")' in lua
+	assert "ProtoField.uint8(\"situ.s.name\"" not in lua
 
 
 # -- a variant, and a run of them -------------------------------------------
@@ -750,7 +751,7 @@ def test_a_variant_shows_the_arm_the_discriminant_selects() -> None:
 	though which one is present is not."""
 	text = emit(DNS_LABEL)
 
-	assert 'label.fields.body_text = ProtoField.bytes("label.body.text"' in text
+	assert 'label.fields.body_text = ProtoField.bytes("situ.label.body.text"' in text
 	assert "label.fields.body_pointer_low = ProtoField.uint8(" in text
 	assert "if arm == 0 then" in text
 	assert "elseif arm == 3 then" in text
@@ -1005,7 +1006,7 @@ DECLINED = re.compile(
 	re.M)
 
 PROTOFIELD = re.compile(
-	r'ProtoField\.(\w+)\("([^"]+)",\s*"[^"]*"(?:,\s*(base\.\w+))?')
+	r'ProtoField\.(\w+)\("(?:situ\.)?([^"]+)",\s*"[^"]*"(?:,\s*(base\.\w+))?')
 
 
 class Comparison(NamedTuple):
@@ -1348,8 +1349,8 @@ def test_a_bit_field_is_masked_from_the_end_the_schema_says(
 
 	# The masks say it before anything runs: the low three bits and the top
 	# five, rather than the other way round.
-	assert 'ProtoField.uint8("s.low", "low", base.DEC, nil, 0x7)' in source
-	assert 'ProtoField.uint8("s.high", "high", base.DEC, nil, 0xf8)' in source
+	assert 'ProtoField.uint8("situ.s.low", "low", base.DEC, nil, 0x7)' in source
+	assert 'ProtoField.uint8("situ.s.high", "high", base.DEC, nil, 0xf8)' in source
 
 	if LUA is None:
 		return
@@ -1689,7 +1690,7 @@ def test_a_value_spelled_in_characters_is_shown_as_one() -> None:
 		source, resolved, _ = analyse(path)
 		text = generate(parse(source), resolved, path.stem)
 		declared = {found[1]: found[0] for found in re.findall(
-			r'^\w+\.fields\.\w+ = ProtoField\.(\w+)\("([\w.]+)"',
+			r'^\w+\.fields\.\w+ = ProtoField\.(\w+)\("(?:situ\.)?([\w.]+)"',
 			text, re.M)}
 
 		for struct in resolved.structs.values():
@@ -1941,3 +1942,22 @@ def test_a_nested_struct_is_as_long_as_its_version(packet: str, after: int,
 
 	assert consumed == after + 1
 	assert rows[-1] == ("outer.after", after, 1, "7")
+
+
+@pytest.mark.skipif(shutil.which("tshark") is None, reason="needs tshark")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=lambda path: path.stem)
+def test_wireshark_loads_every_dissector(schema: Path, tmp_path: Path) -> None:
+	"""`luac` parses and the harness below stands in for Wireshark, and neither
+	knows what Wireshark refuses at load: a `Proto` name it already holds, or
+	a `<` in an abbrev. Six of the corpus's dissectors failed here while every
+	test in this file passed (26.900)."""
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector",
+	                str(schema), "--out", str(tmp_path)],
+	               check=True, capture_output=True,
+	               cwd=Path(__file__).resolve().parents[2])
+	script = tmp_path / f"{schema.stem}.lua"
+	loaded = subprocess.run(["tshark", "-X", f"lua_script:{script}",
+	                         "-G", "protocols"],
+	                        capture_output=True, text=True, timeout=120)
+	assert "Lua: Error" not in loaded.stderr, loaded.stderr
+

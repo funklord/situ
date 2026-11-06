@@ -2211,7 +2211,7 @@ def test_gen_dissector_writes_lua(tmp_path: Path) -> None:
 	assert main(["gen-dissector", str(schema), "--out", str(tmp_path)]) == 0
 	lua = (tmp_path / "udp.lua").read_text(encoding="ascii")
 
-	assert 'Proto("udp_header"' in lua
+	assert 'Proto("situ_udp_udp_header"' in lua
 	assert "ProtoField.uint16" in lua
 
 

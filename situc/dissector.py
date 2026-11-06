@@ -528,10 +528,15 @@ def _value_strings(schema: ast.Schema, resolved: ResolvedSchema) -> list[str]:
 def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 		basename: str, declared: bool = False) -> list[str]:
 	proto = _lua(struct.name)
+	# Under situ's own name and the schema's: Wireshark refuses a second
+	# `Proto` of a name, and it already holds `coap`, `radiotap` and `frame`,
+	# so those dissectors did not load. The schema's, because two schemas may
+	# each have a `header` (26.900).
+	scoped = re.sub(r"\W", "_", f"situ_{basename}_{struct.name}")
 	lines = [
 		f"-- struct {struct.name}",
 		f"{'' if declared else 'local '}{proto} = "
-		f"Proto(\"{struct.name}\", \"{struct.name} (situ)\")",
+		f"Proto(\"{scoped}\", \"{basename}.{struct.name} (situ)\")",
 		"",
 	]
 
@@ -582,7 +587,9 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> str:
 	"""One `ProtoField`, or "" for a member that gets a subtree instead."""
 	name  = _local(struct, placement)
-	abbrev = f"{struct.name}.{name}"
+	# Under `situ.`: Wireshark holds `radiotap.vendor_namespace` as something
+	# else and refuses a second field of that name and another type (26.900).
+	abbrev = f"situ.{_lua(struct.name)}.{name}"
 
 	# An array or a run of structs is not a nested struct, which is the order
 	# `traverse.Member` puts these two questions in and the order this did
@@ -2626,7 +2633,7 @@ def _registration(resolved: ResolvedSchema, names: list[str]) -> list[str]:
 def _local(struct: ResolvedStruct, placement: Placement) -> str:
 	"""The member's name, with the synthetic brackets a reserved field carries
 	stripped: `<reserved0>` is not a name Wireshark accepts in an abbrev."""
-	return local_name(struct, placement).strip("<>")
+	return re.sub("[<>]", "", local_name(struct, placement))
 
 
 #: Lua's own words. A schema may name a field `function` or `end` -- situ

@@ -237,6 +237,12 @@ function Proto(name, description)
 	local self = { name = name, description = description, fields = {},
 	               prefs = {} }
 	protos[name] = self
+	-- By the struct too: a caller names that, and `Proto` is scoped by the
+	-- schema as well, as Wireshark needs (26.900).
+	local struct = description:match("^[^.]*%.(.-) %(situ%)$")
+	if struct ~= nil then
+		protos[struct] = self
+	end
 	return self
 end
 
@@ -337,7 +343,9 @@ local read  = protos[proto].dissector(Tvb(buffer, 0), pinfo, tree())
 
 print(("consumed\t%d"):format(read))
 for _, row in ipairs(rows) do
-	print(row)
+	-- The abbrev without Wireshark's namespace, since a reader compares it
+	-- with the schema's `struct.member` (26.900).
+	print((row:gsub("^situ%.", "")))
 end
 
 -- After the fields, and marked, because a reader of this output splits a row
