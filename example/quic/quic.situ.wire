@@ -1,0 +1,64 @@
+# situ wire signature v3
+# schema: quic.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+varint quic_varint : quic bits=62 bytes=8
+
+varint quic_type : quic bits=62 bytes=8 minimal
+
+struct http3_frames size=0..
+  @0x0000   0..       tlv        frames
+  frames tlv tag: quic_type
+  frames tlv decode kind: tag
+  frames tlv identity: kind
+  frames tlv select: kind
+  frames tlv size default: prefixed quic_varint
+  frames tlv duplicates: allowed
+  frames tlv unknown: error
+
+struct http3_settings size=0..
+  @0x0000   0..       quic_varint pairs  sized-by=remaining varint=quic_varint
+
+struct initial size=10..9223372036854775872
+  @0x0000   1bit      u1         header_form  msb_first
+  @0x0000:1 1bit      u1         fixed_bit  msb_first
+  @0x0000:2 2bit      u2         packet_type  msb_first
+  @0x0000:4 2bit      u2         reserved  msb_first
+  @0x0000:6 2bit      u2         number_length  msb_first
+  @0x0001   4         u32        version  big
+  @0x0005   1         u8         destination_length  max=20
+  @0x0006   0..20     u8         destination  sized-by=destination_length
+  ~         1         u8         source_length  max=20
+  ~         0..20     u8         source  sized-by=source_length
+  ~         1..8      quic_varint token_length  varint=quic_varint
+  ~         0..4611686018427387903 u8         token  sized-by=token_length
+  ~         1..8      quic_varint length  varint=quic_varint min=4
+  ~         1..4      u8         packet_number  sized-by=number_length+1
+  ~         0..4611686018427387902 u8         payload  sized-by=length-(number_length+1)
+
+struct transport_parameters size=0..
+  @0x0000   0..       tlv        parameters
+  parameters tlv tag: quic_varint
+  parameters tlv decode id: tag
+  parameters tlv identity: id
+  parameters tlv select: id
+  parameters tlv size default: prefixed quic_varint
+  parameters tlv duplicates: allowed
+  parameters tlv unknown: error

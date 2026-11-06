@@ -1246,6 +1246,11 @@ class VarintEncoding(Enum):
 	#: Base-128, high group first, otherwise the same. ASN.1's identifier
 	#: octets, MIDI's delta times, SQLite's record varints.
 	BE128  = "be128"
+	#: The top two bits of the first byte say one, two, four or eight bytes,
+	#: and the rest is the value, high byte first. QUIC's and HTTP/3's
+	#: (RFC 9000, section 16). No continuation bit, so `max_bits` is one of
+	#: four widths and the length is known from the first byte.
+	QUIC   = "quic"
 
 
 class VarintTransform(Enum):
@@ -1280,6 +1285,8 @@ class VarintDecl(Decl):
 		some do: SQLite's varint stops at nine bytes where seven-bit groups
 		would need ten.
 		"""
+		if self.encoding is VarintEncoding.QUIC:
+			return (self.max_bits + 2) // 8
 		if self.declared_max_bytes is not None:
 			return self.declared_max_bytes
 		return (self.max_bits + 6) // 7
@@ -1294,6 +1301,8 @@ class VarintDecl(Decl):
 		flag, and the byte is read whole. That is SQLite's ninth byte, and it
 		falls out of the arithmetic rather than being a second flag to declare.
 		"""
+		if self.encoding is VarintEncoding.QUIC:
+			return 0
 		return self.max_bits - 7 * (self.max_bytes - 1)
 
 	@property

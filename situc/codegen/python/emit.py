@@ -31,6 +31,7 @@ from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import (
 	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
+from situc.codegen.varint import varint_limits, varint_measure, varint_stem
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
@@ -1666,29 +1667,32 @@ class Emitter:
 		           for entry in struct.entries)
 
 	def _tlv_imports(self) -> list[str]:
-		"""`varint_get`, where something walks a tlv region."""
-		placements = [entry.placement
-		              for struct in self.resolved.structs.values()
-		              for entry in struct.entries]
-		varints    = [p for p in placements if p.varint is not None]
-		declared   = {decl.name: decl for decl in self.schema.varints()}
+		"""What reads a varint, and only that: a member, a `tlv` region's tag
+		and its lengths each by their own encoding."""
+		declared = {decl.name: decl for decl in self.schema.varints()}
+		members  = [declared[entry.placement.varint]
+		            for struct in self.resolved.structs.values()
+		            for entry in struct.entries
+		            if entry.placement.varint in declared]
 
-		def held(name: str) -> list[ast.VarintDecl]:
-			return [declared[p.varint] for p in varints
-			        if p.varint in declared
-			        and declared[p.varint].encoding.value == name]
+		read: list[ast.VarintDecl | None] = [*members]
+		for _, placement in self._tlv_items():
+			assert placement.tlv_grammar is not None
+			tag = self._tlv_tag_varint(placement)
+			rules = placement.tlv_grammar.rules
+			if placement.tlv_tag_bits is None \
+					or any(rule.kind == "self_delimiting" for rule in rules):
+				read.append(tag)
+			read.extend(declared[rule.length_type] for rule in rules
+			            if rule.kind == "prefixed"
+			            and rule.length_type in declared)
 
-		needed = []
-		if self._tlv_items() or held("leb128"):
-			needed.append("varint_get")
-		if held("be128"):
-			needed.append("varint_be_get")
-		if any(decl.minimal for decl in held("leb128")):
-			needed.append("varint_len")
-		if any(decl.minimal for decl in held("be128")):
-			needed.append("varint_be_len")
-		if any(declared[p.varint].transform is not None for p in varints
-		       if p.varint in declared):
+		order   = ("varint", "varint_be", "varint_quic")
+		reads   = {varint_stem(decl) for decl in read}
+		lengths = {varint_stem(decl) for decl in members if decl.minimal}
+		needed  = [f"{stem}_get" for stem in order if stem in reads]
+		needed += [f"{stem}_len" for stem in order if stem in lengths]
+		if any(decl.transform is not None for decl in members):
 			needed.append("zigzag_decode")
 		return [f"\t{', '.join(needed)}," ] if needed else []
 
@@ -1918,17 +1922,15 @@ class Emitter:
 			"",
 		]
 
-	def _tlv_tag_bytes(self, placement: Placement) -> int:
-		declared = next((decl for decl in self.schema.varints()
-		                 if decl.name == placement.tlv_tag_varint), None)
-		bits = declared.max_bits if declared is not None else 64
-		return (bits + 6) // 7
+	def _tlv_tag_varint(self, placement: Placement) -> ast.VarintDecl | None:
+		return next((decl for decl in self.schema.varints()
+		             if decl.name == placement.tlv_tag_varint), None)
 
 	def _tlv_item_name(self, placement: Placement) -> str:
 		holder = placement.path.partition(".")[0]
 		return f"{py_name(holder)}_{py_name(placement.name)}_item"
 
-	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+	def _tlv_tag_read(self, placement: Placement, tag_varint: ast.VarintDecl | None) -> list[str]:
 		"""The tag, read as the type the schema named (26.664).
 
 		A declared varint by its own encoding; a scalar as that scalar, in
@@ -1937,7 +1939,8 @@ class Emitter:
 		bits = placement.tlv_tag_bits
 		if bits is None:
 			return [
-				f"\t\tread = varint_get(data, at, {max_tag})",
+				f"\t\tread = {varint_stem(tag_varint)}_get(data, at,"
+				f" {varint_limits(tag_varint)})",
 				"\t\tif read is None:",
 				f'\t\t\traise BoundsError(f"the tag at {{at}} runs past'
 				f' the region")',
@@ -1971,7 +1974,7 @@ class Emitter:
 			grammar: TlvGrammar, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		item     = self._tlv_item_name(placement)
-		max_tag  = self._tlv_tag_bytes(placement)
+		tag_varint = self._tlv_tag_varint(placement)
 		# `_pythonic`, because the schema's operators are C's: `/` is
 		# integer division there and float division here, so a part with
 		# `n / 13` in it came out 0.846 and the dispatch compared it
@@ -1998,13 +2001,13 @@ class Emitter:
 			f'\t\t\traise BoundsError(f"no item at {{at}}: the region ends at'
 			f' {{len(data)}}")',
 			"",
-			*self._tlv_tag_read(placement, max_tag),
+			*self._tlv_tag_read(placement, tag_varint),
 			"\t\tstart = at",
 			"\t\tat = at + used",
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		lines.extend(self._tlv_value_extent(struct, grammar, tag_varint,
 		                                    placement))
 		lines.extend([
 			"",
@@ -2024,7 +2027,7 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int, placement: Placement) -> list[str]:
+			tag_varint: ast.VarintDecl | None, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
 			return self._tlv_prefixed_size(grammar.length_type or "u8",
@@ -2041,7 +2044,7 @@ class Emitter:
 				continue
 			lines.append(f"\t\t{'if' if first else 'elif'} chosen"
 			             f" == {rule.label}:")
-			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, tag_varint,
 			                                placement))
 			first = False
 
@@ -2057,11 +2060,11 @@ class Emitter:
 			])
 		else:
 			lines.extend(self._tlv_one_rule(struct, grammar, default,
-			                                max_tag, placement))
+			                                tag_varint, placement))
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			rule: ValueRule, max_tag: int,
+			rule: ValueRule, tag_varint: ast.VarintDecl | None,
 			placement: Placement) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\tsize = {rule.size}"]
@@ -2087,7 +2090,8 @@ class Emitter:
 		if rule.kind == "self_delimiting":
 			# The value carries its own extent, so reading it is measuring it.
 			return [
-				f"\t\t\tcarried = varint_get(data, at, {max_tag})",
+				f"\t\t\tcarried = {varint_stem(tag_varint)}_get(data, at,"
+				f" {varint_limits(tag_varint)})",
 				"\t\t\tif carried is None:",
 				'\t\t\t\traise BoundsError(',
 				'\t\t\t\t\tf"a self-delimiting value at {at} runs past the'
@@ -2110,9 +2114,9 @@ class Emitter:
 		                 if decl.name == length_type), None)
 
 		if declared is not None:
-			width = (declared.max_bits + 6) // 7
 			return [
-				f"{indent}prefix = varint_get(data, at, {width})",
+				f"{indent}prefix = {varint_stem(declared)}_get(data, at,"
+				f" {varint_limits(declared)})",
 				f"{indent}if prefix is None:",
 				f'{indent}\traise BoundsError(',
 				f'{indent}\t\tf"a length prefix at {{at}} runs past the region")',
@@ -3181,12 +3185,10 @@ class Emitter:
 		width   = declared.max_bytes
 		signed  = declared.transform is ast.VarintTransform.ZIGZAG
 		decoded = "zigzag_decode(raw)" if signed else "raw"
-		big     = declared.encoding is ast.VarintEncoding.BE128
+		stem    = varint_stem(declared)
 
-		read = (f"varint_be_get(data, at, {width}, {declared.terminal_bits})"
-		        if big else f"varint_get(data, at, {width})")
-		encoded = (f"varint_be_len(raw, {width}, {declared.terminal_bits})"
-		           if big else "varint_len(raw)")
+		read    = f"{stem}_get(data, at, {varint_limits(declared)})"
+		encoded = f"{stem}_len({varint_measure(declared, 'raw')})"
 
 		# A RUN of varints, whose `access` `project.md` documents as
 		# Sequential. A run is sized by the data, so the shared classifier
@@ -3200,7 +3202,7 @@ class Emitter:
 			"",
 			"\t\t# `minimal` is declared, so a padded encoding is a second",
 			"\t\t# encoding of one value and this schema does not admit it.",
-			"\t\tif used != varint_len(raw):",
+			f"\t\tif used != {encoded}:",
 			"\t\t\traise ConstraintError(",
 			f'\t\t\t\tf"{placement.path} is encoded in {{used}} bytes and needs"',
 			f'\t\t\t\tf" {{{encoded}}}; `minimal` admits one encoding")',

@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 from situc import ast, invariant, traverse
 from situc.codegen.c.names import bare_name, ident, macro
+from situc.codegen.varint import varint_stem
 from situc.codegen.c.owned import _ctype, order_suffix, storage_width
 from situc.layout import Arm, BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -2836,7 +2837,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 			       else f"(uint64_t){part.local}"
 			assert part.declared is not None
 			big  = part.declared.encoding is ast.VarintEncoding.BE128
-			call = "situ_varint_be_put" if big else "situ_varint_put"
+			call = f"situ_{varint_stem(part.declared)}_put"
 			if part.sizes is not None:
 				# The length it states, in whatever unit the schema
 				# counts: elements for a run of wider ones, bytes
@@ -2884,7 +2885,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 			most = (1 << part.value) - 1
 			assert part.declared is not None
 			big  = part.declared.encoding is ast.VarintEncoding.BE128
-			call = "situ_varint_be_put" if big else "situ_varint_put"
+			call = f"situ_{varint_stem(part.declared)}_put"
 			one  = (f"situ_zigzag_encode({part.local}[{SCAN}])"
 			        if part.minimal else f"(uint64_t){part.local}[{SCAN}]")
 			lines += [

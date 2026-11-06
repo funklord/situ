@@ -36,6 +36,7 @@ from situc.codegen.c.names import (
 	KEYWORDS, RUNTIME_GUARD, bare_name, c_name)
 from situc.codegen.cpp.names import check_collisions, class_name, renamed
 from situc.codegen.doc import extractable
+from situc.codegen.varint import varint_limits, varint_measure, varint_stem
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
@@ -6186,13 +6187,11 @@ class Emitter:
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
-	def _tlv_tag_bytes(self, placement: Placement) -> int:
-		declared = next((decl for decl in self.schema.varints()
-		                 if decl.name == placement.tlv_tag_varint), None)
-		bits = declared.max_bits if declared is not None else 64
-		return (bits + 6) // 7
+	def _tlv_tag_varint(self, placement: Placement) -> ast.VarintDecl | None:
+		return next((decl for decl in self.schema.varints()
+		             if decl.name == placement.tlv_tag_varint), None)
 
-	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+	def _tlv_tag_read(self, placement: Placement, tag_varint: ast.VarintDecl | None) -> list[str]:
 		"""The tag, read as the type the schema named (26.664).
 
 		A declared varint by its own encoding; a scalar as that scalar, in
@@ -6201,8 +6200,9 @@ class Emitter:
 		bits = placement.tlv_tag_bits
 		if bits is None:
 			return [
-				f"\t\tused = situ_varint_get(situ_base(raw_) + at,"
-				f" situ_remaining_u32(raw_.limit, at), {max_tag}u, &tag);",
+				f"\t\tused = situ_{varint_stem(tag_varint)}_get(situ_base(raw_)"
+				f" + at, situ_remaining_u32(raw_.limit, at),"
+				f" {varint_limits(tag_varint, 'u')}, &tag);",
 				"\t\tif (used == 0u) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
@@ -6274,7 +6274,7 @@ class Emitter:
 	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, item: str, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
-		max_tag  = self._tlv_tag_bytes(placement)
+		tag_varint = self._tlv_tag_varint(placement)
 		assigned = ["view", "at", "tag"] + [c_name(part.name)
 		                                    for part in grammar.tag_decode] \
 		                                 + [c_name(part.name)
@@ -6308,14 +6308,14 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
-			*self._tlv_tag_read(placement, max_tag),
+			*self._tlv_tag_read(placement, tag_varint),
 			"",
 			*stored,
 			"\t\tat += used;",
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		lines.extend(self._tlv_value_extent(struct, grammar, tag_varint,
 		                                    placement))
 		lines.extend([
 			"",
@@ -6332,7 +6332,7 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int, placement: Placement) -> list[str]:
+			tag_varint: ast.VarintDecl | None, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
 			return self._tlv_prefixed_size(grammar.length_type or "u8",
@@ -6343,7 +6343,7 @@ class Emitter:
 			if rule.label is None:
 				continue
 			lines.append(f"\t\tcase {rule.label}u:")
-			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, tag_varint,
 			                                placement))
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
@@ -6357,12 +6357,12 @@ class Emitter:
 			])
 		else:
 			lines.extend(self._tlv_one_rule(struct, grammar, default,
-			                                max_tag, placement))
+			                                tag_varint, placement))
 		lines.append("\t\t}")
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			rule: ValueRule, max_tag: int,
+			rule: ValueRule, tag_varint: ast.VarintDecl | None,
 			placement: Placement) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\tsize = {rule.size}u;", "\t\t\tbreak;"]
@@ -6385,8 +6385,9 @@ class Emitter:
 			return [
 				"\t\t\t{",
 				"\t\t\t\tstd::uint64_t carried = 0;",
-				f"\t\t\t\tused = situ_varint_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at),"
-				f" {max_tag}u, &carried);",
+				f"\t\t\t\tused = situ_{varint_stem(tag_varint)}_get(situ_base(raw_)"
+				f" + at, situ_remaining_u32(raw_.limit, at),"
+				f" {varint_limits(tag_varint, 'u')}, &carried);",
 				"\t\t\t\tif (used == 0u) {",
 				"\t\t\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t\t\t}",
@@ -6405,12 +6406,12 @@ class Emitter:
 		                 if decl.name == length_type), None)
 
 		if declared is not None:
-			width = (declared.max_bits + 6) // 7
 			return [
 				f"{indent}{{",
 				f"{indent}\tstd::uint64_t length = 0;",
-				f"{indent}\tused = situ_varint_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at),"
-				f" {width}u, &length);",
+				f"{indent}\tused = situ_{varint_stem(declared)}_get(situ_base(raw_)"
+				f" + at, situ_remaining_u32(raw_.limit, at),"
+				f" {varint_limits(declared, 'u')}, &length);",
 				f"{indent}\tif (used == 0u) {{",
 				f"{indent}\t\treturn ::situ::rt::err::bounds;",
 				f"{indent}\t}}",
@@ -8213,16 +8214,14 @@ class Emitter:
 		ctype  = "std::int64_t" if signed else "std::uint64_t"
 		decoded = ("static_cast<std::int64_t>(situ_zigzag_decode(raw))"
 		           if signed else "raw")
-		big    = declared.encoding is ast.VarintEncoding.BE128
+		stem   = f"situ_{varint_stem(declared)}"
 
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries.
-		read = (f"situ_varint_be_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at), {width}u,"
-		        f" {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at), {width}u, &raw)")
-		encoded = (f"situ_varint_be_len(raw, {width}u,"
-		           f" {declared.terminal_bits}u)" if big else
-		           "situ_varint_len(raw)")
+		read = (f"{stem}_get(situ_base(raw_) + at,"
+		        f" situ_remaining_u32(raw_.limit, at),"
+		        f" {varint_limits(declared, 'u')}, &raw)")
+		encoded = f"{stem}_len({varint_measure(declared, 'raw', 'u')})"
 
 		# A RUN of varints, whose `access` `project.md` documents as
 		# Sequential. The dispatch above returns on `varint is not None`
@@ -8240,7 +8239,7 @@ class Emitter:
 			"\t\t * encoding of one value and this schema does not admit it.",
 			"\t\t * A canonicality claim nothing enforced would be a"
 			" comment. */",
-			"\t\tif (used != situ_varint_len(raw)) {",
+			f"\t\tif (used != {encoded}) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
 		] if declared.minimal else [])

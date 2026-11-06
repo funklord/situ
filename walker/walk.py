@@ -1637,6 +1637,9 @@ def _minimal_length(view: View, index: int, value: int) -> int:
 	that may carry `terminal_bits` instead.
 	"""
 	max_bytes, terminal, big = view.image.varint_rules[index]
+	if big and terminal == 0:
+		return next(size for size, bits in ((1, 6), (2, 14), (4, 30))
+		            if value < 1 << bits) if value < 1 << 30 else 8
 	count = 1
 	while value >= 0x80:
 		value >>= 7
@@ -1683,6 +1686,15 @@ def decode_varint(view: View, start: int, max_bytes: int,
 	"""
 	avail = max(0, view.limit - start)
 	data  = view.buffer[start:start + min(avail, max_bytes)]
+
+	# `quic`, which the image says as big with no terminal bits: the first
+	# byte's top two bits are the length and there are no groups.
+	if big and terminal_bits == 0:
+		if not data or 1 << (data[0] >> 6) > len(data):
+			raise Refused("the buffer ends mid-varint")
+		size = 1 << (data[0] >> 6)
+		return size, int.from_bytes(data[:size], "big") \
+			& ((1 << (size * BITS_PER_BYTE - 2)) - 1)
 
 	acc = 0
 	for i, byte in enumerate(data):

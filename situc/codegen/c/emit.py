@@ -35,6 +35,7 @@ from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
 	entities, ident, macro)
+from situc.codegen.varint import varint_limits, varint_measure, varint_stem
 from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
 from situc.layout import (
@@ -2486,19 +2487,16 @@ class Emitter:
 			" * dispatch, or a `length_type` for the simple form. */",
 		]
 
-	def _tlv_tag_bytes(self, placement: Placement) -> int:
-		"""How many bytes the tag varint may occupy, from its declared width.
-
-		Derived rather than the 10 a 64-bit leb128 happens to need: a schema
-		that bounds its tags at 16 bits gets a bound the walk can use, and one
-		that does not is not silently held to protobuf's.
+	def _tlv_tag_varint(self, placement: Placement) -> ast.VarintDecl | None:
+		"""The tag's declaration, which says how long it may be and how it is
+		read: a schema that bounds its tags at 16 bits gets a bound the walk
+		can use, and one that does not is not silently held to protobuf's.
 		"""
-		declared = next((decl for decl in self.schema.varints()
-		                 if decl.name == placement.tlv_tag_varint), None)
-		bits = declared.max_bits if declared is not None else 64
-		return (bits + 6) // 7
+		return next((decl for decl in self.schema.varints()
+		             if decl.name == placement.tlv_tag_varint), None)
 
-	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+	def _tlv_tag_read(self, placement: Placement,
+			tag_varint: ast.VarintDecl | None) -> list[str]:
 		"""The tag, read as the type the schema named.
 
 		A declared varint by its own encoding; a SCALAR as that scalar, in
@@ -2510,8 +2508,9 @@ class Emitter:
 		bits = placement.tlv_tag_bits
 		if bits is None:
 			return [
-				f"\tused = situ_varint_get(situ_base(view) + at,"
-				f" situ_remaining_u32(view.limit, at), {max_tag}u, &tag);",
+				f"\tused = situ_{varint_stem(tag_varint)}_get(situ_base(view)"
+				f" + at, situ_remaining_u32(view.limit, at),"
+				f" {varint_limits(tag_varint, 'u')}, &tag);",
 				"\tif (used == 0u) {",
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
@@ -2578,7 +2577,7 @@ class Emitter:
 			grammar: TlvGrammar, item: str, local: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		read     = ident(self.prefix, struct.name, local, "read")
-		max_tag  = self._tlv_tag_bytes(placement)
+		tag_varint = self._tlv_tag_varint(placement)
 
 		# The parts are named by the schema, so how wide the column has to be
 		# is not knowable until here.
@@ -2628,14 +2627,14 @@ class Emitter:
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"",
-			*self._tlv_tag_read(placement, max_tag),
+			*self._tlv_tag_read(placement, tag_varint),
 			"",
 			*stored,
 			"\tat = at + used;",
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		lines.extend(self._tlv_value_extent(struct, grammar, tag_varint,
 		                                    placement))
 		lines.extend([
 			"",
@@ -2653,7 +2652,7 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int, placement: Placement) -> list[str]:
+			tag_varint: ast.VarintDecl | None, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched exactly as the schema dispatches it.
 
 		The simple form has no dispatch: one `length_type` sizes every value,
@@ -2668,7 +2667,7 @@ class Emitter:
 			if rule.label is None:
 				continue
 			lines.append(f"\tcase {rule.label}u:")
-			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, tag_varint,
 			                                placement))
 
 		default = next((rule for rule in grammar.rules if rule.label is None), None)
@@ -2680,13 +2679,13 @@ class Emitter:
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 			])
 		else:
-			lines.extend(self._tlv_one_rule(struct, grammar, default, max_tag,
+			lines.extend(self._tlv_one_rule(struct, grammar, default, tag_varint,
 			                                placement))
 		lines.append("\t}")
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			rule: ValueRule, max_tag: int,
+			rule: ValueRule, tag_varint: ast.VarintDecl | None,
 			placement: Placement) -> list[str]:
 		"""One arm of the dispatch, sizing a value the way section 9.5 says."""
 		if rule.kind == "fixed":
@@ -2714,8 +2713,9 @@ class Emitter:
 			return [
 				"\t\t{",
 				"\t\t\tuint64_t carried = 0;",
-				f"\t\t\tused = situ_varint_get(situ_base(view) + at, situ_remaining_u32(view.limit, at),"
-				f" {max_tag}u, &carried);",
+				f"\t\t\tused = situ_{varint_stem(tag_varint)}_get(situ_base(view)"
+				f" + at, situ_remaining_u32(view.limit, at),"
+				f" {varint_limits(tag_varint, 'u')}, &carried);",
 				"\t\t\tif (used == 0u) {",
 				"\t\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t\t}",
@@ -2740,12 +2740,12 @@ class Emitter:
 		                 if decl.name == length_type), None)
 
 		if declared is not None:
-			width = (declared.max_bits + 6) // 7
 			return [
 				f"{indent}{{",
 				f"{indent}\tuint64_t length = 0;",
-				f"{indent}\tused = situ_varint_get(situ_base(view) + at,"
-				f" situ_remaining_u32(view.limit, at), {width}u, &length);",
+				f"{indent}\tused = situ_{varint_stem(declared)}_get(situ_base(view)"
+				f" + at, situ_remaining_u32(view.limit, at),"
+				f" {varint_limits(declared, 'u')}, &length);",
 				f"{indent}\tif (used == 0u) {{",
 				f"{indent}\t\treturn SITU_ERR_BOUNDS;",
 				f"{indent}\t}}",
@@ -4105,7 +4105,6 @@ class Emitter:
 		width  = declared.max_bytes
 		signed = declared.transform is ast.VarintTransform.ZIGZAG
 		ctype  = "int64_t" if signed else "uint64_t"
-		big    = declared.encoding is ast.VarintEncoding.BE128
 
 		decoded = ("(int64_t)situ_zigzag_decode(raw)" if signed else "raw")
 
@@ -4116,14 +4115,10 @@ class Emitter:
 		# one tells it there are four billion bytes to decode from an
 		# offset past the end (26.675).
 		room = f"situ_remaining_u32({held}.limit, at)"
-		read = (f"situ_varint_be_get(situ_base({held}) + at,"
-		        f" {room},"
-		        f" {width}u, {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(situ_base({held}) + at, {room},"
-		        f" {width}u, &raw)")
-		encoded = (f"situ_varint_be_len(raw, {width}u,"
-		           f" {declared.terminal_bits}u)" if big else
-		           "situ_varint_len(raw)")
+		stem = f"situ_{varint_stem(declared)}"
+		read = (f"{stem}_get(situ_base({held}) + at, {room},"
+		        f" {varint_limits(declared, 'u')}, &raw)")
+		encoded = f"{stem}_len({varint_measure(declared, 'raw', 'u')})"
 
 		# A RUN of varints, which `project.md` section 828 documents as a
 		# construct whose `access` is Sequential: the layout and the

@@ -1940,6 +1940,70 @@ static inline uint32_t situ_varint_be_put(uint8_t *p, uint32_t avail,
 }
 
 /* Encoded length of a value, so a writer can tell whether it still fits. */
+/* Decode one QUIC varint (RFC 9000, section 16): the top two bits of the
+ * first byte say one, two, four or eight bytes and the rest is the value, high
+ * byte first. Returns bytes consumed, or 0 if the buffer ends inside it or the
+ * first byte says more than `max_bytes`. */
+static inline uint32_t situ_varint_quic_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc;
+	uint32_t n;
+	uint32_t i;
+
+	if (avail == 0u) {
+		return 0;
+	}
+
+	n = 1u << (p[0] >> 6);
+	if (n > avail || n > max_bytes) {
+		return 0;
+	}
+
+	acc = p[0] & 0x3Fu;
+	for (i = 1u; i < n; i++) {
+		acc = (acc << 8) | p[i];
+	}
+
+	*out = acc;
+	return n;
+}
+
+/* The shortest encoding of a value under `situ_varint_quic_get`. */
+static inline uint32_t situ_varint_quic_len(uint64_t value)
+{
+	if (value < (UINT64_C(1) << 6)) {
+		return 1u;
+	}
+	if (value < (UINT64_C(1) << 14)) {
+		return 2u;
+	}
+	if (value < (UINT64_C(1) << 30)) {
+		return 4u;
+	}
+	return 8u;
+}
+
+/* Encode one QUIC varint minimally. Returns bytes written, or 0 if there is
+ * no room or the value needs more than sixty-two bits. */
+static inline uint32_t situ_varint_quic_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	const uint32_t n = situ_varint_quic_len(value);
+	uint32_t i;
+
+	if (n > avail || value >= (UINT64_C(1) << 62)) {
+		return 0;
+	}
+
+	for (i = 0u; i < n; i++) {
+		p[i] = (uint8_t)(value >> (8u * (n - 1u - i)));
+	}
+	p[0] = (uint8_t)(p[0] | (uint8_t)((n == 1u ? 0u : n == 2u ? 1u
+	                                  : n == 4u ? 2u : 3u) << 6));
+	return n;
+}
+
 static inline uint32_t situ_varint_len(uint64_t value)
 {
 	uint32_t n = 1;

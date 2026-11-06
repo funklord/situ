@@ -24,6 +24,7 @@ from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
+from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
 from situc.layout import BITS_PER_BYTE
@@ -172,10 +173,8 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	"""
 	assert part.declared is not None
 	most = (1 << part.value) - 1
-	big  = part.declared.encoding is ast.VarintEncoding.BE128
-	tail = (f", {part.declared.max_bytes}, {part.declared.terminal_bits}"
-	        if big else "")
-	call = "situ_rt::varint_be_put" if big else "situ_rt::varint_put"
+	tail = varint_put_tail(part.declared)
+	call = f"situ_rt::{varint_stem(part.declared)}_put"
 	if part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)

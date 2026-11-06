@@ -1471,7 +1471,7 @@ class Parser:
 			raise error(
 				f"varint type `{name.text}` does not declare an encoding",
 				self.span_from(start),
-				label = "expected `encoding = leb128;` or `encoding = be128;`",
+				label = "expected `encoding = leb128;`, `be128;` or `quic;`",
 			)
 		if max_bits is None:
 			raise error(
@@ -1493,7 +1493,30 @@ class Parser:
 		The bytes before the last carry seven bits each and the last carries
 		what is left, so too few bytes is a type that cannot represent its own
 		range. Too many is a type with a byte that can never be reached.
+
+		`quic` has four widths and no groups: a length of one, two, four or
+		eight bytes less the two bits that say which.
 		"""
+		if decl.encoding is ast.VarintEncoding.QUIC:
+			if decl.declared_max_bytes is not None:
+				raise error(
+					f"`{name.text}` declares `max_bytes` on a `quic` encoding",
+					decl.span,
+					label = "`max_bits` decides it",
+					notes = ["the first byte says the length, so the widest"
+					         " value is the longest encoding"],
+				)
+			if decl.max_bits not in (6, 14, 30, 62):
+				raise error(
+					f"`{name.text}` cannot be {decl.max_bits} bits in a"
+					f" `quic` encoding",
+					decl.span,
+					label = "expected 6, 14, 30 or 62",
+					notes = ["one, two, four or eight bytes, less the two bits"
+					         " that say which"],
+				)
+			return
+
 		if decl.declared_max_bytes is None:
 			return
 

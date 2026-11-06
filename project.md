@@ -890,6 +890,10 @@ already names. An element the frame cuts short is not counted, and
 construct crashed the compiler until 26.691, then C answered a constant
 zero count (26.733), then all four declined it until the walk arrived.
 
+**A third encoding has no continuation bit.** `encoding = quic` is RFC 9000's:
+the top two bits of the first byte say one, two, four or eight bytes, so
+`max_bits` is 6, 14, 30 or 62 and `max_bytes` is refused (26.919).
+
 **Two encodings, and what a declared `max_bytes` means.** `be128` is the same
 shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
 SQLite's record varints. A format may also cap the encoded length below what
@@ -8295,6 +8299,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.919 QUIC has an integer of its own
+
+Moved to `doc/decision/26.919-quic-has-an-integer-of-its-own.md`.
 
 ### 26.918 A chain of lengths is walked once
 

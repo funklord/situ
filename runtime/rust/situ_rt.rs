@@ -1032,6 +1032,57 @@ pub fn zigzag_encode(value: i64) -> u64 {
 	((value << 1) ^ (value >> 63)) as u64
 }
 
+/// Decode one QUIC varint (RFC 9000, section 16): the top two bits of the first
+/// byte say one, two, four or eight bytes and the rest is the value, high byte
+/// first.
+#[inline]
+pub fn varint_quic_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let first = *bytes.get(at)?;
+	let n = 1usize << (first >> 6);
+
+	if n > max_bytes || n > bytes.len() - at {
+		return None;
+	}
+
+	let mut acc = (first & 0x3F) as u64;
+	for byte in &bytes[at + 1..at + n] {
+		acc = (acc << 8) | *byte as u64;
+	}
+
+	Some((acc, n))
+}
+
+/// The shortest encoding of a value under `varint_quic_get`.
+#[inline]
+pub fn varint_quic_len(value: u64) -> usize {
+	if value < 1 << 6 {
+		1
+	} else if value < 1 << 14 {
+		2
+	} else if value < 1 << 30 {
+		4
+	} else {
+		8
+	}
+}
+
+/// Encode one QUIC varint minimally: bytes written, or 0 for want of room or
+/// a value past sixty-two bits.
+#[inline]
+pub fn varint_quic_put(out: &mut [u8], value: u64) -> usize {
+	let n = varint_quic_len(value);
+
+	if n > out.len() || value >= 1 << 62 {
+		return 0;
+	}
+
+	for (i, byte) in out[..n].iter_mut().enumerate() {
+		*byte = (value >> (8 * (n - 1 - i))) as u8;
+	}
+	out[0] |= (n.trailing_zeros() as u8) << 6;
+	n
+}
+
 /// Decode one big-endian base-128 varint: the high group first, otherwise the
 /// same shape as leb128. ASN.1's identifier octets, MIDI's delta times and
 /// SQLite's record varints are all this.

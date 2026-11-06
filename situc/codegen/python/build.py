@@ -39,6 +39,7 @@ from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
 from situc.codegen.plain_build import plain
+from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -105,11 +106,9 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	"""
 	assert part.declared is not None
 	most = (1 << part.value) - 1
-	big  = part.declared.encoding is ast.VarintEncoding.BE128
-	tail = (f", {part.declared.max_bytes}, {part.declared.terminal_bits}"
-	        if big else "")
+	tail = varint_put_tail(part.declared)
 	path = part.placement.path
-	call = "varint_be_put" if big else "varint_put"
+	call = f"{varint_stem(part.declared)}_put"
 	if part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)
@@ -679,6 +678,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
 		"                          TruncatedError, View, format_int,",
 		"                          format_uint, varint_be_put, varint_put,",
+		"                          varint_quic_put,",
 		"                          zigzag_encode)",
 		"",
 	]

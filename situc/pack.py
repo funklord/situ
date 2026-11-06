@@ -43,7 +43,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.wellformed import _encoding_source
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 7
+FORMAT_VERSION	= 8
 
 #: The check a bound over a field makes: its row holds a program (26.902).
 BOUND_BY = {"must_eq": 19, "min": 20, "max": 21}
@@ -847,7 +847,7 @@ def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
 	"""
 	if decl is None:
 		return 10, 7, 0
-	big = decl.encoding is ast.VarintEncoding.BE128
+	big = decl.encoding is not ast.VarintEncoding.LEB128
 	return (min(decl.max_bytes, 255), min(decl.terminal_bits, 255),
 	        2 if big else 0)
 
@@ -2764,8 +2764,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if placement.varint is not None:
 			varint_index.setdefault(placement.varint, len(varint_index))
 			varint_decl = varint_decls.get(placement.varint)
+			# `quic` is big with no terminal bits, which `be128` cannot be:
+			# it has no groups, so the byte that would say what the last
+			# group carries says there are none.
 			big  = (varint_decl is not None
-			        and varint_decl.encoding is ast.VarintEncoding.BE128)
+			        and varint_decl.encoding is not ast.VarintEncoding.LEB128)
 			# BIT 4 IS THE TRANSFORM, and the record carried no room for
 			# it until now -- so both walkers answered a `svar`'s RAW
 			# encoding where all four backends answered the decoded value,

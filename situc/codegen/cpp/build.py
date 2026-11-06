@@ -29,6 +29,7 @@ from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
 from situc.codegen.cpp.names import class_name
 from situc.codegen.plain_build import plain
+from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
@@ -192,10 +193,8 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	"""
 	assert part.declared is not None
 	most = (1 << part.value) - 1
-	big  = part.declared.encoding is ast.VarintEncoding.BE128
-	tail = (f", {part.declared.max_bytes}, {part.declared.terminal_bits}"
-	        if big else "")
-	call = "situ_varint_be_put" if big else "situ_varint_put"
+	tail = varint_put_tail(part.declared)
+	call = f"situ_{varint_stem(part.declared)}_put"
 	if part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)

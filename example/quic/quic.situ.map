@@ -1,0 +1,38 @@
+# situ capability map v1
+# schema: quic.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct http3_frames size=0.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
+  http3_frames.frames                    offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+
+struct http3_settings size=0.. access=Sequential mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  http3_settings.pairs                   offset=AbsoluteStatic(0x00) size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=InPlaceSlack canonical=NonCanonical
+
+struct initial size=10..9223372036854775872 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  initial.header_form                    offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  initial.fixed_bit                      offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  initial.packet_type                    offset=AbsoluteStatic(0x00:2) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  initial.reserved                       offset=AbsoluteStatic(0x00:4) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  initial.number_length                  offset=AbsoluteStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  initial.version                        offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  initial.destination_length             offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  initial.destination                    offset=AbsoluteStatic(0x06) size=Bounded(0, 20) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  initial.source_length                  offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  initial.source                         offset=Dynamic size=Bounded(0, 20) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  initial.token_length                   offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  initial.token                          offset=Dynamic size=Bounded(0, 4611686018427387903) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  initial.length                         offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  initial.packet_number                  offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  initial.payload                        offset=Dynamic size=Bounded(0, 4611686018427387902) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct transport_parameters size=0.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
+  transport_parameters.parameters        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical

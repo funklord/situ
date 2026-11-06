@@ -106,7 +106,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 7u) {
+	if (u16_at(image + 4) != 8u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -1027,6 +1027,11 @@ static situ_walk_err varint_admissible(const uint8_t *rules,
 	if ((rules[10] & VARINT_MINIMAL) == 0u) {
 		return SITU_WALK_OK;
 	}
+	if ((rules[10] & VARINT_BIG) != 0u && rules[9] == 0u) {
+		least = raw < (1u << 6) ? 1u : raw < (1u << 14) ? 2u
+		      : raw < (1u << 30) ? 4u : 8u;
+		return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
+	}
 	while (raw >= 0x80u) {
 		raw >>= 7;
 		least++;
@@ -1115,6 +1120,22 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
 	uint32_t avail = len - at;
 	if (avail > max_bytes) {
 		avail = max_bytes;
+	}
+
+	/* `quic`, which the image says as big with no terminal bits: the first
+	 * byte's top two bits are the length and there are no groups. */
+	if (big && terminal_bits == 0u) {
+		if (avail == 0u || (1u << (message[at] >> 6)) > avail) {
+			return SITU_WALK_BOUNDS;
+		}
+		const uint32_t size = 1u << (message[at] >> 6);
+		uint64_t held = message[at] & 0x3fu;
+		for (uint32_t i = 1u; i < size; i++) {
+			held = (held << 8) | message[at + i];
+		}
+		*consumed = size;
+		*value    = held;
+		return SITU_WALK_OK;
 	}
 
 	uint64_t acc = 0u;

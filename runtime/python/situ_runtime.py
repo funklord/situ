@@ -999,6 +999,44 @@ def zigzag_encode(value: int) -> int:
 	return (value << 1) ^ (value >> 63) if value < 0 else value << 1
 
 
+def varint_quic_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""Decode one QUIC varint (RFC 9000, section 16).
+
+	The top two bits of the first byte say one, two, four or eight bytes and
+	the rest is the value, high byte first.
+	"""
+	if at >= len(data):
+		return None
+	n = 1 << (data[at] >> 6)
+	if n > max_bytes or at + n > len(data):
+		return None
+	acc = data[at] & 0x3F
+	for i in range(1, n):
+		acc = (acc << 8) | data[at + i]
+	return acc, n
+
+
+def varint_quic_len(value: int) -> int:
+	"""The shortest encoding of `value` under `varint_quic_get`."""
+	if value < 1 << 6:
+		return 1
+	if value < 1 << 14:
+		return 2
+	return 4 if value < 1 << 30 else 8
+
+
+def varint_quic_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode one QUIC varint minimally at `at`: bytes written, 0 if it cannot
+	be, for want of room or a value past sixty-two bits."""
+	n = varint_quic_len(value)
+	if at + n > len(out) or value >= 1 << 62:
+		return 0
+	out[at:at + n] = value.to_bytes(n, "big")
+	out[at] |= (n.bit_length() - 1) << 6
+	return n
+
+
 def varint_be_get(data: Buffer, at: int, max_bytes: int,
 		terminal_bits: int) -> tuple[int, int] | None:
 	"""Decode one big-endian base-128 varint: the high group first.
