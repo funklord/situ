@@ -683,11 +683,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
 	# than a verdict on somebody's bytes. Reported per vector it would have
 	# read as "does not conform ... from an implementation that is not this
 	# schema", which sends a reader to their bytes for a flag they did not
-	# type (0050).
+	# type (0050). Of the structs the corpus names: a parent hands its child
+	# an argument out of the message, so a parameter in `publish_body` asks
+	# nothing of a corpus of `packet` (26.912).
 	from situc import traverse
+	from situc.codegen.c.vectors import parse_vectors
 
+	named  = {case.struct for case in parse_vectors(read_source(args.vectors))}
 	wanted = {member.name: owner
-	          for owner, member in traverse.parameters(schema)}
+	          for owner, member in traverse.parameters(schema)
+	          if owner in named}
 	missing = [name for name in wanted if name not in given]
 	if missing:
 		for name in missing:
