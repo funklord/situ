@@ -58,3 +58,8 @@ struct record {
 	u16           length [max = 16384];
 	u8            fragment[length] [holds = handshake];
 }
+
+// The record header is five bytes and the handshake header four: what each
+// holds starts there, whatever it holds.
+require offset(record.fragment) == 5;
+require offset(handshake.body) == 4;

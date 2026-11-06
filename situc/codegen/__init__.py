@@ -589,6 +589,34 @@ def required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return None
 
 
+def held_struct_goes_short(resolved: ResolvedSchema, struct: ResolvedStruct,
+		carried: set[str]) -> bool:
+	"""Whether a baseline's zeroed buffer starves a struct this one holds.
+
+	A baseline leaves a run's bytes zero, and where a length field sizes the
+	run it leaves that zero as well. `validate` descends through `[holds]`
+	(26.898), so a held struct with a minimum refuses the buffer before any
+	check has broken anything: `tls.record` holds a `handshake` of at least
+	four bytes. Writing the child in would mean sizing the parent's frame
+	around it, and `extent` is the parent's alone; so the baseline says it
+	cannot be satisfied, and the checks built on it decline.
+
+	`carried` is the arms the message has. A member of another arm, or of an
+	element in a run the baseline leaves empty, is not in this message.
+	"""
+	for entry in struct.entries:
+		placement = entry.placement
+		child = resolved.structs.get(traverse.holds_of(placement) or "")
+		if child is None or not child.layout.size_bytes:
+			continue
+		if "[]" in placement.path:
+			continue
+		held = traverse.enclosing_arm(struct, placement)
+		if held is None or held[1].member in carried:
+			return True
+	return False
+
+
 def selected_arms(resolved: ResolvedSchema, struct: ResolvedStruct,
 		chosen: str | None) -> set[str]:
 	"""Which arms the message a baseline builds actually carries.

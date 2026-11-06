@@ -29,8 +29,8 @@ from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
                            buffer_size,
                            digit_pattern, passes_unknown, placed_bytes,
                            refuse_parameters, required_pattern,
-                           required_run, reserved_policy,
-                           selected_arms)
+                           held_struct_goes_short, required_run,
+                           reserved_policy, selected_arms)
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
@@ -984,6 +984,8 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 	"""
 	writes: list[str] = []
 	carried = selected_arms(resolved, struct, inside)
+	if held_struct_goes_short(resolved, struct, carried):
+		return None
 
 	for entry in struct.entries:
 		placement = entry.placement

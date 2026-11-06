@@ -74,6 +74,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/slip/slip.situ \
 		   example/tcp/tcp.situ \
 		   example/telemetry/telemetry.situ example/tiff/tiff.situ \
+		   example/tls/tls.situ \
 		   example/udp/udp.situ example/usb/usb.situ \
 		   std/kernels.situ std/image.situ
 GEN_NAMES	:= $(notdir $(basename $(SCHEMAS)))

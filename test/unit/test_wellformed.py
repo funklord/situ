@@ -878,7 +878,7 @@ def test_an_unknown_function_is_still_unknown() -> None:
 	                    "struct m { u16 a; }\n"
 	                    "require wibble(m.a) == 1;\n")
 	assert "unknown function `wibble`" in report
-	assert "builtins: align_up, count, max, min, offset, size" in report
+	assert "builtins: align_up, count, max, min, offset, popcount, size" in report
 
 
 def test_an_unknown_attribute_is_refused() -> None:

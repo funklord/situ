@@ -1405,6 +1405,9 @@ UNORACLED = {
 	             "vector; nothing here can WRITE one, so the bytes are "
 	             "ours",
 	"ntp":       "tshark dissects NTP; randpkt cannot write one",
+	"tls":       "tshark dissects TLS and its extension lists agree with "
+	             "situ's for all three OpenSSL hellos in the vectors; "
+	             "randpkt cannot write one",
 	"radiotap":  "tshark dissects it and randpkt cannot write one; the "
 	             "vectors are laid out from the specification's table and "
 	             "tshark read them back, which test_radiotap_is_one_builder"

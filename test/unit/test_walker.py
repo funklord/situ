@@ -738,7 +738,7 @@ def test_every_refusal_in_validate_names_the_check_that_made_it() -> None:
 	tree   = _ast.parse(source)
 	fn     = next(node for node in _ast.walk(tree)
 	              if isinstance(node, _ast.FunctionDef)
-	              and node.name == "_validate")
+	              and node.name == "_validate_here")
 
 	bare = []
 	for node in _ast.walk(fn):
