@@ -2558,3 +2558,14 @@ struct held_material {
 	}
 	tag u8[16];
 }
+
+// A length-less middle between two fixed ends (26.894): `commitment |
+// ciphertext | tag`, the shape of most AEAD frames. Here so that every sweep
+// meets a `[remaining]` run with something after it, which is a chain term no
+// backend needed before and a size program the walkers had not carried.
+struct sealed_leaf {
+	u8  commitment[4];
+	u8  ciphertext[remaining];
+	u8  leaf_tag[2];
+	u16 leaf_sequence;
+}

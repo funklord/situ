@@ -269,6 +269,9 @@ class Placement:
 	#: declared one may refuse a frame. A struct that merely happens to have
 	#: a maximum is still legitimately read out of a longer buffer.
 	remaining_cap: int | None		= None
+	#: `u8 ciphertext[remaining]; u8 tag[16];`: the fixed bytes after a
+	#: `[remaining]` run, which it leaves them (26.894).
+	tail_bytes: int				= 0
 	# Set when the field's type is a varint, which the propagation table reads
 	# to attach the right reasons.
 	varint: str | None		= None
@@ -1033,8 +1036,11 @@ class Walk:
 
 	fields: dict[str, Interval]
 	cursor: Extent
-	# Set once a `[remaining]` member has been placed: nothing may follow it.
-	closed_by: str | None = None
+	# Set once a `[remaining]` member has been placed at this level, for
+	# `_leave_the_tail` to judge what followed.
+	closed_span: Span | None = None
+	#: Inside an arm or a coded or sealed region.
+	nested: bool = False
 	# The first member whose size was not fixed, which is what every later
 	# member's Dynamic offset traces back to.
 	cause: tuple[str, Span, str] | None = None
@@ -1189,6 +1195,7 @@ class Solver:
 		# rather than by a check.
 		state  = Walk(fields={}, cursor=Extent(0, 0))
 		self.place_members(decl, decl.members, scope, layout, name, state)
+		_leave_the_tail(layout, state)
 		self.resolve_coverage(decl, layout)
 		self.resolve_invariants(decl, layout)
 
@@ -1416,7 +1423,8 @@ class Solver:
 		# The interior is placed at the region's base. Its offsets are what the
 		# decoded bytes look like, which is what a caller addresses.
 		inner = Walk(fields=dict(state.fields), cursor=cursor,
-		             cause=state.cause, decode_cause=state.decode_cause)
+		             cause=state.cause, decode_cause=state.decode_cause,
+		             nested=True)
 		self.place_members(decl, region.members, scope, layout,
 		                   f"{prefix}.{region.name}", inner)
 
@@ -2271,7 +2279,8 @@ class Solver:
 		assert arm.member is not None
 
 		arm_state = Walk(fields=dict(state.fields), cursor=state.cursor,
-		                 cause=state.cause, decode_cause=state.decode_cause)
+		                 cause=state.cause, decode_cause=state.decode_cause,
+		                 nested=True)
 		before    = state.cursor
 
 		self.place_members(decl, (arm.member,), scope, layout,
@@ -2401,16 +2410,6 @@ class Solver:
 				member.name, f"{prefix}.{member.name}",
 				evaluate(member.array.size, self.result.env), member.attrs))
 			return
-
-		if state.closed_by is not None:
-			raise error(
-				f"nothing may follow `{state.closed_by}`",
-				member.span,
-				label = "declared after a `[remaining]` member",
-				notes = [f"`{state.closed_by}` runs to the end of its frame, so "
-				         "this member has no bytes to occupy",
-				         "move it before the `[remaining]` member"],
-			)
 
 		local = scope.narrow(member.attrs, self.result.env)
 
@@ -2664,9 +2663,6 @@ class Solver:
 			                   layout.placements[-1])
 
 		self.record_interval(member, scalar, state, path, name)
-
-		if member.array is not None and isinstance(member.array.size, ast.Remaining):
-			state.closed_by = name
 
 		if getattr(member, "parameter", False):
 			# An argument, not bytes (0050): the cursor does not move, so the
@@ -3453,7 +3449,11 @@ class Solver:
 			)
 
 		if isinstance(member.array.size, ast.Remaining):
-			if not last:
+			# Only at the struct's own level: an arm's run is one arm's and a
+			# region's length is the codec's, so what follows either cannot
+			# be taken off this run (26.782). The rest is `_leave_the_tail`'s
+			# to judge, once it is placed.
+			if not last and state.nested:
 				raise error(
 					"`[remaining]` must be the last member of its frame",
 					member.array.span,
@@ -3461,6 +3461,8 @@ class Solver:
 					notes = ["a member after this one would have no bytes to "
 					         "occupy (project.md section 8.5)"],
 				)
+			if not state.nested:
+				state.closed_span = member.array.span
 			# The frame's extent is not known here, and for a top-level struct
 			# it is not known at all. Unbounded is the honest answer -- unless
 			# the schema states a smaller one, which is what `max N` is for
@@ -4148,6 +4150,43 @@ def _region_argument(region: ast.Member, name: str) -> str | None:
 		if arg.name == name and arg.value is not None:
 			return expr_to_source(arg.value)
 	return None
+
+
+def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
+	"""A `[remaining]` run leaves the fixed members after it their bytes.
+
+	`commitment[32] | ciphertext | tag[16]` is most AEAD frames, and a frame
+	that carries no length of its own has nothing else to size the middle by
+	(26.669). So the run is the frame less what follows, which has to be a
+	number: two members both reaching for the end cannot both have it (26.894).
+	"""
+	at = next((index for index, held in enumerate(layout.placements)
+	           if held.sized_by == "remaining"), None)
+	if at is None or state.closed_span is None:
+		return
+	run    = layout.placements[at]
+	parent = run.path.rpartition(".")[0]
+	# Beside the run: the interior of a nested member is counted by that
+	# member, and the rows under the run are the run's.
+	after  = [held for held in layout.placements[at + 1:]
+	          if held.path.rpartition(".")[0] == parent
+	          and not held.path.startswith(run.path)]
+	if not after:
+		return
+	movable = [held for held in after if not held.is_fixed_size
+	           or held.size_bits % BITS_PER_BYTE or held.delimiters
+	           or held.repeat_while is not None]
+	if movable or run.element_bits != BITS_PER_BYTE or run.type_name != "u8":
+		raise error(
+			"`[remaining]` must be the last member of its frame",
+			state.closed_span,
+			label = "runs to the end of the frame",
+			notes = [f"`{(movable or after)[0].name}` has no bytes to occupy "
+			         "unless a run of bytes leaves them: what follows has to "
+			         "be fixed-size, and the run a run of `u8` (26.894)"],
+		)
+	layout.placements[at] = replace(
+		run, tail_bytes=sum(held.size_bits for held in after) // BITS_PER_BYTE)
 
 
 def _located_source(member: ast.Field | ast.Reserved) -> str | None:

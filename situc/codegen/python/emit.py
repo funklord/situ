@@ -7771,7 +7771,10 @@ class Emitter:
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
-			return None if start is None else f"(self._len - ({start}))"
+			if start is None:
+				return None
+			return (f"max(0, self._len - ({start}) - {placement.tail_bytes})"
+			        if placement.tail_bytes else f"(self._len - ({start}))")
 		if placement.sized_by is None:
 			return None
 

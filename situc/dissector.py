@@ -2409,6 +2409,18 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			"\tat = tvb:len()",
 		]
 
+	if placement.sized_by == "remaining" and placement.tail_bytes:
+		# The frame less the fixed members after it (26.894).
+		left = placement.tail_bytes
+		return [
+			f"\t-- {placement.path}: to {left} bytes from the end of the frame",
+			*seek,
+			f"\tif tvb:len() - {left} > at then",
+			f"\t\tsubtree:add({field}, tvb(at, tvb:len() - {left} - at))",
+			f"\t\tat = tvb:len() - {left}",
+			"\tend",
+		]
+
 	if placement.sized_by == "remaining":
 		return [
 			f"\t-- {placement.path}: to the end of the frame",

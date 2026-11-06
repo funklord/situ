@@ -482,13 +482,14 @@ def test_remaining_is_unbounded() -> None:
 	assert solved.structs["S"].size_max_bits is None
 
 
-def test_remaining_must_be_last() -> None:
-	report = rendered("struct S { u8 rest[remaining]; u8 z; }")
+def test_remaining_must_be_last_of_what_moves() -> None:
+	"""Fixed members may follow (26.894), and a second run cannot."""
+	report = rendered("struct S { u8 rest[remaining]; u8 n; u8 z[n]; }")
 	assert "must be the last member of its frame" in report
 
 
-def test_nothing_may_follow_remaining_even_indirectly() -> None:
-	report = rendered("struct S { u8 a; u8 rest[remaining]; u16 z; }")
+def test_a_run_of_wider_elements_leaves_nothing() -> None:
+	report = rendered("struct S { u8 a; u16 rest[remaining]; u16 z; }")
 	assert "must be the last member" in report
 
 

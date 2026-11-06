@@ -4660,7 +4660,11 @@ class Emitter:
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
-			return None if start is None else f"(situ_remaining_u32(raw_.limit, {start}))"
+			if start is None:
+				return None
+			room = f"situ_remaining_u32(raw_.limit, {start})"
+			return (f"(situ_remaining_u32({room}, {placement.tail_bytes}u))"
+			        if placement.tail_bytes else f"({room})")
 		if placement.sized_by is None:
 			return None
 

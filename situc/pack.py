@@ -1275,6 +1275,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			expr = field.size
 		elif isinstance(field, (ast.Field, ast.Reserved)) and field.array:
 			expr = field.array.size
+			# What a run leaves the members after it (26.894), as the
+			# arithmetic both walkers already run: `max` first, so a frame
+			# too short for the tail is an empty run and not a negative one.
+			if placement.tail_bytes and isinstance(expr, ast.Remaining):
+				left = ast.IntLiteral(expr.span, placement.tail_bytes,
+				                      str(placement.tail_bytes))
+				expr = ast.Binary(expr.span, "-", ast.Call(
+					expr.span, "max", (expr, left)), left)
 		else:
 			expr = None
 		if expr is None:

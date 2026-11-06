@@ -9366,8 +9366,10 @@ class Emitter:
 			# Saturating. A plain subtraction wraps when the members before it
 			# claim more than the view holds, which is a length the message
 			# chooses rather than one the schema does.
-			return (f"situ_remaining_u32({held}.limit, "
+			room = (f"situ_remaining_u32({held}.limit, "
 			        f"{self._base_expression(struct, placement, gated)})")
+			return (f"situ_remaining_u32({room}, {placement.tail_bytes}u)"
+			        if placement.tail_bytes else room)
 
 		count = self._count_expression(struct, placement, held,
 		                               leaf_bounded=leaf_bounded)

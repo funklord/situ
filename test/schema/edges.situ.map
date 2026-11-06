@@ -674,6 +674,12 @@ struct scrambled size=7 repr=ValueConverted atomic=NonAtomic
   scrambled.body.payload                 offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   scrambled.tail                         offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
+struct sealed_leaf size=8.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  sealed_leaf.commitment                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  sealed_leaf.ciphertext                 offset=AbsoluteStatic(0x04) size=Unbounded align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  sealed_leaf.leaf_tag                   offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  sealed_leaf.leaf_sequence              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct sealed_run size=19..27 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated
   sealed_run.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   sealed_run.body                        offset=AbsoluteStatic(0x01) size=Bounded(2, 10) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(seal_mac)

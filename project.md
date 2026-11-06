@@ -8265,6 +8265,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.894 Fixed members may follow a `[remaining]` run
+
+Moved to `doc/decision/26.894-fixed-members-may-follow-a-remaining-run.md`.
+
 ### 26.893 A sum of bytes
 
 Moved to `doc/decision/26.893-a-sum-of-bytes.md`.

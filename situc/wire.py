@@ -448,6 +448,8 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		facts.append(f"escape={placement.delimiter_escape:#04x}")
 	if placement.delimiter_cap is not None:
 		facts.append(f"cap={placement.delimiter_cap}")
+	if placement.tail_bytes:
+		facts.append(f"leaves={placement.tail_bytes}")
 	if placement.since is not None:
 		facts.append(f"since={placement.since}")
 	if placement.varint is not None:
