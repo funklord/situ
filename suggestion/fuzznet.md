@@ -844,6 +844,8 @@ We would be happy with (3). The gate is the valuable part and it already
 works; what cost us time was believing the `extern` declaration meant
 something we would eventually be able to satisfy.
 
+> **Taken as (3), 2026-11-06, in 13.2a.**
+
 ### One smaller note
 
 `situc verify` requires a `vectors` argument. Our own reproduction script had
@@ -1101,6 +1103,11 @@ a prior length array -- a `sum(field)` builtin, or a region form that consumes
 a length table. Bounded, so no DoS concern: `count` and each `leaf_len` are
 themselves bounded, so the sum is too.
 
+> **Built, 2026-11-06 (26.896).** `u8 payload[sum(leaf_len)]` takes a counted
+> run of unsigned integers declared earlier, in all four and both walkers. A
+> table that lies is a run reaching the frame's end, and `validate` refuses what
+> follows it.
+
 ## 2. `[max]` cannot bound a `remaining` field
 
 Our tree node body and our catalog inline content are RECORD BODIES: their real
@@ -1209,6 +1216,12 @@ remaining-minus-trailing-fixed, or -- since the codec already knows its own
 tag length -- a `sealed{}` region that reserves the declared tag from the
 tail the way it reserves it from the front.
 
+> **Built, 2026-11-06 (26.894).** `u8 commitment[32]; u8 ciphertext[remaining];
+> u8 tag[16];` is the frame less the fixed members after it, and `sealed(c) { u8
+> ciphertext[remaining]; } tag u8[16];` under a length-preserving codec is the
+> same rule, so the second design you offered was not needed. What follows
+> records the state before that.
+>
 > **Still open, re-measured 2026-10-21 (26.669).** `u8 commitment[32]; u8
 > ciphertext[remaining]; u8 tag[16];` is refused as it was -- "`[remaining]`
 > must be the last member of its frame" -- and the cap added since does not
@@ -1260,6 +1273,10 @@ we mention it as another instance rather than a separate request. Our seam's
 shape checks catch a mismatch at read time instead.
 
 Nothing needed back.
+
+> **Built anyway, 2026-11-06 (26.897).** `invariant slot.len == size(slot.body);`
+> states it, and `validate` now holds a message to it in all four and both
+> walkers. Until then an invariant was enforced only on writing.
 
 # A situc crash: nested coverage (a signed struct inside a signed region) (2026-09-17)
 

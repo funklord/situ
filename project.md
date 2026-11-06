@@ -2748,6 +2748,13 @@ call, the spec did not name, and no `impl` bound. So the harness could not be
 linked against any implementation this repository produces, and had never once
 been run (26.35, `doc/decision/0028-the-tier-one-codec-abi.md`).
 
+**A keyed codec is not bound here.** This shape has no key, no nonce and no
+associated data, so an `authenticated` codec is driven by the caller through the
+gate rather than bound as `impl x extern`: read `tag_covered`, run the primitive,
+hand the verdict to `_open`. fuzznet read an `extern` line as something it would
+eventually satisfy and lost time to that. A context parameter would change every
+accessor's signature, and whether that is worth it is an open question.
+
 ### 13.2b The scattered form, for a transform that covers spans
 
 13.2a takes one pointer and one length, which cannot express a transform over

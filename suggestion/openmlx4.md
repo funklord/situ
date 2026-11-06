@@ -419,6 +419,11 @@ info-section pointer. `require` is compile-time, so it refuses a field:
 function of the first three is the natural workaround, and it leads to
 the next finding.
 
+> **Built, 2026-11-06.** `polynomial(..., augmented)` states the other model and
+> works the start out at compile time (26.890), and `byte_sum(width, negate)` is
+> a family for the sum to zero (26.893). The wire signature now states a
+> kernel's parameters, so `init` changing fails `wire --check` (26.891).
+
 ## The subcommand divergence was two bugs, and situ found the worse one
 
 Reported as "`map` and `wire` accept a schema that `build` and `verify`
