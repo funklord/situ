@@ -472,6 +472,100 @@ def _bit_stuffing(decl: ast.CodecDecl, prefix: str,
 	]
 
 
+def _json_string(decl: ast.CodecDecl, name: str) -> list[str]:
+	"""The inside of a JSON string; `c/derived.py` says why both halves."""
+	return [
+		"",
+		"",
+		f"#: `{decl.name}`: the inside of a JSON string, RFC 8259 section 7.",
+		"#: A non-empty input decoding to zero is malformed.",
+		f"def {name}_hex4(data: bytes, at: int) -> int:",
+		"\tvalue = 0",
+		"\tfor c in data[at:at + 4]:",
+		"\t\tif 0x30 <= c <= 0x39:",
+		"\t\t\tdigit = c - 0x30",
+		"\t\telif 0x61 <= c <= 0x66:",
+		"\t\t\tdigit = c - 0x61 + 10",
+		"\t\telif 0x41 <= c <= 0x46:",
+		"\t\t\tdigit = c - 0x41 + 10",
+		"\t\telse:",
+		"\t\t\treturn -1",
+		"\t\tvalue = value * 16 + digit",
+		"\treturn value",
+		"",
+		"",
+		f"def {name}_encode(data: bytes, length: int, out: bytearray) -> int:",
+		'\t"""`out` needs length * 6 bytes."""',
+		"\tshort = {0x22: 0x22, 0x5C: 0x5C, 0x08: 0x62, 0x09: 0x74,",
+		"\t         0x0A: 0x6E, 0x0C: 0x66, 0x0D: 0x72}",
+		"\twritten = 0",
+		"\tfor read in range(length):",
+		"\t\tc = data[read]",
+		"\t\tif c in short:",
+		"\t\t\tpiece = bytes((0x5C, short[c]))",
+		"\t\telif c < 0x20:",
+		"\t\t\tpiece = b'\\\\u%04x' % c",
+		"\t\telse:",
+		"\t\t\tpiece = bytes((c,))",
+		"\t\tout[written:written + len(piece)] = piece",
+		"\t\twritten += len(piece)",
+		"\treturn written",
+		"",
+		"",
+		f"def {name}_decode(data: bytes, length: int, out: bytearray) -> int:",
+		'\t"""`out` needs length bytes."""',
+		"\tshort = {0x22: 0x22, 0x5C: 0x5C, 0x2F: 0x2F, 0x62: 0x08, 0x74: 0x09,",
+		"\t         0x6E: 0x0A, 0x66: 0x0C, 0x72: 0x0D}",
+		"\tread = 0",
+		"\twritten = 0",
+		"\twhile read < length:",
+		"\t\tc = data[read]",
+		"\t\tread += 1",
+		"\t\tif c == 0x22 or c < 0x20:",
+		"\t\t\treturn 0",
+		"\t\tif c != 0x5C:",
+		"\t\t\tout[written] = c",
+		"\t\t\twritten += 1",
+		"\t\t\tcontinue",
+		"\t\tif read >= length:",
+		"\t\t\treturn 0",
+		"\t\tc = data[read]",
+		"\t\tread += 1",
+		"\t\tif c in short:",
+		"\t\t\tout[written] = short[c]",
+		"\t\t\twritten += 1",
+		"\t\t\tcontinue",
+		"\t\tif c != 0x75 or length - read < 4:",
+		"\t\t\treturn 0",
+		f"\t\tpoint = {name}_hex4(data, read)",
+		"\t\tread += 4",
+		"\t\tif point < 0 or 0xDC00 <= point <= 0xDFFF:",
+		"\t\t\treturn 0",
+		"\t\tif 0xD800 <= point <= 0xDBFF:",
+		"\t\t\tif length - read < 6 or data[read] != 0x5C \\",
+		"\t\t\t\t\tor data[read + 1] != 0x75:",
+		"\t\t\t\treturn 0",
+		f"\t\t\tlow = {name}_hex4(data, read + 2)",
+		"\t\t\tread += 6",
+		"\t\t\tif low < 0xDC00 or low > 0xDFFF:",
+		"\t\t\t\treturn 0",
+		"\t\t\tpoint = 0x10000 + ((point - 0xD800) << 10) + (low - 0xDC00)",
+		"\t\tif point < 0x80:",
+		"\t\t\tpiece = bytes((point,))",
+		"\t\telif point < 0x800:",
+		"\t\t\tpiece = bytes((0xC0 | point >> 6, 0x80 | point & 0x3F))",
+		"\t\telif point < 0x10000:",
+		"\t\t\tpiece = bytes((0xE0 | point >> 12, 0x80 | point >> 6 & 0x3F,",
+		"\t\t\t               0x80 | point & 0x3F))",
+		"\t\telse:",
+		"\t\t\tpiece = bytes((0xF0 | point >> 18, 0x80 | point >> 12 & 0x3F,",
+		"\t\t\t               0x80 | point >> 6 & 0x3F, 0x80 | point & 0x3F))",
+		"\t\tout[written:written + len(piece)] = piece",
+		"\t\twritten += len(piece)",
+		"\treturn written",
+	]
+
+
 def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""COBS and the escape-stuffed byte codes (SLIP, PPP async).
 
@@ -489,6 +583,9 @@ def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	code = _named_code(decl)
 	name = _ident(prefix, decl.name)
+
+	if code == "json_string":
+		return _json_string(decl, name)
 
 	if code == "cobs":
 		return [

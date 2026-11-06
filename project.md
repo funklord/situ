@@ -8265,6 +8265,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.892 A JSON string is a stuffing code
+
+Moved to `doc/decision/26.892-a-json-string-is-a-stuffing-code.md`.
+
 ### 26.891 The signature did not say what a checksum computes
 
 Moved to `doc/decision/26.891-the-signature-did-not-say-what-a-checksum-computes.md`.

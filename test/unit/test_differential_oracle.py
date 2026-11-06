@@ -924,6 +924,7 @@ STUFFING_MEASURED: dict[str, tuple[bytes, int, tuple[int, int], int]] = {
 	"ppp_async": (b"\x7e" * 16,   16, (2, 1),     1),
 	"slip":      (b"\xc0" * 16,   16, (2, 1),     1),
 	"smtp_dot":  (b".\r\n" * 16,  48, (4, 3),     0),
+	"json_string": (b"\x01" * 16,  16, (6, 1),     0),
 	"usb":       (b"\xff" * 3,    24, (7, 6),     0),
 }
 

@@ -409,6 +409,15 @@ codec cobs {
 }
 impl cobs derived;
 
+// The inside of a JSON string, RFC 8259 section 7: the one-letter escapes,
+// `\uXXXX`, and a surrogate pair as one character (26.892). Six bytes for one
+// is `\u0000`. Framing a string is `[escape = "\\"]`, and this is what turns
+// what that framed into the text it stands for.
+codec json_string {
+	kernel = stuffing(worst_case = 6, per = 1, code = json_string);
+}
+impl json_string derived;
+
 // The two bit stuffings, which are one algorithm and two constants: insert a
 // zero after a run of ones, so that a run one longer cannot occur in the data
 // and means something else on the wire.

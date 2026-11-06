@@ -845,6 +845,7 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 STUFFING_BOUNDS: dict[str, tuple[int, int, int]] = {
 	"cobs":      (255, 254, 1),
 	"hdlc":      (6, 5, 0),
+	"json_string": (6, 1, 0),
 	"ppp_async": (2, 1, 1),
 	"slip":      (2, 1, 1),
 	"smtp_dot":  (4, 3, 0),
