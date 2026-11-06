@@ -231,6 +231,12 @@ def chain_bits(view: View, index: int) -> int:
 	capability map says it costs.
 	"""
 	placement = view.image.placements[index]
+	# An unknown offset whose row carries a number is measured from the
+	# frame's end, and past the frame where the frame is shorter (26.905).
+	if not placement.offset_known and placement.offset_bits != NONE:
+		room = view.limit - view.at
+		back = placement.offset_bits // BITS_PER_BYTE
+		return (room - back if room >= back else room) * BITS_PER_BYTE
 	if placement.located_code != NONE:
 		# `at expr` is measured from the start of the *message* (9.8), and
 		# this function answers from the view's base -- every caller adds

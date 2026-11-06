@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.905 A value at the frame's end
+
+Moved to `doc/decision/26.905-a-value-at-the-frames-end.md`.
+
 ### 26.903 Both walkers, on a message nearly right
 
 Moved to `doc/decision/26.903-both-walkers-on-a-near-miss.md`.

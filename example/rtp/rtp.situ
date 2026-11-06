@@ -1,0 +1,65 @@
+// RTP fixed header and payload (RFC 3550 section 5.1).
+//
+// Here for the padding, which is the shape no length field can state. Section
+// 5.1 puts the count in the LAST octet of the packet, and that count covers
+// the padding and itself:
+//
+//     "the last octet of the padding contains a count of how many padding
+//     octets should be ignored, including itself."
+//
+// So the value sizing the payload comes after the payload, and a reader that
+// goes front to back has nothing to stop at. ESP's trailer (RFC 4303 section
+// 2) is the same shape two bytes wide. `peek` reads a member without spending
+// it; `at end` measures that read from the frame's end, and the payload is
+// then the frame less what the count says follows it.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct nothing {
+}
+
+require size(nothing) == 0;
+
+// 5.3.1: a profile's own 16 bits, then a length in 32-bit words that does not
+// count these four octets.
+struct extension {
+	u16  profile;
+	u16  length;
+	u32  words[length];
+}
+
+struct rtp {
+	u2   version  [must_eq = 2];
+	bit  padded_flag;
+	bit  extended;
+	u4   cc;
+
+	bit  marker;
+	u7   payload_type;
+	u16  sequence;
+	u32  timestamp;
+	u32  ssrc;
+
+	u32  csrc[cc];
+
+	variant header_extension switch (extended) {
+		case 0:  nothing    none;
+		case 1:  extension  present;
+		default: error;
+	}
+
+	// The count is there only when the P bit says so, so the bytes it sizes
+	// are the flag times the last octet: nothing is read as padding without
+	// it, and no second struct is needed to say so.
+	peek u8  last at end;
+	u8       payload[remaining];
+	u8       padding[padded_flag * last];
+}
+
+// Zero is refused because the count includes itself, so a padded packet has at
+// least the one octet holding it.
+when rtp.padded_flag == 1 && rtp.last == 0
+	refuse no_padding_count
+	"the P bit is set and the last octet counts no padding, not even itself";

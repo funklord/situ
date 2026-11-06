@@ -6788,6 +6788,9 @@ class Emitter:
 			placement: Placement) -> str | None:
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
+		if placement.from_end is not None:
+			back = placement.from_end
+			return f"(self._len - {back} if self._len >= {back} else self._len)"
 
 		parts = preceding_parts(struct, placement)
 		if parts is None:
@@ -7839,6 +7842,10 @@ class Emitter:
 			start = self._offset_expression(struct, placement)
 			if start is None:
 				return None
+			if placement.tail_source is not None:
+				left = self._over_fields(struct, placement.tail_source, "self")
+				return (f"max(0, self._len - ({start}) - {placement.tail_bytes}"
+				        f" - ({left}))")
 			return (f"max(0, self._len - ({start}) - {placement.tail_bytes})"
 			        if placement.tail_bytes else f"(self._len - ({start}))")
 		if placement.sized_by is None:

@@ -2936,6 +2936,16 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 		return err;
 	}
 
+	/* An unknown offset whose row carries a number is measured from the
+	 * frame's end, and past the frame where the frame is shorter (26.905). */
+	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u
+	                && held.offset_bits != SITU_WALK_NONE) {
+		const uint32_t back = held.offset_bits / 8u;
+
+		*out = (len >= back ? len - back : len) * 8u;
+		return SITU_WALK_OK;
+	}
+
 	/* `at expr` says where the member is rather than joining the chain, so
 	 * the program answers the offset outright. The loop below already knows
 	 * to skip one when summing what comes before: a located member

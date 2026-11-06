@@ -4356,6 +4356,9 @@ class Emitter:
 		"""
 		if placement.offset_bits is not None:
 			return f"{placement.offset_bytes}u"
+		if placement.from_end is not None:
+			back = placement.from_end
+			return f"(view.limit >= {back}u ? view.limit - {back}u : view.limit)"
 		if placement.kind in NOT_A_MEMBER:
 			inside = [held for held in self._top_level(struct)
 			          if placement.name in held.regions]
@@ -9453,6 +9456,9 @@ class Emitter:
 			# chooses rather than one the schema does.
 			room = (f"situ_remaining_u32({held}.limit, "
 			        f"{self._base_expression(struct, placement, gated)})")
+			if placement.tail_source is not None:
+				left = self._over_fields(struct, placement.tail_source, held)
+				room = f"situ_remaining_u32({room}, (uint32_t)({left}))"
 			return (f"situ_remaining_u32({room}, {placement.tail_bytes}u)"
 			        if placement.tail_bytes else room)
 

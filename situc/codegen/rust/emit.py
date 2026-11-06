@@ -6725,6 +6725,10 @@ class Emitter:
 		"""Where a member starts: the same walk every backend does."""
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
+		if placement.from_end is not None:
+			back = placement.from_end
+			return (f"self.bytes.len().checked_sub({back})"
+			        ".unwrap_or(self.bytes.len())")
 
 		parts = preceding_parts(struct, placement)
 		if parts is None:
@@ -8348,6 +8352,11 @@ class Emitter:
 			start = self._offset_expression(struct, placement)
 			if start is None:
 				return None
+			if placement.tail_source is not None:
+				left = self._over_fields(struct, placement.tail_source, "self")
+				return (f"self.bytes.len().saturating_sub({start})"
+				        f".saturating_sub({placement.tail_bytes})"
+				        f".saturating_sub(({left}) as usize)")
 			return (f"self.bytes.len().saturating_sub({start})"
 			        f".saturating_sub({placement.tail_bytes})"
 			        if placement.tail_bytes

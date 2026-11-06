@@ -26,6 +26,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [ntp](ntp/) | A format designed with alignment in mind, and where `repr` starts to matter. |
 | [bmp](bmp/) | Little endian, and the canonical misaligned layout. |
 | [pes](pes/) | Six optional groups, each gated by its flag, written as one builder taking one arm value per group. Real packets from ffmpeg as vectors. |
+| [rtp](rtp/) | A padding count in the last byte of the packet: a value read from the frame's end, and a payload that is the frame less what it says follows. |
 | [tls](tls/) | A ClientHello from the record to its extensions: a length in bytes over records that each state their own size, framed by `[holds]`. Three hellos OpenSSL wrote, their extension lists checked against tshark. |
 | [radiotap](radiotap/) | Two dozen optional fields behind one `present` word, each aligned from the header with `[align = n]`, in one builder where a builder per combination would be 2^24. Vectors laid out from the specification and read back by tshark. |
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |

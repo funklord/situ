@@ -964,7 +964,9 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 			name   = f"{_lua(placement.name)}_value"
 			little = ("true" if placement.endian is ast.Endian.LITTLE
 			          else "false")
-			lines.append(f"\tlocal {name} = situ_uint(tvb, at, "
+			spot   = ("at" if placement.from_end is None
+			          else f"tvb:len() - {placement.from_end}")
+			lines.append(f"\tlocal {name} = situ_uint(tvb, {spot}, "
 			             f"{placement.size_bits // BITS_PER_BYTE}, {little})")
 			_captured[placement.path] = name
 		if lost:
@@ -1099,6 +1101,10 @@ def _message_calls(struct: ResolvedStruct) -> list[str]:
 		if shown is None:
 			lines.append(f"\t-- {when.name}: {_unreadable(struct, local)}")
 			continue
+		# Lua spells these otherwise, and `&&` here is a file that does not
+		# load, for every message in it and not this one (26.905).
+		shown = translate_operators(shown, conj=" and ", disj=" or ",
+		                            ne=" ~= ", neg="not ")
 		lines.append(f"\tif {shown} then")
 		lines.append(f"\t\tsubtree:add_proto_expert_info("
 		             f"{proto}_e.{_lua(when.name)})")
@@ -1256,7 +1262,7 @@ def _located_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	          f"{driver.size_bits // BITS_PER_BYTE}, {little})")
 
 	local  = _lua(name)
-	length = _length(resolved, struct, placement, "0")
+	length = _length(resolved, struct, placement, "0", "at")
 	extent = f"{local}_n" if length is not None else None
 
 	lines = [f"\t-- {placement.path}: placed at `{placement.located}`",
@@ -1477,6 +1483,19 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	         " than guessed at."]
 	        if _host_order(placement) else [])
 
+	# Read at the frame's end and not at the cursor, which it leaves alone
+	# (26.905).
+	if placement.from_end is not None:
+		back = placement.from_end
+		wide = placement.size_bits // BITS_PER_BYTE
+		return [
+			f"\t-- {placement.path}: {back} bytes from the end of the frame",
+			*note,
+			f"\tif tvb:len() >= {back} then",
+			f"\t\tsubtree:{add}({field}, tvb(tvb:len() - {back}, {wide}))",
+			"\tend",
+		]
+
 	if span is None:
 		# `byte_span` is None for a dynamic offset, and *where* it sits is the
 		# only thing unknown -- how wide it is was never in doubt. Reported as
@@ -1492,7 +1511,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			# struct, at offsets from its own start, which is where the tvb
 			# begins. `at` is the running cursor and would read the driver
 			# from wherever the walk happens to have got to.
-			length = _length(resolved, struct, placement, "0")
+			length = _length(resolved, struct, placement, "0", "at")
 			if length is None:
 				return _uncomputable(placement.path,
 				                     "a length this dissector cannot render")
@@ -2239,7 +2258,7 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	for arm, member in arm_members(struct, placement):
 		if member is None:
 			continue		# `default: error`; nothing to show
-		length = _length(resolved, struct, member, "0")
+		length = _length(resolved, struct, member, "0", "at")
 		if length is None:
 			return _uncomputable(placement.path, "one arm has no length"
 			                     " this dissector can compute")
@@ -2500,9 +2519,14 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			"\tat = tvb:len()",
 		]
 
-	if placement.sized_by == "remaining" and placement.tail_bytes:
-		# The frame less the fixed members after it (26.894).
-		left = placement.tail_bytes
+	if placement.sized_by == "remaining" \
+			and (placement.tail_bytes or placement.tail_source is not None):
+		# The frame less the fixed members after it (26.894), and less what
+		# a value read earlier says follows it (26.905).
+		left: int | str = placement.tail_bytes
+		if placement.tail_source is not None:
+			left = (f"({placement.tail_bytes} + "
+			        f"{_over_fields(struct, placement.tail_source, '0')})")
 		return [
 			f"\t-- {placement.path}: to {left} bytes from the end of the frame",
 			*seek,

@@ -1292,9 +1292,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# What a run leaves the members after it (26.894), as the
 			# arithmetic both walkers already run: `max` first, so a frame
 			# too short for the tail is an empty run and not a negative one.
-			if placement.tail_bytes and isinstance(expr, ast.Remaining):
-				left = ast.IntLiteral(expr.span, placement.tail_bytes,
-				                      str(placement.tail_bytes))
+			if (placement.tail_bytes or placement.tail_ast is not None) \
+					and isinstance(expr, ast.Remaining):
+				left: ast.Expr = ast.IntLiteral(expr.span, placement.tail_bytes,
+				                                str(placement.tail_bytes))
+				if placement.tail_ast is not None:
+					left = ast.Binary(expr.span, "+", left, placement.tail_ast)
 				expr = ast.Binary(expr.span, "-", ast.Call(
 					expr.span, "max", (expr, left)), left)
 		else:
@@ -3170,7 +3173,10 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		)
 		placements_blob += _struct.pack(
 			"<IIIIIIIIIBBHHHH",
-			_u32(placement.offset_bits),
+			# Not known and still a number: measured from the frame's end,
+			# in bits like any other offset here (26.905).
+			_u32(placement.offset_bits if placement.from_end is None
+			     else placement.from_end * BITS_PER_BYTE),
 			_u32(placement.size_bits),
 			_u32(placement.size_max_bits),
 			_u32(placement.element_bits),

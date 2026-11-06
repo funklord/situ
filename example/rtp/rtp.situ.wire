@@ -1,0 +1,48 @@
+# situ wire signature v3
+# schema: rtp.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct extension size=4..262144
+  @0x0000   2         u16        profile  big
+  @0x0002   2         u16        length  big
+  @0x0004   0..262140 u32        words  sized-by=length
+
+struct nothing size=0
+
+struct rtp size=12..
+  @0x0000   2bit      u2         version  msb_first must_eq=2
+  @0x0000:2 1bit      bit        padded_flag  msb_first
+  @0x0000:3 1bit      bit        extended  msb_first
+  @0x0000:4 4bit      u4         cc  msb_first
+  @0x0001   1bit      bit        marker  msb_first
+  @0x0001:1 7bit      u7         payload_type  msb_first
+  @0x0002   2         u16        sequence  big
+  @0x0004   4         u32        timestamp  big
+  @0x0008   4         u32        ssrc  big
+  @0x000c   0..60     u32        csrc  sized-by=cc
+  ~         0..262144 variant    header_extension
+  ~         1         u8         last  peek from_end=1
+  ~         0..       u8         payload  sized-by=remaining leaves_more=(padded_flag * last)
+  ~         0..255    u8         padding  sized-by=padded_flag*last
+  header_extension switch: extended
+  header_extension case 0: none nothing
+  header_extension case 1: present extension
+  header_extension case default: error
+  rtp refuses: no_padding_count when rtp.padded_flag == 1 && rtp.last == 0

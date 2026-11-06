@@ -700,7 +700,8 @@ def unmeasurable_inside(structs: dict[str, "ResolvedStruct"],
 	"""
 	return (bool(member.delimiters)
 	        or member.repeat_while is not None
-	        or (member.sized_by == "remaining" and not member.tail_bytes)
+	        or (member.sized_by == "remaining" and not member.tail_bytes
+	            and member.tail_source is None)
 	        or is_counted_run(structs, member))
 
 

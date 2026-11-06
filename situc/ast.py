@@ -400,6 +400,10 @@ class Field(Member):
 	#: construct along -- it is read to choose, and the bytes belong to the
 	#: arm.
 	peek: bool			= False
+	#: `peek u8 count at end;` -- the same read, measured from the frame's
+	#: end: how many bytes after the member the frame runs on. RTP's padding
+	#: count and ESP's trailer are read there before what they size (26.905).
+	from_end: Expr | None		= None
 	#: `parameter u8 block_size;` -- an argument the CALLER supplies, not a
 	#: member of the message at all (0050). Zero bytes wide, no offset, and
 	#: read by every expression that reads a field: a size, an `at`, a

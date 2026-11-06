@@ -1,0 +1,8 @@
+# Built to RFC 3550 section 5.1 by hand, and held to tshark's own RTP dissector
+# by `test_a_value_at_the_frames_end`: what it calls payload and padding is what
+# this schema calls them. `rtp <name> <hex>`.
+rtp no_padding 80600001000000640000abcddeadbeef
+rtp one_csrc 81e000020000006e0000abcd11223344aabb
+rtp four_octets_of_padding a06000030000007800000a0bcafe000000000004
+rtp padding_is_only_the_count a06000040000008200000a0bcafe01
+rtp extended_and_padded b06000050000008c00000a0bbede000111223344feed0002

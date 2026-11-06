@@ -1,0 +1,40 @@
+# situ capability map v1
+# schema: rtp.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct extension size=4..262144 mutate=Shifting repr=ValueConverted
+  extension.profile                      offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  extension.length                       offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  extension.words                        offset=AbsoluteStatic(0x04) size=Bounded(0, 262140) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting
+
+struct nothing size=0
+
+struct rtp size=12.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  rtp.version                            offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtp.padded_flag                        offset=AbsoluteStatic(0x00:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtp.extended                           offset=AbsoluteStatic(0x00:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtp.cc                                 offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtp.marker                             offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtp.payload_type                       offset=AbsoluteStatic(0x01:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  rtp.sequence                           offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  rtp.timestamp                          offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  rtp.ssrc                               offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  rtp.csrc                               offset=AbsoluteStatic(0x0C) size=Bounded(0, 60) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting
+  rtp.header_extension                   offset=Dynamic size=Bounded(0, 262144) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  rtp.header_extension.none              offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  rtp.header_extension.present           offset=Dynamic size=Bounded(4, 262144) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  rtp.header_extension.present.profile   offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  rtp.header_extension.present.length    offset=FrameStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  rtp.header_extension.present.words     offset=FrameStatic(0x04) size=Bounded(0, 262140) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting address=FrameStable
+  rtp.last                               offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  rtp.payload                            offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  rtp.padding                            offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

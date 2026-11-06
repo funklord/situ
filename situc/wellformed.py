@@ -3943,6 +3943,15 @@ def _check_one_peek(struct: ast.StructDecl, member: ast.Field,
 			notes = ["a variant switches on a scalar, and a peeked member "
 			         "exists to be switched on"])
 
+	# Read from the frame's end, so nothing is at the cursor for an arm to
+	# own, and what it is for is the size it states (26.905).
+	if member.from_end is not None:
+		if member.skip is not None:
+			raise error(
+				f"`{member.name}` has a lead and is read from the frame's end",
+				member.span, label = "a lead belongs to the cursor")
+		return
+
 	# The variant has to be NEXT, and it has to be this member's. A peeked
 	# member further up the struct would empty its extent for every member
 	# after it, which is the general overlap case rather than a dispatch.

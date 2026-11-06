@@ -1565,9 +1565,8 @@ class Emitter:
 		# member where the other three gave it a reader (26.752).
 		if count is None and placement.sized_by == "remaining" \
 				and start is not None:
-			count = f"situ_remaining_u32(raw_.limit, {start})"
-			if placement.tail_bytes:
-				count = f"situ_remaining_u32({count}, {placement.tail_bytes}u)"
+			count = self._frame_less(struct, placement,
+			                         f"situ_remaining_u32(raw_.limit, {start})")
 
 		if start is None or count is None:
 			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"
@@ -1833,6 +1832,16 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _frame_less(self, struct: ResolvedStruct, placement: Placement,
+			room: str) -> str:
+		"""A `[remaining]` run's room, less what it leaves after it."""
+		if placement.tail_source is not None:
+			left = self._over_fields(struct, placement.tail_source)
+			room = f"situ_remaining_u32({room}, (uint32_t)({left}))"
+		if placement.tail_bytes:
+			room = f"situ_remaining_u32({room}, {placement.tail_bytes}u)"
+		return room
+
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""Where a member starts, past its lead where it has one.
@@ -1875,6 +1884,9 @@ class Emitter:
 		field always has a static offset, because a size expression may only
 		name a field declared before it.
 		"""
+		if placement.from_end is not None:
+			back = placement.from_end
+			return f"(raw_.limit >= {back}u ? raw_.limit - {back}u : raw_.limit)"
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
 
@@ -4736,8 +4748,7 @@ class Emitter:
 			if start is None:
 				return None
 			room = f"situ_remaining_u32(raw_.limit, {start})"
-			return (f"(situ_remaining_u32({room}, {placement.tail_bytes}u))"
-			        if placement.tail_bytes else f"({room})")
+			return f"({self._frame_less(struct, placement, room)})"
 		if placement.sized_by is None:
 			return None
 

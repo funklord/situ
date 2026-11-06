@@ -451,6 +451,10 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		facts.append(f"cap={placement.delimiter_cap}")
 	if placement.tail_bytes:
 		facts.append(f"leaves={placement.tail_bytes}")
+	if placement.tail_source is not None:
+		facts.append(f"leaves_more={placement.tail_source}")
+	if placement.from_end is not None:
+		facts.append(f"from_end={placement.from_end}")
 	if (held := holds_of(placement)) is not None:
 		facts.append(f"holds={held}")
 	if placement.since is not None:

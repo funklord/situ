@@ -273,6 +273,13 @@ class Placement:
 	#: `u8 ciphertext[remaining]; u8 tag[16];`: the fixed bytes after a
 	#: `[remaining]` run, which it leaves them (26.894).
 	tail_bytes: int				= 0
+	#: `peek u8 n at end; u8 body[remaining]; u8 pad[n];`: what it leaves as
+	#: well, where that is a length read before the run began (26.905).
+	tail_source: str | None			= None
+	tail_ast: ast.Expr | None		= None
+	#: The length as written, a bare path included, which `size_ast` leaves to
+	#: `sized_by`: what a run before this one has to leave it (26.905).
+	length_ast: ast.Expr | None		= None
 	# Set when the field's type is a varint, which the propagation table reads
 	# to attach the right reasons.
 	varint: str | None		= None
@@ -538,6 +545,9 @@ class Placement:
 	#: the enclosing struct's extent, so the member after it begins where
 	#: it began (0057). The arm owns the bytes; this only looked at them.
 	peek: bool			= False
+	#: `peek u8 count at end;` -- bytes from the frame's end back to where
+	#: this member starts: its own width and what follows it (26.905).
+	from_end: int | None		= None
 	#: `parameter u8 block_size;` -- an argument the caller supplies rather
 	#: than bytes in the message (0050). Zero bits wide and placed nowhere:
 	#: the cursor does not move for it, so the member after it begins where
@@ -2570,6 +2580,7 @@ class Solver:
 			# where every reader expects a struct one. What `ossacli`
 			# reported is real and the answer is not here -- see 26.667.
 			offset_bits    = (None if getattr(member, "located", None) is not None
+			                  or getattr(member, "from_end", None) is not None
 			                  else cursor.lo if cursor.is_exact else None),
 			size_bits      = total.lo,
 			size_max_bits  = total.hi,
@@ -2614,6 +2625,7 @@ class Solver:
 			size_expr      = _size_source(member),
 			size_shown     = _size_source(member, explicit=False),
 			size_ast       = _size_tree(member),
+			length_ast     = (member.array.size if member.array else None),
 			access_mode    = _access_mode(member, decl),
 			on_read        = _read_effect(member, decl),
 			on_write       = _side_effect(member.attrs, "on_write"),
@@ -2636,6 +2648,7 @@ class Solver:
 			radix              = getattr(member, "radix", None),
 			scaled             = bool(getattr(member, "scaled", False)),
 			peek               = bool(getattr(member, "peek", False)),
+			from_end           = self._from_end(member, scalar),
 			parameter          = bool(getattr(member, "parameter", False)),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
@@ -3071,6 +3084,27 @@ class Solver:
 				lo = max(lo, value)
 
 		return Interval(lo, hi)
+
+	def _from_end(self, member: ast.Field | ast.Reserved,
+			scalar: ScalarType | None) -> int | None:
+		"""Bytes from the frame's end to where a `peek ... at end` starts."""
+		held = getattr(member, "from_end", None)
+		if held is None:
+			return None
+		assert scalar is not None and isinstance(member, ast.Field), \
+			"wellformed refuses a peek of no scalar"
+		after = evaluate(held, self.result.env)
+		if after < 0:
+			raise error("`at end` counts back from the frame's end",
+			            held.span, label = f"this is {after}")
+		if scalar.bits % BITS_PER_BYTE:
+			raise error(
+				f"`{member.name}` is read from the frame's end and is not "
+				"whole bytes", member.span,
+				label = f"{scalar.bits} bits",
+				notes = ["the frame ends on a byte, so a member measured from "
+				         "it has to be bytes (26.905)"])
+		return scalar.bits // BITS_PER_BYTE + int(after)
 
 	def _located_bytes(self, member: ast.Field | ast.Reserved) -> int | None:
 		"""An `at` no member decides, as its value (26.888)."""
@@ -4223,6 +4257,9 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 	movable = [held for held in after if not held.is_fixed_size
 	           or held.size_bits % BITS_PER_BYTE or held.delimiters
 	           or held.repeat_while is not None]
+	sized   = [held for held in movable if _sized_before(
+	           held, layout.placements[:at], parent)]
+	movable = [held for held in movable if held not in sized]
 	if movable or run.element_bits != BITS_PER_BYTE or run.type_name != "u8":
 		raise error(
 			"`[remaining]` must be the last member of its frame",
@@ -4230,12 +4267,40 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 			label = "runs to the end of the frame",
 			notes = [f"`{(movable or after)[0].name}` has no bytes to occupy "
 			         "unless a run of bytes leaves them: what follows has to "
-			         "be fixed-size, and the run a run of `u8` (26.894)",
+			         "be fixed-size or a run of `u8` whose length was read "
+			         "before this one began, and the run a run of `u8` "
+			         "(26.894, 26.905)",
 			         "for records: `u8 body[remaining] [holds = T];`, with "
 			         "the run inside `T` (26.898)"],
 		)
+	tail_ast: ast.Expr | None = None
+	for held in sized:
+		assert held.length_ast is not None, "`_sized_before` asked"
+		tail_ast = held.length_ast if tail_ast is None else ast.Binary(
+			held.span, "+", tail_ast, held.length_ast)
 	layout.placements[at] = replace(
-		run, tail_bytes=sum(held.size_bits for held in after) // BITS_PER_BYTE)
+		run, tail_ast = tail_ast,
+		tail_source = " + ".join(f"({held.size_expr or held.sized_by})"
+		                         for held in sized) or None,
+		tail_bytes  = sum(held.size_bits for held in after
+		                  if held not in sized) // BITS_PER_BYTE)
+
+
+def _sized_before(held: Placement, before: list[Placement],
+		parent: str) -> bool:
+	"""Whether a run of bytes after a `[remaining]` run is known ahead of it.
+
+	Its length has to be a value read before the run began, or the two reach
+	for the end together and neither can say where the other starts.
+	"""
+	if held.element_bits != BITS_PER_BYTE or held.type_name != "u8" \
+			or held.delimiters or held.repeat_while is not None \
+			or held.length_ast is None \
+			or isinstance(held.length_ast, ast.Remaining):
+		return False
+	prefix = f"{parent}." if parent else ""
+	read   = {place.path.removeprefix(prefix) for place in before}
+	return all(path.split(".")[0] in read for path in paths_in(held.length_ast))
 
 
 def _refuse_a_pad_beside_bytes(variant: ast.Variant, cursor: Extent,

@@ -630,6 +630,8 @@ u8   fixed[4];                        // a count
 u8   rest[remaining];                 // to the end of the frame
 u8   body[remaining] max 470;         // and no further, or the frame is refused
 u8   cipher[remaining]; u8 tag[16];   // the frame less the fixed members after it
+peek u8 pad at end;                   // the last byte, read before what it sizes
+u8   body[remaining]; u8 padding[pad]; // the frame less a length read before it
 u8   exts[total] [holds = ext_list];  // these bytes are a struct: its [remaining] ends here
 u8   chunks[sum(lens)];               // what a table of lengths adds up to
 u8   name[]    until ':';             // to a delimiter, written as a character

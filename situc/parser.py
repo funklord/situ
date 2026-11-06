@@ -2642,20 +2642,35 @@ class Parser:
 		start = self.advance()
 		field = self.parse_field()
 
+		# `at end` is not `at expr`: that one is measured from the message
+		# and this from the frame, so the word is read here and goes no
+		# further than the member it places (26.905).
+		located: ast.Expr | None  = field.located
+		from_end: ast.Expr | None = None
+		if isinstance(located, ast.NameRef) and located.name == "end":
+			from_end = ast.IntLiteral(located.span, 0, "0")
+			located  = None
+		elif isinstance(located, ast.Binary) and located.op == "-" \
+				and isinstance(located.left, ast.NameRef) \
+				and located.left.name == "end":
+			from_end = located.right
+			located  = None
+
 		# Keywords, for `parse_text_field`'s reason: the positional form
 		# silently took an argument for whatever field was added most
 		# recently.
 		return ast.Field(self.span_from(start), field.name, field.type_ref,
-		                 array   = field.array,
-		                 pin     = field.pin,
-		                 attrs   = field.attrs,
-		                 until   = field.until,
-		                 repeat  = field.repeat,
-		                 radix   = field.radix,
-		                 scaled  = field.scaled,
-		                 peek    = True,
-		                 located = field.located,
-		                 skip    = field.skip)
+		                 array    = field.array,
+		                 pin      = field.pin,
+		                 attrs    = field.attrs,
+		                 until    = field.until,
+		                 repeat   = field.repeat,
+		                 radix    = field.radix,
+		                 scaled   = field.scaled,
+		                 peek     = True,
+		                 from_end = from_end,
+		                 located  = located,
+		                 skip     = field.skip)
 
 	def parse_parameter(self) -> ast.Field:
 		"""`parameter u8 block_size;` -- an argument the caller supplies.

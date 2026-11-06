@@ -70,6 +70,13 @@ struct gap {
 struct list   { node  all[remaining]; }
 struct twices { twice all[remaining]; }
 struct gaps   { gap   all[remaining]; }
+
+struct trailer {
+	peek u8  count at end;
+	peek u16 mark at end - 1;
+	u8  body[remaining];
+	u8  padding[count];
+}
 """
 
 #: Small lengths matter most, and half the bytes small keeps a message past
@@ -121,6 +128,10 @@ int main(void)
 				&& situ_gaps_validate(view) == SITU_OK) {
 			accepted++;
 		}
+		if (situ_trailer_view(&msg, 0, length, &view) == SITU_OK
+				&& situ_trailer_validate(view) == SITU_OK) {
+			accepted++;
+		}
 		free(bytes);
 	}
 	printf("%ld\\n", accepted);
@@ -147,6 +158,7 @@ int main()
 		::situ::list   list;
 		::situ::twices twices;
 		::situ::gaps   gaps;
+		::situ::trailer trailer;
 
 		if (::situ::list::at(msg, 0u, length, list) == ok
 				&& list.validate() == ok) {
@@ -158,6 +170,10 @@ int main()
 		}
 		if (::situ::gaps::at(msg, 0u, length, gaps) == ok
 				&& gaps.validate() == ok) {
+			accepted++;
+		}
+		if (::situ::trailer::at(msg, 0u, length, trailer) == ok
+				&& trailer.validate() == ok) {
 			accepted++;
 		}
 		std::free(bytes);
