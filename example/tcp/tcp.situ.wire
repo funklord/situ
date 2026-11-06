@@ -21,6 +21,19 @@ target buffer
 
 kernel internet_checksum : ones_complement(width = 16, complement)
 
+struct nothing size=0
+
+struct option_list size=0..
+  @0x0000   0..       tcp_option all  sized-by=remaining
+  body switch: kind
+  body case 0: end_of_list
+  body case 1: no_operation
+  body case default: sized
+
+struct sized_option size=1..254
+  @0x0000   1         u8         length  min=2
+  @0x0001   0..253    u8         value  sized-by=length-2
+
 struct tcp_header size=20..
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
@@ -39,9 +52,17 @@ struct tcp_header size=20..
   @0x000e   2         u16        window  big
   @0x0010   2         u8         checksum  codec=internet_checksum self_as=0
   @0x0012   2         u16        urgent_pointer  big
-  @0x0014   0..40     u8         options  sized-by=(data_offset-5)*4
+  @0x0014   0..40     u8         options  sized-by=(data_offset-5)*4 holds=option_list
   ~         0..       u8         payload  sized-by=remaining
   checksum covers: tcp_pseudo_header(prefix) <reserved0> ack acknowledgement cwr data_offset destination_port ece fin options payload push reset sequence source_port summed syn urgent urgent_pointer window
+
+struct tcp_option size=1..255
+  @0x0000   1         u8         kind
+  @0x0001   0..254    variant    body
+  body switch: kind
+  body case 0: end_of_list nothing
+  body case 1: no_operation nothing
+  body case default: sized sized_option
 
 struct tcp_pseudo_header size=12
   @0x0000   4         u32        source_address  big

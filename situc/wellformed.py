@@ -3877,11 +3877,22 @@ def _holds_name(member: ast.Member) -> ast.Attr | None:
 	             if attr.name == "holds"), None)
 
 
+def _own_members(members: tuple[ast.Member, ...]) -> list[ast.Member]:
+	"""What a struct holds itself, through its transparent blocks."""
+	found: list[ast.Member] = []
+	for member in members:
+		found.append(member)
+		if isinstance(member, TRANSPARENT_BLOCKS):
+			found.extend(_own_members(nested(member)))
+	return found
+
+
 def check_holds(schema: ast.Schema) -> None:
 	"""`[holds = T]` names a struct the run can frame alone (26.898).
 
 	A member of the struct itself, because a parent reaches it through a view
-	accessor and an arm or a region has none. A child taking arguments has
+	accessor and an arm or a coded region has none. A transparent block keeps
+	its members the struct's own, so one is allowed there (26.913). A child taking arguments has
 	nowhere to be handed them. A child that can reach its own parent is a
 	cycle like any other, and `check_no_recursive_types` asks it for `[depth]`.
 	"""
@@ -3895,7 +3906,7 @@ def check_holds(schema: ast.Schema) -> None:
 			if not isinstance(value, ast.NameRef) or value.name not in decls:
 				raise error("`[holds]` names a struct", attr.span,
 				            label = "not a struct of this schema")
-			if member not in struct.members:
+			if member not in _own_members(struct.members):
 				raise error(
 					"`[holds]` is built on a member of the struct itself",
 					attr.span,

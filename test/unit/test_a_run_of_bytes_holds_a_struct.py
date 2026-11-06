@@ -29,6 +29,9 @@ struct ext { u16 kind [max = 100]; u16 len; u8 data[len]; }
 struct ext_list { ext all[remaining]; }
 struct hello { u16 total; u8 exts[total] [holds = ext_list]; u8 after; }
 struct guarded { u8 body[remaining] [holds = ext_list]; u16 crc; }
+struct covered { authenticated { u16 total; u8 exts[total] [holds = ext_list];
+                                 u8 after; }
+                 tag u8[2] covers(authenticated); }
 """
 
 #: struct -> message -> what `validate` says: 0 whole, 1 short, 2 a rule.
@@ -46,6 +49,13 @@ CASES = {
 		"beef":                         "0",		# no records, the CRC
 		"ff010001aa" "00020000" "beef": "2",
 		"00010001aa" "0002" "beef":     "1",		# the CRC is not a record
+	},
+	# A transparent block keeps its members the struct's own (26.913).
+	"covered": {
+		"0009" "00010001aa" "00020000" "07" "beef": "0",
+		"0009" "ff010001aa" "00020000" "07" "beef": "2",	# a rule inside it
+		"0008" "00010001aa" "000200" "07" "beef":   "1",	# cut by the run
+		"0005" "00010002aa" "07" "beef":            "1",	# past the run
 	},
 }
 

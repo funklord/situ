@@ -15,6 +15,23 @@
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec internet_checksum derived expansion=+2 seekable=linear granularity=block systematic deterministic
 
+struct nothing size=0
+
+struct option_list size=0.. access=Sequential mutate=Shifting atomic=NonAtomic
+  option_list.all                        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  option_list.all[]                      offset=FrameStatic(0x00) size=Bounded(1, 255) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  option_list.all[].kind                 offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  option_list.all[].body                 offset=FrameStatic(0x01) size=Bounded(0, 254) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  option_list.all[].body.end_of_list     offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  option_list.all[].body.no_operation    offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  option_list.all[].body.sized           offset=FrameStatic(0x01) size=Bounded(1, 254) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  option_list.all[].body.sized.length    offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  option_list.all[].body.sized.value     offset=FrameStatic(0x02) size=Bounded(0, 253) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct sized_option size=1..254 mutate=Shifting
+  sized_option.length                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  sized_option.value                     offset=AbsoluteStatic(0x01) size=Bounded(0, 253) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct tcp_header size=20.. mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
   tcp_header.summed                      offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(checksum)
   tcp_header.source_port                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
@@ -36,6 +53,15 @@ struct tcp_header size=20.. mutate=Immutable address=Unstable repr=ValueConverte
   tcp_header.urgent_pointer              offset=AbsoluteStatic(0x12) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord auth=Covered(checksum)
   tcp_header.options                     offset=AbsoluteStatic(0x14) size=Bounded(0, 40) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(checksum)
   tcp_header.payload                     offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(checksum)
+
+struct tcp_option size=1..255 mutate=Shifting atomic=NonAtomic
+  tcp_option.kind                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  tcp_option.body                        offset=AbsoluteStatic(0x01) size=Bounded(0, 254) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  tcp_option.body.end_of_list            offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  tcp_option.body.no_operation           offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  tcp_option.body.sized                  offset=AbsoluteStatic(0x01) size=Bounded(1, 254) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  tcp_option.body.sized.length           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  tcp_option.body.sized.value            offset=AbsoluteStatic(0x02) size=Bounded(0, 253) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct tcp_pseudo_header size=12 repr=ValueConverted
   tcp_pseudo_header.source_address       offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

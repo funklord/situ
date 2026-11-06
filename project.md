@@ -8296,6 +8296,9 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.913 TCP options are records
+
+Moved to `doc/decision/26.913-tcp-options-are-records.md`.
 ### 26.912 MQTT states its packet identifier
 
 Moved to `doc/decision/26.912-mqtt-states-its-packet-identifier.md`.

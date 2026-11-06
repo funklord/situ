@@ -57,7 +57,7 @@ struct tcp_header {
 		// `[min = 5]` above is what makes the subtraction legal rather than
 		// a note about sensible values. A message that lies makes it
 		// negative, which reads as zero rather than as a length (14.2b).
-		u8        options[(data_offset - 5) * 4];
+		u8        options[(data_offset - 5) * 4] [holds = option_list];
 
 		// The segment text, which the checksum also covers. TCP carries no
 		// length of its own -- the segment length is the IP layer's -- and
@@ -132,10 +132,34 @@ assert atomic(tcp_header.syn);
 
 // Where TCP stops being randomly addressable, and it is the options that do
 // it rather than the bit packing above them. Each option is a kind, a length
-// and a value, so their interior is a `tlv` region -- described here as bytes
-// because the one thing a `tlv` needs is a rule for the tags it does not know,
-// and TCP's is "skip it by its length", which two of the four defined options
-// (End of Option List and No-Operation) do not follow: they are one byte with
-// no length at all. A region whose skip rule has two exceptions is a region
-// situ would describe by lying about it.
+// and a value -- except End of Option List and No-Operation, which are one
+// byte with no length at all. So they are not a `tlv` region, whose skip rule
+// would have two exceptions, but a run of records whose arms say which kinds
+// carry a length, framed by the bytes `data_offset` gives them. This file once
+// left them as bytes for want of a way to say that, which `[holds]` supplies
+// (26.913).
 assert absolute_static(tcp_header.options);
+
+// RFC 9293 3.1: an option either is one byte, or says how long it is, its own
+// two bytes included. An unknown kind is skipped by that length, which is what
+// lets a stack read an option newer than itself.
+struct nothing { }
+
+struct sized_option {
+	u8  length [min = 2];
+	u8  value[length - 2];
+}
+
+struct tcp_option {
+	u8  kind;
+	variant body switch (kind) {
+		case 0:  nothing       end_of_list;
+		case 1:  nothing       no_operation;
+		default: sized_option  sized;
+	}
+}
+
+// Padding after End of Option List is zero (3.1), so it reads as more of them.
+struct option_list {
+	tcp_option  all[remaining];
+}
