@@ -694,7 +694,7 @@ def test_a_width_on_anything_else_is_refused() -> None:
 def test_a_width_with_no_value_is_refused() -> None:
 	text = rendered("struct S { bcd2 x [bits]; }")
 
-	assert "`[bits]` needs a width" in text
+	assert "`[bits]` needs a value" in text
 
 
 # -- pad_random, decision 0045 ----------------------------------------------
