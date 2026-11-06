@@ -77,6 +77,39 @@ def test_an_arm_with_something_after_the_variant_keeps_its_refusal() -> None:
 	assert "must be the last member" in said
 
 
+AEAD = ("codec ae { tag_bytes = 2; length_preserving; seekable = linear;\n"
+        "\tgranularity = byte; authenticated; invertible; deterministic; }\n")
+SEALED = "struct leaf { u8 lead[4]; sealed(ae) { u8 ct[remaining]; } tag u8[2]; }\n"
+
+
+def test_a_region_s_run_leaves_the_tag_after_the_region() -> None:
+	assert run_of(AEAD + SEALED, "ct") == 2
+
+
+def test_a_codec_that_changes_the_length_keeps_its_refusal() -> None:
+	"""The run is in decoded bytes and the tag in wire bytes."""
+	said = refusal("codec x { expansion = ratio_exact(2, 1); seekable = none;\n"
+	               "\tgranularity = byte; authenticated; invertible;\n"
+	               "\tdeterministic; }\n"
+	               "struct leaf { sealed(x) { u8 ct[remaining]; } tag u8[2]; }\n")
+	assert "must be the last member of its frame" in said
+	assert "decoded bytes" in said
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_the_four_read_a_sealed_run_alike(tmp_path: Path) -> None:
+	"""C++ reads a gated interior through a path of its own."""
+	source = tmp_path / "unit.situ"
+	source.write_text(HEAD + AEAD + SEALED, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	whole = bytes(range(1, 10))
+	for packet in (whole, *(whole[:length] for length in range(len(whole)))):
+		given = {name: fourway.answers(argv, packet, tmp_path)
+		         for name, argv in command.items()}
+		assert len(set(given.values())) == 1, (packet.hex(), given)
+	assert "ct len=3" in fourway.answers(command["c"], whole, tmp_path)
+
+
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
 def test_the_four_find_the_tail_from_the_end(tmp_path: Path) -> None:
 	source = tmp_path / "unit.situ"

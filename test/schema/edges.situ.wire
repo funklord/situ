@@ -618,6 +618,12 @@ struct sealed_self_sized size=20..28
   ~         16        u8         self_mac
   self_mac covers: body body.after body.n
 
+struct sealed_tail size=20..
+  @0x0000   4         u8         sealed_prefix  big
+  @0x0004   0..       held_aead  sealed  codec=held_aead
+  ~         16        u8         tag
+  tag covers: sealed sealed.sealed_body
+
 struct secret_run size=3..258
   @0x0000   1         u8         n
   @0x0001   0..255    u8         key  sized-by=n

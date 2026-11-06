@@ -1039,8 +1039,11 @@ class Walk:
 	# Set once a `[remaining]` member has been placed at this level, for
 	# `_leave_the_tail` to judge what followed.
 	closed_span: Span | None = None
-	#: Inside an arm or a coded or sealed region.
+	#: Inside an arm, whose run is one arm's.
 	nested: bool = False
+	#: The codec around the run, where it changes the length: the run is
+	#: then in decoded bytes and the frame in wire bytes.
+	resized_by: str | None = None
 	# The first member whose size was not fixed, which is what every later
 	# member's Dynamic offset traces back to.
 	cause: tuple[str, Span, str] | None = None
@@ -1423,10 +1426,15 @@ class Solver:
 		# The interior is placed at the region's base. Its offsets are what the
 		# decoded bytes look like, which is what a caller addresses.
 		inner = Walk(fields=dict(state.fields), cursor=cursor,
-		             cause=state.cause, decode_cause=state.decode_cause,
-		             nested=True)
+		             cause=state.cause, decode_cause=state.decode_cause)
 		self.place_members(decl, region.members, scope, layout,
 		                   f"{prefix}.{region.name}", inner)
+		state.closed_span = state.closed_span or inner.closed_span
+		around = self.codecs.get(region.codec or "")
+		if inner.closed_span is not None and (
+				around is None
+				or around.expansion is not ast.Expansion.PRESERVING):
+			state.resized_by = region.codec
 
 		# The interior's fields are deliberately not merged back into the
 		# enclosing scope. Section 13.3: the expression language may not
@@ -3449,10 +3457,9 @@ class Solver:
 			)
 
 		if isinstance(member.array.size, ast.Remaining):
-			# Only at the struct's own level: an arm's run is one arm's and a
-			# region's length is the codec's, so what follows either cannot
-			# be taken off this run (26.782). The rest is `_leave_the_tail`'s
-			# to judge, once it is placed.
+			# Not in an arm: the run is one arm's, so what follows the
+			# variant cannot be taken off it (26.782). The rest is
+			# `_leave_the_tail`'s to judge, once it is placed.
 			if not last and state.nested:
 				raise error(
 					"`[remaining]` must be the last member of its frame",
@@ -4169,10 +4176,19 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 	# Beside the run: the interior of a nested member is counted by that
 	# member, and the rows under the run are the run's.
 	after  = [held for held in layout.placements[at + 1:]
-	          if held.path.rpartition(".")[0] == parent
+	          if f"{parent}.".startswith(f"{held.path.rpartition('.')[0]}.")
 	          and not held.path.startswith(run.path)]
 	if not after:
 		return
+	if state.resized_by is not None:
+		raise error(
+			"`[remaining]` must be the last member of its frame",
+			state.closed_span,
+			label = "runs to the end of the frame",
+			notes = [f"`{state.resized_by}` changes the length, so this run is "
+			         f"counted in decoded bytes and `{after[0].name}` sits in "
+			         "wire bytes: one cannot be taken off the other (26.894)"],
+		)
 	movable = [held for held in after if not held.is_fixed_size
 	           or held.size_bits % BITS_PER_BYTE or held.delimiters
 	           or held.repeat_while is not None]

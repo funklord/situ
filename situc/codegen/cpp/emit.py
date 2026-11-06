@@ -1550,6 +1550,8 @@ class Emitter:
 		if count is None and placement.sized_by == "remaining" \
 				and start is not None:
 			count = f"situ_remaining_u32(raw_.limit, {start})"
+			if placement.tail_bytes:
+				count = f"situ_remaining_u32({count}, {placement.tail_bytes}u)"
 
 		if start is None or count is None:
 			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"

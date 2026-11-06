@@ -2569,3 +2569,13 @@ struct sealed_leaf {
 	u8  leaf_tag[2];
 	u16 leaf_sequence;
 }
+
+// The same, with the run inside a region and the tag after it: the frame less
+// what follows reaches through a region whose codec keeps the length (26.894).
+struct sealed_tail {
+	u8  sealed_prefix[4];
+	sealed(held_aead) {
+		u8  sealed_body[remaining];
+	}
+	tag u8[16];
+}
