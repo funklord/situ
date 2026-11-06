@@ -48,6 +48,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
 	behind_a_length,
+	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
 	Member,
@@ -5271,9 +5272,14 @@ class Emitter:
 				if start is None or held_at.scalar is None:
 					raise UnknownName(name)
 				place = f"situ_rt::advance({start}, {nest[1]}, self.bytes.len())"
-				width = held_at.scalar.bits // BITS_PER_BYTE
+				width = bytes_of_a_read(held_at, held_at.scalar)
 				load  = self._unparen(self._raw_load(held_at, held_at.scalar,
 				                                     place))
+				if held_at.scalar.is_bit_packed:
+					load = load.replace(
+						f"read_bits(self.bytes, {held_at.offset_bits},",
+						f"read_bits(self.bytes, ({start}) * {BITS_PER_BYTE}"
+						f" + {held_at.offset_bits},")
 				gated = (f"(if self.bytes.len().saturating_sub({place}) >= {width}"
 				         f" {{ {load} }} else {{ 0 }})")
 				if held != "self":

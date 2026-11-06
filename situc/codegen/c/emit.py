@@ -49,6 +49,7 @@ from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
 	behind_a_length,
+	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
 	NOT_A_MEMBER,
@@ -7339,7 +7340,7 @@ class Emitter:
 				start = (f"{ident(self.prefix, struct.name, outer, 'offset')}"
 				         f"({held}{self._member_args(struct, nest[0])})")
 				assert placement.scalar is not None
-				width = nest[1] + placement.scalar.bits // BITS_PER_BYTE
+				width = nest[1] + bytes_of_a_read(placement, placement.scalar)
 				load  = self._load_expression(placement.scalar, placement,
 				                              f"(situ_base({held}) + {start})")
 				return leaf(f"(situ_remaining_u32({held}.limit, {start})"

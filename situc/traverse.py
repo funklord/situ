@@ -2619,8 +2619,8 @@ def behind_a_length(struct: ResolvedStruct,
 	The struct, and how many bytes into it. Every backend took `offset_bits`
 	as a place in the message, so the wrong bytes sized a run and all four
 	agreed (26.916). Refused where no read is built, since a wrong one is
-	worse than none: a bit field and a text number have no plain load here,
-	and a struct placed by the data inside another has no offset expression.
+	worse than none: a text number and a varint have no plain load here, and
+	a struct placed by the data inside another has no offset expression.
 	"""
 	nest = nest_of(struct, local)
 	if nest is None:
@@ -2629,20 +2629,29 @@ def behind_a_length(struct: ResolvedStruct,
 	outer, depth = nest
 	held = next(entry.placement for entry in struct.entries
 	            if local_name(struct, entry.placement) == local)
-	if depth > 1 or held.scalar is None or held.scalar.is_bit_packed \
-			or held.radix is not None:
+	if depth > 1 or held.scalar is None or held.radix is not None:
 		raise error(
 			f"`{local}` cannot be read here: `{local_name(struct, outer)}` is "
 			"at an offset the message decides",
 			held.span,
 			label = "read by an expression",
-			notes = ["a bit field, a text number or a varint there has no "
+			notes = ["a text number or a varint there has no "
 			         "read yet, nor has a struct the data places inside "
 			         "another, and a wrong read is worse than none (26.916)",
 			         "put the value in a whole-byte field of a struct nested "
 			         "directly in this one"])
 	assert held.offset_bits is not None
 	return outer, held.offset_bits // BITS_PER_BYTE
+
+
+def bytes_of_a_read(placement: Placement, scalar: ScalarType) -> int:
+	"""How many bytes a read of this scalar touches from its first byte.
+
+	A bit field crossing a byte reaches one further than its width says.
+	"""
+	assert placement.offset_bits is not None
+	return (placement.offset_bits % BITS_PER_BYTE + scalar.bits
+	        + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 
 
 def is_behind_a_length(struct: ResolvedStruct, placement: Placement) -> bool:

@@ -51,6 +51,7 @@ from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
 	behind_a_length,
+	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
 	Member,
@@ -4142,8 +4143,11 @@ class Emitter:
 					if start is None or held.scalar is None:
 						raise UnknownName(name)
 					at    = f"({start}) + {nest[1]}u"
-					width = held.scalar.bits // BITS_PER_BYTE
+					width = bytes_of_a_read(held, held.scalar)
 					load  = self._load(held.scalar, held, at)
+					if held.scalar.is_bit_packed:
+						load = load.replace("(situ_base(raw_), ",
+						                    f"(situ_base(raw_) + ({start}), ")
 					return leaf(f"(situ_remaining_u32(raw_.limit, {at})"
 					            f" >= {width}u ? {load} : 0)",
 					            held.scalar.signed)

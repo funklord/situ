@@ -48,6 +48,7 @@ from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
 	behind_a_length,
+	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
 	Member,
@@ -5761,11 +5762,15 @@ class Emitter:
 				start = self._offset_expression(struct, nest[0])
 				if start is None:
 					raise UnknownName(local)
+				assert placement.scalar is not None
 				at    = f"{start} + {nest[1]}"
-				width = (placement.scalar.bits // BITS_PER_BYTE
-				         if placement.scalar else 0)
-				load  = self._raw_load(placement, placement.scalar, at) \
-					if placement.scalar else "0"
+				width = bytes_of_a_read(placement, placement.scalar)
+				load  = self._raw_load(placement, placement.scalar, at)
+				if placement.scalar.is_bit_packed:
+					load = load.replace(
+						f"self._bits({placement.offset_bits},",
+						f"self._bits(({start}) * {BITS_PER_BYTE}"
+						f" + {placement.offset_bits},")
 				gated = f"({load} if self._len - ({at}) >= {width} else 0)"
 				return leaf(gated if held == "self"
 				            else re.sub(r"\bself\.", f"{held}.", gated))
