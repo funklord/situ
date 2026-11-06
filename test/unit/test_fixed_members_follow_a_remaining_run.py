@@ -15,6 +15,8 @@ import fourway
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
+from situc.resolve import resolve
+from situc.traverse import region_extent
 
 HEAD = "target buffer;\nendian big;\n"
 LEAF = HEAD + """struct leaf {
@@ -86,14 +88,45 @@ def test_a_region_s_run_leaves_the_tag_after_the_region() -> None:
 	assert run_of(AEAD + SEALED, "ct") == 2
 
 
-def test_a_codec_that_changes_the_length_keeps_its_refusal() -> None:
-	"""The run is in decoded bytes and the tag in wire bytes."""
-	said = refusal("codec x { expansion = ratio_exact(2, 1); seekable = none;\n"
-	               "\tgranularity = byte; authenticated; invertible;\n"
-	               "\tdeterministic; }\n"
-	               "struct leaf { sealed(x) { u8 ct[remaining]; } tag u8[2]; }\n")
-	assert "must be the last member of its frame" in said
-	assert "decoded bytes" in said
+def test_a_codec_that_changes_the_length_takes_no_tail() -> None:
+	"""The run is in decoded bytes and the tag in wire bytes.
+
+	Accepted as it always was: 26.440's control pins this shape, and a
+	first version of 26.894 refused it. No tail is taken, since nothing
+	could be.
+	"""
+	assert run_of("codec x { expansion = ratio_exact(2, 1); seekable = none;\n"
+	              "\tgranularity = byte; authenticated; invertible;\n"
+	              "\tdeterministic; }\n"
+	              "struct leaf { sealed(x) { u8 ct[remaining]; } tag u8[2]; }\n",
+	              "ct") == 0
+
+
+def test_a_region_that_ends_at_a_scan_closes_nothing() -> None:
+	"""The run is the rest of the region, so what follows is not behind it.
+
+	Neither is it the frame's run, which the second member here is: the
+	tail goes on the run that reaches the end, not on the first of the name.
+	"""
+	stuffed = ("codec s { expansion = ratio_bounded(2, 1); granularity = stream;\n"
+	           "\tinvertible; deterministic; }\n")
+	body    = 'coded b(s) until "\\xC0" { u8 inner[remaining]; }'
+	assert run_of(stuffed + f"struct leaf {{ {body} u16 t; }}\n", "inner") == 0
+	assert run_of(stuffed + f"struct leaf {{ {body} u8 rest[remaining];"
+	              " u16 t; }\n", "rest") == 2
+
+
+def test_a_sealed_run_measures_its_region() -> None:
+	"""The frame says where it stops, so what follows the region is placed."""
+	schema   = parse_text(HEAD + AEAD + SEALED)
+	resolved = resolve(schema, solve(schema))
+	struct   = resolved.structs["leaf"]
+	region   = next(entry.placement for entry in struct.entries
+	                if entry.placement.kind == "sealed")
+	codec    = next(decl for decl in schema.codecs() if decl.name == "ae")
+	rule     = region_extent(struct, region, codec, resolved.structs)
+	assert rule is not None
+	assert [held.name for held in rule.variable] == ["ct"]
 
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")

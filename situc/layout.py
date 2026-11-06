@@ -1041,11 +1041,11 @@ class Walk:
 	# Set once a `[remaining]` member has been placed at this level, for
 	# `_leave_the_tail` to judge what followed.
 	closed_span: Span | None = None
+	#: Which run that was. A `[remaining]` in a region that ends by its own
+	#: means closes nothing, so the first such row need not be this one.
+	closed_path: str | None = None
 	#: Inside an arm, whose run is one arm's.
 	nested: bool = False
-	#: The codec around the run, where it changes the length: the run is
-	#: then in decoded bytes and the frame in wire bytes.
-	resized_by: str | None = None
 	# The first member whose size was not fixed, which is what every later
 	# member's Dynamic offset traces back to.
 	cause: tuple[str, Span, str] | None = None
@@ -1432,12 +1432,16 @@ class Solver:
 		             cause=state.cause, decode_cause=state.decode_cause)
 		self.place_members(decl, region.members, scope, layout,
 		                   f"{prefix}.{region.name}", inner)
-		state.closed_span = state.closed_span or inner.closed_span
-		around = self.codecs.get(region.codec or "")
-		if inner.closed_span is not None and (
-				around is None
-				or around.expansion is not ast.Expansion.PRESERVING):
-			state.resized_by = region.codec
+		# A run reaches the frame's end through a region only where the two
+		# ends are one. A delimited region ends at its scan, so the run is the
+		# rest of the region and what follows is not behind it (13.6). A codec
+		# that changes the length has the run in decoded bytes and the frame
+		# in wire bytes, so nothing can be taken off it (26.894).
+		if (getattr(region, "until", None) is None
+				and codec.expansion is ast.Expansion.PRESERVING
+				and state.closed_span is None):
+			state.closed_span = inner.closed_span
+			state.closed_path = inner.closed_path
 
 		# The interior's fields are deliberately not merged back into the
 		# enclosing scope. Section 13.3: the expression language may not
@@ -2459,6 +2463,8 @@ class Solver:
 		element = self.element_extent(member, local)
 		count   = self.array_extent(member, state, last)
 		total   = _multiply(element, count)
+		if state.closed_span is not None and state.closed_path is None:
+			state.closed_path = path
 
 		if getattr(member, "repeat", None) is not None:
 			total = self.repeated_extent(member, state)
@@ -3473,7 +3479,7 @@ class Solver:
 					notes = ["a member after this one would have no bytes to "
 					         "occupy (project.md section 8.5)"],
 				)
-			if not state.nested:
+			if not state.nested and state.closed_span is None:
 				state.closed_span = member.array.span
 			# The frame's extent is not known here, and for a top-level struct
 			# it is not known at all. Unbounded is the honest answer -- unless
@@ -4173,7 +4179,7 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 	number: two members both reaching for the end cannot both have it (26.894).
 	"""
 	at = next((index for index, held in enumerate(layout.placements)
-	           if held.sized_by == "remaining"), None)
+	           if held.path == state.closed_path), None)
 	if at is None or state.closed_span is None:
 		return
 	run    = layout.placements[at]
@@ -4185,15 +4191,6 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 	          and not held.path.startswith(run.path)]
 	if not after:
 		return
-	if state.resized_by is not None:
-		raise error(
-			"`[remaining]` must be the last member of its frame",
-			state.closed_span,
-			label = "runs to the end of the frame",
-			notes = [f"`{state.resized_by}` changes the length, so this run is "
-			         f"counted in decoded bytes and `{after[0].name}` sits in "
-			         "wire bytes: one cannot be taken off the other (26.894)"],
-		)
 	movable = [held for held in after if not held.is_fixed_size
 	           or held.size_bits % BITS_PER_BYTE or held.delimiters
 	           or held.repeat_while is not None]
