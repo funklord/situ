@@ -1879,8 +1879,8 @@ def _extent_functions(resolved: ResolvedSchema) -> list[str]:
 			# The run's walk first: the struct's own extent sums it, and the
 			# walk needs the element's extent, which is already emitted
 			# because the element is a struct this one names.
-			for placement in own_members(struct):
-				lines.extend(_run_span(resolved, struct, placement))
+			for entry in struct.entries:
+				lines.extend(_run_span(resolved, struct, entry.placement))
 			lines.extend(_extent_function(resolved, struct))
 			done.add(name)
 	return lines

@@ -2028,3 +2028,38 @@ def test_the_dissector_steps_over_what_a_table_sums(tmp_path: Path) -> None:
 		 "-e", "situ.laced.body", "-e", "situ.laced.tail"],
 		check=True, capture_output=True, text=True, timeout=60)
 	assert ran.stdout.replace(":", "").split() == ["aabbcc", "eeff"]
+
+
+#: A run held directly in an arm, each way a run ends, and an arm whose struct
+#: sorts after its parent. Reading own members only, the first two called a
+#: span nothing defined and the third an extent not yet bound (26.913).
+RUN_IN_AN_ARM = """target buffer;
+endian big;
+struct rec { u8 len; u8 data[len]; }
+struct s {
+	u8 kind;
+	u8 n;
+	variant v switch (kind) {
+		case 1: rec counted[n];
+		case 2: rec walked[] while (len != 0) max 8;
+		default: z_last one;
+	}
+	u8 after;
+}
+struct z_last { u8 len; u8 data[len]; }
+"""
+
+
+@pytest.mark.skipif(LUA is None, reason="needs a Lua interpreter")
+@pytest.mark.parametrize("packet, at", [
+	("01 02 0141 0142 07", 6),		# two records, counted
+	("02 00 0141 00 07",   5),		# one, and the terminator
+	("03 00 0141 07",      4),		# the arm's own struct
+], ids=["counted", "while", "struct"])
+def test_a_member_after_an_arm_is_found(packet: str, at: int,
+		tmp_path: Path) -> None:
+	"""`after` is where the arm's own length says, and nothing is nil."""
+	path = tmp_path / "unit.situ"
+	path.write_text(RUN_IN_AN_ARM, encoding="ascii")
+	_, rows = dissect(tmp_path, path, "s", bytes.fromhex(packet))
+	assert [row[1] for row in rows if row[0] == "s.after"] == [at], rows
