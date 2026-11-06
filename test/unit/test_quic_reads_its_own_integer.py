@@ -210,7 +210,8 @@ def _wanted() -> list[str]:
 def test_all_three_runtimes_write_what_section_16_says(tmp_path: Path) -> None:
 	import sys
 	sys.path.insert(0, str(RUNTIME / "python"))
-	from situ_runtime import varint_quic_get, varint_quic_len, varint_quic_put
+	from situ_runtime import (  # type: ignore[import-not-found]
+		varint_quic_get, varint_quic_len, varint_quic_put)
 	lines = []
 	for value in BOUNDARIES:
 		out = bytearray(8)

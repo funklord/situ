@@ -125,12 +125,12 @@ def test_all_four_read_what_each_form_says(tmp_path: Path) -> None:
 			assert _all(command, message, struct, "v", tmp_path) \
 				== f"len={size} value={value}", (struct, sample)
 			assert _all(command, message, struct, "last", tmp_path) == "7"
-	for struct, samples in NUMBERLESS.items():
-		for sample in samples:
+	for struct, numberless in NUMBERLESS.items():
+		for sample in numberless:
 			assert _all(command, bytes.fromhex(sample), struct, "validate",
 			            tmp_path) == "1", (struct, sample)
-	for struct, samples in PADDED.items():
-		for sample in samples:
+	for struct, padded in PADDED.items():
+		for sample in padded:
 			message = bytes.fromhex(sample) + b"\x07"
 			assert _all(command, message, struct, "v", tmp_path).endswith(
 				"value=0"), (struct, sample)
@@ -262,7 +262,7 @@ fn main() {
 @pytest.mark.parametrize("form", list(FORMS))
 def test_all_three_runtimes_write_each_form(form: str, tmp_path: Path) -> None:
 	sys.path.insert(0, str(RUNTIME / "python"))
-	import situ_runtime
+	import situ_runtime  # type: ignore[import-not-found]
 	put = getattr(situ_runtime, f"varint_{form}_put")
 	get = getattr(situ_runtime, f"varint_{form}_get")
 	measure = getattr(situ_runtime, f"varint_{form}_len")
