@@ -1360,6 +1360,13 @@ def _validate_here(image: Image, view: View, struct_index: int,
 						break
 					except Refused:
 						return fail(ERR_BOUNDS, index)
+					# The arm's reach first, as the four ask it: a struct that
+					# states more than the frame holds is short, and what
+					# its members say is not read. This clamped instead,
+					# so a wrong `quantity` in a Modbus write cut at its
+					# `values` answered CONSTRAINT where they say BOUNDS.
+					if at + wide > view.limit:
+						return fail(ERR_BOUNDS, index)
 					inner_struct = arm_placement.type_struct
 					floor = image.structs[inner_struct].size_min_bits
 					if floor != NONE and wide * BITS_PER_BYTE < floor:

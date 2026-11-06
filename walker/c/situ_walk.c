@@ -4696,7 +4696,11 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	return validate_deep(&bound, message + at / 8u, len - at / 8u, arm_type,
+	/* The arm's own span and not the rest of the frame, as `report.py` and
+	 * the four backends frame it. Handing it the frame let the arm's floor
+	 * pass on bytes past the arm, so `["` measured a one-byte array and
+	 * validated it: an accepted message every other reader refuses. */
+	return validate_deep(&bound, message + at / 8u, wide / 8u, arm_type,
 	                     depth + 1u, verdict, why);
 }
 
@@ -5759,7 +5763,14 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		if (err == SITU_WALK_UNSUPPORTED) {
 			return err;
 		}
+		/* A located member past 2^29 bytes has a width no `uint32_t` of bits
+		 * holds, and that is this walker's arithmetic and not the message:
+		 * such a member reaches past the frame by construction (9.8), so
+		 * bmp's `image_size` of 0xff000018 is a clamp in every other reader. */
 		if (err != SITU_WALK_OK) {
+			if (held.located_code != SITU_WALK_NONE) {
+				continue;
+			}
 			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
