@@ -79,7 +79,7 @@ RUNTIME_SYMBOLS = frozenset({
 	"situ_put_le64", "situ_put_ne16", "situ_put_ne32", "situ_put_ne64",
 	"situ_remaining_u32", "situ_saturate_i64", "situ_scan", "situ_scan_any",
 	"situ_scan_relaxed", "situ_sign_extend", "situ_skip", "situ_span_t",
-	"situ_trim_len", "situ_trim_start", "situ_utf16_valid",
+	"situ_sum_run", "situ_trim_len", "situ_trim_start", "situ_utf16_valid",
 	"situ_utf16be_valid", "situ_utf16le_valid", "situ_utf8_valid",
 	"situ_varint_be_get", "situ_varint_be_len", "situ_varint_be_put", "situ_varint_get",
 	"situ_varint_len", "situ_varint_put", "situ_view_assert",

@@ -6787,7 +6787,7 @@ class Emitter:
 		# front, `u8 n; u8 a[n]; pad_to(4); u16 x; u8 y; pad_to(4); u8 z;`
 		# aligned two bytes too many and read `z` from the wrong place in
 		# three of the four backends. C kept the order all along (26.889).
-		leading, tail = leading_bytes(parts)
+		leading, tail = leading_bytes(struct, parts)
 		terms: list[str | tuple[str, str]] = []
 
 		for other in tail:

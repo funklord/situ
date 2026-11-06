@@ -691,14 +691,16 @@ def unmeasurable_inside(structs: dict[str, "ResolvedStruct"],
 	  * `[remaining]`, which means "to the end of the frame" and inside a
 	    region has nothing to mean. Where the region ends is the question the
 	    extent is being asked, so an interior sized by the rest of it is
-	    circular.
+	    circular. Unless a tail was taken off it: then the frame says where
+	    it stops, no byte of the region is read to find out, and the tag
+	    after the region has somewhere to be (26.894).
 
 	A length driven by a field *outside* the region is neither, and is the
 	shape 26.35 wrote the extent rule for.
 	"""
 	return (bool(member.delimiters)
 	        or member.repeat_while is not None
-	        or member.sized_by == "remaining"
+	        or (member.sized_by == "remaining" and not member.tail_bytes)
 	        or is_counted_run(structs, member))
 
 
@@ -2422,15 +2424,24 @@ def walk_order(struct: ResolvedStruct,
 	return before + interior
 
 
-def leading_bytes(parts: list[int | Placement]
+def leading_bytes(struct: ResolvedStruct, parts: list[int | Placement]
 		) -> tuple[int, list[int | Placement]]:
-	"""The fixed bytes before the first variable member, and what follows."""
-	leading = 0
-	for at, part in enumerate(parts):
-		if not isinstance(part, int):
-			return leading, parts[at:]
-		leading += part
-	return leading, []
+	"""The fixed bytes that sum in front, and the walk left to do.
+
+	A length commutes with a byte count and a pad does not, so every count
+	before the first pad is one constant: `advance(2, n)` and not
+	`advance(advance(1, n), 1)`. A count after a pad has to arrive after the
+	alignment, in its place (26.889). A count of nothing is no term at all.
+	"""
+	first = next((at for at, part in enumerate(parts)
+	              if not isinstance(part, int)
+	              and (pad_alignment(part) is not None
+	                   or arm_alignments(struct, part) is not None)),
+	             len(parts))
+	leading = sum(part for part in parts[:first] if isinstance(part, int))
+	return leading, [
+		*(part for part in parts[:first] if not isinstance(part, int)),
+		*(part for part in parts[first:] if part != 0)]
 
 
 def preceding_parts(struct: ResolvedStruct,

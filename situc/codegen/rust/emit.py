@@ -6728,7 +6728,7 @@ class Emitter:
 			return None
 
 		# The leading bytes alone: see the Python backend (26.889).
-		leading, tail = leading_bytes(parts)
+		leading, tail = leading_bytes(struct, parts)
 		terms: list[str | tuple[str, str]] = []
 
 		for other in tail:
