@@ -416,6 +416,12 @@ struct last_line size=2.. access=Sequential mutate=Shifting address=Unstable eff
   last_line.head_line                    offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   last_line.rest_line                    offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
 
+struct length_table size=2.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  length_table.entries                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  length_table.chunk_lens                offset=AbsoluteStatic(0x01) size=Bounded(0, 510) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  length_table.chunks                    offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  length_table.after_chunks              offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
 struct link size=4..1024 mutate=Shifting
   link.kind                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   link.units                             offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

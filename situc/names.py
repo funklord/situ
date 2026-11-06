@@ -130,6 +130,24 @@ def translate_operators(source: str, *, conj: str, disj: str,
 	return re.sub(r"\s+", " ", source).strip()
 
 
+def with_sums(source: str, sum_of: Callable[[str], str]
+		) -> tuple[str, dict[str, str]]:
+	"""`source` with each `sum(run)` lifted out, and what stands for each.
+
+	A name in a size expression is a field's read, and a run has none. So the
+	call is taken out first and handed back as an `extra`, or the rendering
+	would reach for a getter that does not exist (26.896).
+	"""
+	found: dict[str, str] = {}
+
+	def lift(match: re.Match[str]) -> str:
+		token = f"situ_sum_{len(found)}"
+		found[token] = sum_of(match.group(1))
+		return token
+
+	return re.sub(r"\bsum\(\s*(\w+)\s*\)", lift, source), found
+
+
 #: How many arguments each value builtin takes. `situc.expr` is authoritative
 #: about which exist; this is what a backend has to be able to spell.
 CALL_ARITY = {"min": 2, "max": 2, "align_up": 2}

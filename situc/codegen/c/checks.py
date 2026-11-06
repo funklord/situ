@@ -686,8 +686,12 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 		if placement.size_expr is not None:
 			# `size_expr` is the rendered source, not a tree: the identifiers
 			# in it are the fields it reads.
+			#
+			# Not the run inside a `sum`: it is a table, and it has no setter
+			# to choose a length with (26.896).
+			source = re.sub(r"\bsum\(\s*\w+\s*\)", "", placement.size_expr)
 			named |= {word for word in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*",
-			                                      placement.size_expr)
+			                                      source)
 			          if resolved.find(f"{struct.name}.{word}") is not None}
 	drivers = sorted(named)
 
@@ -833,6 +837,11 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 		# A delimited byte run has a pointer and a length like any other; only
 		# a run of *records* has a count and an indexed accessor. The element
 		# type is what separates them, not the delimiter.
+		# A run of wider values has an indexed getter and no pointer, so it
+		# has no answer to where it starts, and what follows it is asked.
+		if placement.array_count is None and placement.scalar is not None \
+				and (placement.element_bits or BITS_PER_BYTE) != BITS_PER_BYTE:
+			return []
 		if placement.scalar is not None:
 			ptr = ident(prefix, struct.name, local, "ptr")
 			lines.append(f"\tassert_int_equal((uint32_t)({ptr}(view) - view.base),"

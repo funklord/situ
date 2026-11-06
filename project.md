@@ -2101,10 +2101,13 @@ Permitted:
 - comparison and boolean operators (in constraints only)
 - `size(X)`, `offset(X)`, `count(X)`, `remaining`
 - `min`, `max`, `align_up(x, n)`
+- `sum(run)` in a size: the elements of a counted run of unsigned integers
+  declared earlier, a table of lengths ahead of what it sizes (26.896)
 
 Forbidden, by construction:
 
-- function calls, recursion, iteration
+- function calls, recursion, iteration other than `sum`, which a run's own
+  count bounds
 - forward references to fields later in layout order
 - references to the *result* of a transform (see 13.2 -- this is the
   decidability boundary)
@@ -8266,6 +8269,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.896 A size may be what a table of lengths adds up to
+
+Moved to `doc/decision/26.896-a-size-may-be-what-a-table-of-lengths-adds-up-to.md`.
 
 ### 26.895 The end of the frame as a delimiter
 

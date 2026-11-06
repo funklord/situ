@@ -763,6 +763,7 @@ def _evaluate(view: View, code_at: int,
 		size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 		offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 		count_of   = lambda i: _count(view, i),
+		sum_of     = lambda i: _sum(view, i),
 		# A THUNK, so the offset it is measured from is computed only by a
 		# program that asks for it (26.585). Every caller passed
 		# `offset_bits(...)` eagerly, and for a member interior to a region
@@ -815,6 +816,23 @@ def _count(view: View, index: int) -> int:
 			view, placement.size_code,
 			lambda: offset_bits(view, index) // BITS_PER_BYTE)
 	raise Refused(f"placement {index} has no count this image carries")
+
+
+def _sum(view: View, index: int) -> int:
+	"""`sum(lens)`: a run's elements added, as `situ_sum_run` adds them.
+
+	Only those the frame holds, and saturating at 32 bits (26.896).
+	"""
+	placement = view.image.placements[index]
+	width = (placement.element_bits // BITS_PER_BYTE
+	         if placement.element_bits != NONE else 1)
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	room  = max(0, view.limit - start)
+	total = 0
+	for at in range(min(_count(view, index), room // width)):
+		piece = view.buffer[start + at * width:start + (at + 1) * width]
+		total += int.from_bytes(piece, _order(view, index))
+	return min(total, 0xFFFFFFFF)
 
 
 def child_args(view: View, index: int) -> dict[int, int]:
@@ -1857,6 +1875,7 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 			size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 			offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 			count_of   = lambda i: _count(view, i),
+			sum_of     = lambda i: _sum(view, i),
 			remaining  = max(0, view.limit - at),
 			tag        = tag)
 
@@ -1881,6 +1900,7 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 				size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 				offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 				count_of   = lambda i: _count(view, i),
+				sum_of     = lambda i: _sum(view, i),
 				remaining  = max(0, view.limit - at),
 				tag        = tag)
 			# The four backends clamp a computed size at both ends (14.2b)

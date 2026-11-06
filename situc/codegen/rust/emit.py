@@ -38,7 +38,7 @@ from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (
-	UnknownName, expand_calls, over_fields, render_delimiter, rust_spelling,
+	with_sums, UnknownName, expand_calls, over_fields, render_delimiter, rust_spelling,
 	unwrap_parens,
 )
 from situc.propagate import Resolved
@@ -5064,6 +5064,18 @@ class Emitter:
 			])
 		return lines
 
+	def _sum_run(self, struct: ResolvedStruct, run: str) -> str:
+		"""`sum(run)`: the elements added, from the bytes (26.896)."""
+		found = self.resolved.find(f"{struct.name}.{run}")
+		assert found is not None
+		member = found.placement
+		start  = self._offset_expression(struct, member)
+		count  = self._count_expression(struct, member)
+		width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		big    = "true" if member.endian is ast.Endian.BIG else "false"
+		return (f"situ_rt::sum_run(&self.bytes[core::cmp::min({start},"
+		        f" self.bytes.len())..], {count}, {width}, {big})")
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str, cast: str = "usize", bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -5074,6 +5086,12 @@ class Emitter:
 		`extra` names the caller supplies as Rust expressions rather than as
 		fields of `struct` -- `remaining` in a repeat condition, and nothing
 		else. C's copy carries that reasoning too."""
+		if "sum(" in source:
+			source, sums = with_sums(
+				source,
+				lambda run: f"({self._sum_run(struct, run)} as {cast})")
+			extra = {**(extra or {}), **sums}
+
 		def leaf(text: str, signed: bool = False) -> str:
 			"""One read, cast and bounded together.
 

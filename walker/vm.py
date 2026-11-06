@@ -23,6 +23,8 @@ from collections.abc import Callable
 #: here on purpose and `test_the_opcodes_match_the_packer` reads both files
 #: and fails when they drift.
 END, PUSH, FIELD, REMAINING, SIZE, OFFSET, COUNT = range(7)
+#: `sum(lens)`: a run's elements added (26.896).
+SUM = 10
 #: Only relation programs carry this (26.95). A relation's two
 #: parameters are usually the same struct, so a placement index alone
 #: does not say which message to read it out of; the operand is a
@@ -106,7 +108,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
         remaining: int | Callable[[], int],
         load_arg: Callable[[int, int], int] | None = None,
         load_field_in: Callable[[int, int], int] | None = None,
-        tag: int | None = None) -> int:
+        tag: int | None = None,
+        sum_of: Callable[[int], int] | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -137,6 +140,12 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 		if op == PUSH:
 			stack.append(_struct.unpack_from("<q", code, pc)[0])
 			pc += 8
+			continue
+		if op == SUM:
+			if sum_of is None:
+				raise VmError("this program sums a run and nothing here reads one")
+			stack.append(sum_of(_struct.unpack_from("<I", code, pc)[0]))
+			pc += 4
 			continue
 		if op in (FIELD, SIZE, OFFSET, COUNT):
 			index = _struct.unpack_from("<I", code, pc)[0]

@@ -513,6 +513,16 @@ def nonneg(value: int) -> int:
 	return 0xFFFFFFFF if value > 0xFFFFFFFF else value
 
 
+def sum_run(data: memoryview, count: int, width: int, big: bool,
+		room: int) -> int:
+	"""`sum(lens)` (26.896): `situ_sum_run`, saturating at 32 bits with it."""
+	total = 0
+	for at in range(min(count, max(room, 0) // width)):
+		piece = bytes(data[at * width:(at + 1) * width])
+		total += int.from_bytes(piece, "big" if big else "little")
+	return min(total, 0xFFFFFFFF)
+
+
 def advance(at: int, by: int, limit: int) -> int:
 	"""Advance an offset by a length the message chose, and stop at the end.
 

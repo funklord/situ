@@ -244,6 +244,8 @@ class Op:
 	SIZE		= 0x04		# + u32 placement index
 	OFFSET		= 0x05		# + u32 placement index
 	COUNT		= 0x06		# + u32 placement index
+	# `sum(lens)`: a run's elements added (26.896).
+	SUM		= 0x0A		# + u32 placement index
 	# A relation's two parameters are usually the same struct, so a
 	# placement index alone does not say which message to read it out
 	# of. Only relation programs emit this (26.95).
@@ -297,7 +299,8 @@ UNARY = {"-": Op.NEG, "~": Op.NOT, "+": None}
 
 #: `size`, `offset` and `count` take a path; `min`, `max` and `align_up` take
 #: values and are ordinary operators with a name.
-PATH_CALLS  = {"size": Op.SIZE, "offset": Op.OFFSET, "count": Op.COUNT}
+PATH_CALLS  = {"size": Op.SIZE, "offset": Op.OFFSET, "count": Op.COUNT,
+               "sum": Op.SUM}
 VALUE_CALLS = {"min": Op.MIN, "max": Op.MAX, "align_up": Op.ALIGN_UP}
 
 

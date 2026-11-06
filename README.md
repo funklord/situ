@@ -629,8 +629,11 @@ decides the capability vector:
 u8   fixed[4];                        // a count
 u8   rest[remaining];                 // to the end of the frame
 u8   body[remaining] max 470;         // and no further, or the frame is refused
+u8   cipher[remaining]; u8 tag[16];   // the frame less the fixed members after it
+u8   chunks[sum(lens)];               // what a table of lengths adds up to
 u8   name[]    until ':';             // to a delimiter, written as a character
 u8   value[]   until "\r\n" | '\n';    // or to whichever of several comes first
+u8   line[]    until "\n" | end;       // or to the end of the frame, if that is first
 u8   method[]  until " " max 16;      // bounded, so it stays allocatable
 nlattr attrs[] while (nla_len >= 4);  // while a predicate over each element holds
 u8   pixels[n] at file.pixel_offset;  // placed where the data says
@@ -770,8 +773,9 @@ answer where the interior is not described at all.
 
 Small on purpose, because everything in it has to be evaluable by the layout
 solver *and* by four backends *and* by a table walk. Field references,
-arithmetic, comparisons, and six builtins: `min`, `max` and `align_up` over
-values; `size`, `offset` and `count` over the layout.
+arithmetic, comparisons, and seven builtins: `min`, `max` and `align_up` over
+values; `size`, `offset` and `count` over the layout; `sum` over a table of
+lengths.
 
 ```situ
 u8       body[length - 8];              // arithmetic over a field already read
@@ -1072,6 +1076,7 @@ framing code in practical use, which is what bounds the design:
 | `linear_block` | a parity-check matrix over GF(2), named or stated as one `parity` row per check bit | Hamming(7,4) by name, any `(n,k)` whose codeword is a byte from its matrix |
 | `shift_register` | taps, a feedback source, an initial state, and whether the feedback is complemented | additive and multiplicative scramblers, both NRZI conventions |
 | `permutation` | an index mapping | block interleavers |
+| `byte_sum` | the bytes added and truncated, negated where they sum to zero | ACPI, SMBIOS, Intel HEX |
 | `stuffing` | a trigger predicate and an insertion rule | COBS, bit stuffing, SLIP, PPP, SMTP dot-stuffing |
 
 **Where a family stops is memory rather than difficulty.** A convolutional
@@ -1082,9 +1087,9 @@ soft-decision decoders are tier 1, where the caller owns the buffer and
 situ checks the contract. Section 13.4 of `project.md` records the boundary
 and the one case that is a trap rather than a gap.
 
-`std/kernels.situ` carries 42 of them: 18 polynomial (16 CRCs and 2
+`std/kernels.situ` carries 44 of them: 18 polynomial (16 CRCs and 2
 Reed-Solomon codes), 8 table, 7 shift_register (two scramblers, the two NRZI
-conventions, SONET, USB 3.0, PRBS23), 6 stuffing, 1 linear_block -- a
+conventions, SONET, USB 3.0, PRBS23), 7 stuffing, 1 byte_sum, 1 linear_block -- a
 Hamming(7, 4) -- 1 permutation, and 1 ones_complement, which is RFC 1071's
 checksum: the one IPv4, ICMP, UDP and TCP all carry, and the one that had no
 description here while every CRC anybody uses had one. Those counts are held to the schema by a

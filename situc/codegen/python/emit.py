@@ -38,7 +38,7 @@ from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (
-	UnknownName, expand_calls, over_fields, python_spelling,
+	UnknownName, expand_calls, over_fields, python_spelling, with_sums,
 	render_delimiter, translate_operators,
 )
 from situc.propagate import Resolved
@@ -446,7 +446,7 @@ class Emitter:
 			"\tTruncatedError,",
 			"\tVersionError, View,",
 			"\tacquire,",
-			"\tadvance,",
+			"\tadvance, sum_run,",
 			"\tas_enum,",
 			"\tascii_valid, bcd_decode, bcd_encode, bcd_valid, known_enum,",
 			"\tleaf, nonneg,",
@@ -5478,6 +5478,18 @@ class Emitter:
 			"\t\treturn 0 if held is None else held[1]",
 		]
 
+	def _sum_run(self, struct: ResolvedStruct, run: str) -> str:
+		"""`sum(run)`: the elements added, from the bytes (26.896)."""
+		found = self.resolved.find(f"{struct.name}.{run}")
+		assert found is not None
+		member = found.placement
+		start  = self._offset_expression(struct, member)
+		count  = self._count_expression(struct, member)
+		width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		big    = member.endian is ast.Endian.BIG
+		return (f"sum_run(self._msg.buffer[self._at + ({start}):], {count},"
+		        f" {width}, {big}, self._len - ({start}))")
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str, bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -5486,6 +5498,11 @@ class Emitter:
 		to *agree* with the three backends that do rather than for its own
 		sake -- a bound applied in three places and not the fourth is a
 		disagreement waiting for a lying message."""
+		if "sum(" in source:
+			source, sums = with_sums(
+				source, lambda run: self._sum_run(struct, run))
+			extra = {**(extra or {}), **sums}
+
 		# Its own scalars and its nested structs': `at file.pixel_offset`
 		# names a field of a header nested in this struct, and the dotted
 		# path was emitted verbatim -- an attribute Python does not have.

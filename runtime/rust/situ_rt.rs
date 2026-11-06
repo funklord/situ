@@ -170,6 +170,21 @@ pub fn remaining(limit: usize, at: usize) -> usize {
 	limit.saturating_sub(at)
 }
 
+/// `sum(lens)` (26.896): `situ_sum_run`, saturating at 32 bits with it.
+#[must_use]
+pub fn sum_run(data: &[u8], count: usize, width: usize, big: bool) -> usize {
+	let mut total: u64 = 0;
+	for element in data.chunks_exact(width).take(count) {
+		let mut value: u64 = 0;
+		for at in 0..width {
+			let from = if big { at } else { width - 1 - at };
+			value = (value << 8) | u64::from(element[from]);
+		}
+		total = total.saturating_add(value).min(0xFFFF_FFFF);
+	}
+	total as usize
+}
+
 /// A member placed after a variable-length region has an offset that is a sum
 /// of lengths an attacker fills in: `example/packet` with `hdr.length =
 /// 0xffff` puts its tag 65581 bytes into a 62-byte message. Rust's answer to

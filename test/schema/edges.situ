@@ -2587,3 +2587,12 @@ struct last_line {
 	u8  head_line[] until "\n" | end max 16;
 	u8  rest_line[] until "\n" | end;
 }
+
+// A table of lengths ahead of what they size (26.896): `lens` adds up to the
+// payload, and `after` is there so that a wrong sum lands on a wrong byte.
+struct length_table {
+	u8   entries;
+	u16  chunk_lens[entries];
+	u8   chunks[sum(chunk_lens)];
+	u8   after_chunks;
+}

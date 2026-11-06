@@ -731,6 +731,32 @@ static inline uint32_t situ_remaining_u32(uint32_t limit, uint32_t at)
  *
  * Found by fuzzing `example/packet` under an address sanitizer, three seconds
  * into the first run that was fuzzing rather than eight random inputs. */
+/* `sum(lens)`: the elements of a run of unsigned integers added up, for a
+ * length table standing apart from what it sizes (26.896). Only the elements
+ * `room` holds, and saturating, because each is a number the message chose. */
+static inline uint32_t situ_sum_run(const uint8_t *p, uint32_t count,
+                                    uint32_t width, int big, uint32_t room)
+{
+	uint64_t total = 0;
+	uint32_t at;
+
+	for (at = 0; at < count && (uint64_t)(at + 1u) * width <= room; at++) {
+		uint64_t value = 0;
+		uint32_t byte;
+
+		for (byte = 0; byte < width; byte++) {
+			const uint32_t from = big ? byte : width - 1u - byte;
+
+			value = (value << 8) | p[at * width + from];
+		}
+		if (value >= 0xFFFFFFFFu - total) {
+			return 0xFFFFFFFFu;
+		}
+		total += value;
+	}
+	return (uint32_t)total;
+}
+
 static inline uint32_t situ_advance_u32(uint32_t at, uint32_t by, uint32_t limit)
 {
 	const uint32_t room = situ_remaining_u32(limit, at);

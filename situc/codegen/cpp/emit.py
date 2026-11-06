@@ -42,7 +42,7 @@ from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (
-	UnknownName, c_spelling, expand_calls, over_fields, render_delimiter,
+	with_sums, UnknownName, c_spelling, expand_calls, over_fields, render_delimiter,
 )
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -3655,6 +3655,19 @@ class Emitter:
 		        "\t\treturn extent_at(0);",
 		        "\t}"]
 
+	def _sum_run(self, struct: ResolvedStruct, run: str) -> str:
+		"""`sum(run)`: the elements added, from the bytes (26.896)."""
+		found = self.resolved.find(f"{struct.name}.{run}")
+		assert found is not None
+		member = found.placement
+		start  = self._offset_expression(struct, member)
+		count  = self._count_expression(struct, member)
+		width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		big    = int(member.endian is ast.Endian.BIG)
+		return (f"(static_cast<std::int64_t>(situ_sum_run(situ_base(raw_) + "
+		        f"({start}), {count}, {width}u, {big}, "
+		        f"situ_remaining_u32(raw_.limit, {start}))))")
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -3668,6 +3681,11 @@ class Emitter:
 		the buffer. Only where the caller says so, for C's reason -- a name
 		that resolves everywhere is a name that resolves where it should
 		not."""
+		if "sum(" in source:
+			source, sums = with_sums(
+				source, lambda run: self._sum_run(struct, run))
+			extra = {**(extra or {}), **sums}
+
 		def leaf(text: str, signed: bool = False) -> str:
 			if not bounded:
 				return text

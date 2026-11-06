@@ -41,7 +41,7 @@ from situc.layout import (
 	BITS_PER_BYTE, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 	expansion_is_closed_form,
 )
-from situc.names import (UnknownName, c_spelling, expand_calls,
+from situc.names import (UnknownName, c_spelling, expand_calls, with_sums,
                          over_fields, render_delimiter)
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -6768,6 +6768,18 @@ class Emitter:
 			element, placement.repeat_while or "", "element",
 			extra = {"remaining": "situ_remaining_u32(view.limit, at)"})
 
+	def _sum_run(self, struct: ResolvedStruct, run: str, held: str) -> str:
+		"""`sum(run)`: the elements added, from the bytes (26.896)."""
+		found = self.resolved.find(f"{struct.name}.{run}")
+		assert found is not None
+		member = found.placement
+		base   = self._base_expression(struct, member)
+		count  = self._count_expression(struct, member, held)
+		width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		big    = int(member.endian is ast.Endian.BIG)
+		return (f"((int64_t)situ_sum_run(situ_base({held}) + {base}, {count},"
+		        f" {width}u, {big}, situ_remaining_u32({held}.limit, {base})))")
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str, bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -6790,6 +6802,11 @@ class Emitter:
 		The bound costs nothing observable: a length at or past the view's
 		limit saturates against the frame either way.
 		"""
+		if "sum(" in source:
+			source, sums = with_sums(
+				source, lambda run: self._sum_run(struct, run, held))
+			extra = {**(extra or {}), **sums}
+
 		def leaf(text: str, signed: bool) -> str:
 			if not bounded:
 				return text

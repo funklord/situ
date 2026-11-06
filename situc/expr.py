@@ -496,6 +496,12 @@ def _not_resolvable(expr: ast.Expr, name: str, env: Env) -> Interval:
 
 
 def _call_interval(expr: ast.Call, env: Env) -> Interval:
+	if expr.name == "sum":
+		# A size only, and a number the message chose: nothing here can say
+		# how large until it is read (26.896).
+		_check_arity(expr, 1)
+		return Interval(0, UNBOUNDED)
+
 	if expr.name in VALUE_BUILTINS:
 		_check_arity(expr, VALUE_BUILTINS[expr.name])
 		args = [interval_of(arg, env) for arg in expr.args]
@@ -808,7 +814,8 @@ def _call(expr: ast.Call, env: Env) -> int:
 		label = "not a builtin",
 		notes = ["the expression language has no user-defined functions "
 		         "(project.md section 10)",
-		         "builtins: " + ", ".join(sorted(VALUE_BUILTINS | LAYOUT_BUILTINS))],
+		         "builtins: " + ", ".join(sorted(
+		             {**VALUE_BUILTINS, **LAYOUT_BUILTINS, "sum": 1}))],
 	)
 
 

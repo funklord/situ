@@ -686,7 +686,9 @@ typedef enum {
 	 * callback that does not know them must refuse rather than read the
 	 * message it holds, which would answer a question about another pair. */
 	SITU_WALK_ASK_ARG_REQUEST  = 4,
-	SITU_WALK_ASK_ARG_RESPONSE = 5
+	SITU_WALK_ASK_ARG_RESPONSE = 5,
+	/* `sum(lens)`: a run's elements added (26.896). */
+	SITU_WALK_ASK_SUM = 6
 } situ_walk_ask;
 
 typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,

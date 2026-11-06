@@ -379,6 +379,12 @@ struct last_line size=2..
   @0x0000   until:0a|end u8         head_line  cap=16
   ~         until:0a|end u8         rest_line
 
+struct length_table size=2..
+  @0x0000   1         u8         entries
+  @0x0001   0..510    u16        chunk_lens  sized-by=entries
+  ~         0..       u8         chunks  sized-by=sum(chunk_lens)
+  ~         1         u8         after_chunks
+
 struct link size=4..1024
   @0x0000   1         u8         kind
   @0x0001   1         u8         units

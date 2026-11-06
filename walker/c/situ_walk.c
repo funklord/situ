@@ -1432,6 +1432,56 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		*out = (int64_t)held;
 		return SITU_WALK_OK;
 	}
+	if (what == SITU_WALK_ASK_SUM) {
+		/* `situ_sum_run`'s rule: only the elements the frame holds, and
+		 * saturating at 32 bits (26.896). */
+		situ_walk_placement run;
+		uint32_t count = 0u;
+		uint32_t bits  = 0u;
+		uint64_t total = 0u;
+		situ_walk_err err = situ_walk_count(ctx->image, ctx->message, ctx->len,
+		                                    ctx->shape, index, &count);
+
+		if (err == SITU_WALK_OK) {
+			err = offset_bits_deep(ctx->image, ctx->message, ctx->len,
+			                       ctx->shape, index, ctx->depth, &bits);
+		}
+		if (err == SITU_WALK_OK) {
+			err = situ_walk_placement_at(ctx->image, index, &run);
+		}
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		const uint32_t width = run.element_bits / 8u;
+		const uint32_t start = bits / 8u;
+
+		if (width == 0u) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		for (uint32_t at = 0u; at < count; at++) {
+			const uint64_t end = (uint64_t)start + (uint64_t)(at + 1u) * width;
+			uint64_t value = 0u;
+
+			if (end > ctx->len) {
+				break;
+			}
+			for (uint32_t byte = 0u; byte < width; byte++) {
+				uint32_t from = byte;
+
+				if (run.endian == ENDIAN_LITTLE) {
+					from = width - 1u - byte;
+				}
+				value = (value << 8) | ctx->message[start + at * width + from];
+			}
+			total += value;
+			if (total > 0xFFFFFFFFu) {
+				total = 0xFFFFFFFFu;
+				break;
+			}
+		}
+		*out = (int64_t)total;
+		return SITU_WALK_OK;
+	}
 
 	if (base != 0) {
 		return read_based(ctx->image, ctx->message, ctx->len, index, base,
@@ -6278,6 +6328,7 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_ARG_FIELD 0x07u
 #define OP_FIELD_IN 0x08u
 #define OP_TAG 0x09u
+#define OP_SUM 0x0Au
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -6462,7 +6513,8 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 		 * `edges`' coded, split, marked, scrambled and unverified
 		 * regions, every one of which sizes something by another
 		 * member. */
-		if (op == OP_SIZE || op == OP_OFFSET || op == OP_COUNT) {
+		if (op == OP_SIZE || op == OP_OFFSET || op == OP_COUNT
+		    || op == OP_SUM) {
 			if (pc + 4u > image->code_len || depth >= STACK_DEPTH) {
 				return SITU_WALK_MALFORMED;
 			}
@@ -6476,6 +6528,8 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				what = SITU_WALK_ASK_SIZE;
 			} else if (op == OP_OFFSET) {
 				what = SITU_WALK_ASK_OFFSET;
+			} else if (op == OP_SUM) {
+				what = SITU_WALK_ASK_SUM;
 			}
 			const situ_walk_err err = load(ctx, what,
 			                               u32_at(image->code + pc), 0,

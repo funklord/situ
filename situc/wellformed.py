@@ -74,6 +74,7 @@ def check(schema: ast.Schema) -> None:
 	check_located_names(schema)
 	check_peeked_members(schema)
 	check_parameters(schema)
+	check_sums(schema)
 	check_member_arguments(schema)
 	check_parameter_nesting(schema)
 	check_varint_arms(schema)
@@ -3506,6 +3507,54 @@ def _check_arguments(struct: ast.StructDecl, member: ast.Field,
 				 "(decisions 0050, 0068)",
 				 f"declare `parameter {source.type_ref.name} {head} "
 				 "[stream];` if it is fixed for a stream"])
+
+
+def check_sums(schema: ast.Schema) -> None:
+	"""`sum(lens)` names a run of unsigned integers declared earlier (26.896).
+
+	A table of lengths standing apart from what it sizes. Only a size asks
+	for one: nothing else in the language reads a run's elements.
+	"""
+	for struct in schema.structs():
+		seen: dict[str, ast.Field] = {}
+		for member in _members_and_arms(struct):
+			for expr, _ in _moving_expressions(member):
+				for call in _sum_calls(expr):
+					_check_sum(call, seen)
+			if isinstance(member, ast.Field):
+				seen[member.name] = member
+
+
+def _sum_calls(expr: ast.Expr) -> list[ast.Call]:
+	if isinstance(expr, ast.Call):
+		found = [expr] if expr.name == "sum" else []
+		for arg in expr.args:
+			found += _sum_calls(arg)
+		return found
+	if isinstance(expr, ast.Binary):
+		return _sum_calls(expr.left) + _sum_calls(expr.right)
+	if isinstance(expr, ast.Unary):
+		return _sum_calls(expr.operand)
+	return []
+
+
+def _check_sum(call: ast.Call, seen: dict[str, ast.Field]) -> None:
+	target = call.args[0] if len(call.args) == 1 else None
+	name   = target.name if isinstance(target, ast.NameRef) else None
+	held   = seen.get(name or "")
+	scalar = held.type_ref.scalar if held is not None else None
+	if (held is None or held.array is None or scalar is None
+			or scalar.signed or scalar.bits % 8
+			or held.until is not None or held.repeat is not None
+			or held.radix is not None
+			or isinstance(held.array.size, ast.Remaining)):
+		raise error(
+			"`sum` takes a counted run of unsigned integers declared earlier",
+			call.span,
+			label = "not a table of lengths",
+			notes = ["`u16 lens[n]; u8 payload[sum(lens)];` is the shape, a "
+			         "table of lengths ahead of what they size (26.896)"],
+		)
 
 
 def _check_material(schema: ast.Schema, struct: ast.StructDecl) -> None:
