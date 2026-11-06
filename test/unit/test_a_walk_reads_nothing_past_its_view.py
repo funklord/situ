@@ -290,7 +290,6 @@ VECTORS = sorted(ROOT.glob("example/*/*.vectors"))
 #: is one `situ_walk.c` declines rather than guess, and says so at the read.
 DECLINED = {
 	"netlink": "`endian native`: the capture's machine is not the reader's",
-	"tiff":    "`[endian = from(byte_order)]`: no marker resolved in this build",
 }
 
 

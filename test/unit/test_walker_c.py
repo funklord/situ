@@ -2836,14 +2836,11 @@ def test_they_agree_about_the_corpus_being_well_formed(
 	What the C build declines has been measured rather than guessed at, by
 	reporting `__LINE__` at each of its refusal sites over the corpus, one
 	struct per run so the trace belongs to the struct that produced it.
-	**One site is left** and it covers two different things. A `native`
-	MULTI-byte read is a deliberate refusal rather than a gap, because a
-	capture and the machine reading it are different machines: netlink's
-	four structs are there. An UNSTATED order is the marker construct,
-	whose point is that the message decides -- and this build does not
-	resolve a marker, so it declines rather than picking an end, which is
-	`tiff_header`. The two are worth telling apart, because only the first
-	is settled: whether a walker should answer for `native` at all is a
+	**One site is left**. A `native` MULTI-byte read is a deliberate refusal
+	rather than a gap, because a capture and the machine reading it are
+	different machines: netlink's four structs are there. An UNSTATED order
+	was the second thing here, `tiff_header`, until the walker read a marker
+	(26.906). Whether a walker should answer for `native` at all is a
 	question about what a walker IS, and the two walkers currently answer
 	it differently. See `project.md` 26.356.
 

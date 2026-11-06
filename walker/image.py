@@ -99,14 +99,9 @@ PINNED = 128
 #: `test_an_unset_byte_order_has_nothing_to_order.py` asserts as a
 #: partition rather than leaving to be re-derived.
 #:
-#: **The C walker had reasoned this out already, in the other direction.**
-#: `walker/c/situ_walk.c` returns `SITU_WALK_UNSUPPORTED` for a multi-byte
-#: read whose order is unstated, saying *an unstated order is the marker
-#: construct, whose whole point is that the message decides -- and this
-#: build does not resolve a marker, so it declines rather than picking an
-#: end.* It declines where this walker answers, which is a capability
-#: difference it states by name; what it shows is that the reason existed
-#: in the tree all along, in the reader that could not act on it.
+#: `walker/c/situ_walk.c` answers the same way: a governed member asks the
+#: marker first (26.906), and a multi-byte read whose order nothing stated
+#: is `SITU_WALK_UNSUPPORTED` rather than a guess at an end.
 UNSET, BIG, LITTLE, NATIVE = 0, 1, 2, 3
 
 #: The capability vocabulary, in the order the packer writes it: one byte per

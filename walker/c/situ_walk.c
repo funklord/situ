@@ -1157,6 +1157,8 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
  * at all. Kept as the short spellings this file already reads by. */
 #define FLAG_OFFSET_KNOWN SITU_WALK_OFFSET_KNOWN
 #define FLAG_SIGNED       SITU_WALK_SIGNED
+/* `flags` bit 5: `pack.MARKER_GOVERNED`, a member a marker orders. */
+#define FLAG_MARKER_GOVERNED 0x20u
 
 /* The load callback for a size expression: a field of this same message,
  * read at whatever offset the chain has reached.
@@ -3167,9 +3169,9 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
 		} else {
 			/* `native` has no answer a walker can give for a MULTI-byte
 			 * read: the capture and the machine reading it are different
-			 * machines. An unstated order is the marker construct, whose
-			 * whole point is that the message decides -- and this build
-			 * does not resolve a marker, so it declines rather than
+			 * machines. An unstated order here is a member no marker
+			 * reached: `read_deep` writes a marker's answer into the row
+			 * before it gets this far, so this declines rather than
 			 * picking an end. A bit-packed read is answered above, and so
 			 * is a single byte, where the question does not arise. */
 			return SITU_WALK_UNSUPPORTED;
@@ -3219,6 +3221,39 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
                              uint32_t shape, uint32_t index, uint64_t *out)
 {
 	return read_deep(image, message, len, shape, index, 0u, out);
+}
+
+/* The byte order a marker among this struct's members states, written into
+ * the row being read: `walk.marker_order`, to the same rule. No marker in
+ * scope is no answer, since a wrong order is silently wrong data. */
+static situ_walk_err order_from_marker(const situ_walk_image *image,
+                                       const uint8_t *message, uint32_t len,
+                                       uint32_t shape,
+                                       situ_walk_placement *held)
+{
+	uint32_t first = 0u;
+	uint32_t count = 0u;
+	situ_walk_err err = situ_walk_members(image, shape, &first, &count);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	for (uint32_t i = 0u; i < image->marker_count; i++) {
+		const uint32_t at = u32_at(image->markers
+		                           + i * image->marker_stride);
+		uint32_t little   = 0u;
+
+		if (at < first || at - first >= count) {
+			continue;
+		}
+		err = situ_walk_marker(image, message, len, shape, at, &little);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		held->endian = little ? ENDIAN_LITTLE : ENDIAN_BIG;
+		return SITU_WALK_OK;
+	}
+	return SITU_WALK_UNSUPPORTED;
 }
 
 static situ_walk_err read_deep(const situ_walk_image *image,
@@ -3373,6 +3408,12 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		                        &width);
 		if (err != SITU_WALK_OK) {
 			return err;
+		}
+		if ((held.flags & FLAG_MARKER_GOVERNED) != 0u) {
+			err = order_from_marker(image, message, len, shape, &held);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
 		}
 		return read_at(message, len, &held, offset, width, out);
 	}

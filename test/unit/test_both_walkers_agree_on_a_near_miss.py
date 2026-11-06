@@ -25,7 +25,7 @@ TRIES   = 25
 
 #: Named in `test_a_walk_reads_nothing_past_its_view`: what the C walker
 #: declines rather than guesses.
-DECLINED = {"netlink", "tiff"}
+DECLINED = {"netlink"}
 
 #: Each was a disagreement. The backends are what said which walker was wrong.
 FOUND = [
