@@ -1597,10 +1597,9 @@ def test_a_covered_nested_setter_finds_its_own_frame(target: str) -> None:
 	source = sources(COVERED_DYNAMIC)[target]
 	composed = {
 		"c":      "situ_base(view) + situ_s_head_offset(view)",
-		"cpp":    "situ_base(raw_) + (situ_advance_u32(situ_advance_u32(1,",
-		"python": "self._write((advance(advance(1,",
-		"rust":   "situ_rt::write_be(self.bytes, situ_rt::advance("
-		          "situ_rt::advance(1,",
+		"cpp":    "situ_base(raw_) + (situ_advance_u32(1,",
+		"python": "self._write((advance(1,",
+		"rust":   "situ_rt::write_be(self.bytes, situ_rt::advance(1,",
 	}[target]
 
 	assert composed in source
