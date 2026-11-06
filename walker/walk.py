@@ -2401,9 +2401,25 @@ def _while_walk(view: View, index: int,
 		# where every other description takes three, swallowing the two
 		# members after the run. The only `_evaluate` here that did not
 		# say where `remaining` starts.
-		if not _evaluate(sub, placement.repeat_code, extent):
+		if not while_holds(sub, placement.repeat_code, extent):
 			break
 	return count, at - start
+
+
+def while_holds(sub: View, code: int, extent: int) -> bool:
+	"""Whether a `while` run goes on past the element `sub` is at.
+
+	A field the frame cuts short ends the run, as every `_value` the four
+	compiled backends read it through answers zero. Refusing made a run with
+	its last varint cut unmeasurable, so a walker let through the message
+	whose struct it could not reach. The ceiling still travels.
+	"""
+	try:
+		return bool(_evaluate(sub, code, extent))
+	except Unplaceable:
+		raise
+	except Refused:
+		return False
 
 
 #: How deep this walker follows a recursive type where the schema says

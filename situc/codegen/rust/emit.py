@@ -5285,6 +5285,10 @@ class Emitter:
 					raise UnknownName(name)
 				raw = self._raw_load(held_at, held_at.scalar,
 				                     at and self._unparen(at))
+				# Written for this struct, and a `while` asks it of the
+				# element: `self` in `required` is no value at all.
+				if at is not None and held != "self":
+					raw = re.sub(r"\bself\.", f"{held}.", raw)
 				return leaf(f"{self._unparen(raw)}",
 				            held_at.scalar is not None and held_at.scalar.signed)
 			# A varint's own getter reports a truncated encoding; `_value` is
@@ -6778,6 +6782,14 @@ class Emitter:
 					         " self.bytes.len())")
 				body.append(f"\t\tmarks[{index}] = {where};")
 				continue
+			# A pad's length is how far `at` is from the next multiple, which
+			# only the cursor knows: it has no expression, and `0` here left
+			# the padding out of the sum `at` had just moved past.
+			if step.kind == "pad":
+				body.extend([f"\t\textent += situ_rt::pad_to(at, {step.size});",
+				             f"\t\tat = situ_rt::align_up(at, {step.size},"
+				             " self.bytes.len());"])
+				continue
 			rendered = self._length_expression(struct, member, "at",
 			                                   depth="depth")
 			assert rendered is not None, "`_cursor` asked"
@@ -6794,8 +6806,6 @@ class Emitter:
 				continue
 			body.extend([f"\t\tlet term = {self._unparen(length)};",
 			             "\t\textent += term;",
-			             f"\t\tat = situ_rt::align_up(at, {step.size},"
-			             " self.bytes.len());" if step.kind == "pad" else
 			             "\t\tat = situ_rt::advance(at, term,"
 			             " self.bytes.len());"])
 		body.append("\t\textent")
@@ -6824,7 +6834,7 @@ class Emitter:
 			self._cursors[struct.name] = None
 			steps = cursor_walk(self.resolved.structs, struct)
 			if steps is not None and all(
-					step.member is None or step.kind == "read"
+					step.member is None or step.kind in ("read", "pad")
 					or self._length_expression(struct, step.member) is not None
 					for step in steps):
 				self._cursors[struct.name] = steps
@@ -6962,7 +6972,7 @@ class Emitter:
 			return []
 
 		extent = self._extent_expression(struct)
-		if extent is None:
+		if extent is None and self._cursor(struct) is None:
 			return []
 
 		head = [

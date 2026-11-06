@@ -2690,7 +2690,8 @@ class Emitter:
 		should not.
 		"""
 		names = [entry.placement.name for entry in element.entries
-		         if entry.placement.scalar is not None
+		         if (entry.placement.scalar is not None
+		             or entry.placement.varint is not None)
 		         and "." not in entry.placement.path[len(element.name) + 1:]]
 
 		# The same enum problem `_over_fields` has, in the other rewriter:
@@ -2708,8 +2709,17 @@ class Emitter:
 			if name == "remaining":
 				return "situ_remaining_u32(raw_.limit, at)"
 			held = by_name.get(name)
+			# A varint's accessor reports a truncated encoding through an
+			# out parameter; `_value` is the read that cannot fail.
+			if held is not None and held.varint is not None:
+				return f"element.{bare_name(name)}_value()"
 			if held is not None and held.type_name in self.enums \
 					and held.scalar is not None:
+				# Behind a variable member there is no offset to load at, and
+				# the accessor is what finds it: the same bytes, as the enum.
+				if held.offset_bits is None and where(held) is None:
+					return (f"static_cast<{self._ctype(held.scalar)}>"
+					        f"(element.{bare_name(name)}())")
 				return f"({self._load(held.scalar, held, where(held), on='element')})"
 			# `bare_name`, matching the DECLARATION. `cpp/names.py` names
 			# every accessor with it so a member called `int` becomes
@@ -3723,7 +3733,10 @@ class Emitter:
 
 		terms = self._extent_terms(struct)
 		if terms is None:
-			return []
+			# A pad has no term to sum, and the cursor below needs none.
+			if self._cursor(struct) is None:
+				return []
+			terms = []
 
 		head = [
 			"",
@@ -3845,6 +3858,15 @@ class Emitter:
 					where = f"situ_advance_u32(at, {lead}(at), raw_.limit)"
 				body.append(f"\t\tmarks[{index}] = {where};")
 				continue
+			# A pad's length is how far `at` is from the next multiple, which
+			# only the cursor knows: it has no expression, and `0` here left
+			# the padding out of the sum `at` had just moved past.
+			if step.kind == "pad":
+				body.extend([f"\t\tterm = situ_pad_to_u32(at, {step.size}u);",
+				             "\t\textent = extent + term;",
+				             f"\t\tat = situ_align_up_u32(at, {step.size}u,"
+				             " raw_.limit);"])
+				continue
 			rendered = self._length_expression(struct, member, "at",
 			                                   depth="depth")
 			assert rendered is not None, "`_cursor` asked"
@@ -3894,7 +3916,7 @@ class Emitter:
 			self._cursors[struct.name] = None
 			steps = cursor_walk(self.resolved.structs, struct)
 			if steps is not None and all(
-					step.member is None or step.kind == "read"
+					step.member is None or step.kind in ("read", "pad")
 					or self._length_expression(struct, step.member) is not None
 					for step in steps):
 				self._cursors[struct.name] = steps

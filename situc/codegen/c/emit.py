@@ -5464,6 +5464,15 @@ class Emitter:
 					         " view.limit)")
 				body.append(f"\tmarks[{index}] = {where};")
 				continue
+			# A pad's length is how far `at` is from the next multiple, which
+			# only the cursor knows: it has no expression, and `0` here left
+			# the padding out of the sum `at` had just moved past.
+			if step.kind == "pad":
+				body.extend([f"\tterm = situ_pad_to_u32(at, {step.size}u);",
+				             "\textent = extent + term;",
+				             f"\tat = situ_align_up_u32(at, {step.size}u,"
+				             " view.limit);"])
+				continue
 			length = self._reading_marks(struct, self._length_expression(
 				struct, member, running="at", depth="depth"))
 			for one in self._measures.get(member.path, ()):
@@ -5477,8 +5486,6 @@ class Emitter:
 				body.append(f"\textent = extent + ({length});")
 				continue
 			body.extend([f"\tterm = {length};", "\textent = extent + term;",
-			             f"\tat = situ_align_up_u32(at, {step.size}u, view.limit);"
-			             if step.kind == "pad" else
 			             "\tat = situ_advance_u32(at, term, view.limit);"])
 		inner = "_marked_at" if reads else "_at"
 		carry = ", uint32_t *marks" if reads else ""
@@ -5522,7 +5529,7 @@ class Emitter:
 			steps = (cursor_walk(self.resolved.structs, struct)
 			         if self._is_run_element(struct.name) else None)
 			if steps is not None and all(
-					step.member is None or step.kind == "read"
+					step.member is None or step.kind in ("read", "pad")
 					or self._has_length(struct, step.member)
 					for step in steps):
 				self._cursors[struct.name] = steps

@@ -2997,6 +2997,19 @@ class Emitter:
 			f'\t\t\t\tf"{placement.path} is not {width} digits in base'
 			f' {placement.radix}")',
 			"\t\treturn value",
+			# `_nested_text_values` has the rest, reading at a constant: this
+			# is the one with no constant, and `d[n]` behind a variable member
+			# named a property nothing defined.
+			*([] if placement.offset_bits is not None else [
+				"",
+				"\t@property",
+				f"\tdef {name}_value(self) -> int:",
+				f'\t\t"""{placement.path}, where an error cannot be raised."""',
+				"\t\ttry:",
+				f"\t\t\treturn self.{name}",
+				"\t\texcept (BoundsError, ConstraintError):",
+				"\t\t\treturn 0",
+			]),
 		]
 
 	def _varint_run(self, struct: ResolvedStruct, placement: Placement,
@@ -6812,6 +6825,13 @@ class Emitter:
 					where = f"advance(at, self.{lead}_lead(at), self._len)"
 				body.append(f"\t\tmarks[{index}] = {where}")
 				continue
+			# A pad's length is how far `at` is from the next multiple, which
+			# only the cursor knows: it has no expression, and `0` here left
+			# the padding out of the sum `at` had just moved past.
+			if step.kind == "pad":
+				body.extend([f"\t\textent += pad_to(at, {step.size})",
+				             f"\t\tat = align_up(at, {step.size}, self._len)"])
+				continue
 			rendered = self._length_expression(struct, member, "at",
 			                                   depth="depth")
 			assert rendered is not None, "`_cursor` asked"
@@ -6827,9 +6847,7 @@ class Emitter:
 				body.append(f"\t\textent += {length}")
 				continue
 			body.extend([f"\t\tterm = {length}", "\t\textent += term",
-			             f"\t\tat = align_up(at, {step.size}, self._len)"
-			             if step.kind == "pad"
-			             else "\t\tat = advance(at, term, self._len)"])
+			             "\t\tat = advance(at, term, self._len)"])
 		body.append("\t\treturn extent")
 		lines = ["",
 		         ("\tdef _extent_marked_at(self, depth: int,"
@@ -6852,7 +6870,7 @@ class Emitter:
 			self._cursors[struct.name] = None
 			steps = cursor_walk(self.resolved.structs, struct)
 			if steps is not None and all(
-					step.member is None or step.kind == "read"
+					step.member is None or step.kind in ("read", "pad")
 					or self._length_expression(struct, step.member) is not None
 					for step in steps):
 				self._cursors[struct.name] = steps
@@ -6987,7 +7005,7 @@ class Emitter:
 			return []
 
 		extent = self._extent_expression(struct)
-		if extent is None:
+		if extent is None and self._cursor(struct) is None:
 			return []
 
 		doc = [f'\t\t"""How many bytes one `{struct.name}` occupies.',

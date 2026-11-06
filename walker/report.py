@@ -35,7 +35,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          chosen_arm, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
                          tlv_count, tlv_whole, varint, varint_run_at,
-                         varint_run_count,
+                         varint_run_count, while_holds,
                          while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
@@ -2225,7 +2225,7 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 				at += size
 				sub = View(image, view.buffer, element, at - size, view.limit,
 				           child_args(view, index))
-				if not _evaluate(sub, placement.repeat_code, size):
+				if not while_holds(sub, placement.repeat_code, size):
 					break
 		elif index in image.delimiters:
 			delims = image.delimiters[index]

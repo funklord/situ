@@ -715,11 +715,6 @@ TARGETS = ("c", "cpp", "rust", "python")
 #: enum behind a variable member reads a field in `required` where only a view
 #: can, C++ has no reading of a varint in a condition, and Python has no
 #: `_value` for fixed digits at a dynamic offset.
-UNBUILT = {("enum_while", "cpp"), ("enum_while", "rust"),
-           ("varint_while", "cpp"),
-           ("pad_behind", "cpp"), ("pad_behind", "rust"),
-           ("pad_behind", "python"), ("digits_fixed", "python")}
-
 #: What a level costs in the worst of these is the validator asking each level
 #: for its nesting, which walks every level beneath it and measures each: n^3
 #: where the nesting grows with the message, so 2n costs 8 times n. Anything
@@ -746,17 +741,11 @@ def growth(tmp: Path, command: list[str], message: object, ask: object,
 	return first, second
 
 
-def buildable(shape: str, target: str) -> None:
-	if (shape, target) in UNBUILT:
-		pytest.skip(f"{target} has never built `{shape}`")
-
-
 @pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize("shape", list(SHAPES))
 def test_sixty_levels_cost_a_polynomial(shape: str, target: str,
 		tmp_path: Path) -> None:
 	"""`validate` and `required`, on a message nested within its `[depth]`."""
-	buildable(shape, target)
 	text, message = SHAPES[shape]
 	command = build(tmp_path, text, target, top_of(shape))
 	short, long = SPANS.get(shape, (LEVELS // 2, LEVELS))
@@ -830,7 +819,7 @@ def test_the_walkers_cost_a_polynomial(shape: str, target: str,
 	short, long = SPANS.get(shape, (LEVELS // 2, LEVELS))
 	# Half the span for Python: about n^3 calls, and each one profiled, so
 	# sixty levels is over `SLOW_BUDGET` while the ratio is still the ratio.
-	if target == "python":
+	if target == "python" and shape not in SPANS:
 		short, long = short // 2, long // 2
 	first, second = growth(tmp_path, command, message, walker_cost, short,
 	                       long)
@@ -842,7 +831,8 @@ AGREEING = ("member", "between", "arm", "handed", "length_behind",
             "switch_behind", "count_behind", "arm_behind", "nested_behind",
             "varint_behind", "digits_behind", "dotted_behind", "sum_behind",
             "lead", "two_arms", "sexpr", "counted", "delimited",
-            "json_whole")
+            "json_whole", "varint_while", "enum_while", "pad_behind",
+            "digits_fixed")
 
 
 @pytest.mark.parametrize("shape", AGREEING)
