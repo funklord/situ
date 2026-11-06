@@ -3105,6 +3105,150 @@ def descends(structs: dict[str, "ResolvedStruct"], parent: "ResolvedStruct",
 		and parent.name in _reaches(structs, name)
 
 
+def member_recurses(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct", placement: Placement) -> bool:
+	"""Whether measuring this member comes back round to `struct`.
+
+	A variant through any of its arms. What it says is what the cost of a
+	second measurement is: a member that does not recurse costs its own bytes
+	again, and one that does costs the second measurement of every level
+	beneath it, so each level doubles the one below (26.909).
+	"""
+	if placement.kind == "variant":
+		return any(member is not None
+		           and descends(structs, struct, member.type_name or "")
+		           for _, member in arm_members(struct, placement))
+	return descends(structs, struct, placement.type_name or "")
+
+
+def _sources_read(struct: "ResolvedStruct", placement: Placement
+		) -> list[str]:
+	"""Every expression measuring this member evaluates."""
+	inside = ([member for _, member in arm_members(struct, placement)
+	           if member is not None]
+	          if placement.kind == "variant" else [])
+	found = [placement.size_expr, placement.sized_by, placement.discriminant,
+	         placement.tail_source,
+	         *(value for _, value in placement.arguments or ())]
+	for member in inside:
+		found.extend(_sources_read(struct, member))
+	return [str(source) for source in found if source]
+
+
+def read_behind_recursion(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct") -> tuple[list[Placement], list[Placement]]:
+	"""The fields behind a recursing member that measuring `struct` reads.
+
+	Two lists, the first a subset of the second: what the struct's own
+	lengths, counts, discriminants and arguments read, and that with what a
+	`while` condition over a run of it reads as well. Such a field's accessor
+	finds it by measuring everything in front of it, the recursion included,
+	so reading one while measuring is the second measurement. Only what can
+	be read from its offset alone is here: a member of a nested struct has no
+	accessor to read it with, and costs what it always did.
+	"""
+	own = own_members(struct)
+	first = next((at for at, member in enumerate(own)
+	              if member_recurses(structs, struct, member)), None)
+	if first is None:
+		return [], []
+	behind = [member for member in own[first + 1:]
+	          if (member.scalar is not None or member.varint is not None)
+	          and not member.parameter and member.located is None
+	          and member.since is None]
+
+	sources = [source for member in own
+	           for source in _sources_read(struct, member)]
+	conditions = [entry.placement.repeat_while
+	              for other in structs.values() for entry in other.entries
+	              if entry.placement.repeat_while is not None
+	              and entry.placement.type_name == struct.name]
+
+	def named(among: list[str]) -> list[Placement]:
+		return [member for member in behind
+		        if any(_names_a_field(source, local_name(struct, member))
+		               for source in among)]
+
+	return named(sources), named([*sources, *conditions])
+
+
+@dataclass(frozen=True)
+class CursorStep:
+	"""One step of an extent measured front to back.
+
+	`advance` moves the cursor over `size` fixed bytes, `read` records where
+	`member` is, and `term` measures `member` and moves past it. `pad` is that
+	with the cursor aligned to `size` rather than moved by the length, as the
+	offset chain moves it. `loose` measures a member that stands somewhere
+	else, so it counts and the cursor stays.
+	"""
+	kind:   str
+	member: Placement | None = None
+	size:   int = 0
+
+
+def cursor_walk(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct") -> list[CursorStep] | None:
+	"""How to measure a recursive struct with each member measured once, or
+	None where summing its members already does.
+
+	A sum of members is only that where each term can find its own base, and
+	a term behind a recursing member finds it by measuring the recursion over
+	again. So from there on this keeps the base in hand, which is the one fact
+	a sum throws away (26.909). None for a struct with nothing behind its
+	recursion, and for one a sum cannot be taken of: one whose length is its
+	version's or its frame's has a rule of its own.
+	"""
+	if not is_recursive(structs, struct.name) \
+			or extent_parts(structs, struct) is None:
+		return None
+	own = own_members(struct)
+	first = next((at for at, member in enumerate(own)
+	              if member_recurses(structs, struct, member)), None)
+	if first is None:
+		return None
+	marked = {member.path for member in read_behind_recursion(structs, struct)[1]}
+	later  = any(not occupies_fixed_bytes(member) for member in own[first + 1:])
+	if not marked and not later:
+		return None
+	if versioned_tail(structs, struct) is not None \
+			or ends_in_the_frame(structs, struct, always=True):
+		return None
+
+	steps: list[CursorStep] = []
+	bits = 0
+
+	def flush() -> bool:
+		nonlocal bits
+		if bits % BITS_PER_BYTE:
+			return False
+		if bits:
+			steps.append(CursorStep("advance", size=bits // BITS_PER_BYTE))
+		bits = 0
+		return True
+
+	for member in own:
+		if arm_alignments(struct, member) is not None:
+			return None
+		if member.path in marked:
+			if not flush():
+				return None
+			steps.append(CursorStep("read", member))
+		if member.located is not None:
+			if not occupies_fixed_bytes(member):
+				steps.append(CursorStep("loose", member))
+			continue
+		if occupies_fixed_bytes(member):
+			bits += fixed_span_bits(member)
+			continue
+		if not flush():
+			return None
+		steps.append(CursorStep(
+			"term" if pad_alignment(member) is None else "pad", member,
+			pad_alignment(member) or 0))
+	return steps
+
+
 def enters_a_cycle(structs: dict[str, "ResolvedStruct"],
 		parent: "ResolvedStruct", placement: Placement) -> bool:
 	"""Whether a member is where a message enters a cycle from outside it."""

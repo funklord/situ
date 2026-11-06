@@ -67,6 +67,7 @@ from situc.traverse import (
 	covered_bit_span,
 	covered_run,
 	covered_run_refusal,
+	CursorStep,
 	data_sized,
 	declared_depth,
 	declared_value_bounds,
@@ -111,10 +112,12 @@ from situc.traverse import (
 	offset_plan,
 	own_members,
 	arm_alignments,
+	cursor_walk,
 	pad_alignment,
 	pinned_bytes,
 	pinned_runs,
 	preceding_parts,
+	read_behind_recursion,
 	readable_names,
 	recursion_cycle,
 	region_extent,
@@ -243,6 +246,12 @@ class Emitter:
 		#: question -- `_struct_extent` answers it from here rather than
 		#: re-entering. The solver's `in_progress` guard, one layer out.
 		self._in_extent: set[str] = set()
+		#: Which helpers of each struct have a copy taking the marks, which
+		#: is what an extent measured by cursor calls in their place.
+		self._marked: dict[str, list[str]] = {}
+		self._cursors: dict[str, list[CursorStep] | None] = {}
+		#: Which of a member's own functions have a copy taking its offset.
+		self._measures: dict[str, list[str]] = {}
 		#: Structs whose `required` is being rendered, for the same reason
 		#: `_in_extent` exists one function over: `_frames_itself` renders
 		#: `_required` to see whether it emits, `_required` asks
@@ -1964,6 +1973,11 @@ class Emitter:
 		if self._leads_here(struct, placement):
 			body = body + self._stride_helpers(struct, placement)
 
+		# A varint and a text number find themselves through their offset, and
+		# their length is a term of the extent whether anything reads them.
+		if placement.varint is not None or placement.radix is not None:
+			body = body + self._measured_from(struct, placement, body)
+
 		return lines_bounds + body if lines_bounds else body
 
 	def _value_bounds(self, struct: ResolvedStruct,
@@ -3367,7 +3381,7 @@ class Emitter:
 			span_fn = ident(self.prefix, struct.name, local, "span")
 			term_fn = ident(self.prefix, struct.name, local, "terminated")
 			at     = self._base_expression(struct, placement, gated=False)
-			return [
+			scans  = [
 				*head,
 				f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
 				"",
@@ -3459,6 +3473,7 @@ class Emitter:
 				"\treturn SITU_OK;",
 				"}",
 			]
+			return [*scans, *self._measured_from(struct, placement, scans)]
 
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None \
@@ -3654,7 +3669,28 @@ class Emitter:
 			      f"(whole{self._child_args(struct, placement)});"),
 			"}",
 		]
+		# Measured by cursor the variant's start is in hand, and deriving it
+		# here would measure everything in front of it again (26.909).
+		tail = self._handed_tail(struct, placement)
+		held = [] if self._cursor(struct) is None else [
+			f"static inline uint32_t {site}_from"
+			+ ("_at" if deep else "")
+			+ (f"(situ_view_t view, uint32_t base, uint32_t depth{tail})"
+			   if deep else f"(situ_view_t view, uint32_t base{tail})"),
+			"{",
+			"\tsitu_view_t whole;",
+			"",
+			"\tif (situ_view_sub(view, base, "
+			"situ_remaining_u32(view.limit, base), &whole) != SITU_OK) {",
+			"\t\treturn 0u;",
+			"\t}",
+			body[-2],
+			"}",
+		]
 		return [
+			*held,
+			*self._marked_copy(struct, held),
+			*([""] if held else []),
 			f"/* How many bytes `{placement.name}` occupies, for the switch",
 			" * that places whatever follows the variant. */",
 			f"static inline uint32_t {site}" + ("_at" if deep else "") + taken,
@@ -4509,12 +4545,7 @@ class Emitter:
 		carry  = ", uint32_t depth" if deep else ""
 		pass_  = ", depth" if deep else ""
 
-		return [
-			"",
-			f"/* How far `{placement.name}` reaches from `at`: the whitespace",
-			" * in front of it, then the member itself. Every sum over the",
-			" * members of this struct goes through here, which is what keeps",
-			" * the lead from being counted in some of them and not others. */",
+		reach = [
 			f"static inline uint32_t {stride}_from{suffix}(situ_view_t view,"
 			f" uint32_t at{carry})",
 			"{",
@@ -4522,6 +4553,15 @@ class Emitter:
 			"",
 			f"\treturn lead + ({content});",
 			"}",
+		]
+		return [
+			"",
+			f"/* How far `{placement.name}` reaches from `at`: the whitespace",
+			" * in front of it, then the member itself. Every sum over the",
+			" * members of this struct goes through here, which is what keeps",
+			" * the lead from being counted in some of them and not others. */",
+			*reach,
+			*self._marked_copy(struct, reach),
 			"",
 			f"static inline uint32_t {stride}{suffix}(situ_view_t view{carry})",
 			"{",
@@ -4966,6 +5006,8 @@ class Emitter:
 					f"static inline uint32_t {name}_at(situ_view_t view,"
 					f" uint32_t depth{taken});",
 				])
+				if peer_struct is not None and self._reads(peer_struct):
+					lines.extend(self._marked_prototypes(peer_struct))
 			lines.extend([
 				# The nesting probe bounces round the cycle the same way and
 				# needs the same declarations. It declared itself and only
@@ -5034,6 +5076,25 @@ class Emitter:
 					"(const uint8_t *data, uint32_t have, uint32_t *need"
 					f"{self._argument_tail(peer_struct)});")
 		return lines + self._predicate_prototypes(struct, cycle)
+
+	def _marked_prototypes(self, struct: ResolvedStruct) -> list[str]:
+		"""What a walk over this struct calls to measure one and ask about it."""
+		name  = ident(self.prefix, struct.name, "extent")
+		lines = [f"static inline {self._field_ctype(held)} "
+		         f"{ident(self.prefix, struct.name, c_name(self._local(struct, held)), 'get')}"
+		         "_from(situ_view_t view, uint32_t at);"
+		         for held in self._reads(struct)
+		         if held.varint is None and held.radix is None]
+		lines.extend(
+			f"static inline {'uint64_t' if held.varint else self._field_ctype(held)} "
+			f"{ident(self.prefix, struct.name, c_name(self._local(struct, held)), 'value')}"
+			"_from(situ_view_t view, uint32_t known);"
+			for held in self._reads(struct)
+			if held.varint is not None or held.radix is not None)
+		return [*lines,
+		        f"static inline uint32_t {name}_marked_at(situ_view_t view,"
+		        f" uint32_t depth, uint32_t *marks"
+		        f"{self._argument_tail(struct)});"]
 
 	def _predicate_prototypes(self, struct: ResolvedStruct,
 			cycle: list[str]) -> list[str]:
@@ -5314,6 +5375,10 @@ class Emitter:
 		# message. "At the limit" and "past the limit" have to be
 		# distinguishable, or the limit can only truncate.
 		limit = declared_depth(self.schema, struct.name) + 1
+		steps = self._cursor(struct)
+		if steps is not None:
+			return self._extent_by_cursor(struct, constant, bool(variable),
+			                              steps, limit, head)
 		deep  = [self._length_expression(struct, placement, depth="depth")
 		         for placement in variable]
 		taken = self._argument_tail(struct)
@@ -5347,6 +5412,218 @@ class Emitter:
 		              "{", f"\treturn {name}_at(view, 0u"
 		              f"{self._argument_args(struct)});", "}"])
 		return lines
+
+	def _extent_by_cursor(self, struct: ResolvedStruct, constant: int,
+			variable: bool, steps: list[CursorStep], limit: int,
+			head: list[str]) -> list[str]:
+		"""The extent of a struct with something behind its recursion.
+
+		Summing the members measures the recursion once for itself and once
+		for each term behind it, every one of which finds its own base by
+		measuring it again, so a level cost twice the level below it and a few
+		dozen bytes of `[` never finished (26.909). So each member is measured
+		from where the last one ended, and the saturating cursor is the offset
+		chain's own arithmetic, kept beside the plain sum `extent` has always
+		been.
+
+		A field read behind the recursion is found by the same pass. `marks`
+		holds where each one is, for the terms here and for a `while` run over
+		this struct, whose condition asks about the element it just measured.
+		"""
+		reads = self._reads(struct)
+		name  = ident(self.prefix, struct.name, "extent")
+		taken = self._argument_tail(struct)
+		args  = self._argument_args(struct)
+		body  = [f"\tmarks[{index}] = view.limit;"
+		         for index in range(len(reads))]
+		body.extend([
+			f"\tif (depth >= {limit}u) {{",
+			"\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
+			"\t}"])
+		if constant and variable:
+			body.extend([
+				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+				f"\t\treturn {constant}u;\t/* the lengths below are not"
+				" here to read */",
+				"\t}"])
+		for step in steps:
+			if step.kind == "advance":
+				body.append(f"\tat = situ_advance_u32(at, {step.size}u,"
+				            " view.limit);")
+				continue
+			member = step.member
+			assert member is not None
+			if step.kind == "read":
+				index = [held.path for held in reads].index(member.path)
+				where = "at"
+				if member.skip:
+					lead  = ident(self.prefix, struct.name,
+					              c_name(self._local(struct, member)),
+					              "lead_from")
+					where = (f"situ_advance_u32(at, {lead}(view, at),"
+					         " view.limit)")
+				body.append(f"\tmarks[{index}] = {where};")
+				continue
+			length = self._reading_marks(struct, self._length_expression(
+				struct, member, running="at", depth="depth"))
+			for one in self._measures.get(member.path, ()):
+				length = re.sub(rf"\b{one}\(view\b", f"{one}_from(view, at",
+				                length)
+			# A length that says where it starts says the same thing.
+			if member.offset_bits is None:
+				length = length.replace(self._base_expression(struct, member),
+				                        "at")
+			if step.kind == "loose":
+				body.append(f"\textent = extent + ({length});")
+				continue
+			body.extend([f"\tterm = {length};", "\textent = extent + term;",
+			             f"\tat = situ_align_up_u32(at, {step.size}u, view.limit);"
+			             if step.kind == "pad" else
+			             "\tat = situ_advance_u32(at, term, view.limit);"])
+		inner = "_marked_at" if reads else "_at"
+		carry = ", uint32_t *marks" if reads else ""
+		lines = [*head,
+		         f"static inline uint32_t {name}{inner}(situ_view_t view,"
+		         f" uint32_t depth{carry}{taken})",
+		         "{",
+		         f"\tuint32_t extent = {constant}u;",
+		         "\tuint32_t at = 0u;",
+		         *(["\tuint32_t term;"]
+		           if any(step.kind in ("term", "pad") for step in steps)
+		           else []),
+		         "",
+		         *self._argument_unused(struct, taken, *body),
+		         *body,
+		         "\treturn extent;",
+		         "}"]
+		if reads:
+			lines.extend([
+				"",
+				f"static inline uint32_t {name}_at(situ_view_t view,"
+				f" uint32_t depth{taken})",
+				"{",
+				f"\tuint32_t marks[{len(reads)}];",
+				"",
+				f"\treturn {name}_marked_at(view, depth, marks{args});",
+				"}"])
+		lines.extend(["",
+		              f"static inline uint32_t {name}(situ_view_t view{taken})",
+		              "{", f"\treturn {name}_at(view, 0u{args});", "}"])
+		return lines
+
+	def _cursor(self, struct: ResolvedStruct) -> list[CursorStep] | None:
+		"""How this struct measures itself, where a sum would not do.
+
+		Held once it is known, because the answer is asked for every field
+		and the lengths it depends on are rendered to find out.
+		"""
+		if struct.name not in self._cursors:
+			self._cursors[struct.name] = None
+			steps = (cursor_walk(self.resolved.structs, struct)
+			         if self._is_run_element(struct.name) else None)
+			if steps is not None and all(
+					step.member is None or step.kind == "read"
+					or self._has_length(struct, step.member)
+					for step in steps):
+				self._cursors[struct.name] = steps
+		return self._cursors[struct.name]
+
+	def _reads(self, struct: ResolvedStruct,
+			own: bool = False) -> list[Placement]:
+		"""The fields a pass over this struct records, in `marks` order.
+
+		The whole list, or with `own` what the struct's own terms read and so
+		what its helpers have to be handed. Nothing where nothing measures
+		the struct by cursor, which is what keeps a walk asking the accessor.
+		"""
+		if self._cursor(struct) is None:
+			return []
+		reads, every = read_behind_recursion(self.resolved.structs, struct)
+		return reads if own else every
+
+	def _reading_marks(self, struct: ResolvedStruct, text: str,
+			held: str = "view", marks: str = "marks") -> str:
+		"""`text` with each read behind the recursion taken from `marks`,
+		and each helper that makes one handed them."""
+		for index, member in enumerate(self._reads(struct)):
+			getter = ident(self.prefix, struct.name,
+			               c_name(self._local(struct, member)), "get")
+			text = re.sub(rf"\b{getter}\({held}(, [^()]*)?\)",
+			              f"{getter}_from({held}, {marks}[{index}])", text)
+			# By name as well, since a walk can be emitted ahead of the element
+			# it asks about.
+			value = ident(self.prefix, struct.name,
+			              c_name(self._local(struct, member)), "value")
+			for one in {*self._measures.get(member.path, ()), value}:
+				text = re.sub(rf"\b{one}\({held}\b",
+				              f"{one}_from({held}, {marks}[{index}]", text)
+			# A count reads its field where it sits rather than through the
+			# accessor, so what it names is the offset.
+			if held == "view":
+				text = text.replace(self._base_expression(struct, member),
+				                    f"{marks}[{index}]")
+		for helper in self._marked.get(struct.name, ()):
+			text = re.sub(rf"\b{helper}\({held}\b",
+			              f"{helper}_marked({held}, {marks}", text)
+		return text
+
+	def _measured_from(self, struct: ResolvedStruct, placement: Placement,
+			lines: list[str]) -> list[str]:
+		"""The functions in `lines` that find `placement` for themselves,
+		over again for a caller that knows where it is.
+
+		Their offset is every member in front of it measured over, which from
+		inside an extent is the second measurement (26.909).
+		"""
+		if self._cursor(struct) is None or placement.offset_bits is not None:
+			return []
+		text = "\n".join(lines)
+		base = self._base_expression(struct, placement)
+		held = {found.group(1): found.group(0) for found in re.finditer(
+			r"^static inline [^\n(]*?(\w+)\(situ_view_t view[^\n]*\)\n"
+			r"\{\n.*?^\}$", text, re.M | re.S)}
+		names: set[str] = set()
+		while True:
+			more = {name for name, body in held.items()
+			        if name not in names and (base in body or any(
+			            re.search(rf"\b{one}\(view\b", body) for one in names))}
+			if not more:
+				break
+			names |= more
+		copies = []
+		for name in held:
+			if name not in names or re.search(rf"\b{name}_from\(", text):
+				continue
+			body = held[name].replace(base, "known").replace(
+				f"{name}(situ_view_t view", f"{name}_from(situ_view_t view,"
+				" uint32_t known", 1)
+			for one in names:
+				body = re.sub(rf"\b{one}\(view\b", f"{one}_from(view, known",
+				              body)
+			copies.extend(["", *body.split("\n")])
+		self._measures.setdefault(placement.path, []).extend(sorted(names))
+		return copies
+
+	def _marked_copy(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""A helper over again, for a caller holding the marks.
+
+		A helper of this struct that reads a field behind the recursion finds
+		the field by measuring everything in front of it, which is the second
+		measurement from one call further down. Empty where it reads none.
+		"""
+		if not self._reads(struct, own=True):
+			return []
+		text = "\n".join(lines)
+		held = self._reading_marks(struct, text)
+		if held == text:
+			return []
+		found = re.search(r"(\w+)\(situ_view_t view", held)
+		assert found is not None
+		self._marked.setdefault(struct.name, []).append(found.group(1))
+		return ["", *held.replace(
+			found.group(0), f"{found.group(1)}_marked(situ_view_t view,"
+			" const uint32_t *marks", 1).split("\n")]
 
 	def _required(self, struct: ResolvedStruct) -> list[str]:
 		"""How many bytes a whole message needs, given the ones so far.
@@ -6602,8 +6879,34 @@ class Emitter:
 		reached = self._reaching_call(struct, placement)
 
 		walk  = self._walk_prologue(base, cap, extent)
+		# The walk an extent makes asks the element about itself from what
+		# measuring it found, or the question measures it again (26.909).
+		found = self._reads(element) if deep else []
+		if found:
+			deeper = (f"{ident(self.prefix, element.name, 'extent')}"
+			          "_marked_at(element, depth + 1u, read"
+			          f"{self._child_args(struct, placement)})")
 		from_ = self._walk_prologue("start", cap,
 		                            deeper if deep else extent)
+		asked = self._element_condition(element, placement, struct,
+		                                bool(found))
+		spans = [
+			f"static inline uint32_t {span}_from"
+			+ (f"_at(situ_view_t view, uint32_t start, uint32_t depth{reach})"
+			   if deep else f"(situ_view_t view, uint32_t start{reach})"),
+			"{",
+			*([f"\tuint32_t read[{len(found)}];"] if found else []),
+			*from_,
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			f"\t\tif (!({asked})) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			"\t}",
+			"\t(void)n;",
+			"\treturn at - start;",
+			"}",
+		]
 
 		return [
 			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"
@@ -6644,20 +6947,8 @@ class Emitter:
 			"",
 			"/* The walk, from a base the caller already knows: the same",
 			" * helper every delimited member has, for the same reason. */",
-			f"static inline uint32_t {span}_from"
-			+ (f"_at(situ_view_t view, uint32_t start, uint32_t depth{reach})"
-			   if deep else f"(situ_view_t view, uint32_t start{reach})"),
-			"{",
-			*from_,
-			"\t\tat = at + size;",
-			"\t\tn  = n + 1u;",
-			f"\t\tif (!({cond})) {{",
-			"\t\t\tbreak;",
-			"\t\t}",
-			"\t}",
-			"\t(void)n;",
-			"\treturn at - start;",
-			"}",
+			*spans,
+			*self._marked_copy(struct, spans),
 			*self._span_entries(span, base, deep, reach, reached),
 		]
 
@@ -6845,7 +7136,8 @@ class Emitter:
 		return f"{ident(self.prefix, element.name, 'extent')}(element{args})"
 
 	def _element_condition(self, element: ResolvedStruct,
-			placement: Placement, struct: ResolvedStruct) -> str:
+			placement: Placement, struct: ResolvedStruct,
+			marked: bool = False) -> str:
 		"""The predicate, as C over the element's own view.
 
 		Plus `remaining`, which is not a field of the element and is the
@@ -6871,6 +7163,8 @@ class Emitter:
 		rendered = self._over_fields(
 			element, placement.repeat_while or "", "element",
 			extra = {"remaining": "situ_remaining_u32(view.limit, at)"})
+		if marked:
+			rendered = self._reading_marks(element, rendered, "element", "read")
 		if not placement.arguments:
 			return rendered
 		given  = dict(placement.arguments)
@@ -7131,6 +7425,26 @@ class Emitter:
 		walk = self._record_prologue(base, delim, sym, extent)
 		from_ = self._record_prologue("start", delim, sym,
 		                              deeper if deep else extent)
+		spans = [
+			f"static inline uint32_t {span}_from"
+			+ (f"_at(situ_view_t view, uint32_t start, uint32_t depth{reach})"
+			   if deep else f"(situ_view_t view, uint32_t start{reach})"),
+			"{",
+			*from_,
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\t(void)n;",
+			"",
+			"\t/* The terminator belongs to this member, as a delimiter does.",
+			"\t * Where the run ran out of buffer instead there is none to",
+			"\t * count. */",
+			f"\tif (at + {len(delim)}u <= view.limit) {{",
+			f"\t\tat = at + {len(delim)}u;",
+			"\t}",
+			"\treturn at - start;",
+			"}",
+		]
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
@@ -7168,24 +7482,8 @@ class Emitter:
 			" * accumulates offsets has `at` in hand, and the plain `_span`",
 			" * re-resolves the base by rescanning every member before this",
 			" * one. This was the last member kind without the helper. */",
-			f"static inline uint32_t {span}_from"
-			+ (f"_at(situ_view_t view, uint32_t start, uint32_t depth{reach})"
-			   if deep else f"(situ_view_t view, uint32_t start{reach})"),
-			"{",
-			*from_,
-			"\t\tat = at + size;",
-			"\t\tn  = n + 1u;",
-			"\t}",
-			"\t(void)n;",
-			"",
-			"\t/* The terminator belongs to this member, as a delimiter does.",
-			"\t * Where the run ran out of buffer instead there is none to",
-			"\t * count. */",
-			f"\tif (at + {len(delim)}u <= view.limit) {{",
-			f"\t\tat = at + {len(delim)}u;",
-			"\t}",
-			"\treturn at - start;",
-			"}",
+			*spans,
+			*self._marked_copy(struct, spans),
 			*self._span_entries(span, base, deep, reach, reached),
 		]
 
@@ -9254,7 +9552,8 @@ class Emitter:
 		return chain
 
 	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view", depth: str | None = None) -> str | None:
+			held: str = "view", depth: str | None = None,
+			running: str | None = None) -> str | None:
 		"""How many bytes the selected arm occupies, as one expression.
 
 		A ternary chain rather than a `switch`, because callers want this
@@ -9287,7 +9586,7 @@ class Emitter:
 				# the ordinary nested member both carry it, and the arm was
 				# the third member kind that reaches a recursive type.
 				length = (
-					f"({self._length_expression(struct, member, held, depth=depth)})")
+					f"({self._length_expression(struct, member, held, running=running, depth=depth)})")
 
 			if arm.value is None:
 				chain = length		# `default:` with an arm; matches anything
@@ -9344,7 +9643,7 @@ class Emitter:
 			local  = c_name(self._local(struct, placement))
 			stride = ident(self.prefix, struct.name, local, "stride")
 			deep   = "_at" if self._lead_needs_depth(struct, placement) else ""
-			carry  = f", {depth}" if deep else ""
+			carry  = f", {depth or '0u'}" if deep else ""
 			if running is not None:
 				return f"{stride}_from{deep}({held}, {running}{carry})"
 			return f"{stride}{deep}({held}{carry})"
@@ -9472,11 +9771,20 @@ class Emitter:
 				# takes the narrow one (26.817).
 				return (f"{site}({held}"
 				        f"{self._reaching_call(struct, placement)})")
+			if running is not None:
+				return (f"{site}_from_at({held}, {running}, {depth}"
+				        f"{self._handed_call(struct, placement)})")
 			return (f"{site}_at({held}, {depth}"
 			        f"{self._reaching_call(struct, placement)})")
 
 		if placement.kind == "variant":
-			chain = self._variant_length(struct, placement, held, depth)
+			# The offset in hand reaches the arms only from an extent measured
+			# by cursor, whose depth says so, and only where it is not a
+			# constant: the offset chains hand one too, and an arm has a
+			# `_from` only where that extent calls it.
+			chain = self._variant_length(struct, placement, held, depth,
+			                             (running if depth and placement.offset_bits is None
+			                              else None))
 			assert chain is not None, "callers check _has_length first"
 			return chain
 
@@ -9540,8 +9848,9 @@ class Emitter:
 			# Saturating. A plain subtraction wraps when the members before it
 			# claim more than the view holds, which is a length the message
 			# chooses rather than one the schema does.
-			room = (f"situ_remaining_u32({held}.limit, "
-			        f"{self._base_expression(struct, placement, gated)})")
+			start = (running if running is not None and depth is not None
+			         else self._base_expression(struct, placement, gated))
+			room = f"situ_remaining_u32({held}.limit, {start})"
 			if placement.tail_source is not None:
 				left = self._over_fields(struct, placement.tail_source, held)
 				room = f"situ_remaining_u32({room}, (uint32_t)({left}))"
@@ -10313,7 +10622,7 @@ class Emitter:
 			# member kind, and a run of structs reaches it here rather than
 			# through `_array`.
 			counted = self._count_expression(struct, placement)
-			lines.extend([
+			told = [
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'count')}"
 				f"(situ_view_t view{self._argument_tail_in(struct, counted)})",
@@ -10322,7 +10631,9 @@ class Emitter:
 				  and "view" not in counted else []),
 				f"\treturn (uint32_t){counted};",
 				"}",
-			])
+			]
+			lines.extend(told)
+			lines.extend(self._marked_copy(struct, told))
 
 		# The element count, not just the message extent. `situ_view_sub` bounds
 		# against the view, which is a weaker claim: an array that does not run
@@ -10433,6 +10744,8 @@ class Emitter:
 				" member",
 				" * instead, so the four disagreed about the schema as well"
 				" (26.46). */",
+			])
+			spanning = [
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'span')}_from"
 				# The wide tail although it takes a start: the walk's
@@ -10472,7 +10785,9 @@ class Emitter:
 				"\t}",
 				"\treturn at - start;",
 				"}",
-			])
+			]
+			lines.extend(spanning)
+			lines.extend(self._marked_copy(struct, spanning))
 			span_name = ident(self.prefix, struct.name, local, "span")
 			lines.extend(self._span_entries(
 				span_name, base, self._descends(struct, nested or ""),
@@ -10577,7 +10892,24 @@ class Emitter:
 				"}",
 				"",
 			]
-			return plain + [
+			# The same offset in hand for a type that recurses, which an
+			# extent measuring by cursor is the one caller of (26.909).
+			held = [
+				f"static inline uint32_t {site}_from_at(situ_view_t view,"
+				f" uint32_t base, uint32_t depth{tail})",
+				"{",
+				"\tsitu_view_t whole;",
+				"",
+				"\tif (situ_view_sub(view, base, "
+				"situ_remaining_u32(view.limit, base), &whole)"
+				" != SITU_OK) {",
+				"\t\treturn 0u;",
+				"\t}",
+				f"\treturn {passed};",
+				"}",
+				"",
+			] if deep and self._cursor(struct) is not None else []
+			return plain + held + self._marked_copy(struct, plain + held) + [
 				f"/* How many bytes `{placement.name}` occupies here. The",
 				" * member after it starts at the end of this, and that was a",
 				f" * constant zero until `{nested}` stopped having one size --",
@@ -10991,6 +11323,10 @@ class Emitter:
 				"}",
 			]
 
+		if any(placement.path == held.path for held in self._reads(struct)):
+			lines = [*lines, *self._getter_from(struct, placement, getter,
+			                                    "\n".join(lines))]
+
 		# A pointer accessor is offered only where the value is literally the
 		# bytes. Section 20.2: never hand out a pointer into a converted field.
 		if (entry.vector.get(Axis.REPR).base == "MemoryIdentical"
@@ -11009,6 +11345,19 @@ class Emitter:
 			])
 
 		return lines
+
+	def _getter_from(self, struct: ResolvedStruct, placement: Placement,
+			getter: str, text: str) -> list[str]:
+		"""The accessor again, for a caller that knows where the field is.
+
+		Its offset is every member in front of it measured over, and the one
+		caller of this has just measured them (26.909).
+		"""
+		offset = self._base_expression(struct, placement)
+		start  = text.index("static inline")
+		held   = re.sub(rf"\b{getter}\(.*\)\n", f"{getter}_from(situ_view_t"
+		                " view, uint32_t at)\n", text[start:], count=1)
+		return ["", *held.replace(offset, "at").split("\n")]
 
 	def _scalar_set(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

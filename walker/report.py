@@ -849,6 +849,13 @@ def _read_for_relation(view: View, index: int) -> int:
 #: this (26.898). The C walker's `depth`, and the same ceiling.
 _descent = [0]
 
+#: What this `validate` has found clean: a struct, the frame it was given, and
+#: how deep and with what arguments. A variant asks its arm twice, once as a
+#: nested member held to its own reach and once as the selected arm in the
+#: frame around it, so each level cost two of the level below (26.909). A clean
+#: answer alone, since a refusal ends the walk, and only for one call.
+_clean: set[tuple[int, int, int, int, tuple[tuple[int, int], ...]]] = set()
+
 
 def _nesting_within(view: View, depth: int = 0) -> None:
 	"""Raise `TooDeep` where a cycle through a run of bytes nests too far.
@@ -895,6 +902,12 @@ def _validate(image: Image, view: View, struct_index: int,
 	"""`_validate_here`, refused past the ceiling as the C walker refuses."""
 	if _descent[0] > _ceiling(image, struct_index):
 		return None
+	if _descent[0] == 0:
+		_clean.clear()
+	asked = (struct_index, view.at, view.limit, _descent[0],
+	         tuple(sorted(view.args.items())))
+	if asked in _clean:
+		return OK
 	if image.holds and struct_index in image.depths:
 		try:
 			_nesting_within(view)
@@ -902,9 +915,12 @@ def _validate(image: Image, view: View, struct_index: int,
 			return None
 	_descent[0] += 1
 	try:
-		return _validate_here(image, view, struct_index, found)
+		verdict = _validate_here(image, view, struct_index, found)
 	finally:
 		_descent[0] -= 1
+	if verdict == OK:
+		_clean.add(asked)
+	return verdict
 
 
 def _validate_here(image: Image, view: View, struct_index: int,

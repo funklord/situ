@@ -257,6 +257,13 @@ typedef struct {
 	 * is the wrong-number-confidently failure this construct was refused
 	 * for. Read only where `args` is non-NULL, so zero is not a claim. */
 	uint32_t       arg_shape;
+
+	/* What the members of the struct being measured came to, on the stack
+	 * of the walk measuring it. A member behind a recursive one finds its
+	 * offset by summing what is in front of it, so without this every read
+	 * during a measurement measured the recursion over, and a level cost
+	 * twice the level below it (26.909). NULL outside a measurement. */
+	struct situ_walk_sizes *sizes;
 } situ_walk_image;
 
 /* One member, as the image describes it. */

@@ -1176,6 +1176,40 @@ typedef struct {
 	uint32_t               depth;
 } walk_ctx;
 
+/* What a struct's first members measured, for the one frame this says.
+ *
+ * A fixed number, because the walker allocates nothing and this sits on the
+ * stack of every level of a recursive walk. A member past it is measured
+ * each time it is asked for, which is what a recursive struct of more than
+ * this many members costs. */
+#define WALK_SIZES_MAX 32u
+
+typedef struct situ_walk_sizes {
+	const uint8_t *message;
+	uint32_t       len;
+	uint32_t       shape;
+	uint32_t       first;
+	uint32_t       known;		/* a bit for each of `bits` that is set */
+	uint32_t       bits[WALK_SIZES_MAX];
+} walk_sizes;
+
+/* Give the binding about to measure `shape` somewhere to keep its members.
+ * Only a struct that names itself, because that is the one a second
+ * measurement doubles, and this is on the path of every element of a run. */
+static void hold_sizes(situ_walk_image *bound, walk_sizes *sizes,
+                       uint32_t shape)
+{
+	uint32_t i;
+
+	for (i = 0u; i < bound->depth_count; i++) {
+		if (u32_at(bound->depths + (size_t)i * bound->depth_stride) == shape) {
+			sizes->message = NULL;
+			bound->sizes   = sizes;
+			return;
+		}
+	}
+}
+
 static situ_walk_err read_deep(const situ_walk_image *image,
                                const uint8_t *message, uint32_t len,
                                uint32_t shape, uint32_t index,
@@ -1369,11 +1403,14 @@ static situ_walk_err varint_run_bits(const situ_walk_image *image,
  *
  * What decides it is the stack, and that is measurable. Summing the largest
  * frame of every function in the recursion cycle of this file, built `-Os`
- * for x86-64: `size_bits_deep` 200, `situ_walk_eval` 296, `offset_bits_deep`
- * 152, `read_deep` 104, `struct_extent` 104, `arm_bits` 88 -- 944 bytes for
- * one level in the worst case, and about 300 on the ordinary path. Eight is
- * therefore around 7.5 KB worst case, which is a real fraction of a small
- * device's stack and is why the number is small.
+ * for x86-64 with `-fstack-usage`: `content_bits_deep` 896, `while_walk` 848,
+ * `chain_bits_deep` 288, `read_deep` 192, `struct_extent` 192, `member_bits`
+ * 160, `offset_bits_deep` 96, `size_bits_deep` 64, `situ_walk_eval` 64 --
+ * 2800 bytes for one level in the worst case, and about 2200 on the path a
+ * measurement takes, each run holding a binding and what its element's
+ * members measured (26.909). Eight is therefore around 22 KB worst case,
+ * which is a real fraction of a small device's stack and is why the number
+ * is small.
  *
  * Overridable, because the comment above has always said the arena is this
  * program's and the code did not let a program say so. A host tool reading
@@ -1810,6 +1847,9 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 				return err;
 			}
 
+			walk_sizes sizes;
+
+			hold_sizes(&bound, &sizes, held.type_struct);
 			uint32_t extent = 0u;
 			err = struct_extent(&bound, message + at, len - at,
 			                    held.type_struct, depth + 1u, &extent);
@@ -2039,6 +2079,16 @@ static situ_walk_err struct_extent(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 
+	/* Each member measured once, by whichever of this loop and the offset
+	 * of a member behind it asks first. */
+	if (image->sizes != NULL) {
+		image->sizes->message = message;
+		image->sizes->len     = len;
+		image->sizes->shape   = shape;
+		image->sizes->first   = first;
+		image->sizes->known   = 0u;
+	}
+
 	uint32_t total = 0u;
 	for (uint32_t i = 0u; i < count; i++) {
 		situ_walk_placement held;
@@ -2140,6 +2190,12 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 	if (depth > depth_ceiling(image, held.type_struct)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
+
+	/* The predicate below asks about the element just measured, so it keeps
+	 * what measuring it found rather than measuring it again (26.909). */
+	walk_sizes sizes;
+
+	hold_sizes(&elements, &sizes, held.type_struct);
 
 	uint32_t start = 0u;
 	err = offset_bits_deep(image, message, len, shape, index, depth,
@@ -2306,6 +2362,10 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 
 	/* `at + room <= len`, the generated C's guard: below it there is no
 	 * room for the terminator to stand, so there is nothing to ask. */
+	walk_sizes sizes;
+
+	hold_sizes(&elements, &sizes, held.type_struct);
+
 	while (room <= len - at) {
 		uint32_t extent = 0u;
 
@@ -2403,6 +2463,7 @@ static situ_walk_err child_binding(const situ_walk_image *image,
 	int      any  = 0;
 
 	*out = *image;
+	out->sizes = NULL;
 	for (i = 0u; i < image->argument_count; i++) {
 		const uint8_t *row = image->arguments + i * image->argument_stride;
 		if (u32_at(row) != index) {
@@ -2458,10 +2519,10 @@ static situ_walk_err child_binding(const situ_walk_image *image,
  * a member's whitespace is part of what it occupies even though it is no
  * part of what it holds. `content_bits_deep` is the member alone, and that
  * is what a value read takes its width from. */
-static situ_walk_err size_bits_deep(const situ_walk_image *image,
-                                    const uint8_t *message, uint32_t len,
-                                    uint32_t shape, uint32_t index,
-                                    uint32_t depth, uint32_t *out)
+static situ_walk_err member_bits(const situ_walk_image *image,
+                                 const uint8_t *message, uint32_t len,
+                                 uint32_t shape, uint32_t index,
+                                 uint32_t depth, uint32_t *out)
 {
 	uint32_t content = 0u;
 	uint32_t chain   = 0u;
@@ -2524,6 +2585,36 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 	}
 	*out = content + lead * 8u;
 	return SITU_WALK_OK;
+}
+
+static situ_walk_err size_bits_deep(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t depth, uint32_t *out)
+{
+	walk_sizes *held = image->sizes;
+
+	if (held == NULL || held->message != message || held->len != len
+	                || held->shape != shape || index < held->first
+	                || index - held->first >= WALK_SIZES_MAX) {
+		return member_bits(image, message, len, shape, index, depth, out);
+	}
+
+	const uint32_t at  = index - held->first;
+	const uint32_t bit = (uint32_t)1 << at;
+
+	if ((held->known & bit) != 0u) {
+		*out = held->bits[at];
+		return SITU_WALK_OK;
+	}
+
+	const situ_walk_err err = member_bits(image, message, len, shape, index,
+	                                      depth, out);
+	if (err == SITU_WALK_OK) {
+		held->bits[at] = *out;
+		held->known   |= bit;
+	}
+	return err;
 }
 
 static situ_walk_err content_bits_deep(const situ_walk_image *image,
@@ -2758,6 +2849,9 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 					return err;
 				}
 
+				walk_sizes sizes;
+
+				hold_sizes(&bound, &sizes, held.type_struct);
 				uint32_t extent = 0u;
 				err = struct_extent(&bound, message + at, len - at,
 				                    held.type_struct, depth + 1u, &extent);
@@ -2877,6 +2971,9 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			walk_sizes sizes;
+
+			hold_sizes(&elements, &sizes, held.type_struct);
 			for (i = 0; i < count && at < len; i++) {
 				uint32_t extent = 0u;
 				err = struct_extent(&elements, message + at, len - at,

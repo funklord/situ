@@ -114,6 +114,12 @@ class View:
 	#: ones its parent hands it (0068), computed by `child_args` from the
 	#: image's ARGUMENTS rows, and never the parent's own.
 	args: dict[int, int] = field(default_factory=dict)
+	#: What each member measured, while `struct_extent` holds this view. A
+	#: member behind a recursive one finds its offset by summing what is in
+	#: front of it, so without this every read during a measurement measured
+	#: the recursion over and a level cost twice the level below it (26.909).
+	#: None outside a measurement: a write moves what is held here.
+	sizes: dict[int, int] | None = None
 
 	@property
 	def shape(self) -> Struct:
@@ -268,6 +274,13 @@ def chain_bits(view: View, index: int) -> int:
 	for before in view.image.members(view.shape):
 		if before == index:
 			return total
+		# An arm starts where its variant does. Summing the variant here asks
+		# for the arm's size, and a delimited arm scans from this offset: a
+		# cycle a one-level message ran to the end of the stack on (26.909).
+		if before in view.image.arms and any(
+				index == chosen
+				for _, chosen, _ in view.image.arms[before][1]):
+			return total
 		earlier = view.image.placements[before]
 		if earlier.located_code != NONE:
 			continue		# a located member joins no offset chain
@@ -325,10 +338,17 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 	# would start one byte late and `tail` would be read off the end.
 	if view.image.placements[index].parameter:
 		return 0
+	held = view.sizes
+	if held is not None and index in held:
+		return held[index]
 	lead = lead_bytes(view, index) * BITS_PER_BYTE
 	if view.image.placements[index].text_flags & PEEK:
-		return lead
-	return lead + content_bits(view, index, depth)
+		found = lead
+	else:
+		found = lead + content_bits(view, index, depth)
+	if held is not None:
+		held[index] = found
+	return found
 
 
 def content_bits(view: View, index: int, depth: int = 0) -> int:
@@ -2348,8 +2368,10 @@ def _while_walk(view: View, index: int,
 
 	start = at
 	while count < cap and at < view.limit:
+		# The condition below asks about this element, so it keeps what
+		# measuring it found rather than measuring it again (26.909).
 		sub = View(view.image, view.buffer, element, at, view.limit,
-		           child_args(view, index))
+		           child_args(view, index), {})
 		try:
 			# The depth travels with the descent, or the counter restarts
 			# one level down and bounds nothing (26.112).
@@ -2670,8 +2692,19 @@ def struct_extent(view: View, depth: int = 0) -> int:
 	shape = view.shape
 	if shape.fixed:
 		return (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+	if view.sizes is not None:
+		return _measured(view, depth)
+	view.sizes = {}
+	try:
+		return _measured(view, depth)
+	finally:
+		view.sizes = None
+
+
+def _measured(view: View, depth: int) -> int:
+	"""`struct_extent` of a view holding what its members measure."""
 	total   = 0
-	members = list(view.image.members(shape))
+	members = list(view.image.members(view.shape))
 	for at, member in enumerate(members):
 		if view.image.placements[member].located_code != NONE:
 			continue

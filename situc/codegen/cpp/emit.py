@@ -113,7 +113,10 @@ from situc.traverse import (
 	must_be_terminated,
 	obligation,
 	obligations,
+	CursorStep,
+	cursor_walk,
 	offset_plan,
+	read_behind_recursion,
 	own_entries,
 	own_members,
 	arm_alignments,
@@ -260,6 +263,11 @@ class Emitter:
 			basename: str, namespace: str, materialize: bool = False,
 			messages: bool = False) -> None:
 		self._refuses_memo: dict[str, bool] = {}
+		#: Which helpers of each struct have a copy taking the marks, and how
+		#: each struct measures itself, asked for every field (26.909).
+		self._marked: dict[str, list[str]] = {}
+		self._cursors: dict[str, list[CursorStep] | None] = {}
+		self._measures: dict[str, list[str]] = {}
 		self.schema    = schema
 		self.resolved  = resolved
 		self.basename  = basename
@@ -2532,10 +2540,18 @@ class Emitter:
 		# counted run's emitter threaded it and this one declared it.
 		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 
+		# The walk an extent makes asks the element about itself from what
+		# measuring it found, or the question measures it again (26.909).
+		found = self._reads(element) if deep else []
+
 		def walk_from(base: str, depth: str | None = None) -> list[str]:
 			step = ("element.extent()" if depth is None
+			        else f"element.extent_marked_at({depth} + 1, read)"
+			        if found
 			        else f"element.extent_at({depth} + 1)")
 			return [
+			*([f"\t\tstd::uint32_t read[{len(found)}];"]
+			  if found and depth is not None else []),
 			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
@@ -2561,6 +2577,26 @@ class Emitter:
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			"\t\t}",
+		]
+		asked = [one.replace(self._element_cond(element, placement),
+		                     self._element_cond(element, placement, True))
+		         for one in tail] if found else tail
+		spans = [
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from_at"
+			"(std::uint32_t start, std::uint32_t depth) const noexcept",
+			"\t{",
+			*from_, *asked,
+			"\t\t(void)n;",
+			"\t\treturn at - start;",
+			"\t}",
+		] if deep else [
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+			"(std::uint32_t start) const noexcept",
+			"\t{",
+			*from_, *tail,
+			"\t\t(void)n;",
+			"\t\treturn at - start;",
+			"\t}",
 		]
 
 		return [
@@ -2595,15 +2631,10 @@ class Emitter:
 			"",
 			"\t/* The walk, from a base the caller already knows: the same",
 			"\t * helper every delimited member has, for the same reason. */",
+			*spans,
+			*self._marked_copy(struct, spans),
+			"",
 			*( [
-				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
-				"(std::uint32_t start) const noexcept",
-				"\t{",
-				*from_, *tail,
-				"\t\t(void)n;",
-				"\t\treturn at - start;",
-				"\t}",
-				"",
 				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
 				"\t{",
 				f"\t\treturn {name}_span_from({start});",
@@ -2612,14 +2643,6 @@ class Emitter:
 				# The element names itself, so the walk descends and the
 				# depth travels with it. Four entry points: the `_at` forms
 				# carry the counter and the plain ones start it at zero.
-				f"\t[[nodiscard]] std::uint32_t {name}_span_from_at"
-				"(std::uint32_t start, std::uint32_t depth) const noexcept",
-				"\t{",
-				*from_, *tail,
-				"\t\t(void)n;",
-				"\t\treturn at - start;",
-				"\t}",
-				"",
 				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
 				"(std::uint32_t start) const noexcept",
 				"\t{",
@@ -2642,7 +2665,7 @@ class Emitter:
 		]
 
 	def _element_cond(self, element: ResolvedStruct,
-			placement: Placement) -> str:
+			placement: Placement, marked: bool = False) -> str:
 		"""The condition over `element`, whose accessors are methods.
 
 		Plus `remaining`, which is not a field of the element and is the
@@ -2675,6 +2698,11 @@ class Emitter:
 		# `example/ipv6ext` is exactly that. Two rewriters, one rule.
 		by_name = {entry.placement.name: entry.placement
 		           for entry in element.entries}
+		noted = [held.path for held in self._reads(element)] if marked else []
+
+		def where(held: Placement) -> str | None:
+			return (f"read[{noted.index(held.path)}]"
+			        if held.path in noted else None)
 
 		def read(name: str) -> str:
 			if name == "remaining":
@@ -2682,7 +2710,7 @@ class Emitter:
 			held = by_name.get(name)
 			if held is not None and held.type_name in self.enums \
 					and held.scalar is not None:
-				return f"({self._load(held.scalar, held, None, on='element')})"
+				return f"({self._load(held.scalar, held, where(held), on='element')})"
 			# `bare_name`, matching the DECLARATION. `cpp/names.py` names
 			# every accessor with it so a member called `int` becomes
 			# `int_()`, and these four call sites said `c_name` -- so the
@@ -2692,8 +2720,10 @@ class Emitter:
 			# and four more with nothing sizing a member by them (26.700).
 			return f"element.{bare_name(name)}()"
 
-		return over_fields([*names, "remaining"],
-		                   placement.repeat_while or "", read)
+		rendered = over_fields([*names, "remaining"],
+		                       placement.repeat_while or "", read)
+		return (self._reading_marks(element, rendered, "element", "read")
+		        if marked else rendered)
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2763,6 +2793,26 @@ class Emitter:
 
 		walk  = walk_from(start)
 		from_ = walk_from("start", "depth" if deep else None)
+		spans = [
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+			+ ("(std::uint32_t start) const noexcept" if not deep else
+			   "_at(std::uint32_t start, std::uint32_t depth)"
+			   " const noexcept"),
+			"\t{",
+			*from_,
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\t(void)n;",
+			"",
+			"\t\t/* The terminator belongs to this member. Where the run ran",
+			"\t\t * out of buffer instead there is none to count. */",
+			f"\t\tif (at + {len(delim)}u <= raw_.limit) {{",
+			f"\t\t\tat += {len(delim)}u;",
+			"\t\t}",
+			"\t\treturn at - start;",
+			"\t}",
+		]
 
 		return [
 			"",
@@ -2803,24 +2853,8 @@ class Emitter:
 			"\t * accumulates offsets holds `at` already, and the plain",
 			"\t * `_span` re-resolves it by rescanning every member before",
 			"\t * the run. */",
-			f"\t[[nodiscard]] std::uint32_t {name}_span_from"
-			+ ("(std::uint32_t start) const noexcept" if not deep else
-			   "_at(std::uint32_t start, std::uint32_t depth)"
-			   " const noexcept"),
-			"\t{",
-			*from_,
-			"\t\t\tat += size;",
-			"\t\t\tn  += 1;",
-			"\t\t}",
-			"\t\t(void)n;",
-			"",
-			"\t\t/* The terminator belongs to this member. Where the run ran",
-			"\t\t * out of buffer instead there is none to count. */",
-			f"\t\tif (at + {len(delim)}u <= raw_.limit) {{",
-			f"\t\t\tat += {len(delim)}u;",
-			"\t\t}",
-			"\t\treturn at - start;",
-			"\t}",
+			*spans,
+			*self._marked_copy(struct, spans),
 			"",
 			*( [
 				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
@@ -3740,6 +3774,9 @@ class Emitter:
 		# a length can only truncate. `[limit]` is a refusal, and refusals
 		# belong in `validate`.
 		limit = declared_depth(self.schema, struct.name) + 1
+		steps = self._cursor(struct)
+		if steps is not None:
+			return self._extent_by_cursor(struct, steps, limit, head)
 		deep  = self._extent_terms(struct, depth="depth")
 		sums  = deep or terms
 		# The plain form's floor, for its reason: a walk hands this whatever
@@ -3764,6 +3801,217 @@ class Emitter:
 		        "\t{",
 		        "\t\treturn extent_at(0);",
 		        "\t}"]
+
+	def _extent_by_cursor(self, struct: ResolvedStruct,
+			steps: list[CursorStep], limit: int,
+			head: list[str]) -> list[str]:
+		"""The extent of a struct with something behind its recursion.
+
+		Summing the members measures the recursion once for itself and once
+		for each term behind it, every one of which finds its own base by
+		measuring it again, so a level cost twice the level below it (26.909).
+		So each member is measured from where the last one ended. `marks`
+		holds where each field read behind the recursion is, for the terms
+		here and for a `while` run over this struct.
+		"""
+		reads = self._reads(struct)
+		parts = extent_parts(self.resolved.structs, struct)
+		assert parts is not None
+		body  = [f"\t\tmarks[{index}] = raw_.limit;"
+		         for index in range(len(reads))]
+		body.extend([f"\t\tif (depth >= {limit}u) {{",
+		             "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
+		             "\t\t}"])
+		if parts[0] and parts[1]:
+			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {parts[0]}u)) {{",
+			             f"\t\t\treturn {parts[0]}u;",
+			             "\t\t}"])
+		body.extend([f"\t\tstd::uint32_t extent = {parts[0]}u;",
+		             "\t\tstd::uint32_t at = 0u;"])
+		if any(step.kind in ("term", "pad") for step in steps):
+			body.append("\t\tstd::uint32_t term;")
+		for step in steps:
+			if step.kind == "advance":
+				body.append(f"\t\tat = situ_advance_u32(at, {step.size}u,"
+				            " raw_.limit);")
+				continue
+			member = step.member
+			assert member is not None
+			if step.kind == "read":
+				index = [held.path for held in reads].index(member.path)
+				where = "at"
+				if member.skip:
+					lead  = bare_name(local_name(struct, member)) + "_lead"
+					where = f"situ_advance_u32(at, {lead}(at), raw_.limit)"
+				body.append(f"\t\tmarks[{index}] = {where};")
+				continue
+			rendered = self._length_expression(struct, member, "at",
+			                                   depth="depth")
+			assert rendered is not None, "`_cursor` asked"
+			length = self._reading_marks(struct, rendered)
+			for one in self._measures.get(member.path, ()):
+				length = re.sub(rf"(?<![\w.>]){one}\(\)",
+				                f"{one}_from(at)", length)
+			# A length that says where it starts says the same thing.
+			if member.offset_bits is None:
+				length = length.replace(
+					self._offset_expression(struct, member) or "\0", "at")
+			if step.kind == "loose":
+				body.append(f"\t\textent = extent + ({length});")
+				continue
+			body.extend([f"\t\tterm = {length};",
+			             "\t\textent = extent + term;",
+			             f"\t\tat = situ_align_up_u32(at, {step.size}u,"
+			             " raw_.limit);" if step.kind == "pad" else
+			             "\t\tat = situ_advance_u32(at, term, raw_.limit);"])
+		body.append("\t\treturn extent;")
+		lines = [*head,
+		         ("\t[[nodiscard]] std::uint32_t extent_marked_at(std::uint32_t"
+		          " depth, std::uint32_t *marks) const noexcept" if reads
+		          else "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t"
+		               " depth) const noexcept"),
+		         "\t{", *body, "\t}"]
+		if reads:
+			lines.extend(["",
+			              "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t"
+			              " depth) const noexcept",
+			              "\t{",
+			              f"\t\tstd::uint32_t marks[{len(reads)}];",
+			              "",
+			              "\t\treturn extent_marked_at(depth, marks);",
+			              "\t}"])
+		return [*lines, "",
+		        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
+		        "\t{", "\t\treturn extent_at(0);", "\t}"]
+
+	def _cursor(self, struct: ResolvedStruct) -> list[CursorStep] | None:
+		"""How this struct measures itself, where a sum would not do.
+
+		Held once it is known, because the answer is asked for every field
+		and the lengths it depends on are rendered to find out.
+		"""
+		if struct.name not in self._cursors:
+			self._cursors[struct.name] = None
+			steps = cursor_walk(self.resolved.structs, struct)
+			if steps is not None and all(
+					step.member is None or step.kind == "read"
+					or self._length_expression(struct, step.member) is not None
+					for step in steps):
+				self._cursors[struct.name] = steps
+		return self._cursors[struct.name]
+
+	def _reads(self, struct: ResolvedStruct,
+			own: bool = False) -> list[Placement]:
+		"""The fields a pass over this struct records, in `marks` order.
+
+		The whole list, or with `own` what the struct's own terms read and so
+		what its helpers have to be handed.
+		"""
+		if self._cursor(struct) is None:
+			return []
+		reads, every = read_behind_recursion(self.resolved.structs, struct)
+		return reads if own else every
+
+	def _reading_marks(self, struct: ResolvedStruct, text: str,
+			held: str = "", marks: str = "marks") -> str:
+		"""`text` with each read behind the recursion taken from `marks`,
+		and each helper that makes one handed them."""
+		on = rf"\b{held}\." if held else r"(?<![\w.>])(?:this->)?"
+		to = f"{held}." if held else ""
+		for index, member in enumerate(self._reads(struct)):
+			name = bare_name(local_name(struct, member))
+			# By name as well, since a walk can be emitted ahead of the element
+			# it asks about.
+			for one in {*self._measures.get(member.path, ()), f"{name}_value"}:
+				text = re.sub(rf"{on}{one}\(\)",
+				              f"{to}{one}_from({marks}[{index}])", text)
+			text = re.sub(rf"{on}{name}\(\)",
+			              f"{to}{name}_from({marks}[{index}])", text)
+			# A count reads its field where it sits rather than through the
+			# accessor, so what it names is the offset.
+			if not held:
+				text = text.replace(
+					self._offset_expression(struct, member) or "\0",
+					f"{marks}[{index}]")
+		for helper in self._marked.get(struct.name, ()):
+			text = re.sub(rf"{on}{helper}\(\)",
+			              f"{to}{helper}_marked({marks})", text)
+			text = re.sub(rf"{on}{helper}\(",
+			              f"{to}{helper}_marked({marks}, ", text)
+		return text
+
+	def _measured_from(self, struct: ResolvedStruct, placement: Placement,
+			lines: list[str]) -> list[str]:
+		"""The accessors in `lines` that find `placement` for themselves,
+		over again for a caller that knows where it is.
+
+		A varint, a text number and a delimited arm: their offset is every
+		member in front of them measured over, which from inside an extent is
+		the second measurement, and their length is a term of that extent
+		whether anything reads them (26.909).
+		"""
+		if self._cursor(struct) is None or placement.offset_bits is not None \
+				or (placement.varint is None and placement.radix is None
+				    and (not placement.delimiters
+				         or arm_of(struct, placement) is None)):
+			return []
+		base = self._offset_expression(struct, placement)
+		if base is None:
+			return []
+		call = f"{bare_name(local_name(struct, placement))}_offset()"
+		text = "\n".join(lines).replace(call, base)
+		held = {found.group(1): found for found in re.finditer(
+			r"^\t\[\[nodiscard\]\] [^\n(]*?(\w+)\(([^)\n]*)\) const noexcept\n"
+			r"\t\{\n.*?^\t\}$", text, re.M | re.S)}
+		names: set[str] = set()
+		while True:
+			more = {name for name, found in held.items()
+			        if name not in names and (base in found.group(0) or any(
+			            re.search(rf"(?<![\w.>]){one}\(", found.group(0))
+			            for one in names))}
+			if not more:
+				break
+			names |= more
+		copies = []
+		for name in held:
+			if name not in names or re.search(rf"\b{name}_from\(",
+			                                  "\n".join(lines)):
+				continue
+			taken = held[name].group(2)
+			body = held[name].group(0).replace(base, "known").replace(
+				f"{name}({taken})",
+				f"{name}_from(std::uint32_t known"
+				+ (f", {taken})" if taken else ")"), 1)
+			for one in names:
+				body = re.sub(rf"(?<![\w.>]){one}\(\)", f"{one}_from(known)",
+				              body)
+				body = re.sub(rf"(?<![\w.>]){one}\((?!std::uint32_t known)",
+				              f"{one}_from(known, ", body)
+			copies.extend(["", *body.split("\n")])
+		self._measures.setdefault(placement.path, []).extend(sorted(names))
+		return copies
+
+	def _marked_copy(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""A helper over again, for a caller holding the marks.
+
+		A helper of this struct that reads a field behind the recursion finds
+		the field by measuring everything in front of it, which is the second
+		measurement from one call further down. Empty where it reads none.
+		"""
+		if not self._reads(struct, own=True):
+			return []
+		text = "\n".join(lines)
+		held = self._reading_marks(struct, text)
+		if held == text:
+			return []
+		found = re.search(r"std::uint32_t (\w+)\((\)?)", held)
+		assert found is not None
+		self._marked.setdefault(struct.name, []).append(found.group(1))
+		return held.replace(
+			found.group(0),
+			f"std::uint32_t {found.group(1)}_marked(const std::uint32_t *marks"
+			+ (")" if found.group(2) else ", "), 1).split("\n")
 
 	def _size_term(self, struct: ResolvedStruct, path: str) -> str | None:
 		"""`size(member)` in an expression: `Terms.size`, by name (26.897)."""
@@ -3953,6 +4201,7 @@ class Emitter:
 			limit = (1 << scalar.bits) - 1
 			value_fits = self._fits(struct, placement,
 			                        placement.array_count)
+			first = len(lines)
 			lines.extend([
 				"",
 				f"\t/* {placement.path}, where an error cannot be returned:",
@@ -3976,6 +4225,7 @@ class Emitter:
 				f"\t\treturn static_cast<{ctype}>(value);",
 				"\t}",
 			])
+			lines.extend(self._measured_from(struct, placement, lines[first:]))
 		return lines
 
 	def _fits(self, struct: ResolvedStruct, placement: Placement,
@@ -4513,7 +4763,8 @@ class Emitter:
 		]
 
 	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
-			depth: str | None = None) -> str | None:
+			depth: str | None = None,
+			running: str | None = None) -> str | None:
 		"""How many bytes the selected arm occupies, as one expression.
 
 		A conditional chain rather than a statement `switch`, because callers
@@ -4549,11 +4800,14 @@ class Emitter:
 				# span accessor here all along. Measured on `edges`: one
 				# declined member, and the differential driver named it and
 				# did not compile.
-				length = f"{bare_name(local_name(struct, member))}_span()"
+				length = (f"{bare_name(local_name(struct, member))}_span()"
+				          if running is None else
+				          f"{bare_name(local_name(struct, member))}"
+				          f"_span_from({running})")
 			else:
 				# The depth travels into the arm too, or a tagged tree
 				# restarts the counter at every level of itself.
-				rendered = self._length_expression(struct, member,
+				rendered = self._length_expression(struct, member, running,
 				                                   depth=depth)
 				if rendered is None:
 					return None
@@ -4675,9 +4929,15 @@ class Emitter:
 		"""
 		if placement.skip:
 			local = bare_name(local_name(struct, placement))
+			# The depth rides through a lead as it does in C: a stride that
+			# starts its own count measures past `[depth]` where C stops.
+			deep  = "_at" if descends(self.resolved.structs, struct,
+			                          placement.type_name or "") else ""
+			carry = (depth or "0") if deep else ""
 			if running is not None:
-				return f"{local}_stride_from({running})"
-			return f"{local}_stride()"
+				return (f"{local}_stride_from{deep}({running}"
+				        f"{', ' + carry if deep else ''})")
+			return f"{local}_stride{deep}({carry})"
 		return self._content_length_expression(struct, placement, running,
 		                                       depth, leaf_bounded)
 
@@ -4696,7 +4956,13 @@ class Emitter:
 			return None
 
 		if placement.kind == "variant":
-			return self._variant_length(struct, placement, depth)
+			# The offset in hand reaches the arms only from an extent measured
+			# by cursor, whose depth says so, and only where it is not a
+			# constant: the offset chains hand one too, and an arm has a
+			# `_from` only where that extent calls it.
+			return self._variant_length(struct, placement, depth,
+			                            (running if depth and placement.offset_bits is None
+			                             else None))
 
 		# A run inside a variant arm has no length here, because the arm
 		# emitter has no walk: an arm is emitted by a family of its own, and
@@ -4782,6 +5048,8 @@ class Emitter:
 				if running is not None and not descends(self.resolved.structs, struct, placement.type_name or ""):
 					return f"{name}_extent_from({running})"
 				return f"{name}_extent()"
+			if running is not None:
+				return f"{name}_extent_from_at({running}, {depth})"
 			return f"{name}_extent_at({depth})"
 
 		if placement.kind in ("coded", "sealed"):
@@ -4815,7 +5083,8 @@ class Emitter:
 			return None if count is None else f"({count})"
 
 		if placement.sized_by == "remaining":
-			start = self._offset_expression(struct, placement)
+			start = (running if running is not None and depth is not None
+			         else self._offset_expression(struct, placement))
 			if start is None:
 				return None
 			room = f"situ_remaining_u32(raw_.limit, {start})"
@@ -5112,6 +5381,45 @@ class Emitter:
 		# every step of a walk a walk of its own.
 		bound = "" if count is None else f"n < {name}_count() && "
 
+		told = [
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			f"\t\treturn {count};",
+			"\t}",
+		]
+		spanning = [
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+			+ ("(std::uint32_t start) const noexcept"
+			   if not descends(self.resolved.structs, struct, placement.type_name or "")
+			   else "_at(std::uint32_t start, std::uint32_t depth)"
+			        " const noexcept"),
+			"\t{",
+			"\t\tstd::uint32_t at = start;",
+			"\t\tstd::uint32_t n  = 0;",
+			"",
+			f"\t\twhile ({bound}at < raw_.limit) {{",
+			"\t\t\tsitu_view_t raw;",
+			"",
+			"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
+			"\t\t\t\t\t!= SITU_OK) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"",
+			f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
+			("\t\t\tconst std::uint32_t size = element.extent();"
+			 if not descends(self.resolved.structs, struct, placement.type_name or "")
+			 else "\t\t\tconst std::uint32_t size ="
+			      " element.extent_at(depth + 1);"),
+			"",
+			"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\treturn at - start;",
+			"\t}",
+		]
 		lines.extend(
 			[
 				f"\t/* How many elements are here: `{placement.sized_by}` gives",
@@ -5143,12 +5451,7 @@ class Emitter:
 				"\t\t}",
 				"\t\treturn n;",
 				"\t}",
-			] if count is None else [
-				f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
-				"\t{",
-				f"\t\treturn {count};",
-				"\t}",
-			])
+			] if count is None else [*told, *self._marked_copy(struct, told)])
 
 		# An element with no single size is walked rather than indexed: there
 		# is no stride to multiply. Same walk a terminated run uses, with the
@@ -5241,37 +5544,8 @@ class Emitter:
 				"\t * the run, and nothing emitted it -- so those members were",
 				"\t * declined as having an offset this could not resolve,",
 				"\t * which was true only because this was missing. */",
-				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
-				+ ("(std::uint32_t start) const noexcept"
-				   if not descends(self.resolved.structs, struct, placement.type_name or "")
-				   else "_at(std::uint32_t start, std::uint32_t depth)"
-				        " const noexcept"),
-				"\t{",
-				"\t\tstd::uint32_t at = start;",
-				"\t\tstd::uint32_t n  = 0;",
-				"",
-				f"\t\twhile ({bound}at < raw_.limit) {{",
-				"\t\t\tsitu_view_t raw;",
-				"",
-				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
-				"\t\t\t\t\t!= SITU_OK) {",
-				"\t\t\t\tbreak;",
-				"\t\t\t}",
-				"",
-				f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
-				("\t\t\tconst std::uint32_t size = element.extent();"
-				 if not descends(self.resolved.structs, struct, placement.type_name or "")
-				 else "\t\t\tconst std::uint32_t size ="
-				      " element.extent_at(depth + 1);"),
-				"",
-				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
-				"\t\t\t\tbreak;",
-				"\t\t\t}",
-				"\t\t\tat += size;",
-				"\t\t\tn  += 1;",
-				"\t\t}",
-				"\t\treturn at - start;",
-				"\t}",
+				*spanning,
+				*self._marked_copy(struct, spanning),
 				# Whether every declared element is inside the frame, which
 				# `check` asks and a span cannot answer -- a span is summed
 				# into the enclosing extent, so an unsatisfiable value there
@@ -6679,7 +6953,9 @@ class Emitter:
 			for arm, member in arm_members(struct, variant):
 				if member is None:
 					continue
-				lines.extend(self._arm_member(struct, variant, arm, member))
+				held = self._arm_member(struct, variant, arm, member)
+				lines.extend(held)
+				lines.extend(self._measured_from(struct, member, held))
 		return lines
 
 	def _arm_typed(self, scalar: ScalarType, placement: Placement,
@@ -7034,6 +7310,8 @@ class Emitter:
 				# only the ordinary nested member emitted one, so the first
 				# schema with a variable-size arm -- MQTT's CONNECT, three
 				# times over -- named a member function nothing defines.
+				*self._extent_from_at(struct, placement, name,
+				                      f"::{self.namespace}::{inner}", deep),
 				*([] if not deep else [
 					f"\t[[nodiscard]] std::uint32_t {name}_extent_at"
 					"(std::uint32_t depth) const noexcept",
@@ -7066,6 +7344,8 @@ class Emitter:
 					f"\t\treturn ::{self.namespace}::{inner}(whole{self._child_args(struct, placement)}).extent();",
 					"\t}",
 				]),
+				*self._marked_from(struct, placement, name,
+				                   f"::{self.namespace}::{inner}", deep),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
 				"\t{",
 				*([f"\t\treturn {name}_extent_at(0);"] if deep
@@ -7229,7 +7509,9 @@ class Emitter:
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
 		lead = self._lead_methods(struct, entry.placement)
-		return (bounds + lead + self._member_body(struct, entry)
+		body = self._member_body(struct, entry)
+		return (bounds + lead + body
+		        + self._measured_from(struct, entry.placement, body)
 		        + self._secret_erase(struct, entry))
 
 	def _parameter(self, struct: ResolvedStruct,
@@ -7363,16 +7645,29 @@ class Emitter:
 		if chain is None:
 			return []
 
+		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 		content = (str(fixed_span_bits(placement) // BITS_PER_BYTE) + "u"
 		           if placement.is_fixed_size else
-		           self._content_length_expression(struct, placement,
-		                                           running="at + lead"))
+		           self._content_length_expression(
+		               struct, placement, running="at + lead",
+		               depth="depth" if deep else None))
 		if content is None:
 			return []
 
+		suffix = "_at" if deep else ""
+		carry  = ", std::uint32_t depth" if deep else ""
 		set_  = ", ".join(f"0x{byte:02X}u" for byte in placement.skip)
 		shown = " ".join(one.replace("\\", "\\\\")
 		                  for one in placement.skip_shown) or "the declared set"
+		reach = [
+			f"\t[[nodiscard]] std::uint32_t {local}_stride_from{suffix}"
+			f"(std::uint32_t at{carry}) const noexcept",
+			"\t{",
+			f"\t\tconst std::uint32_t lead = {local}_lead(at);",
+			"",
+			f"\t\treturn lead + ({content});",
+			"\t}",
+		]
 
 		return [
 			"",
@@ -7401,19 +7696,60 @@ class Emitter:
 			"",
 			f"\t/** How far {placement.path} reaches from `at`: the",
 			"\t *  whitespace, and then the member. */",
-			f"\t[[nodiscard]] std::uint32_t {local}_stride_from"
-			"(std::uint32_t at) const noexcept",
-			"\t{",
-			f"\t\tconst std::uint32_t lead = {local}_lead(at);",
+			*reach,
+			*self._marked_copy(struct, reach),
 			"",
-			f"\t\treturn lead + ({content});",
-			"\t}",
-			"",
-			f"\t[[nodiscard]] std::uint32_t {local}_stride() const noexcept",
+			f"\t[[nodiscard]] std::uint32_t {local}_stride{suffix}"
+			f"({carry[2:]}) const noexcept",
 			"\t{",
-			f"\t\treturn {local}_stride_from({local}_start());",
+			f"\t\treturn {local}_stride_from{suffix}({local}_start()"
+			f"{', depth' if deep else ''});",
 			"\t}",
 		]
+
+	def _extent_from_at(self, struct: ResolvedStruct, placement: Placement,
+			name: str, inner: str, deep: bool) -> list[str]:
+		"""How far a member of a type that can contain this one reaches from
+		a start the caller has, which an extent measuring by cursor is the one
+		caller of: deriving the start here would measure everything in front
+		of it again (26.909)."""
+		if not deep or self._cursor(struct) is None:
+			return []
+		held = [f"\t[[nodiscard]] std::uint32_t {name}_extent_from_at"
+		        "(std::uint32_t at, std::uint32_t depth) const noexcept",
+		        "\t{",
+		        "\t\tsitu_view_t whole;",
+		        "",
+		        "\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
+		        "\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
+		        " != SITU_OK) {",
+		        "\t\t\treturn 0u;",
+		        "\t\t}",
+		        f"\t\treturn {inner}(whole"
+		        f"{self._child_args(struct, placement)}).extent_at(depth + 1);",
+		        "\t}"]
+		return [*held, *self._marked_copy(struct, held)]
+
+	def _marked_from(self, struct: ResolvedStruct, placement: Placement,
+			name: str, inner: str, deep: bool) -> list[str]:
+		"""`_extent_from` over again where what it hands the type is read
+		behind the recursion."""
+		if deep:
+			return []
+		return self._marked_copy(struct, [
+			f"\t[[nodiscard]] std::uint32_t {name}_extent_from"
+			"(std::uint32_t at) const noexcept",
+			"\t{",
+			"\t\tsitu_view_t whole;",
+			"",
+			"\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
+			"\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
+			" != SITU_OK) {",
+			"\t\t\treturn 0u;",
+			"\t\t}",
+			f"\t\treturn {inner}(whole"
+			f"{self._child_args(struct, placement)}).extent();",
+			"\t}"])
 
 	def _member_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -7885,6 +8221,19 @@ class Emitter:
 				f"\t\treturn {fits} ? {load} : {ctype}{{}};",
 				"\t}",
 			])
+			# The accessor again for a caller that knows where the field is,
+			# its offset being every member in front of it measured over
+			# (26.909).
+			if offset is not None and any(placement.path == held.path
+			                              for held in self._reads(struct)):
+				lines.extend([
+					f"\t[[nodiscard]] {ctype} {name}_from(std::uint32_t at)"
+					" const noexcept",
+					"\t{",
+					f"\t\treturn {fits} ? {load} : {ctype}{{}};".replace(
+						offset, "at"),
+					"\t}",
+				])
 		else:
 			lines.extend([
 				f"\t[[nodiscard]] {ctype} {name}() const noexcept",
@@ -8257,6 +8606,7 @@ class Emitter:
 				# The arithmetic is saturating too, so the two defences are
 				# independent: the subtraction cannot wrap, and if it did,
 				# the sub-view would refuse the extent anyway.
+				*self._extent_from_at(struct, placement, name, nested, deep),
 				*([] if not deep else [
 					f"\t[[nodiscard]] std::uint32_t {name}_extent_at"
 					"(std::uint32_t depth) const noexcept",
@@ -8288,6 +8638,7 @@ class Emitter:
 					f"{self._child_args(struct, placement)}).extent();",
 					"\t}",
 				]),
+				*self._marked_from(struct, placement, name, nested, deep),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
 				"\t{",
 				*([f"\t\treturn {name}_extent_at(0);"] if deep

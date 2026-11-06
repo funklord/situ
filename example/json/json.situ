@@ -339,7 +339,7 @@ struct nothing { u8  word[4]  [must_eq = "null"]; }
 // `{"a":["b",{"c":"d"}]}` is nine structs, which a default `situ-walk` build
 // declines and `-DWALK_DEPTH_MAX=64` measures at twenty-one bytes. Summing
 // the largest frame of every function in that walker's recursion cycle,
-// `-Os` on x86-64, one level costs at most 944 bytes, which is why the
+// `-Os` on x86-64, one level costs at most 2800 bytes, which is why the
 // default is small and why it is overridable.
 //
 // None of this is a gap in the schema. It is what this format asks of situ,
