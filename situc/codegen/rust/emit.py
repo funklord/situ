@@ -8517,7 +8517,9 @@ class Emitter:
 		if walk is not None and not placement.skip \
 				and any(held.path == placement.path for held in walk[1]):
 			expression = self._offset_expression(struct, placement)
-			return [f"\t\t{expression}"]
+			# Two lines, as the rest of this function's answers end: a caller
+			# drops the last and goes on from `at`.
+			return [f"\t\tlet at = {expression};", "\t\tat"]
 
 		parts = preceding_parts(struct, placement)
 		if parts is None:

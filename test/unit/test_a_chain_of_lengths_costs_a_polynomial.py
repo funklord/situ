@@ -233,3 +233,22 @@ def test_six_readers_agree_on_a_chain(shape: str, tmp_path: Path) -> None:
 			buffer.hex()
 		asked += 1
 	assert asked, "no message reached both walkers"
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason = "needs gcc, g++ and rustc")
+def test_a_struct_of_no_one_size_can_stand_in_a_chain(tmp_path: Path) -> None:
+	"""Its extent is measured from where the pass says it is, and C++, Rust
+	and Python named an `at` nothing declared. `hdr` above is one size, so no
+	link of `LINKS` has an extent to measure (26.920)."""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\n"
+		"struct vh { u8 l; u8 d[l]; }\n"
+		"struct s { u8 k; u8 x[k]; vh p; u8 y[p.l]; vh q; u8 z[q.l]; }\n",
+		encoding = "ascii")
+	command = fourway.build(tmp_path, schema)
+	for message, verdict in {"00" "01aa" "bb" "01cc" "dd": "validate 0",
+	                         "00" "01aa" "bb" "01cc":      "validate 1"}.items():
+		for argv in command.values():
+			assert verdict in fourway.answers(argv, bytes.fromhex(message),
+			                                  tmp_path)
