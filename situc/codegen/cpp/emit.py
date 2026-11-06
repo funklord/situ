@@ -124,6 +124,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	held_here,
 	holds_of,
 	walks_to_the_frame_end,
 )
@@ -379,7 +380,8 @@ class Emitter:
 		with the condition under which it is present. See the C backend."""
 		found: list[tuple[Placement, str | None]] = []
 		for placement in own_members(struct):
-			if (placement.type_name or "") in cycle:
+			if (placement.type_name or "") in cycle \
+					or holds_of(placement) in cycle:
 				found.append((placement, None))
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
@@ -424,29 +426,39 @@ class Emitter:
 		i = 0
 		while i < len(lines):
 			line = lines[i]
+			# A signature may run on, indented past the body: `all_at` takes
+			# its out-parameter on a line of its own, and that is the line
+			# naming the peer.
+			brace = i + 1
+			while brace < len(lines) and lines[brace].startswith("\t\t\t"):
+				brace += 1
 			if not (line.startswith("\t") and not line.startswith("\t\t")
-					and i + 1 < len(lines) and lines[i + 1] == "\t{"):
+					and brace < len(lines) and lines[brace] == "\t{"):
 				kept.append(line)
 				i += 1
 				continue
+			line = " ".join([line.rstrip(),
+			                 *(one.strip() for one in lines[i + 1:brace])])
 
-			close = i + 2
+			close = brace + 1
 			while close < len(lines) and lines[close] != "\t}":
 				close += 1
 			if close == len(lines):
-				kept.append(line)		# not a shape this understands
+				kept.append(lines[i])	# not a shape this understands
 				i += 1
 				continue
 
 			block = lines[i:close + 1]
-			if not any(peer in one for one in block for peer in spelled):
+			# Whole names: `::situ::box` is the front of `::situ::boxes`.
+			if not any(re.search(rf"{re.escape(peer)}\b", one)
+			           for one in block for peer in spelled):
 				kept.extend(block)
 				i = close + 1
 				continue
 
 			kept.append(line.rstrip() + ";")
 			moved.extend(["", self._out_of_line(line, holder),
-			              *(one[1:] for one in block[1:])])
+			              *(one[1:] for one in lines[brace:close + 1])])
 			i = close + 1
 		return kept, moved
 
@@ -464,6 +476,7 @@ class Emitter:
 		head = ""
 		if text.startswith("[[nodiscard]] "):
 			head, text = "[[nodiscard]] ", text[len("[[nodiscard]] "):]
+		text = text.removeprefix("static ")
 		open_paren = text.index("(")
 		start      = text.rindex(" ", 0, open_paren) + 1
 		return f"{head}inline {text[:start]}{holder}::{text[start:]}"
@@ -9377,6 +9390,25 @@ class Emitter:
 			target = placement.type_name or ""
 			name  = bare_name(local_name(struct, placement))
 			inner = f"::{self.namespace}::{self._struct_class(target)}"
+			if holds_of(placement) in cycle:
+				child = (f"::{self.namespace}::"
+				         f"{self._struct_class(holds_of(placement) or '')}")
+				lines.extend([
+					"\t\t{",
+					f"\t\t\t{child} element;",
+					"",
+					f"\t\t\tif (this->{name}_view(element)"
+					" == ::situ::rt::err::ok) {",
+					"\t\t\t\tconst std::uint32_t found ="
+					" element.nesting_at(depth + 1);",
+					"",
+					"\t\t\t\tif (found > deepest) {",
+					"\t\t\t\t\tdeepest = found;",
+					"\t\t\t\t}",
+					"\t\t\t}",
+					"\t\t}",
+				])
+				continue
 			start = self._offset_expression(struct, placement)
 			if start is None:
 				continue
@@ -9466,7 +9498,7 @@ class Emitter:
 	def _holds_view(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
-		held = holds_of(placement)
+		held = held_here(struct, placement)
 		if held is None:
 			return []
 		name  = bare_name(local_name(struct, placement))
@@ -9492,7 +9524,7 @@ class Emitter:
 	def _holds_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""What a held struct says about the bytes that frame it (26.898)."""
-		held = holds_of(placement)
+		held = held_here(struct, placement)
 		if held is None:
 			return []
 		name  = bare_name(local_name(struct, placement))

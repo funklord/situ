@@ -119,6 +119,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	held_here,
 	holds_of,
 	walks_to_the_frame_end,
 	inside_a_nested_member,
@@ -6646,6 +6647,13 @@ class Emitter:
 			target = placement.type_name or ""
 			name  = py_name(local_name(struct, placement)).replace(".", "_")
 			inner = py_name(target)
+			if holds_of(placement) in cycle:
+				lines.extend([
+					f"\t\tfound = self.{name}_view.nesting_at(depth + 1)",
+					"\t\tif found > deepest:",
+					"\t\t\tdeepest = found",
+				])
+				continue
 			start = self._offset_expression(struct, placement)
 			if start is None:
 				continue
@@ -6700,7 +6708,8 @@ class Emitter:
 		with the condition under which it is present. See the C backend."""
 		found: list[tuple[Placement, str | None]] = []
 		for placement in own_members(struct):
-			if (placement.type_name or "") in cycle:
+			if (placement.type_name or "") in cycle \
+					or holds_of(placement) in cycle:
 				found.append((placement, None))
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
@@ -8491,7 +8500,7 @@ class Emitter:
 	def _holds_view(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
-		held = holds_of(placement)
+		held = held_here(struct, placement)
 		if held is None:
 			return []
 		name = py_name(local_name(struct, placement))
@@ -8508,7 +8517,7 @@ class Emitter:
 	def _holds_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""What a held struct says about the bytes that frame it (26.898)."""
-		if holds_of(placement) is None:
+		if held_here(struct, placement) is None:
 			return []
 		name = py_name(local_name(struct, placement))
 		return [f"\t\tself.{name}_view.validate()"]

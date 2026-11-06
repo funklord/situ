@@ -3771,22 +3771,10 @@ def check_holds(schema: ast.Schema) -> None:
 
 	A member of the struct itself, because a parent reaches it through a view
 	accessor and an arm or a region has none. A child taking arguments has
-	nowhere to be handed them. A child that can reach its own parent would
-	validate to a depth the bytes choose, and `depth` has not been built for
-	this edge.
+	nowhere to be handed them. A child that can reach its own parent is a
+	cycle like any other, and `check_no_recursive_types` asks it for `[depth]`.
 	"""
 	decls = {struct.name: struct for struct in schema.structs()}
-	edges: dict[str, set[str]] = {}
-	for struct in decls.values():
-		edges[struct.name] = set()
-		for member in _walk_members(struct.members):
-			held = _holds_name(member)
-			if isinstance(member, ast.Field) \
-					and member.type_ref.scalar is None:
-				edges[struct.name].add(member.type_ref.name)
-			if held is not None and isinstance(held.value, ast.NameRef):
-				edges[struct.name].add(held.value.name)
-
 	for struct in decls.values():
 		for member in _walk_members(struct.members):
 			attr = _holds_name(member)
@@ -3811,20 +3799,6 @@ def check_holds(schema: ast.Schema) -> None:
 					label = "held here",
 					notes = ["a held struct stands on its bytes alone "
 					         "(26.898)"])
-			seen: set[str] = set()
-			todo = [value.name]
-			while todo:
-				name = todo.pop()
-				if name == struct.name:
-					raise error(
-						f"`{value.name}` can hold `{struct.name}` again",
-						attr.span,
-						label = "held here",
-						notes = ["how deep it goes would be the message's "
-						         "to choose (26.898)"])
-				if name not in seen:
-					seen.add(name)
-					todo.extend(edges.get(name, ()))
 
 
 def _reads_a_parameter(struct: ast.StructDecl, member: ast.Field) -> bool:
@@ -5909,6 +5883,10 @@ def _referenced_structs(members: tuple[ast.Member, ...], structs: Structs,
 	for member in members:
 		if isinstance(member, ast.Field) and member.type_ref.name in structs:
 			names.append(member.type_ref.name)
+		held = _holds_name(member)
+		if held is not None and isinstance(held.value, ast.NameRef) \
+				and held.value.name in structs:
+			names.append(held.value.name)
 		if isinstance(member, ast.Variant) and not in_arm:
 			continue
 		names.extend(_referenced_structs(nested(member), structs, in_arm))

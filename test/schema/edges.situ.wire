@@ -289,6 +289,14 @@ struct hands_on_runs size=2..
   carried case 2: flag
   carried case default: error
 
+struct held_box size=2..257
+  @0x0000   1         u8         kind  max=9
+  @0x0001   1         u8         len
+  @0x0002   0..255    u8         body  sized-by=len holds=held_boxes
+
+struct held_boxes size=0..
+  @0x0000   0..       held_box   all  sized-by=remaining
+
 struct held_material size=17..272
   parameter -         u8[12]     iv
   parameter -         u8[32]     k

@@ -91,9 +91,9 @@ def test_both_walkers_descend_into_the_run(struct: str,
 	("struct b { u8 n; u8 d[n] [holds = nothing]; }", "names a struct"),
 	("struct a { parameter u8 k [stream]; u8 d[k]; }\n"
 	 "struct b { u8 n; u8 d[n] [holds = a]; }", "takes arguments"),
-	("struct a { u8 n; u8 d[n] [holds = a]; }", "hold `a` again"),
+	("struct a { u8 n; u8 d[n] [holds = a]; }", "contains itself"),
 	("struct a { u8 k; u8 d[k] [holds = c]; }\n"
-	 "struct c { a inner; }", "hold"),
+	 "struct c { a inner; }", "is recursive"),
 	("struct a { u8 x; }\n"
 	 "struct b { u8 k; variant v switch (k) { case 1: u8 d[2] [holds = a];"
 	 " default: error; } }", "member of the struct itself"),
@@ -145,3 +145,57 @@ def test_a_client_hello_reads_as_tshark_reads_it(tmp_path: Path) -> None:
 		del sys.path[:2]
 		sys.modules.pop("tls", None)
 	assert seen == TSHARK
+
+
+
+#: A container format: a box's bytes hold more boxes, as ISO-BMFF, RIFF, EBML
+#: and BER all do. A turn is two structs, and the innermost box's empty list
+#: is an edge too, so four levels of `box` are seven.
+TREE = """target buffer;
+endian big;
+struct box [depth = 8] { u8 kind [max = 9]; u8 len; u8 body[len] [holds = boxes]; }
+struct boxes [depth = 8] { box all[remaining]; }
+"""
+
+
+def _nest(levels: int, kind: int = 1) -> bytes:
+	message = b""
+	for _ in range(levels):
+		message = bytes([kind, len(message)]) + message
+	return message
+
+
+TREE_CASES = {
+	_nest(1):                                       "0",
+	_nest(4):                                       "0",
+	_nest(3, 200):                                  "2",
+	bytes([1, 4, 1, 0, 1, 0]):                      "0",	# two children
+	bytes([1, 3, 1, 9, 0]):                         "1",	# a child past its frame
+	_nest(5):                                       "2",	# deeper than `[depth]`
+}
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_a_box_holding_boxes_is_bounded_by_its_depth(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(TREE, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for message, verdict in TREE_CASES.items():
+		given = {backend: _section(fourway.answers(argv, message, tmp_path),
+		                           "box")
+		         for backend, argv in command.items()}
+		assert len(set(given.values())) == 1, (message.hex(), given)
+		assert _line(next(iter(given.values())), "validate") == verdict, \
+			(message.hex(), given)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
+def test_both_walkers_stop_at_the_ceiling(tmp_path: Path) -> None:
+	image = _inline_image(TREE)
+	shape = shape_named_text(TREE, "box")
+	for message, verdict in TREE_CASES.items():
+		# Past the ceiling a walker says it stopped, as for any cycle.
+		wanted = "cannot-say" if message == _nest(5) else verdict
+		assert python_verdict(image, message, shape) == wanted, message.hex()
+		assert c_verdict(tmp_path, image, message, shape) == wanted, \
+			message.hex()

@@ -118,6 +118,7 @@ from situc.traverse import (
 	tlv_admitted_tags,
 	tlv_single_tags,
 	walk_order,
+	held_here,
 	holds_of,
 	walks_to_the_frame_end,
 )
@@ -4682,6 +4683,25 @@ class Emitter:
 			local  = c_name(self._local(struct, placement))
 			peer   = ident(self.prefix, target, "nesting")
 
+			if holds_of(placement) in cycle:
+				peer = ident(self.prefix, holds_of(placement) or "", "nesting")
+				lines.extend([
+					"\t{",
+					"\t\tsitu_view_t element;",
+					"",
+					f"\t\tif ({ident(self.prefix, struct.name, local, 'view')}"
+					"(view, &element) == SITU_OK) {",
+					f"\t\t\tconst uint32_t found = {peer}_at(element,"
+					" depth + 1u);",
+					"",
+					"\t\t\tif (found > deepest) {",
+					"\t\t\t\tdeepest = found;",
+					"\t\t\t}",
+					"\t\t}",
+					"\t}",
+				])
+				continue
+
 			base = self._base_expression(struct, placement, gated=False)
 
 			if self._is_nested_member(placement):
@@ -4777,7 +4797,8 @@ class Emitter:
 		"""
 		found: list[tuple[Placement, str | None]] = []
 		for placement in own_members(struct):
-			if (placement.type_name or "") in cycle:
+			if (placement.type_name or "") in cycle \
+					or holds_of(placement) in cycle:
 				found.append((placement, None))
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
@@ -13597,7 +13618,7 @@ class Emitter:
 	def _holds_view(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The struct a run of bytes holds, framed by those bytes (26.898)."""
-		held = holds_of(placement)
+		held = held_here(struct, placement)
 		if held is None:
 			return []
 		local = c_name(self._local(struct, placement))
@@ -13621,7 +13642,7 @@ class Emitter:
 	def _holds_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""What a held struct says about the bytes that frame it (26.898)."""
-		held = holds_of(placement)
+		held = held_here(struct, placement)
 		if held is None:
 			return []
 		local = c_name(self._local(struct, placement))

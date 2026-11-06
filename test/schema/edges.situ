@@ -2620,3 +2620,14 @@ struct holds_to_the_tail {
 	u8   records[remaining] [holds = held_records];
 	u16  crc;
 }
+
+// A container holding containers: the cycle runs through the run's bytes.
+struct held_box [depth = 8] {
+	u8  kind [max = 9];
+	u8  len;
+	u8  body[len] [holds = held_boxes];
+}
+
+struct held_boxes [depth = 8] {
+	held_box  all[remaining];
+}

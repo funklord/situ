@@ -2158,6 +2158,16 @@ def holds_of(placement: Placement) -> str | None:
 	return held.name if isinstance(held, ast.NameRef) else None
 
 
+def held_here(struct: ResolvedStruct, placement: Placement) -> str | None:
+	"""`holds_of`, for a member of this struct's own frame.
+
+	`entries` is flattened, so `boxes` carries `boxes.all[].body`, which is the
+	element's to answer for and has no accessor here.
+	"""
+	local = local_name(struct, placement)
+	return None if "." in local or "[" in local else holds_of(placement)
+
+
 def walks_to_the_frame_end(placement: Placement) -> bool:
 	"""Whether a run of varints is counted by walking to the frame's end.
 
@@ -3068,10 +3078,11 @@ def _reaches(structs: dict[str, "ResolvedStruct"],
 		for entry in struct.entries:
 			if "[" in local_name(struct, entry.placement):
 				continue
-			target = entry.placement.type_name or ""
-			if target in structs and target not in found:
-				found.add(target)
-				queue.append(target)
+			for target in (entry.placement.type_name or "",
+			               holds_of(entry.placement) or ""):
+				if target in structs and target not in found:
+					found.add(target)
+					queue.append(target)
 	return frozenset(found)
 
 

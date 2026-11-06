@@ -29,7 +29,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
-                         _evaluate, _read_at, _sizes_in_bytes,
+                         _ceiling, _evaluate, _read_at, _sizes_in_bytes,
                          counted_run_fits,
                          offset_bits, record_run_count,
                          chosen_arm, scan, size_bits, sized_run_count,
@@ -840,7 +840,26 @@ def _read_for_relation(view: View, index: int) -> int:
 	return read_scalar(view, index)
 
 
+#: How many structs this `validate` is inside. Nothing measures a `[holds]`
+#: run's interior, so nothing else stops a cycle through one, and the walk
+#: reaches here again through a run's elements with no parameter to carry
+#: this (26.898). The C walker's `depth`, and the same ceiling.
+_descent = [0]
+
+
 def _validate(image: Image, view: View, struct_index: int,
+		found: list[tuple[int, int]] | None = None) -> int | None:
+	"""`_validate_here`, refused past the ceiling as the C walker refuses."""
+	if _descent[0] > _ceiling(image, struct_index):
+		return None
+	_descent[0] += 1
+	try:
+		return _validate_here(image, view, struct_index, found)
+	finally:
+		_descent[0] -= 1
+
+
+def _validate_here(image: Image, view: View, struct_index: int,
 		found: list[tuple[int, int]] | None = None) -> int | None:
 	"""What `validate` returns, or None where this image cannot say.
 
