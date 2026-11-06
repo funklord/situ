@@ -25,3 +25,10 @@ header   reply        03 07 85 80 00 01 00 01 00 00 00 00
 name     uncompressed 09 6C 6F 63 61 6C 68 6F 73 74 00
 name     compressed   C0 0C
 question localhost    09 6C 6F 63 61 6C 68 6F 73 74 00 00 01 00 01
+
+# A reply assembled here rather than captured, because a local resolver answers
+# `localhost` with one record and this wants every arm: a CNAME and an A and an
+# AAAA, an MX in authority, a TXT in additional, with four compression pointers.
+# Held to tshark, which decodes all of it without a complaint:
+# `test_a_dns_message_reads_as_tshark_reads_it.py`.
+message  every_arm  03 07 81 80 00 01 00 03 00 01 00 01 03 77 77 77 07 65 78 61 6D 70 6C 65 03 63 6F 6D 00 00 01 00 01 C0 0C 00 05 00 01 00 00 0E 10 00 06 03 63 64 6E C0 10 C0 2D 00 01 00 01 00 00 0E 10 00 04 C0 00 02 01 C0 2D 00 1C 00 01 00 00 0E 10 00 10 20 01 0D B8 00 00 00 00 00 00 00 00 00 00 00 01 C0 10 00 0F 00 01 00 00 0E 10 00 09 00 0A 04 6D 61 69 6C C0 10 C0 10 00 10 00 01 00 00 0E 10 00 06 05 68 65 6C 6C 6F

@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.914 A whole DNS message
+
+Moved to `doc/decision/26.914-a-whole-dns-message.md`.
+
 ### 26.913 TCP options are records
 
 Moved to `doc/decision/26.913-tcp-options-are-records.md`.

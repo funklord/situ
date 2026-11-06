@@ -11,6 +11,14 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
+struct a_data size=0..65535 mutate=Shifting repr=ValueConverted
+  a_data.size                            parameter
+  a_data.data                            offset=AbsoluteStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct aaaa_data size=0..65535 mutate=Shifting repr=ValueConverted
+  aaaa_data.size                         parameter
+  aaaa_data.data                         offset=AbsoluteStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct header size=12 repr=ValueConverted
   header.id                              offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   header.flags                           offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
@@ -19,12 +27,153 @@ struct header size=12 repr=ValueConverted
   header.nscount                         offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   header.arcount                         offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
 
+struct ipv4_address size=4 atomic=NonAtomic
+  ipv4_address.octets                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
+struct ipv6_address size=16 atomic=NonAtomic
+  ipv6_address.octets                    offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
 struct label size=1..64 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   label.form                             offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   label.rest                             offset=AbsoluteStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   label.body                             offset=AbsoluteStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   label.body.text                        offset=AbsoluteStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   label.body.pointer_low                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct mail_exchange size=3..8194 access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  mail_exchange.preference               offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  mail_exchange.exchange                 offset=AbsoluteStatic(0x02) size=Bounded(1, 8192) align=Aligned(2) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  mail_exchange.exchange.labels          offset=AbsoluteStatic(0x02) size=Bounded(1, 8192) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  mail_exchange.exchange.labels[]        offset=FrameStatic(0x02) size=Bounded(1, 64) align=Aligned(2) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
+  mail_exchange.exchange.labels[].form   offset=FrameStatic(0x02) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  mail_exchange.exchange.labels[].rest   offset=FrameStatic(0x02:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  mail_exchange.exchange.labels[].body   offset=FrameStatic(0x03) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  mail_exchange.exchange.labels[].body.text offset=FrameStatic(0x03) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  mail_exchange.exchange.labels[].body.pointer_low offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct message size=12..15034187757 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  message.head                           offset=AbsoluteStatic(0x00) size=Fixed(12) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  message.head.id                        offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  message.head.flags                     offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  message.head.qdcount                   offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  message.head.ancount                   offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  message.head.nscount                   offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  message.head.arcount                   offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  message.questions                      offset=AbsoluteStatic(0x0C) size=Bounded(0, 537124860) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  message.questions[]                    offset=FrameStatic(0x00) size=Bounded(5, 8196) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  message.questions[].qname              offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  message.questions[].qname.labels       offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  message.questions[].qname.labels[]     offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
+  message.questions[].qname.labels[].form offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  message.questions[].qname.labels[].rest offset=FrameStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  message.questions[].qname.labels[].body offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  message.questions[].qname.labels[].body.text offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  message.questions[].qname.labels[].body.pointer_low offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  message.questions[].qtype              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.questions[].qclass             offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.answers                        offset=Dynamic size=Bounded(0, 4832354295) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  message.answers[]                      offset=FrameStatic(0x00) size=Bounded(11, 73737) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  message.answers[].owner                offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  message.answers[].owner.labels         offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  message.answers[].owner.labels[]       offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable
+  message.answers[].owner.labels[].form  offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.answers[].owner.labels[].rest  offset=FrameStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.answers[].owner.labels[].body  offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  message.answers[].owner.labels[].body.text offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.answers[].owner.labels[].body.pointer_low offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  message.answers[].rtype                offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.answers[].rclass               offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.answers[].ttl                  offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.answers[].rdlength             offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.answers[].rdata                offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.a              offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.a.size         parameter
+  message.answers[].rdata.a.data         offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.answers[].rdata.ns             offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.ns.size        parameter
+  message.answers[].rdata.ns.data        offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.answers[].rdata.cname          offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.cname.size     parameter
+  message.answers[].rdata.cname.data     offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.answers[].rdata.mx             offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.mx.size        parameter
+  message.answers[].rdata.mx.data        offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.answers[].rdata.aaaa           offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.aaaa.size      parameter
+  message.answers[].rdata.aaaa.data      offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.answers[].rdata.other          offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.answers[].rdata.other.size     parameter
+  message.answers[].rdata.other.data     offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority                      offset=Dynamic size=Bounded(0, 4832354295) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  message.authority[]                    offset=FrameStatic(0x00) size=Bounded(11, 73737) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  message.authority[].owner              offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  message.authority[].owner.labels       offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  message.authority[].owner.labels[]     offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable
+  message.authority[].owner.labels[].form offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.authority[].owner.labels[].rest offset=FrameStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.authority[].owner.labels[].body offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  message.authority[].owner.labels[].body.text offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority[].owner.labels[].body.pointer_low offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  message.authority[].rtype              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.authority[].rclass             offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.authority[].ttl                offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.authority[].rdlength           offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.authority[].rdata              offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.a            offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.a.size       parameter
+  message.authority[].rdata.a.data       offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority[].rdata.ns           offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.ns.size      parameter
+  message.authority[].rdata.ns.data      offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority[].rdata.cname        offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.cname.size   parameter
+  message.authority[].rdata.cname.data   offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority[].rdata.mx           offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.mx.size      parameter
+  message.authority[].rdata.mx.data      offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority[].rdata.aaaa         offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.aaaa.size    parameter
+  message.authority[].rdata.aaaa.data    offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.authority[].rdata.other        offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.authority[].rdata.other.size   parameter
+  message.authority[].rdata.other.data   offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional                     offset=Dynamic size=Bounded(0, 4832354295) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  message.additional[]                   offset=FrameStatic(0x00) size=Bounded(11, 73737) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  message.additional[].owner             offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  message.additional[].owner.labels      offset=FrameStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  message.additional[].owner.labels[]    offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable
+  message.additional[].owner.labels[].form offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.additional[].owner.labels[].rest offset=FrameStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  message.additional[].owner.labels[].body offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  message.additional[].owner.labels[].body.text offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional[].owner.labels[].body.pointer_low offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  message.additional[].rtype             offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.additional[].rclass            offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.additional[].ttl               offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.additional[].rdlength          offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  message.additional[].rdata             offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.a           offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.a.size      parameter
+  message.additional[].rdata.a.data      offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional[].rdata.ns          offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.ns.size     parameter
+  message.additional[].rdata.ns.data     offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional[].rdata.cname       offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.cname.size  parameter
+  message.additional[].rdata.cname.data  offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional[].rdata.mx          offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.mx.size     parameter
+  message.additional[].rdata.mx.data     offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional[].rdata.aaaa        offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.aaaa.size   parameter
+  message.additional[].rdata.aaaa.data   offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  message.additional[].rdata.other       offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  message.additional[].rdata.other.size  parameter
+  message.additional[].rdata.other.data  offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+
+struct mx_data size=0..65535 mutate=Shifting repr=ValueConverted
+  mx_data.size                           parameter
+  mx_data.data                           offset=AbsoluteStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct name size=1..8192 access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   name.labels                            offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
@@ -34,6 +183,14 @@ struct name size=1..8192 access=Sequential mutate=Shifting repr=ValueConverted a
   name.labels[].body                     offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   name.labels[].body.text                offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   name.labels[].body.pointer_low         offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct name_data size=0..65535 mutate=Shifting repr=ValueConverted
+  name_data.size                         parameter
+  name_data.data                         offset=AbsoluteStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct other_data size=0..65535 mutate=Shifting repr=ValueConverted
+  other_data.size                        parameter
+  other_data.data                        offset=AbsoluteStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct question size=5..8196 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   question.qname                         offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
@@ -46,3 +203,36 @@ struct question size=5..8196 access=Sequential mutate=Shifting address=Unstable 
   question.qname.labels[].body.pointer_low offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   question.qtype                         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
   question.qclass                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct resource size=11..73737 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  resource.owner                         offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  resource.owner.labels                  offset=AbsoluteStatic(0x00) size=Bounded(1, 8192) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  resource.owner.labels[]                offset=FrameStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
+  resource.owner.labels[].form           offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  resource.owner.labels[].rest           offset=FrameStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  resource.owner.labels[].body           offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  resource.owner.labels[].body.text      offset=FrameStatic(0x01) size=Bounded(0, 63) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  resource.owner.labels[].body.pointer_low offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  resource.rtype                         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  resource.rclass                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  resource.ttl                           offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  resource.rdlength                      offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  resource.rdata                         offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.a                       offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.a.size                  parameter
+  resource.rdata.a.data                  offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  resource.rdata.ns                      offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.ns.size                 parameter
+  resource.rdata.ns.data                 offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  resource.rdata.cname                   offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.cname.size              parameter
+  resource.rdata.cname.data              offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  resource.rdata.mx                      offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.mx.size                 parameter
+  resource.rdata.mx.data                 offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  resource.rdata.aaaa                    offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.aaaa.size               parameter
+  resource.rdata.aaaa.data               offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  resource.rdata.other                   offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  resource.rdata.other.size              parameter
+  resource.rdata.other.data              offset=FrameStatic(0x00) size=Bounded(0, 65535) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable

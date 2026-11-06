@@ -1,6 +1,7 @@
 // DNS message header (RFC 1035).
 //
-// Twelve bytes of header, in front of a body this file does not describe.
+// Twelve bytes of header. `example/dnsname` goes on to the whole message: its
+// names, its four sections and the common RDATA (26.914).
 //
 // It used to say situ "cannot describe [DNS names] statically at all", which
 // was too strong and is now demonstrably so: `example/dnsname` describes one

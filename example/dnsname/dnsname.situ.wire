@@ -19,6 +19,14 @@ bit_order msb_first
 endian big
 target buffer
 
+struct a_data size=0..65535
+  parameter -         u16        size [stream]
+  @0x0000   0..65535  u8         data  sized-by=size holds=ipv4_address
+
+struct aaaa_data size=0..65535
+  parameter -         u16        size [stream]
+  @0x0000   0..65535  u8         data  sized-by=size holds=ipv6_address
+
 struct header size=12
   @0x0000   2         u16        id  big
   @0x0002   2         u16        flags  big
@@ -26,6 +34,12 @@ struct header size=12
   @0x0006   2         u16        ancount  big
   @0x0008   2         u16        nscount  big
   @0x000a   2         u16        arcount  big
+
+struct ipv4_address size=4
+  @0x0000   4         u8         octets  big
+
+struct ipv6_address size=16
+  @0x0000   16        u8         octets  big
 
 struct label size=1..64
   @0x0000   2bit      u2         form  msb_first
@@ -36,12 +50,76 @@ struct label size=1..64
   body case 3: pointer_low u8
   body case default: error
 
+struct mail_exchange size=3..8194
+  @0x0000   2         u16        preference  big
+  @0x0002   1..8192   name       exchange
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
+
+struct message size=12..15034187757
+  @0x0000   12        header     head  big
+  @0x000c   0..537124860 question   questions  sized-by=head.qdcount
+  ~         0..4832354295 resource   answers  sized-by=head.ancount
+  ~         0..4832354295 resource   authority  sized-by=head.nscount
+  ~         0..4832354295 resource   additional  sized-by=head.arcount
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
+  rdata switch: rtype
+  rdata case 1: a
+  rdata case 2: ns
+  rdata case 5: cname
+  rdata case 15: mx
+  rdata case 28: aaaa
+  rdata case default: other
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
+  rdata switch: rtype
+  rdata case 1: a
+  rdata case 2: ns
+  rdata case 5: cname
+  rdata case 15: mx
+  rdata case 28: aaaa
+  rdata case default: other
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
+  rdata switch: rtype
+  rdata case 1: a
+  rdata case 2: ns
+  rdata case 5: cname
+  rdata case 15: mx
+  rdata case 28: aaaa
+  rdata case default: other
+
+struct mx_data size=0..65535
+  parameter -         u16        size [stream]
+  @0x0000   0..65535  u8         data  sized-by=size holds=mail_exchange
+
 struct name size=1..8192
   @0x0000   1..8192   label      labels  while=form==0&&rest!=0 while-max=128
   body switch: form
   body case 0: text
   body case 3: pointer_low
   body case default: error
+
+struct name_data size=0..65535
+  parameter -         u16        size [stream]
+  @0x0000   0..65535  u8         data  sized-by=size holds=name
+
+struct other_data size=0..65535
+  parameter -         u16        size [stream]
+  @0x0000   0..65535  u8         data  sized-by=size
 
 struct question size=5..8196
   @0x0000   1..8192   name       qname
@@ -51,3 +129,22 @@ struct question size=5..8196
   body case 0: text
   body case 3: pointer_low
   body case default: error
+
+struct resource size=11..73737
+  @0x0000   1..8192   name       owner
+  ~         2         u16        rtype  big
+  ~         2         u16        rclass  big
+  ~         4         u32        ttl  big
+  ~         2         u16        rdlength  big
+  ~         0..65535  variant    rdata
+  body switch: form
+  body case 0: text
+  body case 3: pointer_low
+  body case default: error
+  rdata switch: rtype
+  rdata case 1: a a_data
+  rdata case 2: ns name_data
+  rdata case 5: cname name_data
+  rdata case 15: mx mx_data
+  rdata case 28: aaaa aaaa_data
+  rdata case default: other other_data
