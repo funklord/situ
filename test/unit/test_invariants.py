@@ -203,8 +203,8 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: struct does not have. 31 -> 32 is the third of them closing.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                80,
-	("no-scalar", "struct", "fixed"):            95,
-	("no-scalar", "struct", "unmeasurable"):     33,
+	("no-scalar", "struct", "fixed"):            102,
+	("no-scalar", "struct", "unmeasurable"):     41,
 	("no-scalar", "not-struct", ""):              1,
 }
 

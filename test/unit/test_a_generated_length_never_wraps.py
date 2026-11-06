@@ -91,7 +91,7 @@ RUST_CENSUS = {
 	"bmp.situ": 3,
 	"coap.situ": 1,
 	"cpio.situ": 1,
-	"dnsname.situ": 1,
+	"dnsname.situ": 4,
 	# 30 -> 33 on 2026-11-03, when 26.833 added `marked_tag`,
 	# `marked_index` and `marked_prefix`: a tlv and an offset table inside
 	# an `endian_marker` struct, which is the arrangement where four
@@ -111,12 +111,12 @@ RUST_CENSUS = {
 	"id3.situ": 1,
 	"image.situ": 1,
 	"importer.situ": 2,
-	"ipv4.situ": 2,
+	"ipv4.situ": 4,
 	"json.situ": 5,
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,
-	"mqtt.situ": 15,
+	"mqtt.situ": 19,
 	"netlink.situ": 4,
 	"ntp.situ": 4,
 	"packet.situ": 1,
@@ -125,6 +125,7 @@ RUST_CENSUS = {
 	"protobuf.situ": 1,
 	"rtc.situ": 2,
 	"rtp.situ": 1,
+	"tcp.situ": 2,
 	"telemetry.situ": 1,
 }
 
