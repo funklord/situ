@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.917 A cpio entry adds up
+
+Moved to `doc/decision/26.917-a-cpio-entry-adds-up.md`.
+
 ### 26.916 A field behind a length is read where it is
 
 Moved to `doc/decision/26.916-a-field-behind-a-length-is-read-where-it-is.md`.

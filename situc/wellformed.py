@@ -1489,6 +1489,7 @@ def check_whens(schema: ast.Schema) -> None:
 	# only spelling left was the bare number. Reported by bbq-predictor.
 	enums = {decl.name: {member.name for member in decl.members}
 	         for decl in schema.enums()}
+	byte_enums = {decl.name: decl.width for decl in schema.enums()}
 	seen: dict[str, ast.When] = {}
 
 	for held in schema.whens():
@@ -1534,6 +1535,17 @@ def check_whens(schema: ast.Schema) -> None:
 						         "an enum constant in a `when` is read as "
 						         "the number it stands for, so a name that "
 						         "is not one cannot be read at all"],
+					)
+				# A byte enum's member is a spelling, with no number for an
+				# expression to read: it was a traceback here (26.917).
+				if byte_enums.get(struct_name) is not None:
+					raise error(
+						f"`{struct_name}` is an enum of bytes, and a `when` "
+						"reads numbers",
+						held.span,
+						label = "no number to compare",
+						notes = ["its members are spellings rather than values "
+						         "(0052), so nothing can evaluate this"],
 					)
 				continue
 

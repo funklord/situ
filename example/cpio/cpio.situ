@@ -75,19 +75,12 @@ struct cpio_header {
 	// caller can size a buffer for rather than four billion.
 	hex u32  namesize[8]  [min = 1, max = 4096];
 
-	// Zero for `newc` and a checksum of the file data for `newc_crc`. Not
-	// modelled as a `checksum`: it covers the *data*, which is not in this
-	// struct, and coverage in situ is over regions of the message the tag is
-	// in. `example/tcp` carries the same limitation for the same reason.
-	//
-	// 0053 does not change that, and it fails a second time for a reason of
-	// its own: the algorithm is not one situ can generate. Despite the name,
-	// `newc_crc` is no CRC -- it is the unsigned sum of the file's bytes,
-	// truncated to 32 bits, so none of the thirteen CRC kernels in
-	// `std/kernels.situ` computes it and neither does `internet_checksum`,
-	// which is a one's-complement sum of 16-bit words. Measured rather than
-	// read off the name: `-H crc` over the six bytes "hello\n" writes
-	// 0000021E, and 0x21E is 542, which is 104+101+108+108+111+10.
+	// Zero for `newc` and a checksum of the file data for `newc_crc`. Despite
+	// the name `newc_crc` is no CRC -- it is the unsigned sum of the file's
+	// bytes, truncated to 32 bits. Measured rather than read off the name: `-H
+	// crc` over the six bytes "hello\n" writes 0000021E, and 0x21E is 542, which
+	// is 104+101+108+108+111+10. The data is not in this struct, so the rule is
+	// `cpio_entry`'s, below.
 	hex u32  check[8];
 }
 
@@ -157,3 +150,11 @@ assert in_place(cpio_entry.name);
 //
 // What the schema *can* say is where the next entry starts, and it does: the
 // two `reserved` runs above are exactly the padding a caller adds up.
+
+// The check, as a `when` on the entry that holds both. A non-zero value is a
+// claim, and `newc` writes none; so a `newc_crc` entry whose check was zeroed
+// goes unnoticed, the price of not comparing `magic` here, which a byte enum
+// cannot be in a `when` (26.917).
+when cpio_entry.header.check != 0
+	&& cpio_entry.header.check != (sum(cpio_entry.data) & 0xFFFFFFFF)
+	refuse sum_mismatch "the file's bytes do not add up to `check`";

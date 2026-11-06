@@ -27,6 +27,7 @@ struct cpio_entry size=111..4294971507
   ~         0..3      u8         <reserved0>  sized-by=align_up(110+header.namesize,4)-(110+header.namesize)
   ~         0..4294967295 u8         data  sized-by=header.filesize
   ~         0..3      u8         <reserved1>  sized-by=align_up(header.filesize,4)-header.filesize
+  cpio_entry refuses: sum_mismatch when cpio_entry.header.check != 0 && cpio_entry.header.check != (sum(cpio_entry.data) & 0xFFFFFFFF)
 
 struct cpio_header size=110
   @0x0000   6         format     magic  big
