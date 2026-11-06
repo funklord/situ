@@ -2913,7 +2913,10 @@ def _python_ask(ask: Ask) -> list[str]:
 		        "except situ_runtime.SituError:",
 		        f'\tprint("{ask.local} ok=0 value=0")',
 		        "else:",
-		        f'\tprint("{ask.local} ok=1 value=%d" % held)']
+		        # The pattern the other three print: a signed arm is -60 here
+		        # and 2^64 - 60 through their `%llu` (26.889).
+		        f'\tprint("{ask.local} ok=1 value=%d"'
+		        " % (int(held) & 0xFFFFFFFFFFFFFFFF))"]
 
 	return [f"held = view.{call}",
 	        f'print("{ask.local} len=%d first=%d"'

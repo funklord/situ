@@ -2419,6 +2419,10 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 	# default, so writing it on a reserved member changes no byte and is still
 	# not meaningless -- it says out loud what the silence already meant.
 	if attr.name in ("preserve", "unknown", "must_be_one"):
+		# A pad is reserved bytes too: 0043 has `pad_to(n) [preserve]` for a
+		# format whose padding is the sender's, and this refused it (26.889).
+		if isinstance(member, ast.Pad) and attr.name != "must_be_one":
+			return None
 		return None if isinstance(member, ast.Reserved) else (
 			"a `reserved` member, whose policy it sets")
 

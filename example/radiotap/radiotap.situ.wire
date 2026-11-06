@@ -1,0 +1,297 @@
+# situ wire signature v3
+# schema: radiotap.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order lsb_first
+endian little
+target buffer
+
+struct ampdu size=8
+  @0x0000   4         u32        reference  little
+  @0x0004   2         u16        ampdu_flags  little
+  @0x0006   1         u8         delimiter_crc
+  @0x0007   1         u8         ampdu_reserved
+
+struct channel size=4
+  @0x0000   2         u16        frequency  little
+  @0x0002   2         u16        channel_flags  little
+
+struct extended size=4..64
+  @0x0000   4..64     present_word words  little while=another==1 while-max=16
+
+struct fhss size=2
+  @0x0000   1         u8         hop_set
+  @0x0001   1         u8         hop_pattern
+
+struct he size=12
+  @0x0000   12        u16        he_data  little
+
+struct mcs size=3
+  @0x0000   1         u8         known
+  @0x0001   1         u8         mcs_flags
+  @0x0002   1         u8         index
+
+struct nothing size=0
+
+struct present_word size=4
+  @0x0000   3         u24        <reserved0>  little unknown
+  @0x0003   7bit      u7         <reserved1>  lsb_first unknown
+  @0x0003:7 1bit      bit        another  lsb_first
+
+struct radiotap size=8..
+  @0x0000   1         u8         version  must_eq=0
+  @0x0001   1         u8         header_pad
+  @0x0002   2         u16        len  little min=8
+  @0x0004   1bit      bit        has_tsft  lsb_first
+  @0x0004:1 1bit      bit        has_flags  lsb_first
+  @0x0004:2 1bit      bit        has_rate  lsb_first
+  @0x0004:3 1bit      bit        has_channel  lsb_first
+  @0x0004:4 1bit      bit        has_fhss  lsb_first
+  @0x0004:5 1bit      bit        has_antsignal  lsb_first
+  @0x0004:6 1bit      bit        has_antnoise  lsb_first
+  @0x0004:7 1bit      bit        has_lock  lsb_first
+  @0x0005   1bit      bit        has_txatt  lsb_first
+  @0x0005:1 1bit      bit        has_dbtxatt  lsb_first
+  @0x0005:2 1bit      bit        has_txpower  lsb_first
+  @0x0005:3 1bit      bit        has_antenna  lsb_first
+  @0x0005:4 1bit      bit        has_dbsignal  lsb_first
+  @0x0005:5 1bit      bit        has_dbnoise  lsb_first
+  @0x0005:6 1bit      bit        has_rxflags  lsb_first
+  @0x0005:7 1bit      bit        has_txflags  lsb_first
+  @0x0006   1bit      bit        has_rts  lsb_first
+  @0x0006:1 1bit      bit        has_data  lsb_first
+  @0x0006:2 1bit      bit        has_xchannel  lsb_first
+  @0x0006:3 1bit      bit        has_mcs  lsb_first
+  @0x0006:4 1bit      bit        has_ampdu  lsb_first
+  @0x0006:5 1bit      bit        has_vht  lsb_first
+  @0x0006:6 1bit      bit        has_timestamp  lsb_first
+  @0x0006:7 1bit      bit        has_he  lsb_first
+  @0x0007   5bit      u5         <reserved0>  lsb_first unknown
+  @0x0007:5 1bit      bit        radiotap_namespace  lsb_first
+  @0x0007:6 1bit      bit        vendor_namespace  lsb_first
+  @0x0007:7 1bit      bit        has_ext  lsb_first
+  @0x0008   0..64     variant    more
+  ~         0..7      variant    tsft_field_align
+  ~         0..8      variant    tsft_field
+  ~         0..1      variant    flags_field
+  ~         0..1      variant    rate_field
+  ~         0..1      variant    channel_field_align
+  ~         0..4      variant    channel_field
+  ~         0..1      variant    fhss_field_align
+  ~         0..2      variant    fhss_field
+  ~         0..1      variant    antsignal_field
+  ~         0..1      variant    antnoise_field
+  ~         0..1      variant    lock_field_align
+  ~         0..2      variant    lock_field
+  ~         0..1      variant    txatt_field_align
+  ~         0..2      variant    txatt_field
+  ~         0..1      variant    dbtxatt_field_align
+  ~         0..2      variant    dbtxatt_field
+  ~         0..1      variant    txpower_field
+  ~         0..1      variant    antenna_field
+  ~         0..1      variant    dbsignal_field
+  ~         0..1      variant    dbnoise_field
+  ~         0..1      variant    rxflags_field_align
+  ~         0..2      variant    rxflags_field
+  ~         0..1      variant    txflags_field_align
+  ~         0..2      variant    txflags_field
+  ~         0..1      variant    rts_field
+  ~         0..1      variant    data_field
+  ~         0..3      variant    xchannel_field_align
+  ~         0..8      variant    xchannel_field
+  ~         0..3      variant    mcs_field
+  ~         0..3      variant    ampdu_field_align
+  ~         0..8      variant    ampdu_field
+  ~         0..1      variant    vht_field_align
+  ~         0..12     variant    vht_field
+  ~         0..7      variant    timestamp_field_align
+  ~         0..12     variant    timestamp_field
+  ~         0..1      variant    he_field_align
+  ~         0..12     variant    he_field
+  ~         0..       u8         unparsed  sized-by=remaining
+  more switch: has_ext
+  more case 0: no_more nothing
+  more case 1: more_words extended
+  more case default: error
+  tsft_field_align switch: has_tsft
+  tsft_field_align case 0: <pad2> u8
+  tsft_field_align case 1: <pad> u8
+  tsft_field_align case default: error
+  tsft_field switch: has_tsft
+  tsft_field case 0: tsft_absent nothing
+  tsft_field case 1: mactime u64
+  tsft_field case default: error
+  flags_field switch: has_flags
+  flags_field case 0: flags_absent nothing
+  flags_field case 1: frame_flags u8
+  flags_field case default: error
+  rate_field switch: has_rate
+  rate_field case 0: rate_absent nothing
+  rate_field case 1: rate_500kbps u8
+  rate_field case default: error
+  channel_field_align switch: has_channel
+  channel_field_align case 0: <pad2> u8
+  channel_field_align case 1: <pad> u8
+  channel_field_align case default: error
+  channel_field switch: has_channel
+  channel_field case 0: channel_absent nothing
+  channel_field case 1: channel_data channel
+  channel_field case default: error
+  fhss_field_align switch: has_fhss
+  fhss_field_align case 0: <pad2> u8
+  fhss_field_align case 1: <pad> u8
+  fhss_field_align case default: error
+  fhss_field switch: has_fhss
+  fhss_field case 0: fhss_absent nothing
+  fhss_field case 1: fhss_data fhss
+  fhss_field case default: error
+  antsignal_field switch: has_antsignal
+  antsignal_field case 0: antsignal_absent nothing
+  antsignal_field case 1: dbm_antsignal i8
+  antsignal_field case default: error
+  antnoise_field switch: has_antnoise
+  antnoise_field case 0: antnoise_absent nothing
+  antnoise_field case 1: dbm_antnoise i8
+  antnoise_field case default: error
+  lock_field_align switch: has_lock
+  lock_field_align case 0: <pad2> u8
+  lock_field_align case 1: <pad> u8
+  lock_field_align case default: error
+  lock_field switch: has_lock
+  lock_field case 0: lock_absent nothing
+  lock_field case 1: lock_quality u16
+  lock_field case default: error
+  txatt_field_align switch: has_txatt
+  txatt_field_align case 0: <pad2> u8
+  txatt_field_align case 1: <pad> u8
+  txatt_field_align case default: error
+  txatt_field switch: has_txatt
+  txatt_field case 0: txatt_absent nothing
+  txatt_field case 1: tx_attenuation u16
+  txatt_field case default: error
+  dbtxatt_field_align switch: has_dbtxatt
+  dbtxatt_field_align case 0: <pad2> u8
+  dbtxatt_field_align case 1: <pad> u8
+  dbtxatt_field_align case default: error
+  dbtxatt_field switch: has_dbtxatt
+  dbtxatt_field case 0: dbtxatt_absent nothing
+  dbtxatt_field case 1: db_tx_attenuation u16
+  dbtxatt_field case default: error
+  txpower_field switch: has_txpower
+  txpower_field case 0: txpower_absent nothing
+  txpower_field case 1: dbm_tx_power i8
+  txpower_field case default: error
+  antenna_field switch: has_antenna
+  antenna_field case 0: antenna_absent nothing
+  antenna_field case 1: antenna_index u8
+  antenna_field case default: error
+  dbsignal_field switch: has_dbsignal
+  dbsignal_field case 0: dbsignal_absent nothing
+  dbsignal_field case 1: db_antsignal u8
+  dbsignal_field case default: error
+  dbnoise_field switch: has_dbnoise
+  dbnoise_field case 0: dbnoise_absent nothing
+  dbnoise_field case 1: db_antnoise u8
+  dbnoise_field case default: error
+  rxflags_field_align switch: has_rxflags
+  rxflags_field_align case 0: <pad2> u8
+  rxflags_field_align case 1: <pad> u8
+  rxflags_field_align case default: error
+  rxflags_field switch: has_rxflags
+  rxflags_field case 0: rxflags_absent nothing
+  rxflags_field case 1: rx_flags u16
+  rxflags_field case default: error
+  txflags_field_align switch: has_txflags
+  txflags_field_align case 0: <pad2> u8
+  txflags_field_align case 1: <pad> u8
+  txflags_field_align case default: error
+  txflags_field switch: has_txflags
+  txflags_field case 0: txflags_absent nothing
+  txflags_field case 1: tx_flags u16
+  txflags_field case default: error
+  rts_field switch: has_rts
+  rts_field case 0: rts_absent nothing
+  rts_field case 1: rts_retries u8
+  rts_field case default: error
+  data_field switch: has_data
+  data_field case 0: data_absent nothing
+  data_field case 1: data_retries u8
+  data_field case default: error
+  xchannel_field_align switch: has_xchannel
+  xchannel_field_align case 0: <pad2> u8
+  xchannel_field_align case 1: <pad> u8
+  xchannel_field_align case default: error
+  xchannel_field switch: has_xchannel
+  xchannel_field case 0: xchannel_absent nothing
+  xchannel_field case 1: xchannel_data xchannel
+  xchannel_field case default: error
+  mcs_field switch: has_mcs
+  mcs_field case 0: mcs_absent nothing
+  mcs_field case 1: mcs_data mcs
+  mcs_field case default: error
+  ampdu_field_align switch: has_ampdu
+  ampdu_field_align case 0: <pad2> u8
+  ampdu_field_align case 1: <pad> u8
+  ampdu_field_align case default: error
+  ampdu_field switch: has_ampdu
+  ampdu_field case 0: ampdu_absent nothing
+  ampdu_field case 1: ampdu_data ampdu
+  ampdu_field case default: error
+  vht_field_align switch: has_vht
+  vht_field_align case 0: <pad2> u8
+  vht_field_align case 1: <pad> u8
+  vht_field_align case default: error
+  vht_field switch: has_vht
+  vht_field case 0: vht_absent nothing
+  vht_field case 1: vht_data vht
+  vht_field case default: error
+  timestamp_field_align switch: has_timestamp
+  timestamp_field_align case 0: <pad2> u8
+  timestamp_field_align case 1: <pad> u8
+  timestamp_field_align case default: error
+  timestamp_field switch: has_timestamp
+  timestamp_field case 0: timestamp_absent nothing
+  timestamp_field case 1: timestamp_data timestamp
+  timestamp_field case default: error
+  he_field_align switch: has_he
+  he_field_align case 0: <pad2> u8
+  he_field_align case 1: <pad> u8
+  he_field_align case default: error
+  he_field switch: has_he
+  he_field case 0: he_absent nothing
+  he_field case 1: he_data he
+  he_field case default: error
+
+struct timestamp size=12
+  @0x0000   8         u64        value  little
+  @0x0008   2         u16        accuracy  little
+  @0x000a   1         u8         unit_position
+  @0x000b   1         u8         timestamp_flags
+
+struct vht size=12
+  @0x0000   2         u16        vht_known  little
+  @0x0002   1         u8         vht_flags
+  @0x0003   1         u8         bandwidth
+  @0x0004   4         u8         mcs_nss  little
+  @0x0008   1         u8         coding
+  @0x0009   1         u8         group_id
+  @0x000a   2         u16        partial_aid  little
+
+struct xchannel size=8
+  @0x0000   4         u32        xflags  little
+  @0x0004   2         u16        xfrequency  little
+  @0x0006   1         u8         xnumber
+  @0x0007   1         u8         max_power

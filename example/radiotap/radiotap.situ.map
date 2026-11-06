@@ -1,0 +1,249 @@
+# situ capability map v1
+# schema: radiotap.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct ampdu size=8 repr=ValueConverted
+  ampdu.reference                        offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ampdu.ampdu_flags                      offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ampdu.delimiter_crc                    offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  ampdu.ampdu_reserved                   offset=AbsoluteStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct channel size=4 repr=ValueConverted
+  channel.frequency                      offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  channel.channel_flags                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct extended size=4..64 access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  extended.words                         offset=AbsoluteStatic(0x00) size=Bounded(4, 64) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  extended.words[]                       offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  extended.words[].<reserved0>           offset=FrameStatic(0x00) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  extended.words[].<reserved1>           offset=FrameStatic(0x03) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  extended.words[].another               offset=FrameStatic(0x03:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+struct fhss size=2
+  fhss.hop_set                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  fhss.hop_pattern                       offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct he size=12 repr=ValueConverted atomic=NonAtomic
+  he.he_data                             offset=AbsoluteStatic(0x00) size=Fixed(12) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+
+struct mcs size=3
+  mcs.known                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  mcs.mcs_flags                          offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  mcs.index                              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+
+struct nothing size=0
+
+struct present_word size=4 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  present_word.<reserved0>               offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  present_word.<reserved1>               offset=AbsoluteStatic(0x03) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  present_word.another                   offset=AbsoluteStatic(0x03:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+struct radiotap size=8.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  radiotap.version                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  radiotap.header_pad                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  radiotap.len                           offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  radiotap.has_tsft                      offset=AbsoluteStatic(0x04) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_flags                     offset=AbsoluteStatic(0x04:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_rate                      offset=AbsoluteStatic(0x04:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_channel                   offset=AbsoluteStatic(0x04:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_fhss                      offset=AbsoluteStatic(0x04:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_antsignal                 offset=AbsoluteStatic(0x04:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_antnoise                  offset=AbsoluteStatic(0x04:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_lock                      offset=AbsoluteStatic(0x04:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_txatt                     offset=AbsoluteStatic(0x05) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_dbtxatt                   offset=AbsoluteStatic(0x05:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_txpower                   offset=AbsoluteStatic(0x05:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_antenna                   offset=AbsoluteStatic(0x05:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_dbsignal                  offset=AbsoluteStatic(0x05:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_dbnoise                   offset=AbsoluteStatic(0x05:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_rxflags                   offset=AbsoluteStatic(0x05:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_txflags                   offset=AbsoluteStatic(0x05:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_rts                       offset=AbsoluteStatic(0x06) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_data                      offset=AbsoluteStatic(0x06:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_xchannel                  offset=AbsoluteStatic(0x06:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_mcs                       offset=AbsoluteStatic(0x06:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_ampdu                     offset=AbsoluteStatic(0x06:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_vht                       offset=AbsoluteStatic(0x06:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_timestamp                 offset=AbsoluteStatic(0x06:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_he                        offset=AbsoluteStatic(0x06:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.<reserved0>                   offset=AbsoluteStatic(0x07) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  radiotap.radiotap_namespace            offset=AbsoluteStatic(0x07:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.vendor_namespace              offset=AbsoluteStatic(0x07:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.has_ext                       offset=AbsoluteStatic(0x07:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.more                          offset=AbsoluteStatic(0x08) size=Bounded(0, 64) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  radiotap.more.more_words               offset=AbsoluteStatic(0x08) size=Bounded(4, 64) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting canonical=NonCanonical
+  radiotap.more.more_words.words         offset=AbsoluteStatic(0x08) size=Bounded(4, 64) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  radiotap.more.more_words.words[]       offset=FrameStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  radiotap.more.more_words.words[].<reserved0> offset=FrameStatic(0x08) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  radiotap.more.more_words.words[].<reserved1> offset=FrameStatic(0x0B) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  radiotap.more.more_words.words[].another offset=FrameStatic(0x0B:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  radiotap.more.no_more                  offset=AbsoluteStatic(0x08) size=Fixed(0) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  radiotap.tsft_field_align              offset=Dynamic size=Bounded(0, 7) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.tsft_field_align.<pad>        offset=Dynamic size=Bounded(0, 7) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.tsft_field_align.<pad2>       offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.tsft_field                    offset=Dynamic size=Bounded(0, 8) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.tsft_field.mactime            offset=Dynamic size=Fixed(8) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.tsft_field.tsft_absent        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.flags_field                   offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.flags_field.frame_flags       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.flags_field.flags_absent      offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.rate_field                    offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.rate_field.rate_500kbps       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.rate_field.rate_absent        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.channel_field_align           offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.channel_field_align.<pad>     offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.channel_field_align.<pad2>    offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.channel_field                 offset=Dynamic size=Bounded(0, 4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.channel_field.channel_data    offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.channel_field.channel_data.frequency offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.channel_field.channel_data.channel_flags offset=FrameStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.channel_field.channel_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.fhss_field_align              offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.fhss_field_align.<pad>        offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.fhss_field_align.<pad2>       offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.fhss_field                    offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.fhss_field.fhss_data          offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.fhss_field.fhss_data.hop_set  offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.fhss_field.fhss_data.hop_pattern offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.fhss_field.fhss_absent        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.antsignal_field               offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.antsignal_field.dbm_antsignal offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.antsignal_field.antsignal_absent offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.antnoise_field                offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.antnoise_field.dbm_antnoise   offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.antnoise_field.antnoise_absent offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.lock_field_align              offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.lock_field_align.<pad>        offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.lock_field_align.<pad2>       offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.lock_field                    offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.lock_field.lock_quality       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.lock_field.lock_absent        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.txatt_field_align             offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.txatt_field_align.<pad>       offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.txatt_field_align.<pad2>      offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.txatt_field                   offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.txatt_field.tx_attenuation    offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.txatt_field.txatt_absent      offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.dbtxatt_field_align           offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.dbtxatt_field_align.<pad>     offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.dbtxatt_field_align.<pad2>    offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.dbtxatt_field                 offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.dbtxatt_field.db_tx_attenuation offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.dbtxatt_field.dbtxatt_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.txpower_field                 offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.txpower_field.dbm_tx_power    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.txpower_field.txpower_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.antenna_field                 offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.antenna_field.antenna_index   offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.antenna_field.antenna_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.dbsignal_field                offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.dbsignal_field.db_antsignal   offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.dbsignal_field.dbsignal_absent offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.dbnoise_field                 offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.dbnoise_field.db_antnoise     offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.dbnoise_field.dbnoise_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.rxflags_field_align           offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.rxflags_field_align.<pad>     offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.rxflags_field_align.<pad2>    offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.rxflags_field                 offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.rxflags_field.rx_flags        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.rxflags_field.rxflags_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.txflags_field_align           offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.txflags_field_align.<pad>     offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.txflags_field_align.<pad2>    offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.txflags_field                 offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.txflags_field.tx_flags        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.txflags_field.txflags_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.rts_field                     offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.rts_field.rts_retries         offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.rts_field.rts_absent          offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.data_field                    offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.data_field.data_retries       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.data_field.data_absent        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.xchannel_field_align          offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.xchannel_field_align.<pad>    offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.xchannel_field_align.<pad2>   offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.xchannel_field                offset=Dynamic size=Bounded(0, 8) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.xchannel_field.xchannel_data  offset=Dynamic size=Fixed(8) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.xchannel_field.xchannel_data.xflags offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.xchannel_field.xchannel_data.xfrequency offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.xchannel_field.xchannel_data.xnumber offset=FrameStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.xchannel_field.xchannel_data.max_power offset=FrameStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.xchannel_field.xchannel_absent offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.mcs_field                     offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.mcs_field.mcs_data            offset=Dynamic size=Fixed(3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.mcs_field.mcs_data.known      offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.mcs_field.mcs_data.mcs_flags  offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.mcs_field.mcs_data.index      offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.mcs_field.mcs_absent          offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.ampdu_field_align             offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.ampdu_field_align.<pad>       offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.ampdu_field_align.<pad2>      offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.ampdu_field                   offset=Dynamic size=Bounded(0, 8) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.ampdu_field.ampdu_data        offset=Dynamic size=Fixed(8) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.ampdu_field.ampdu_data.reference offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.ampdu_field.ampdu_data.ampdu_flags offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.ampdu_field.ampdu_data.delimiter_crc offset=FrameStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.ampdu_field.ampdu_data.ampdu_reserved offset=FrameStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.ampdu_field.ampdu_absent      offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.vht_field_align               offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.vht_field_align.<pad>         offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.vht_field_align.<pad2>        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.vht_field                     offset=Dynamic size=Bounded(0, 12) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.vht_field.vht_data            offset=Dynamic size=Fixed(12) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.vht_field.vht_data.vht_known  offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.vht_field.vht_data.vht_flags  offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.vht_field.vht_data.bandwidth  offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.vht_field.vht_data.mcs_nss    offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  radiotap.vht_field.vht_data.coding     offset=FrameStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.vht_field.vht_data.group_id   offset=FrameStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.vht_field.vht_data.partial_aid offset=FrameStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.vht_field.vht_absent          offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.timestamp_field_align         offset=Dynamic size=Bounded(0, 7) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.timestamp_field_align.<pad>   offset=Dynamic size=Bounded(0, 7) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.timestamp_field_align.<pad2>  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.timestamp_field               offset=Dynamic size=Bounded(0, 12) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.timestamp_field.timestamp_data offset=Dynamic size=Fixed(12) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.timestamp_field.timestamp_data.value offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.timestamp_field.timestamp_data.accuracy offset=FrameStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  radiotap.timestamp_field.timestamp_data.unit_position offset=FrameStatic(0x0A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.timestamp_field.timestamp_data.timestamp_flags offset=FrameStatic(0x0B) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  radiotap.timestamp_field.timestamp_absent offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.he_field_align                offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.he_field_align.<pad>          offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  radiotap.he_field_align.<pad2>         offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  radiotap.he_field                      offset=Dynamic size=Bounded(0, 12) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  radiotap.he_field.he_data              offset=Dynamic size=Fixed(12) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  radiotap.he_field.he_data.he_data      offset=FrameStatic(0x00) size=Fixed(12) align=Aligned(8) repr=ValueConverted atomic=NonAtomic address=FrameStable
+  radiotap.he_field.he_absent            offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  radiotap.unparsed                      offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct timestamp size=12 repr=ValueConverted
+  timestamp.value                        offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  timestamp.accuracy                     offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  timestamp.unit_position                offset=AbsoluteStatic(0x0A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  timestamp.timestamp_flags              offset=AbsoluteStatic(0x0B) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct vht size=12 repr=ValueConverted atomic=NonAtomic
+  vht.vht_known                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  vht.vht_flags                          offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  vht.bandwidth                          offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  vht.mcs_nss                            offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  vht.coding                             offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  vht.group_id                           offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  vht.partial_aid                        offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct xchannel size=8 repr=ValueConverted
+  xchannel.xflags                        offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  xchannel.xfrequency                    offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  xchannel.xnumber                       offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  xchannel.max_power                     offset=AbsoluteStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

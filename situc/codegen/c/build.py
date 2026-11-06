@@ -187,6 +187,9 @@ class Part:
 		self.declined: tuple[tuple[str, str], ...] = ()
 					# the arms it cannot write, and why
 		self.chooser: Part | None = None
+		#: The CHOSEN part that wrote this one's discriminant, whose tag
+		#: this one's value has to agree with (26.889).
+		self.agrees: Part | None = None
 					# the CHOSEN part that says what this
 					# discriminant holds
 
@@ -199,13 +202,16 @@ class ArmOf:
 	from the arm and cannot disagree with the body: 26.617's argument, with
 	a constructor in the place of a function. `tag` is the default arm's
 	discriminant, which is the caller's and must be no named arm's. `part`
-	is what the arm writes, and None for an arm of no bytes.
+	is what the arm writes, and None for an arm of no bytes. `lead` is a pad
+	the arm brings with it, from a variant of nothing else on the same
+	discriminant (26.889).
 	"""
 
 	name: str
 	value: int | None
 	tag: Part | None
 	part: Part | None
+	lead: Part | None = None
 
 
 def every_part(parts: list[Part]) -> list[Part]:
@@ -213,8 +219,38 @@ def every_part(parts: list[Part]) -> list[Part]:
 	found: list[Part] = []
 	for part in parts:
 		found.append(part)
-		found.extend(one.part for one in part.arms if one.part is not None)
+		for arm in part.arms:
+			found.extend(one for one in (arm.lead, arm.part) if one is not None)
 	return found
+
+
+def _only_pads(part: Part) -> bool:
+	"""Whether a variant says nothing but how far to pad: it takes no value."""
+	return all(arm.tag is None and arm.part is None for arm in part.arms)
+
+
+def _fold_pads(parts: list[Part]) -> list[Part]:
+	"""Hand a pad's variant to the arms of the variant it stands in front of.
+
+	`variant a switch (f) { case 1: pad_to(8); ... }` directly before
+	`variant b switch (f) { case 1: u64 v; ... }` is one choice, and radiotap
+	spells every field that way. The caller says it once, with `b`'s arm, and
+	the pad is in that arm's hands (26.889).
+	"""
+	folded: list[Part] = []
+	for part in parts:
+		ahead = folded[-1] if folded else None
+		if (ahead is not None and ahead.role == CHOSEN and part.role == CHOSEN
+				and ahead.placement.discriminant == part.placement.discriminant
+				and _only_pads(ahead)):
+			pads = {arm.value: arm.lead for arm in ahead.arms}
+			if all(arm.value in pads for arm in part.arms):
+				for arm in part.arms:
+					arm.lead = pads[arm.value]
+				folded[-1] = part
+				continue
+		folded.append(part)
+	return folded
 
 
 def _states_its_content(placement: Placement) -> bool:
@@ -784,6 +820,12 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 	return _value_part(SCALAR, placement, local)
 
 
+def _claimed_by(variant: Placement) -> tuple[int, ...]:
+	"""The discriminant values a variant's named arms claim."""
+	return tuple(sorted({int(case.value) for case in (variant.arm_cases or ())
+	                     if case.value is not None}))
+
+
 def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		disc: Placement | None, shape: Shape
 		) -> tuple[Part | None, str | None]:
@@ -791,6 +833,10 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	inner = _arm_placement(struct, str(case.member))
 	if inner is None:
 		return None, f"`{case.member}` is not a member of this struct"
+	if traverse.pad_alignment(inner) is not None:
+		# At the cursor, which is the holder's: an arm's pad is measured from
+		# the struct the variant is in, as the reader measures it.
+		return Part(PAD, inner, bare_name(inner.name or "pad")), None
 	why = _arm_refusal(inner, shape.header, shape.prefix, shape.structs)
 	if why:
 		# The LOCAL name, as every other member-level message uses: this
@@ -1064,13 +1110,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	# By discriminant, each with the values its other arms claim.
 	tags: dict[str | None, tuple[Arm | None, tuple[int, ...]]] = {}
 	for variant in variants:
-		if variant.discriminant in tags:
-			return [], f"`{variant.discriminant}` chooses two variants, so " \
-			           "an arm of one would decide the other"
-		tags[variant.discriminant] = (
-			chosen.get(variant.path),
-			tuple(sorted({int(case.value) for case in (variant.arm_cases or ())
-			              if case.value is not None})))
+		tags.setdefault(variant.discriminant,
+		                (chosen.get(variant.path), _claimed_by(variant)))
 
 	groups = _packed_groups(members)
 
@@ -1244,7 +1285,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# The arm of THIS variant. Writing the requested one for each
 			# wrote mqtt's CONNECT with `will_present` three times, in
 			# place of its user name and password (26.862).
-			claimed = tags[held.discriminant][1]
+			claimed = _claimed_by(held)
 			disc = next((other for other in members
 			             if other.name == held.discriminant), None)
 			if isinstance(arm, Each):
@@ -1262,12 +1303,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					if case.value is None and disc is not None \
 							and not disc.peek:
 						tag = _claimed_tag(struct, disc, claimed)
+					padding = body is not None and body.role == PAD
 					offered.append(ArmOf(
 						arm_name(case),
 						None if case.value is None else int(case.value),
 						tag,
-						None if body is None or _of_no_bytes(body, structs)
-						else body))
+						None if body is None or padding
+						or _of_no_bytes(body, structs) else body,
+						body if padding else None))
 				if not offered:
 					return [], refused[0][1]
 				part.arms     = tuple(offered)
@@ -1576,8 +1619,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 
 	# Last, for the same names: an arm's value says what its discriminant
 	# holds, and a peeked one is written by the arm itself.
+	parts = _fold_pads(parts)
+	leaders: dict[str | None, Part] = {}
 	for part in parts:
 		if part.role == CHOSEN:
+			held_by = leaders.setdefault(part.placement.discriminant, part)
+			if held_by is not part:
+				part.agrees = held_by
+				continue
 			for one in parts:
 				if one.role in (ARMTAG, BITS) and \
 						one.placement.name == part.placement.discriminant:
@@ -2263,7 +2312,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# refuses the file: a run that takes the rest of the frame is
 		# walked without being counted.
 		*([f"\tuint32_t    {PADLEN};"]
-		  if any(part.role == PAD for part in parts) else []),
+		  if any(part.role == PAD for part in every_part(parts)) else []),
 		*([f"\tint64_t     {SOLVED};"]
 		  if any(part.solved is not None for part in parts) else []),
 		*([f"\tuint32_t    {COUNT} = 0u;"]
@@ -2385,7 +2434,10 @@ def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part],
 	The arm's part is written as it is for a builder of that arm alone,
 	with what it reads bound to the names it expects.
 	"""
-	lines = [f"\tswitch ({part.local}.situ_arm) {{"]
+	lines = [*([f"\tif ({part.local}.situ_tag != {part.agrees.local}.situ_tag) {{",
+	            "\t\treturn SITU_ERR_CONSTRAINT;", "\t}"]
+	           if part.agrees is not None else []),
+	         f"\tswitch ({part.local}.situ_arm) {{"]
 	for at, arm in enumerate(part.arms):
 		bound = _arguments(struct, [arm.part], prefix, enums) \
 			if arm.part is not None else []
@@ -2396,6 +2448,9 @@ def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part],
 			                      for value in arm.tag.others)
 			body += [f"\tif ({claimed}) {{",
 			         "\t\treturn SITU_ERR_CONSTRAINT;", "\t}"]
+		if arm.lead is not None:
+			body += _written(struct, [arm.lead], parts, structs, prefix,
+			                 enums)
 		if arm.part is not None:
 			body += _written(struct, [arm.part], parts, structs, prefix,
 			                 enums)

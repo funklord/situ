@@ -1975,6 +1975,33 @@ def arm_members(struct: ResolvedStruct,
 	        for arm in variant.arm_cases]
 
 
+def arm_alignments(struct: ResolvedStruct,
+		variant: Placement) -> list[tuple[Arm, int]] | None:
+	"""Each arm's alignment, where a variant at a run-time offset only pads.
+
+	`variant p switch (f) { case 1: pad_to(8); case 0: nothing none; ... }`
+	has a length that depends on where it starts, so it is not a term to add.
+	It is a term to align by, and an arm of no bytes aligns by one. Rendered
+	as one number chosen by the discriminant and handed to `align_up`, the
+	running offset appears once. A conditional around the offset would repeat
+	it, and twenty radiotap fields would double the text twenty times (26.889).
+
+	None for anything else, a variant at a constant offset included: there
+	every pad is a constant and the arm's length is an ordinary one.
+	"""
+	if variant.kind != "variant" or variant.offset_bits is not None:
+		return None
+	found: list[tuple[Arm, int]] = []
+	for arm, member in arm_members(struct, variant):
+		if member is None:
+			continue		# `default: error`: no such message
+		pad = pad_alignment(member)
+		if pad is None and not (member.is_fixed_size and member.size_bits == 0):
+			return None
+		found.append((arm, 1 if pad is None else pad))
+	return found if any(unit > 1 for _, unit in found) else None
+
+
 def _variant_is_measurable(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct, variant: Placement,
 		seen: frozenset[str] = frozenset()) -> bool:
@@ -1999,6 +2026,11 @@ def _variant_is_measurable(structs: dict[str, ResolvedStruct],
 	the recursion has to terminate in the data, and how deep it may go is
 	what the schema declares.
 	"""
+	# A pad arm at a run-time offset is as long as where it starts says, and
+	# framing measures a member by itself. Four backends declining together
+	# is the answer here until framing carries the cursor in (26.889).
+	if arm_alignments(struct, variant) is not None:
+		return False
 	for arm, member in arm_members(struct, variant):
 		if member is None:
 			# `default: error` selects nothing, so there is no length to
@@ -2386,6 +2418,17 @@ def walk_order(struct: ResolvedStruct,
 			break
 		before.append(held)
 	return before + interior
+
+
+def leading_bytes(parts: list[int | Placement]
+		) -> tuple[int, list[int | Placement]]:
+	"""The fixed bytes before the first variable member, and what follows."""
+	leading = 0
+	for at, part in enumerate(parts):
+		if not isinstance(part, int):
+			return leading, parts[at:]
+		leading += part
+	return leading, []
 
 
 def preceding_parts(struct: ResolvedStruct,

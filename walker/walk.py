@@ -273,8 +273,26 @@ def chain_bits(view: View, index: int) -> int:
 			unit = earlier.pad_to * BITS_PER_BYTE
 			total = min(((total + unit - 1) // unit) * unit, room)
 			continue
+		# A pad arm is the same step. Asked for its size it would ask for
+		# its variant's offset, which is this sum again: a cycle, and past
+		# that a walk from the start for every pad (26.889).
+		arm = _chosen_pad(view, before)
+		if arm:
+			unit = arm * BITS_PER_BYTE
+			total = min(((total + unit - 1) // unit) * unit, room)
+			continue
 		total = min(total + size_bits(view, before), room)
 	raise Refused(f"placement {index} is not a member of this struct")
+
+
+def _chosen_pad(view: View, index: int) -> int:
+	"""The alignment a variant's chosen arm pads to, or zero."""
+	if index not in view.image.arms:
+		return 0
+	chosen = chosen_arm(view, index)
+	if chosen is None or chosen == NONE:
+		return 0
+	return view.image.placements[chosen].pad_to or 0
 
 
 def size_bits(view: View, index: int, depth: int = 0) -> int:
@@ -648,6 +666,12 @@ def _arm_bits(view: View, variant: int, chosen: int, depth: int) -> int:
 	`size_bits` is there.
 	"""
 	placement = view.image.placements[chosen]
+	if placement.pad_to:
+		# From where the variant starts, for the reason above.
+		unit = placement.pad_to * BITS_PER_BYTE
+		off  = offset_bits(view, variant)
+		room = (view.limit - view.at) * BITS_PER_BYTE
+		return min(((off + unit - 1) // unit) * unit, room) - off
 	shape     = view.image.structs[placement.type_struct] \
 		if placement.type_struct != NONE else None
 

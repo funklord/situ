@@ -122,6 +122,7 @@ RUST_CENSUS = {
 	"ntp.situ": 4,
 	"packet.situ": 1,
 	"pes.situ": 15,
+	"radiotap.situ": 35,
 	"protobuf.situ": 1,
 	"rtc.situ": 2,
 	"sexpr.situ": 3,

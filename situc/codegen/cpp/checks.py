@@ -151,8 +151,10 @@ def _decodes(enums: set[str], struct: ResolvedStruct,
 		*(f"\traw[{first + i}u] = {byte:#04x}u;"
 		  for i, byte in enumerate(pattern)),
 		"",
-		f"\tif (static_cast<std::int64_t>(view.{c_name(placement.name)}())"
-		f" != {expected}) {{",
+		# Unsigned, both sides: a `u64` whose top bit is set is past every
+		# `int64_t`, and the pattern's last byte sets it in little endian.
+		f"\tif (static_cast<std::uint64_t>(view.{c_name(placement.name)}())"
+		f" != {expected & (1 << 64) - 1}ull) {{",
 		*_fail(label, "does not decode its own bytes"),
 		"\t}",
 		"}",

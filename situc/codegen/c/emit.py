@@ -106,6 +106,7 @@ from situc.traverse import (
 	obligations,
 	offset_plan,
 	own_members,
+	arm_alignments,
 	pad_alignment,
 	pinned_bytes,
 	pinned_runs,
@@ -8110,7 +8111,7 @@ class Emitter:
 			leading += part
 
 		constant = leading
-		terms: list[str | tuple[str, int]] = []
+		terms: list[str | tuple[str, str]] = []
 		seen     = 0
 
 		for other in parts:
@@ -8119,12 +8120,12 @@ class Emitter:
 				if seen > leading:
 					terms.append(str(other) + "u")
 				continue
-			pad = pad_alignment(other)
-			if pad is not None:
+			unit = self._alignment(struct, other)
+			if unit is not None:
 				# A pad advances the sum to the next multiple, not by a
 				# fixed length (0043). Marked so the emit loop below aligns
 				# instead of adding.
-				terms.append(("align", pad))
+				terms.append(("align", unit))
 				continue
 			if not self._has_length(struct, other):
 				return self._unresolvable_offset(placement, other)
@@ -8163,7 +8164,7 @@ class Emitter:
 		# the view, and `validate` reports the message as malformed (26.27).
 		for term in terms:
 			if isinstance(term, tuple):
-				lines.append(f"\toffset = situ_align_up_u32(offset, {term[1]}u,"
+				lines.append(f"\toffset = situ_align_up_u32(offset, {term[1]},"
 				             " view.limit);")
 			else:
 				lines.append(f"\toffset = situ_advance_u32(offset, ({term}),"
@@ -8544,6 +8545,10 @@ class Emitter:
 		is asked on its own instead (26.689).
 		"""
 		if placement.kind != "variant" or placement.is_fixed_size:
+			return []
+		# A variant of pads aligns and reads nothing, and what it aligns for
+		# is asked this question itself (26.889).
+		if arm_alignments(struct, placement) is not None:
 			return []
 		length = self._variant_length(struct, placement)
 		base   = self._base_expression(struct, placement)
@@ -9079,6 +9084,22 @@ class Emitter:
 			"\t\treturn SITU_ERR_VERSION;",
 			"\t}",
 		]
+
+	def _alignment(self, struct: ResolvedStruct,
+			other: Placement) -> str | None:
+		"""What `other` aligns the running offset to, where it does."""
+		pad = pad_alignment(other)
+		if pad is not None:
+			return f"{pad}u"
+		arms = arm_alignments(struct, other)
+		if arms is None or other.discriminant is None:
+			return None
+		held  = self._over_fields(struct, other.discriminant, "view")
+		chain = "1u"
+		for arm, unit in reversed(arms):
+			chain = (f"{unit}u" if arm.value is None
+			         else f"({held} == {arm.value}u ? {unit}u : {chain})")
+		return chain
 
 	def _variant_length(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view", depth: str | None = None) -> str | None:

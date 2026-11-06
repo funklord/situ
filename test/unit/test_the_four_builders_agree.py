@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import importlib
 import itertools
+import math
 import random
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Iterable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,11 +116,35 @@ class Picked(Unit):
 	"""One combination of a builder's arms.
 
 	The builder takes each arm as a value, so nothing generated grows with
-	the combinations (26.881). What is tried does, and this is where the
-	product belongs: every combination goes through all four here.
+	the combinations (26.881). What is tried does, so the product is taken
+	only where it is small: radiotap's is 2^24, and this comparison would
+	have outlived the gate that ran it (26.889).
 	"""
 
 	picks: tuple[tuple[Part, ArmOf], ...] = ()
+
+
+#: Every combination up to this many, and past it a covering set.
+ALL_COMBINATIONS = 64
+
+
+def _covering(chosen: list[Part]) -> Iterable[tuple[ArmOf, ...]]:
+	"""Every arm seen, and enough mixes that their order is exercised.
+
+	Each arm of each variant beside the first arm of the rest, the first and
+	last arm of all, and a fixed sample. Seeded, because four backends have to
+	be handed the same list, and a failure has to come back.
+	"""
+	arms   = [part.arms for part in chosen]
+	first  = tuple(one[0] for one in arms)
+	yield first
+	yield tuple(one[-1] for one in arms)
+	for at, held in enumerate(arms):
+		for arm in held[1:]:
+			yield (*first[:at], arm, *first[at + 1:])
+	picked = random.Random(len(arms))
+	for _ in range(ALL_COMBINATIONS):
+		yield tuple(picked.choice(one) for one in arms)
 
 
 def _combinations(units: list[Unit]) -> list[Unit]:
@@ -130,10 +155,11 @@ def _combinations(units: list[Unit]) -> list[Unit]:
 		if not chosen:
 			found.append(unit)
 			continue
+		count = math.prod(len(part.arms) for part in chosen)
+		tried = (itertools.product(*(part.arms for part in chosen))
+		         if count <= ALL_COMBINATIONS else _covering(chosen))
 		found.extend(Picked(unit.struct, unit.parts, unit.suffix,
-		                    tuple(zip(chosen, arms)))
-		             for arms in itertools.product(*(part.arms
-		                                             for part in chosen)))
+		                    tuple(zip(chosen, arms))) for arms in tried)
 	return found
 
 

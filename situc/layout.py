@@ -1375,6 +1375,7 @@ class Solver:
 		# because a sender varying it varies bytes the format calls fixed
 		# (8.8). The policy rides on the placement as an ordinary reserved
 		# attribute, so the existing validation needs no pad special case.
+		name  = _pad_name(layout, prefix)
 		names = {attr.name for attr in member.attrs}
 		if "preserve" in names or "unknown" in names:
 			policy = member.attrs
@@ -1383,8 +1384,8 @@ class Solver:
 			          ast.Attr(member.span, "must_be_zero", None))
 
 		layout.placements.append(Placement(
-			path          = f"{prefix}.<pad>",
-			name          = "<pad>",
+			path          = f"{prefix}.{name}",
+			name          = name,
 			kind          = "reserved",
 			type_name     = "u8",
 			offset_bits   = offset,
@@ -2274,6 +2275,7 @@ class Solver:
 		if state.cause is None and total.hi != total.lo:
 			state.cause = (variant.name, variant.span, _render_extent(total))
 
+		_refuse_a_pad_beside_bytes(variant, cursor, dict(arm_sizes))
 		state.cursor = cursor.advance(total)
 
 	def arm_extent(self, decl: ast.StructDecl, arm: ast.VariantArm, scope: Scope,
@@ -2433,7 +2435,7 @@ class Solver:
 			# that removing it changes what an observer learns. `<reserved0>`
 			# says nothing about intent, and padding for traffic analysis is
 			# the case where intent is the whole point.
-			name = "<pad>"
+			name = _pad_name(layout, prefix)
 		else:
 			name = f"<reserved{layout.reserved_count}>"
 			layout.reserved_count += 1
@@ -4203,6 +4205,46 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 		)
 	layout.placements[at] = replace(
 		run, tail_bytes=sum(held.size_bits for held in after) // BITS_PER_BYTE)
+
+
+def _refuse_a_pad_beside_bytes(variant: ast.Variant, cursor: Extent,
+		sizes: dict[str, int]) -> None:
+	"""A pad arm at a run-time offset shares its variant with nothing solid.
+
+	Its length depends on where it starts, so it is a number to align by and
+	not a length to add, and one variant cannot be both. Every member after
+	it lost its accessor while `validate` went on calling them (26.889).
+	"""
+	pads = [arm for arm in variant.arms if isinstance(arm.member, ast.Pad)]
+	if cursor.is_exact or not pads:
+		return
+	shut = {_arm_name(arm) for arm in pads}
+	for name, size in sizes.items():
+		if name in shut or size == 0:
+			continue
+		raise error(
+			f"arm `{name}` holds bytes beside an arm that pads",
+			pads[0].span,
+			label = "this pad's length depends on where the variant starts",
+			notes = ["a pad at a run-time offset aligns the offset and bytes "
+			         "add to it, and one variant cannot do both",
+			         "put `[align = n]` on the arm that wants it, or a "
+			         "variant of pads on the same discriminant in front of "
+			         "this one (26.889)"],
+		)
+
+
+def _pad_name(layout: StructLayout, prefix: str) -> str:
+	"""`<pad>`, and `<pad2>` for the next one in the same scope.
+
+	Two were one path, so `resolved.find` answered for the first and C
+	emitted `situ_p_pad_offset` twice and did not compile. A format that pads
+	after each of two opaques has this: all of XDR.
+	"""
+	taken = sum(held.name.startswith("<pad")
+	            and held.path.rpartition(".")[0] == prefix
+	            for held in layout.placements)
+	return f"<pad{taken + 1}>" if taken else "<pad>"
 
 
 def _located_source(member: ast.Field | ast.Reserved) -> str | None:

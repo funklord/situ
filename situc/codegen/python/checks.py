@@ -36,7 +36,7 @@ from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (enclosing_arm, has_computable_extent,
+from situc.traverse import (enclosing_arm, has_computable_extent, indexed_elements,
                             inside_an_unresolved_arm,
                             measured_from_a_moving_base, own_entries)
 from situc.types import ScalarKind
@@ -1397,7 +1397,10 @@ def _occupies(basename: str, struct: ResolvedStruct,
 	# bytes; `bytes(...)` is what makes a difference printable and is the
 	# same cast the vector suites use.
 	read = f"view.{py_name(placement.name)}"
-	if placement.array_count is not None:
+	if placement.array_count is not None and indexed_elements(placement):
+		# A run of wider values has an indexed getter and no property.
+		read = f"[{read}(at) for at in range({placement.array_count})]"
+	elif placement.array_count is not None:
 		read = f"bytes({read})"
 
 	name = py_name(f"{struct.name}_{placement.name}")

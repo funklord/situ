@@ -111,6 +111,8 @@ from situc.traverse import (
 	offset_plan,
 	own_entries,
 	own_members,
+	arm_alignments,
+	leading_bytes,
 	pad_alignment,
 	pinned_bytes,
 	pinned_runs,
@@ -1833,6 +1835,22 @@ class Emitter:
 		return (f"situ_advance_u32({chain}, {local}_lead({chain}),"
 		        " raw_.limit)")
 
+	def _alignment(self, struct: ResolvedStruct,
+			other: Placement) -> str | None:
+		"""What `other` aligns the running offset to, where it does."""
+		pad = pad_alignment(other)
+		if pad is not None:
+			return f"{pad}u"
+		arms = arm_alignments(struct, other)
+		if arms is None or other.discriminant is None:
+			return None
+		held  = self._over_fields(struct, other.discriminant)
+		chain = "1u"
+		for arm, unit in reversed(arms):
+			chain = (f"{unit}u" if arm.value is None
+			         else f"({held} == {arm.value}u ? {unit}u : {chain})")
+		return chain
+
 	def _chain_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		"""Where a member starts, as a C++ expression.
@@ -1850,15 +1868,17 @@ class Emitter:
 		if parts is None:
 			return None
 
-		constant = sum(part for part in parts if isinstance(part, int))
-		terms: list[str | tuple[str, int]] = []
+		# The leading bytes alone: see the Python backend (26.889).
+		leading, tail = leading_bytes(parts)
+		terms: list[str | tuple[str, str]] = []
 
-		for other in parts:
+		for other in tail:
 			if isinstance(other, int):
+				terms.append(f"{other}u")
 				continue
-			pad = pad_alignment(other)
-			if pad is not None:
-				terms.append(("align", pad))
+			unit = self._alignment(struct, other)
+			if unit is not None:
+				terms.append(("align", unit))
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -1866,14 +1886,14 @@ class Emitter:
 			terms.append(length)
 
 		if not terms:
-			return str(constant)
+			return str(leading)
 
 		# Saturating, term by term, for the reason `situ_advance_u32` exists:
 		# one of these is a length the message chose, and `at + by` in
 		# `std::uint32_t` wraps to an offset inside the frame pointing at the
 		# wrong bytes. C's runtime is this backend's too, so it is the same
 		# function rather than a second one that agrees today.
-		folded = str(constant)
+		folded = str(leading)
 		for term in terms:
 			if isinstance(term, tuple):
 				folded = f"situ_align_up_u32({folded}, {term[1]}, raw_.limit)"
@@ -1930,9 +1950,9 @@ class Emitter:
 					lines.append(f"\t\tat = situ_advance_u32(at, {other}u,"
 					             " raw_.limit);")
 				continue
-			pad = pad_alignment(other)
-			if pad is not None:
-				lines.append(f"\t\tat = situ_align_up_u32(at, {pad}, raw_.limit);")
+			unit = self._alignment(struct, other)
+			if unit is not None:
+				lines.append(f"\t\tat = situ_align_up_u32(at, {unit}, raw_.limit);")
 				continue
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
@@ -3909,6 +3929,10 @@ class Emitter:
 		is asked on its own instead (26.689).
 		"""
 		if placement.kind != "variant" or placement.is_fixed_size:
+			return []
+		# A variant of pads aligns and reads nothing, and what it aligns for
+		# is asked this question itself (26.889).
+		if arm_alignments(struct, placement) is not None:
 			return []
 		length = self._variant_length(struct, placement)
 		base   = self._offset_expression(struct, placement)

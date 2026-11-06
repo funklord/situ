@@ -1,0 +1,221 @@
+// IEEE 802.11 radiotap: the header a monitor-mode capture puts in front of
+// every frame, and the format this tree's fan-out argument was about.
+//
+// A 32-bit `present` word says which of two dozen fields follow, in bit
+// order, so a builder per combination would be 2^24 of them and this is one.
+// Each field aligns to its own size from the START OF THE HEADER, which is
+// the struct that holds it rather than the arm's struct and rather than the
+// message: `[align = n]` on an arm says exactly that (26.889). Where the
+// header sits in a capture does not move a field inside it.
+//
+// The bit numbers and sizes are the radiotap specification's, as
+// include/net/ieee80211_radiotap.h numbers them. tshark reads every vector
+// beside this file, field by field, so an alignment wrong here is a value
+// wrong there. Fields past bit 23 follow the ones described and land in
+// `unparsed`, as a reader that does not know one is told to treat it.
+
+target buffer;
+endian little;
+bit_order lsb_first;
+
+struct nothing { }
+
+struct channel  { u16 frequency; u16 channel_flags; }
+struct fhss     { u8 hop_set; u8 hop_pattern; }
+struct xchannel { u32 xflags; u16 xfrequency; u8 xnumber; u8 max_power; }
+struct mcs      { u8 known; u8 mcs_flags; u8 index; }
+struct ampdu    { u32 reference; u16 ampdu_flags; u8 delimiter_crc; u8 ampdu_reserved; }
+struct vht {
+	u16 vht_known;
+	u8  vht_flags;
+	u8  bandwidth;
+	u8  mcs_nss[4];
+	u8  coding;
+	u8  group_id;
+	u16 partial_aid;
+}
+struct timestamp { u64 value; u16 accuracy; u8 unit_position; u8 timestamp_flags; }
+struct he       { u16 he_data[6]; }
+
+// One more `present` word, while each says there is another after it.
+struct present_word {
+	reserved u24 [unknown];
+	reserved u7  [unknown];
+	bit      another;
+}
+
+struct extended {
+	present_word  words[] while (another == 1) max 16;
+}
+
+struct radiotap {
+	u8    version [must_eq = 0];
+	u8    header_pad;
+	u16   len [min = 8];
+
+	bit   has_tsft;
+	bit   has_flags;
+	bit   has_rate;
+	bit   has_channel;
+	bit   has_fhss;
+	bit   has_antsignal;
+	bit   has_antnoise;
+	bit   has_lock;
+	bit   has_txatt;
+	bit   has_dbtxatt;
+	bit   has_txpower;
+	bit   has_antenna;
+	bit   has_dbsignal;
+	bit   has_dbnoise;
+	bit   has_rxflags;
+	bit   has_txflags;
+	bit   has_rts;
+	bit   has_data;
+	bit   has_xchannel;
+	bit   has_mcs;
+	bit   has_ampdu;
+	bit   has_vht;
+	bit   has_timestamp;
+	bit   has_he;
+	reserved u5 [unknown];
+	bit   radiotap_namespace;
+	bit   vendor_namespace;
+	bit   has_ext;
+
+	variant more switch (has_ext) {
+		case 1:  extended  more_words;
+		case 0:  nothing   no_more;
+		default: error;
+	}
+
+	variant tsft_field switch (has_tsft) {
+		case 1:  u64 mactime [align = 8];
+		case 0:  nothing tsft_absent;
+		default: error;
+	}
+	variant flags_field switch (has_flags) {
+		case 1:  u8 frame_flags;
+		case 0:  nothing flags_absent;
+		default: error;
+	}
+	variant rate_field switch (has_rate) {
+		case 1:  u8 rate_500kbps;
+		case 0:  nothing rate_absent;
+		default: error;
+	}
+	variant channel_field switch (has_channel) {
+		case 1:  channel channel_data [align = 2];
+		case 0:  nothing channel_absent;
+		default: error;
+	}
+	variant fhss_field switch (has_fhss) {
+		case 1:  fhss fhss_data [align = 2];
+		case 0:  nothing fhss_absent;
+		default: error;
+	}
+	variant antsignal_field switch (has_antsignal) {
+		case 1:  i8 dbm_antsignal;
+		case 0:  nothing antsignal_absent;
+		default: error;
+	}
+	variant antnoise_field switch (has_antnoise) {
+		case 1:  i8 dbm_antnoise;
+		case 0:  nothing antnoise_absent;
+		default: error;
+	}
+	variant lock_field switch (has_lock) {
+		case 1:  u16 lock_quality [align = 2];
+		case 0:  nothing lock_absent;
+		default: error;
+	}
+	variant txatt_field switch (has_txatt) {
+		case 1:  u16 tx_attenuation [align = 2];
+		case 0:  nothing txatt_absent;
+		default: error;
+	}
+	variant dbtxatt_field switch (has_dbtxatt) {
+		case 1:  u16 db_tx_attenuation [align = 2];
+		case 0:  nothing dbtxatt_absent;
+		default: error;
+	}
+	variant txpower_field switch (has_txpower) {
+		case 1:  i8 dbm_tx_power;
+		case 0:  nothing txpower_absent;
+		default: error;
+	}
+	variant antenna_field switch (has_antenna) {
+		case 1:  u8 antenna_index;
+		case 0:  nothing antenna_absent;
+		default: error;
+	}
+	variant dbsignal_field switch (has_dbsignal) {
+		case 1:  u8 db_antsignal;
+		case 0:  nothing dbsignal_absent;
+		default: error;
+	}
+	variant dbnoise_field switch (has_dbnoise) {
+		case 1:  u8 db_antnoise;
+		case 0:  nothing dbnoise_absent;
+		default: error;
+	}
+	variant rxflags_field switch (has_rxflags) {
+		case 1:  u16 rx_flags [align = 2];
+		case 0:  nothing rxflags_absent;
+		default: error;
+	}
+	variant txflags_field switch (has_txflags) {
+		case 1:  u16 tx_flags [align = 2];
+		case 0:  nothing txflags_absent;
+		default: error;
+	}
+	variant rts_field switch (has_rts) {
+		case 1:  u8 rts_retries;
+		case 0:  nothing rts_absent;
+		default: error;
+	}
+	variant data_field switch (has_data) {
+		case 1:  u8 data_retries;
+		case 0:  nothing data_absent;
+		default: error;
+	}
+	variant xchannel_field switch (has_xchannel) {
+		case 1:  xchannel xchannel_data [align = 4];
+		case 0:  nothing xchannel_absent;
+		default: error;
+	}
+	variant mcs_field switch (has_mcs) {
+		case 1:  mcs mcs_data;
+		case 0:  nothing mcs_absent;
+		default: error;
+	}
+	variant ampdu_field switch (has_ampdu) {
+		case 1:  ampdu ampdu_data [align = 4];
+		case 0:  nothing ampdu_absent;
+		default: error;
+	}
+	variant vht_field switch (has_vht) {
+		case 1:  vht vht_data [align = 2];
+		case 0:  nothing vht_absent;
+		default: error;
+	}
+	variant timestamp_field switch (has_timestamp) {
+		case 1:  timestamp timestamp_data [align = 8];
+		case 0:  nothing timestamp_absent;
+		default: error;
+	}
+	variant he_field switch (has_he) {
+		case 1:  he he_data [align = 2];
+		case 0:  nothing he_absent;
+		default: error;
+	}
+
+	// Whatever this schema does not describe, and then the frame.
+	u8    unparsed[remaining];
+}
+
+// The fixed head is where every reader starts, and how long the header is has
+// to be a number a reader can take before it knows a single field.
+require absolute_static(radiotap.len);
+require size(channel) == 4;
+require size(vht) == 12;
+require size(timestamp) == 12;

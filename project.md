@@ -1065,6 +1065,8 @@ Capability consequences, which are mercifully narrow:
   flagged, because it faults on some targets and is slow on others.
 - `[require_aligned]` on a field turns a misalignment into an error.
 - `pad_to(n)` inserts explicit padding to the next multiple of `n`.
+- `[align = n]` on a member pads to `n` first, from the struct that holds it. On
+  an arm the pad is that arm's: radiotap's fields are written this way (26.889).
 
 ### 8.5 Arrays
 
@@ -8284,6 +8286,10 @@ Moved to `doc/decision/26.891-the-signature-did-not-say-what-a-checksum-computes
 ### 26.890 An augmented CRC is a constant
 
 Moved to `doc/decision/26.890-an-augmented-crc-is-a-constant.md`.
+
+### 26.889 Alignment in the holder's coordinates, and radiotap
+
+Moved to `doc/decision/26.889-alignment-in-the-holder-s-coordinates.md`.
 
 ### 26.888 A constant offset from the message
 

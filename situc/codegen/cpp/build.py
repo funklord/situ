@@ -506,7 +506,9 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 	The arm's part is written as it is for a builder of that arm alone,
 	with what it reads bound to the names it expects.
 	"""
-	lines = [f"\tswitch ({part.local}.situ_arm) {{"]
+	lines = [*([f"\tif ({part.local}.situ_tag != {part.agrees.local}.situ_tag) {{",
+	            CONSTRAINT, "\t}"] if part.agrees is not None else []),
+	         f"\tswitch ({part.local}.situ_arm) {{"]
 	for at, arm in enumerate(part.arms):
 		bound = _parameters(struct, [arm.part]) if arm.part else []
 		body  = [f"\t{one} = {part.local}.situ_as.arm_{at}."
@@ -515,6 +517,8 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 			claimed = " || ".join(f"{part.local}.situ_tag == {value}u"
 			                      for value in arm.tag.others)
 			body += [f"\tif ({claimed}) {{", CONSTRAINT, "\t}"]
+		if arm.lead is not None:
+			body += _write(struct, structs, arm.lead, parts)
 		if arm.part is not None:
 			body += _write(struct, structs, arm.part, parts)
 		lines.extend([f"\tcase {at}u: {{",

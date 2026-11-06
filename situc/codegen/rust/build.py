@@ -452,7 +452,11 @@ def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part]
 	pattern binding what it reads to the name it expects.
 	"""
 	held  = _arm_type(struct, part)
-	lines = [f"\tmatch {_ident(part.local)} {{"]
+	lines = [*([f"\tif {_ident(part.local)}.situ_tag() != "
+	            f"{_ident(part.agrees.local)}.situ_tag() {{",
+	            "\t\treturn Err(Error::Constraint);", "\t}"]
+	           if part.agrees is not None else []),
+	         f"\tmatch {_ident(part.local)} {{"]
 	for arm in part.arms:
 		bound = [*(["situ_given"] if arm.tag else []),
 		         *([_ident(arm.part.local)] if arm.part else [])]
@@ -464,9 +468,10 @@ def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part]
 			lines.extend([f"\t\t\tif {claimed} {{",
 			              "\t\t\t\treturn Err(Error::Constraint);",
 			              "\t\t\t}"])
-		if arm.part is not None:
-			lines.extend(f"\t\t{line}" if line else ""
-			             for line in _write(struct, arm.part, parts))
+		for one in (arm.lead, arm.part):
+			if one is not None:
+				lines.extend(f"\t\t{line}" if line else ""
+				             for line in _write(struct, one, parts))
 		lines.append("\t\t}")
 	lines.append("\t}")
 	return lines

@@ -1405,6 +1405,10 @@ UNORACLED = {
 	             "vector; nothing here can WRITE one, so the bytes are "
 	             "ours",
 	"ntp":       "tshark dissects NTP; randpkt cannot write one",
+	"radiotap":  "tshark dissects it and randpkt cannot write one; the "
+	             "vectors are laid out from the specification's table and "
+	             "tshark read them back, which test_radiotap_is_one_builder"
+	             "_and_aligns_from_its_header rebuilds byte for byte",
 	"pes":       "nothing here can write one for a sweep: randpkt cannot, "
 	             "and the vectors are ffmpeg's, which "
 	             "test_a_real_pes_packet_is_one_builder_call rebuilds byte "

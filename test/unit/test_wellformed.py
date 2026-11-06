@@ -974,7 +974,7 @@ def test_every_attribute_is_accounted_for() -> None:
 	# the accounting above could not notice. Widening the unknown-attribute
 	# walk is what surfaced it, by refusing the construct seven tests
 	# exercise (26.544).
-	elsewhere = {"quoted", "escape", "timeout_ms", "retries",
+	elsewhere = {"quoted", "escape", "timeout_ms", "retries", "align",
 	             "bits", "since", "require_aligned", "stream", "tag_order"}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere

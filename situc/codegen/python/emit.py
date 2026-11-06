@@ -107,6 +107,8 @@ from situc.traverse import (
 	offset_plan,
 	own_entries,
 	own_members,
+	arm_alignments,
+	leading_bytes,
 	pad_alignment,
 	pinned_bytes,
 	pinned_runs,
@@ -6732,6 +6734,22 @@ class Emitter:
 		name = py_name(local_name(struct, placement)).replace(".", "_")
 		return f"advance({chain}, self.{name}_lead({chain}), self._len)"
 
+	def _alignment(self, struct: ResolvedStruct,
+			other: Placement) -> str | None:
+		"""What `other` aligns the running offset to, where it does."""
+		pad = pad_alignment(other)
+		if pad is not None:
+			return str(pad)
+		arms = arm_alignments(struct, other)
+		if arms is None or other.discriminant is None:
+			return None
+		held  = self._over_fields(struct, other.discriminant, "self")
+		chain = "1"
+		for arm, unit in reversed(arms):
+			chain = (str(unit) if arm.value is None
+			         else f"({unit} if {held} == {arm.value} else {chain})")
+		return chain
+
 	def _chain_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
 		if placement.offset_bits is not None:
@@ -6741,15 +6759,21 @@ class Emitter:
 		if parts is None:
 			return None
 
-		constant = sum(part for part in parts if isinstance(part, int))
-		terms: list[str | tuple[str, int]] = []
+		# Only the LEADING bytes are one constant. A pad aligns what precedes
+		# it, so a byte after one has to arrive after the alignment: summed in
+		# front, `u8 n; u8 a[n]; pad_to(4); u16 x; u8 y; pad_to(4); u8 z;`
+		# aligned two bytes too many and read `z` from the wrong place in
+		# three of the four backends. C kept the order all along (26.889).
+		leading, tail = leading_bytes(parts)
+		terms: list[str | tuple[str, str]] = []
 
-		for other in parts:
+		for other in tail:
 			if isinstance(other, int):
+				terms.append(str(other))
 				continue
-			pad = pad_alignment(other)
-			if pad is not None:
-				terms.append(("align", pad))
+			unit = self._alignment(struct, other)
+			if unit is not None:
+				terms.append(("align", unit))
 				continue
 			length = self._length_expression(struct, other)
 			if length is None:
@@ -6757,14 +6781,14 @@ class Emitter:
 			terms.append(length)
 
 		if not terms:
-			return str(constant)
+			return str(leading)
 
 		# Saturating, term by term. Python is the one backend where this is
 		# not a safety question -- a short slice is short, not a read past the
 		# buffer -- and it is still the same arithmetic, because four backends
 		# that disagree about where a member is mean the schema means four
 		# things (26.27).
-		folded = str(constant)
+		folded = str(leading)
 		for term in terms:
 			if isinstance(term, tuple):
 				folded = f"align_up({folded}, {term[1]}, self._len)"
@@ -6848,6 +6872,10 @@ class Emitter:
 		is asked on its own instead (26.689).
 		"""
 		if placement.kind != "variant" or placement.is_fixed_size:
+			return []
+		# A variant of pads aligns and reads nothing, and what it aligns for
+		# is asked this question itself (26.889).
+		if arm_alignments(struct, placement) is not None:
 			return []
 		length = self._variant_length(struct, placement)
 		base   = self._offset_expression(struct, placement)
@@ -7527,6 +7555,10 @@ class Emitter:
 			if isinstance(other, int):
 				if other:
 					lines.append(f"\t\tat += {other}")
+				continue
+			unit = self._alignment(struct, other)
+			if unit is not None:
+				lines.append(f"\t\tat = align_up(at, {unit}, self._len)")
 				continue
 			length = self._length_expression(struct, other, running="at")
 			if length is None:

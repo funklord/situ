@@ -453,12 +453,17 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 	path  = part.placement.path
 	lines = [f"\tif not isinstance({local}, {_arm_type(struct, part)}):",
 	         f'\t\traise ConstraintError("{path}: not an arm of this variant")']
+	if part.agrees is not None:
+		lines += [f"\tif {local}.situ_tag != {py_name(part.agrees.local)}.situ_tag:",
+		          f'\t\traise ConstraintError("{path}: another arm was chosen")']
 	for at, arm in enumerate(part.arms):
 		lines.append(f"\t{'el' if at else ''}if {local}.situ_arm == {at}:")
 		body: list[str] = []
 		if arm.tag is not None:
 			body += [f"\tif {local}.situ_tag in {tuple(arm.tag.others)!r}:",
 			         f'\t\traise ConstraintError("{path}: reads as something else")']
+		if arm.lead is not None:
+			body += _write(struct, structs, arm.lead, parts)
 		if arm.part is not None:
 			body += [f"\t({py_name(arm.part.local)},) = {local}.situ_values",
 			         *_write(struct, structs, arm.part, parts)]

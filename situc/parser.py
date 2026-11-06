@@ -202,6 +202,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"non_canonical",
 	# section 8.3: host-dependent byte order
 	"allow_host_dependent",
+	# 26.889: where a member starts, from the struct that holds it
+	"align",
 	# section 8.8: reserved behaviour
 	"must_be_zero", "must_be_one", "preserve", "unknown",
 	# section 5.1 and 18.2: constraints
@@ -240,10 +242,66 @@ ATTRIBUTE_NAMES = frozenset({
 #: from the vocabulary alone. `escape`, `nonce` and the flags are not here: a
 #: lone `[escape]` means something, and so does a lone `[secret]`.
 VALUE_ATTRIBUTES = frozenset({
-	"size", "version", "since", "max", "min", "limit", "depth", "bits",
+	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write",
 })
+
+def _alignment_of(member: ast.Member | None) -> int | None:
+	"""`[align = n]`'s n, or None where the member carries none."""
+	attr = next((one for one in getattr(member, "attrs", ())
+	             if one.name == "align"), None)
+	if attr is None:
+		return None
+	value = None if attr.value is None else evaluate_literal(attr.value)
+	if value is None or value <= 0:
+		raise error("`[align = n]` needs a positive literal alignment",
+		            attr.span, label = "not a positive integer literal")
+	return value
+
+
+def _alignment_pad(span: Span, unit: int) -> ast.Pad:
+	"""A pad no reader holds a sender to: what fills it is the sender's."""
+	return ast.Pad(span, unit, (ast.Attr(span, "preserve", None),))
+
+
+def _without_alignment(member: ast.Field) -> ast.Field:
+	return replace(member, attrs=tuple(one for one in member.attrs
+	                                   if one.name != "align"))
+
+
+def _lower_alignment(member: ast.Member) -> tuple[ast.Member, ...]:
+	"""`u64 v [align = 8];` is a pad and a member, in the holder's coordinates.
+
+	On an arm the pad belongs to the arm alone, so it becomes a variant of
+	pads on the same discriminant, in front of this one: an arm that does not
+	ask aligns by one, which is nothing. Every reader then has the shape it
+	already has and a builder folds the two back into one value (26.889).
+
+	The struct's own coordinates and not the arm's: the member is where the
+	struct says it is, so how long a struct is never depends on where it
+	sits, and an arm value can be made before it is placed.
+	"""
+	unit = _alignment_of(member)
+	if unit is not None and isinstance(member, ast.Field):
+		return _alignment_pad(member.span, unit), _without_alignment(member)
+	if not isinstance(member, ast.Variant):
+		return (member,)
+
+	pads: list[ast.VariantArm] = []
+	kept: list[ast.VariantArm] = []
+	for arm in member.arms:
+		held = _alignment_of(arm.member)
+		pads.append(arm if arm.is_error else ast.VariantArm(
+			arm.span, arm.value, _alignment_pad(arm.span, held or 1)))
+		kept.append(replace(arm, member=_without_alignment(arm.member))
+		            if held and isinstance(arm.member, ast.Field) else arm)
+	if pads == list(member.arms) or kept == list(member.arms):
+		return (member,)
+	return (ast.Variant(member.span, f"{member.name}_align",
+	                    member.discriminant, tuple(pads), ()),
+	        replace(member, arms=tuple(kept)))
+
 
 #: What a lone identifier in brackets is read as an attribute for.
 BARE_ATTRIBUTE_NAMES = ATTRIBUTE_NAMES - VALUE_ATTRIBUTES
@@ -1558,7 +1616,7 @@ class Parser:
 					self.current.span,
 					label = "expected `}`",
 				)
-			members.append(self.parse_member())
+			members.extend(_lower_alignment(self.parse_member()))
 		return tuple(members)
 
 	def parse_member(self) -> ast.Member:
