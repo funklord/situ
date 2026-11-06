@@ -10,6 +10,7 @@ from `mqtt.vectors`, and the two the standard rules on.
 
 from __future__ import annotations
 
+import sys
 from types import ModuleType
 from typing import Any
 
@@ -19,6 +20,8 @@ from every_schema import ROOT
 from situc.cli import analyse
 from situc.codegen.python import generate
 from situc.parser import parse
+
+sys.path.insert(0, str(ROOT / "runtime" / "python"))
 
 PAHO_QOS0 = "30 07 00 03 61 2F 62 68 69"
 PAHO_QOS1 = "32 10 00 08 73 65 6E 73 6F 72 2F 74 00 07 32 31 2E 35"

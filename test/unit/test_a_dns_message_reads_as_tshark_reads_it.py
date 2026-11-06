@@ -9,6 +9,7 @@ decode of those bytes over UDP, and not situ's.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from types import ModuleType
 from typing import Any
 
@@ -19,6 +20,8 @@ from every_schema import ROOT
 from situc.cli import analyse
 from situc.codegen.python import generate
 from situc.parser import parse
+
+sys.path.insert(0, str(ROOT / "runtime" / "python"))
 
 #: `tshark -T fields -e dns.resp.type -e dns.a -e dns.aaaa
 #: -e dns.mx.preference`, over the vector, through `text2pcap -u 53,5353`.

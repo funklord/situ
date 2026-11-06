@@ -8,6 +8,7 @@ Linux sends it. `TSHARK` is that tool's decode of these bytes, through
 from __future__ import annotations
 
 from typing import Any
+import sys
 from types import ModuleType
 
 import pytest
@@ -16,6 +17,8 @@ from every_schema import ROOT
 from situc.cli import analyse
 from situc.codegen.python import generate
 from situc.parser import parse
+
+sys.path.insert(0, str(ROOT / "runtime" / "python"))
 
 FIXED = bytes.fromhex("c001005000000001" "00000000" "a002" "faf0" "0000" "0000")
 #: MSS 1460, SACK permitted, timestamps, No-Operation, window scale 7.
