@@ -5093,7 +5093,8 @@ class Emitter:
 		         f"{ident(self.prefix, struct.name, c_name(self._local(struct, held)), 'get')}"
 		         "_from(situ_view_t view, uint32_t at);"
 		         for held in self._reads(struct)
-		         if held.varint is None and held.radix is None]
+		         if held.scalar is not None
+		         and held.varint is None and held.radix is None]
 		lines.extend(
 			f"static inline {'uint64_t' if held.varint else self._field_ctype(held)} "
 			f"{ident(self.prefix, struct.name, c_name(self._local(struct, held)), 'value')}"

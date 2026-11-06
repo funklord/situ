@@ -3217,8 +3217,9 @@ def read_behind_recursion(structs: dict[str, "ResolvedStruct"],
 	`while` condition over a run of it reads as well. Such a field's accessor
 	finds it by measuring everything in front of it, the recursion included,
 	so reading one while measuring is the second measurement. Only what can
-	be read from its offset alone is here: a member of a nested struct has no
-	accessor to read it with, and costs what it always did.
+	be read from its offset alone is here, and a nested struct is: a read of
+	`h.len` starts at `h`, and finding `h` over again at each level is what
+	made one exponential (26.916).
 	"""
 	own = own_members(struct)
 	first = next((at for at, member in enumerate(own)
@@ -3226,7 +3227,9 @@ def read_behind_recursion(structs: dict[str, "ResolvedStruct"],
 	if first is None:
 		return [], []
 	behind = [member for member in own[first + 1:]
-	          if (member.scalar is not None or member.varint is not None)
+	          if (member.scalar is not None or member.varint is not None
+	              or (member.type_name in structs and member.array_count is None
+	                  and member.size_expr is None))
 	          and not member.parameter and member.located is None
 	          and member.since is None]
 

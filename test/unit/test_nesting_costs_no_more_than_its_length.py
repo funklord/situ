@@ -344,6 +344,70 @@ struct x [depth = {DEEP}] {{
 }}
 """, lambda n: b"\x01" * n + b"\x00" + b"\x01mt" * (n + 1)),
 
+	# The same read by each other road: arithmetic, a discriminant, an argument
+	# and a `when`. Each is a second way to find `h`, and one bare length being
+	# polynomial says nothing about them (26.916).
+	"dotted_sum": (HEAD + f"""
+struct nothing {{ }}
+struct hdr {{ u8 l; u8 m; }}
+struct x [depth = {DEEP}] {{
+	u8 k;
+	variant c switch (k) {{
+		case 1:  x inner;
+		default: nothing none;
+	}}
+	hdr h;
+	u8 tail[h.l + 1];
+}}
+""", lambda n: b"\x01" * n + b"\x00" + b"\x00mt" * (n + 1)),
+
+	"dotted_switch": (HEAD + f"""
+struct nothing {{ }}
+struct hdr {{ u8 l; u8 m; }}
+struct x [depth = {DEEP}] {{
+	u8 k;
+	variant c switch (k) {{
+		case 1:  x inner;
+		default: nothing none;
+	}}
+	hdr h;
+	variant d switch (h.l) {{
+		case 1:  u8 one;
+		default: nothing no;
+	}}
+}}
+""", lambda n: b"\x01" * n + b"\x00" + b"\x01mt" * (n + 1)),
+
+	"dotted_handed": (HEAD + f"""
+struct nothing {{ }}
+struct hdr {{ u8 l; u8 m; }}
+struct w {{ parameter u8 n [stream]; u8 body[n]; }}
+struct x [depth = {DEEP}] {{
+	u8 k;
+	variant c switch (k) {{
+		case 1:  x inner;
+		default: nothing none;
+	}}
+	hdr h;
+	w(n = h.l) tail;
+}}
+""", lambda n: b"\x01" * n + b"\x00" + b"\x01mt" * (n + 1)),
+
+	"dotted_when": (HEAD + f"""
+struct nothing {{ }}
+struct hdr {{ u8 l; u8 m; }}
+struct x [depth = {DEEP}] {{
+	u8 k;
+	variant c switch (k) {{
+		case 1:  x inner;
+		default: nothing none;
+	}}
+	hdr h;
+	u8 tail;
+}}
+when x.h.l == 9 refuse nine "never nine";
+""", lambda n: b"\x01" * n + b"\x00" + b"\x01mt" * (n + 1)),
+
 	# A condition over a varint behind the recursion. C++ has never built one.
 	"varint_while": (HEAD + f"""
 varint_type v {{ encoding = leb128; max_bits = 14; max_bytes = 2; }}
@@ -856,7 +920,8 @@ def test_the_walkers_cost_a_polynomial(shape: str, target: str,
 #: The shapes measured by a cursor, which nothing in the corpus but JSON is.
 AGREEING = ("member", "between", "arm", "handed", "length_behind",
             "switch_behind", "count_behind", "arm_behind", "nested_behind",
-            "varint_behind", "digits_behind", "dotted_behind", "sum_behind",
+            "varint_behind", "digits_behind", "dotted_behind", "dotted_sum",
+            "dotted_switch", "dotted_handed", "dotted_when", "sum_behind",
             "lead", "two_arms", "sexpr", "counted", "delimited",
             "json_whole", "varint_while", "enum_while", "pad_behind",
             "digits_fixed", "tlv_behind")
