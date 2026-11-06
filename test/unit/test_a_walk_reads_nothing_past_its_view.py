@@ -18,8 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from test_walker_c import (COMPILER, _inline_image, c_verdict,
-                           python_verdict, shape_named_text)
+from situc.codegen.c.vectors import parse_vectors
+from situc.diagnostics import Source
+from test_walker_c import (COMPILER, VERDICT, _build_driver, _inline_image,
+                           c_verdict, image_for, python_verdict, shape_named,
+                           shape_named_text)
 
 ROOT     = Path(__file__).resolve().parents[2]
 HOST_CC  = shutil.which("cc") or shutil.which("gcc")
@@ -220,3 +223,67 @@ def test_both_walkers_ask_the_depth_first(tmp_path: Path) -> None:
 	verdict = python_verdict(image, TOO_DEEP_AND_CUT, shape)
 	assert verdict not in ("0", "1")
 	assert c_verdict(tmp_path, image, TOO_DEEP_AND_CUT, shape) == verdict
+
+
+#: The short forms stop at the floor; the rest are whole headers with nothing
+#: present, and a header was all the cycle needed.
+RADIOTAP = ["", "00", "0000", "00000800", "0000080000000000",
+            "0000090000000000"]
+
+
+@pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
+@pytest.mark.parametrize("message", RADIOTAP)
+def test_a_pad_arm_is_a_step_in_the_c_walkers_chain(message: str,
+		tmp_path: Path) -> None:
+	"""An arm's `[align]` asked its variant's offset, which asked the arm.
+
+	`walk.py` took the pad as a step in the chain and measured it from the
+	variant (26.889); `situ_walk.c` did neither, and the public
+	`situ_walk_offset_bits` restarted `depth` on each lap, so the ceiling never
+	fired. It ran to the end of the stack. The agreement sweeps read the dead
+	driver as a shape they could not acquire.
+	"""
+	path  = ROOT / "example" / "radiotap" / "radiotap.situ"
+	image = image_for(path)
+	shape = shape_named(path, "radiotap")
+	data  = bytes.fromhex(message)
+	assert c_verdict(tmp_path, image, data, shape) \
+		== python_verdict(image, data, shape)
+
+
+VECTORS = sorted(ROOT.glob("example/*/*.vectors"))
+
+#: Where the C walker says it cannot and the Python walker answers. Each read
+#: is one `situ_walk.c` declines rather than guess, and says so at the read.
+DECLINED = {
+	"netlink": "`endian native`: the capture's machine is not the reader's",
+	"tiff":    "`[endian = from(byte_order)]`: no marker resolved in this build",
+}
+
+
+@pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
+@pytest.mark.parametrize("vectors", VECTORS, ids=lambda path: path.stem)
+def test_both_walkers_agree_about_every_committed_vector(vectors: Path,
+		tmp_path: Path) -> None:
+	"""Real bytes through both walkers, which nothing did.
+
+	Radiotap's nine captures killed the C walker from 26.889 to 26.901, and it
+	refused JSON's `-1.5e3` from 0056, while every random sweep went on
+	passing: random bytes rarely make a header or spell a decimal, and a dead
+	driver read as a skip.
+	"""
+	path  = next(vectors.parent.glob("*.situ"))
+	cases = parse_vectors(Source(str(vectors),
+	                             vectors.read_text(encoding="utf-8")))
+	assert cases, f"{vectors} states nothing"
+	image = image_for(path)
+	(tmp_path / "img").write_bytes(image)
+	drive = _build_driver(tmp_path, image, VERDICT)
+	for case in cases:
+		shape = shape_named(path, case.struct)
+		data  = bytes(case.data)
+		assert data, case.name
+		said = c_verdict(tmp_path, image, data, shape, drive)
+		if vectors.stem in DECLINED and said == "cannot-say":
+			continue
+		assert said == python_verdict(image, data, shape), case.name

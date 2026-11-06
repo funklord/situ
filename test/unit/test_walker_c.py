@@ -513,6 +513,12 @@ def _run_driver(drive: Path, tmp_path: Path, message: bytes, shape: int,
 	ran = subprocess.run([str(drive), str(tmp_path / "img"),
 	                      message.hex(), str(shape)],
 	                     capture_output=True, text=True)
+	# Not an assertion. Four sweeps read AssertionError as "no driver can
+	# acquire this shape" and go on, which filed a walker that overflowed
+	# its stack on every radiotap message as a skip (26.901).
+	if ran.returncode < 0:
+		raise RuntimeError(f"the driver died on signal {-ran.returncode} "
+		                   f"over {message.hex()}: {ran.stderr[:500]}")
 	assert ran.returncode == 0, ran.stdout + ran.stderr
 	# Whitespace for the asks that print one token a line, and lines for
 	# the ones that print fields. Splitting an `ARMS` line on spaces would

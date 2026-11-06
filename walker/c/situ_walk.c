@@ -814,6 +814,86 @@ static situ_walk_err parse_digits(const uint8_t *data, uint32_t len,
 	return SITU_WALK_OK;
 }
 
+/* A `scaled` text number's significand: `walk.parse_scaled_digits`, and the
+ * scale goes unused here because `validate` holds the significand to the
+ * bound. Until 26.901 this walker ran `parse_digits` over `-1.5e3` and refused
+ * what the five others accept. The integer overflows where Python's cannot,
+ * and either way the answer is CONSTRAINT: past `uint64_t` is past any row. */
+static situ_walk_err parse_scaled(const uint8_t *data, uint32_t len,
+                                  int is_signed, uint64_t *out)
+{
+	uint64_t magnitude = 0u;
+	int64_t  fraction  = 0;
+	int64_t  exponent  = 0;
+	uint32_t at        = 0u;
+	int      negative  = 0;
+
+	if (len != 0u && data[0] == (uint8_t)'-') {
+		negative = 1;
+		at       = 1u;
+	}
+	for (int point = 0; point < 2; point++) {
+		const uint32_t first = at;
+
+		while (at < len && data[at] >= (uint8_t)'0'
+		       && data[at] <= (uint8_t)'9') {
+			const uint32_t digit = (uint32_t)(data[at] - (uint8_t)'0');
+
+			if (magnitude > (0xffffffffffffffffu - digit) / 10u) {
+				return SITU_WALK_CONSTRAINT;
+			}
+			magnitude = magnitude * 10u + digit;
+			fraction += point;
+			at += 1u;
+		}
+		if (at == first) {
+			return SITU_WALK_CONSTRAINT;	/* no digits, or none after a point */
+		}
+		if (point != 0 || at >= len || data[at] != (uint8_t)'.') {
+			break;
+		}
+		at += 1u;
+	}
+
+	if (at < len && (data[at] == (uint8_t)'e' || data[at] == (uint8_t)'E')) {
+		int down = 0;
+
+		at += 1u;
+		if (at < len && (data[at] == (uint8_t)'+' || data[at] == (uint8_t)'-')) {
+			down = data[at] == (uint8_t)'-';
+			at  += 1u;
+		}
+		const uint32_t first = at;
+
+		while (at < len && data[at] >= (uint8_t)'0'
+		       && data[at] <= (uint8_t)'9') {
+			if (exponent > 1000000000) {
+				return SITU_WALK_CONSTRAINT;
+			}
+			exponent = exponent * 10 + (int64_t)(data[at] - (uint8_t)'0');
+			at += 1u;
+		}
+		if (at == first) {
+			return SITU_WALK_CONSTRAINT;
+		}
+		if (down) {
+			exponent = -exponent;
+		}
+	}
+	if (at != len) {
+		return SITU_WALK_CONSTRAINT;
+	}
+	if (exponent - fraction < -0x80000000ll
+	    || exponent - fraction > 0x7fffffffll) {
+		return SITU_WALK_CONSTRAINT;
+	}
+	if (negative && !is_signed && magnitude != 0u) {
+		return SITU_WALK_CONSTRAINT;
+	}
+	*out = negative ? (uint64_t)0 - magnitude : magnitude;
+	return SITU_WALK_OK;
+}
+
 /* -- varints ------------------------------------------------------------ */
 
 #define VARINT_MINIMAL 0x01u
@@ -1674,6 +1754,26 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 		return err;
 	}
 
+	/* From where the variant starts, as a struct arm is below: asking the
+	 * chain for the arm walks the variant whose extent this is. Clamped to
+	 * the frame, as `content_bits_deep`'s pad is by the chain (26.578). */
+	if (held.pad_to != 0u) {
+		const uint32_t unit = (uint32_t)held.pad_to * 8u;
+		const uint32_t room = len > 0x1fffffffu ? 0xffffffffu : len * 8u;
+		uint32_t       off  = 0u;
+
+		err = offset_bits_deep(image, message, len, shape, variant, depth,
+		                       &off);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		const uint32_t rem = off % unit;
+		const uint32_t pad = rem != 0u ? unit - rem : 0u;
+
+		*out = off >= room ? 0u : (pad < room - off ? pad : room - off);
+		return SITU_WALK_OK;
+	}
+
 	if (held.type_struct != SITU_WALK_NONE
 	                && held.type_struct < image->struct_count
 	                && held.array_count == SITU_WALK_NONE
@@ -1719,10 +1819,14 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 	                      out);
 }
 
-static situ_walk_err variant_bits(const situ_walk_image *image,
-                                  const uint8_t *message, uint32_t len,
-                                  uint32_t shape, uint32_t index,
-                                  uint32_t depth, uint32_t *out)
+/* Which arm this variant's discriminant selects, SITU_WALK_NONE for an arm
+ * with nothing in it and for no arm at all: both measure zero. `walk.chosen_arm`,
+ * and one loop for its reason: two would be two answers to which arm a message
+ * selects. */
+static situ_walk_err variant_arm(const situ_walk_image *image,
+                                 const uint8_t *message, uint32_t len,
+                                 uint32_t shape, uint32_t index,
+                                 uint32_t depth, uint32_t *out)
 {
 	uint32_t       count = 0u;
 	const uint8_t *rows  = arm_rows(image, index, &count);
@@ -1785,22 +1889,60 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
 			continue;
 		}
 		if ((uint64_t)when == value) {
-			if (chosen == SITU_WALK_NONE) {
-				*out = 0u;
-				return SITU_WALK_OK;
-			}
-			return arm_bits(image, message, len, shape, index, chosen,
-			                depth, out);
+			*out = chosen;
+			return SITU_WALK_OK;
 		}
 	}
 
-	if (fallback != SITU_WALK_NONE) {
-		return arm_bits(image, message, len, shape, index, fallback,
-		                depth, out);
-	}
+	*out = fallback;
+	return SITU_WALK_OK;
+}
 
+static situ_walk_err variant_bits(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t depth, uint32_t *out)
+{
+	uint32_t      chosen = SITU_WALK_NONE;
+	situ_walk_err err    = variant_arm(image, message, len, shape, index,
+	                                   depth, &chosen);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (chosen != SITU_WALK_NONE) {
+		return arm_bits(image, message, len, shape, index, chosen, depth,
+		                out);
+	}
 	*out = 0u;
 	return SITU_WALK_OK;
+}
+
+/* The alignment a variant's chosen arm pads to, zero where it does not.
+ * `walk._chosen_pad`. */
+static situ_walk_err chosen_pad(const situ_walk_image *image,
+                                const uint8_t *message, uint32_t len,
+                                uint32_t shape, uint32_t index,
+                                uint32_t depth, uint32_t *out)
+{
+	uint32_t            arms   = 0u;
+	uint32_t            chosen = SITU_WALK_NONE;
+	situ_walk_placement arm;
+
+	*out = 0u;
+	if (arm_rows(image, index, &arms) == NULL || arms == 0u) {
+		return SITU_WALK_OK;
+	}
+	situ_walk_err err = variant_arm(image, message, len, shape, index, depth,
+	                                &chosen);
+	if (err != SITU_WALK_OK || chosen == SITU_WALK_NONE) {
+		return err;
+	}
+	err = situ_walk_placement_at(image, chosen, &arm);
+	if (err == SITU_WALK_OK) {
+		*out = arm.pad_to;
+	}
+	return err;
 }
 
 /* -- `while` runs -------------------------------------------------------- */
@@ -2366,7 +2508,11 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		uint32_t off  = 0u;
 		const uint32_t unit = (uint32_t)held.pad_to * 8u;
 
-		err = situ_walk_offset_bits(image, message, len, shape, index, &off);
+		/* `depth` carried, not restarted through the public entry point
+		 * (26.112): a cycle through here ran to the end of the stack with
+		 * the ceiling never asked (26.901). */
+		err = offset_bits_deep(image, message, len, shape, index, depth + 1u,
+		                       &off);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -2875,6 +3021,24 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 			continue;
 		}
 
+		/* A pad arm is the same step. Asked for its size it would ask for
+		 * its variant's offset, which is this sum again (26.889): `walk.py`
+		 * had this and here it was a cycle, on every radiotap message
+		 * (26.901). */
+		uint32_t arm_pad = 0u;
+		err = chosen_pad(image, message, len, shape, before, depth, &arm_pad);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (arm_pad != 0u) {
+			const uint32_t unit = arm_pad * 8u;
+			const uint32_t rem  = total % unit;
+			const uint32_t pad  = rem != 0u ? unit - rem : 0u;
+
+			total = pad < room - total ? total + pad : room;
+			continue;
+		}
+
 		uint32_t wide = 0u;
 		err = size_bits_deep(image, message, len, shape, before, depth,
 		                     &wide);
@@ -2921,6 +3085,7 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
  * point -- a second copy of what a flag means is how two readers of one
  * attribute start disagreeing. */
 #define TEXT_BCD 8u
+#define TEXT_SCALED 16u
 
 static situ_walk_err read_at(const uint8_t *message, uint32_t len,
                              const situ_walk_placement *held,
@@ -3105,6 +3270,10 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		}
 		if (at > len || width > len - at) {
 			return SITU_WALK_BOUNDS;
+		}
+		if ((held.text_flags & TEXT_SCALED) != 0u) {
+			return parse_scaled(message + at, width,
+			                    (held.flags & FLAG_SIGNED) != 0u, out);
 		}
 		return parse_digits(message + at, width, held.radix,
 		                    (held.flags & FLAG_SIGNED) != 0u, out);
