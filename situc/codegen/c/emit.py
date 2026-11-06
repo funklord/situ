@@ -120,6 +120,7 @@ from situc.traverse import (
 	pinned_bytes,
 	pinned_runs,
 	preceding_parts,
+	offset_walk,
 	read_behind_recursion,
 	readable_names,
 	recursion_cycle,
@@ -253,6 +254,8 @@ class Emitter:
 		#: is what an extent measured by cursor calls in their place.
 		self._marked: dict[str, list[str]] = {}
 		self._cursors: dict[str, list[CursorStep] | None] = {}
+		self._walks: dict[str, tuple[list[CursorStep],
+		                             list[Placement]] | None] = {}
 		#: Which of a member's own functions have a copy taking its offset.
 		self._measures: dict[str, list[str]] = {}
 		#: Structs whose `required` is being rendered, for the same reason
@@ -540,9 +543,11 @@ class Emitter:
 		lines.extend(self._tag_constants(struct))
 		lines.extend(self._view_acquisition(struct))
 		lines.extend(self._recursive_prototypes(struct))
+		lines.extend(self._walked_prototype(struct))
 
 		for entry in struct.entries:
 			lines.extend(self._explained(struct, entry))
+		lines.extend(self._walked(struct))
 
 		# After the members, not before: it sums their `_span` functions, and
 		# the C preprocessor is not a scope. Emitting it beside the size
@@ -3680,7 +3685,7 @@ class Emitter:
 		# Measured by cursor the variant's start is in hand, and deriving it
 		# here would measure everything in front of it again (26.909).
 		tail = self._handed_tail(struct, placement)
-		held = [] if self._cursor(struct) is None else [
+		held = [] if not self._passes(struct) else [
 			f"static inline uint32_t {site}_from"
 			+ ("_at" if deep else "")
 			+ (f"(situ_view_t view, uint32_t base, uint32_t depth{tail})"
@@ -5557,10 +5562,107 @@ class Emitter:
 		what its helpers have to be handed. Nothing where nothing measures
 		the struct by cursor, which is what keeps a walk asking the accessor.
 		"""
+		walk = self._walk(struct)
+		if walk is not None:
+			return walk[1]
 		if self._cursor(struct) is None:
 			return []
 		reads, every = read_behind_recursion(self.resolved.structs, struct)
 		return reads if own else every
+
+	def _passes(self, struct: ResolvedStruct) -> bool:
+		"""Whether anything measures this struct front to back, and so has to
+		be handed a start rather than deriving one."""
+		return self._cursor(struct) is not None \
+			or self._walk(struct) is not None
+
+	def _walk(self, struct: ResolvedStruct
+			) -> tuple[list[CursorStep], list[Placement]] | None:
+		"""The pass to a struct's chained lengths, where each can be rendered.
+
+		Held once known. The rendering asks about the struct's offsets, and
+		those ask this, so the answer is None while it is being worked out.
+		"""
+		if struct.name not in self._walks:
+			self._walks[struct.name] = None
+			walk = offset_walk(self.resolved.structs, struct)
+			if walk is not None and all(
+					step.member is None or step.kind in ("read", "pad")
+					or self._has_length(struct, step.member)
+					for step in walk[0]):
+				self._walks[struct.name] = walk
+		return self._walks[struct.name]
+
+	def _walked_index(self, struct: ResolvedStruct,
+			placement: Placement) -> int | None:
+		"""Where the pass notes `placement`, or None where it does not."""
+		walk = self._walk(struct)
+		for index, held in enumerate(walk[1] if walk is not None else ()):
+			if held.path == placement.path:
+				return index
+		return None
+
+	def _walked_prototype(self, struct: ResolvedStruct) -> list[str]:
+		"""The pass is called from accessors emitted ahead of it."""
+		if self._walk(struct) is None:
+			return []
+		name = ident(self.prefix, struct.name, "walked")
+		return [f"static inline uint32_t {name}(situ_view_t view, uint32_t index"
+		        f"{self._argument_tail(struct)});", ""]
+
+	def _walked(self, struct: ResolvedStruct) -> list[str]:
+		"""Where each field a length reads is, found in one pass (26.918)."""
+		walk = self._walk(struct)
+		if walk is None:
+			return []
+		steps, reads = walk
+		body = [f"\tmarks[{index}] = view.limit;"
+		        for index in range(len(reads))]
+		for step in steps:
+			if step.kind == "advance":
+				body.append(f"\tat = situ_advance_u32(at, {step.size}u,"
+				            " view.limit);")
+				continue
+			member = step.member
+			assert member is not None
+			if step.kind == "read":
+				index = [held.path for held in reads].index(member.path)
+				where = "at"
+				if member.skip:
+					lead  = ident(self.prefix, struct.name,
+					              c_name(self._local(struct, member)),
+					              "lead_from")
+					where = (f"situ_advance_u32(at, {lead}(view, at),"
+					         " view.limit)")
+				body.append(f"\tmarks[{index}] = {where};")
+				continue
+			if step.kind == "pad":
+				body.append(f"\tat = situ_align_up_u32(at, {step.size}u,"
+				            " view.limit);")
+				continue
+			if step.kind == "loose":
+				continue
+			length = self._reading_marks(struct, self._length_expression(
+				struct, member, running="at"))
+			if member.offset_bits is None:
+				length = length.replace(self._base_expression(struct, member),
+				                        "at")
+			body.append(f"\tat = situ_advance_u32(at, ({length}), view.limit);")
+		name  = ident(self.prefix, struct.name, "walked")
+		taken = self._argument_tail(struct)
+		return [f"/* Where the fields `{struct.name}`'s lengths read are, in one"
+		        " pass. */",
+		        f"static inline uint32_t {name}(situ_view_t view, uint32_t index"
+		        f"{taken})",
+		        "{",
+		        f"\tuint32_t marks[{len(reads)}];",
+		        "\tuint32_t at = 0u;",
+		        "",
+		        *self._argument_unused(struct, taken, *body),
+		        *body,
+		        "\treturn marks[index];",
+		        "}",
+		        ""]
 
 	def _reading_marks(self, struct: ResolvedStruct, text: str,
 			held: str = "view", marks: str = "marks") -> str:
@@ -5596,7 +5698,7 @@ class Emitter:
 		Their offset is every member in front of it measured over, which from
 		inside an extent is the second measurement (26.909).
 		"""
-		if self._cursor(struct) is None or placement.offset_bits is not None:
+		if not self._passes(struct) or placement.offset_bits is not None:
 			return []
 		text = "\n".join(lines)
 		base = self._base_expression(struct, placement)
@@ -8574,6 +8676,17 @@ class Emitter:
 		everything before the first dynamic member is statically placed.
 		"""
 		local = c_name(self._local(struct, placement))
+		walked = self._walked_index(struct, placement)
+		if walked is not None and not placement.skip:
+			name = ident(self.prefix, struct.name, "walked")
+			return [f"static inline uint32_t "
+			        f"{ident(self.prefix, struct.name, local, 'offset')}"
+			        f"(situ_view_t view{self._argument_tail(struct)})",
+			        "{",
+			        f"\treturn {name}(view, {walked}u"
+			        f"{self._argument_args(struct)});",
+			        "}"]
+
 		parts = preceding_parts(struct, placement)
 		if parts is None:
 			return self._unresolvable_offset(placement, placement)

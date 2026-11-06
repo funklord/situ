@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.918 A chain of lengths is walked once
+
+Moved to `doc/decision/26.918-a-chain-of-lengths-is-walked-once.md`.
+
 ### 26.917 A cpio entry adds up
 
 Moved to `doc/decision/26.917-a-cpio-entry-adds-up.md`.

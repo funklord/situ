@@ -1404,11 +1404,13 @@ static situ_walk_err varint_run_bits(const situ_walk_image *image,
  * What decides it is the stack, and that is measurable. Summing the largest
  * frame of every function in the recursion cycle of this file, built `-Os`
  * for x86-64 with `-fstack-usage`: `content_bits_deep` 896, `while_walk` 848,
- * `chain_bits_deep` 288, `read_deep` 192, `struct_extent` 192, `member_bits`
- * 160, `offset_bits_deep` 96, `size_bits_deep` 64, `situ_walk_eval` 64 --
- * 2800 bytes for one level in the worst case, and about 2200 on the path a
- * measurement takes, each run holding a binding and what its element's
- * members measured (26.909). Eight is therefore around 22 KB worst case,
+ * `chain_sum` 224, `read_deep` 192, `struct_extent` 192, `chain_bits_deep`
+ * 176, `member_bits` 160, `offset_bits_deep` 96, `size_bits_deep` 64,
+ * `situ_walk_eval` 64 -- 2912 bytes for one level in the worst case, and
+ * about 2300 on the path a measurement takes, each run holding a binding and
+ * what its element's members measured (26.909). `chain_sum_held` adds 592
+ * where a level's frame is not a recursive one (26.918). Eight is therefore
+ * around 23 KB worst case,
  * which is a real fraction of a small device's stack and is why the number
  * is small.
  *
@@ -3058,81 +3060,32 @@ static situ_walk_err offset_bits_deep(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
-static situ_walk_err chain_bits_deep(const situ_walk_image *image,
-                                     const uint8_t *message, uint32_t len,
-                                     uint32_t shape, uint32_t index,
-                                     uint32_t depth, uint32_t *out)
+/* Every term SATURATES at the frame, which is `situ_advance_u32`'s rule
+ * in `runtime/situ.h` spelled in bits: `at + min(by, limit - at)`. The
+ * generated backends compute an offset chain that way, and 26.27 says
+ * why -- a term is a length the message chose, so `offset + by` running
+ * past a short frame is a pointer no reader downstream can check.
+ *
+ * Both walkers summed without a cap, which agreed with each other and
+ * with nobody else: on a truncated frame they produced an offset past
+ * the end and refused the read behind it, where the four backends place
+ * the member at the limit, take a zero-length sub-view and answer
+ * `ok=1 extent=0`. `validate` is what calls such a message malformed,
+ * and a measurement is not the place to decide it.
+ *
+ * `room` is the frame in bits. `len` is bytes remaining from this
+ * struct's base -- every nested walk rebases `message + at, len - at` --
+ * so a long buffer would overflow the multiply, and saturating there is
+ * the same answer a 512 MB frame would give anyway. */
+static situ_walk_err chain_sum(const situ_walk_image *image,
+                               const uint8_t *message, uint32_t len,
+                               uint32_t shape, uint32_t index, uint32_t depth,
+                               uint32_t first, uint32_t count, uint32_t *out)
 {
-	situ_walk_placement held;
-	situ_walk_err err = situ_walk_placement_at(image, index, &held);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-
-	/* An unknown offset whose row carries a number is measured from the
-	 * frame's end, and past the frame where the frame is shorter (26.905). */
-	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u
-	                && held.offset_bits != SITU_WALK_NONE) {
-		const uint32_t back = held.offset_bits / 8u;
-
-		*out = (len >= back ? len - back : len) * 8u;
-		return SITU_WALK_OK;
-	}
-
-	/* `at expr` says where the member is rather than joining the chain, so
-	 * the program answers the offset outright. The loop below already knows
-	 * to skip one when summing what comes before: a located member
-	 * contributes nothing to the members after it, which is the whole of what
-	 * separates it from an ordinary one. */
-	if (held.located_code != SITU_WALK_NONE) {
-		walk_ctx ctx = {image, message, len, shape, depth};
-		int64_t  at  = 0;
-
-		err = situ_walk_eval(image, held.located_code, ctx_load, &ctx,
-		                     (int64_t)len, &at);
-		if (err != SITU_WALK_OK) {
-			return err;
-		}
-		if (at < 0 || (uint64_t)at > 0xffffffffu / 8u) {
-			return SITU_WALK_BOUNDS;
-		}
-		*out = (uint32_t)at * 8u;
-		return SITU_WALK_OK;
-	}
-	if ((held.flags & FLAG_OFFSET_KNOWN) != 0u
-	                && held.offset_bits != SITU_WALK_NONE) {
-		*out = held.offset_bits;
-		return SITU_WALK_OK;
-	}
-
-	/* Sum what comes before. The loop is bounded by the struct's member
-	 * count, which the image states, so this needs no guard of its own. */
-	uint32_t first = 0u;
-	uint32_t count = 0u;
-	err = situ_walk_members(image, shape, &first, &count);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-
-	/* Every term SATURATES at the frame, which is `situ_advance_u32`'s rule
-	 * in `runtime/situ.h` spelled in bits: `at + min(by, limit - at)`. The
-	 * generated backends compute an offset chain that way, and 26.27 says
-	 * why -- a term is a length the message chose, so `offset + by` running
-	 * past a short frame is a pointer no reader downstream can check.
-	 *
-	 * Both walkers summed without a cap, which agreed with each other and
-	 * with nobody else: on a truncated frame they produced an offset past
-	 * the end and refused the read behind it, where the four backends place
-	 * the member at the limit, take a zero-length sub-view and answer
-	 * `ok=1 extent=0`. `validate` is what calls such a message malformed,
-	 * and a measurement is not the place to decide it.
-	 *
-	 * `room` is the frame in bits. `len` is bytes remaining from this
-	 * struct's base -- every nested walk rebases `message + at, len - at` --
-	 * so a long buffer would overflow the multiply, and saturating there is
-	 * the same answer a 512 MB frame would give anyway. */
+	situ_walk_err err;
 	const uint32_t room  = len > 0x1fffffffu ? 0xffffffffu : len * 8u;
 	uint32_t       total = 0u;
+
 	for (uint32_t i = 0u; i < count; i++) {
 		const uint32_t before = first + i;
 		if (before == index) {
@@ -3192,6 +3145,103 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 	}
 
 	return SITU_WALK_BOUNDS;	/* not a member of this struct */
+}
+
+/* `chain_sum` with somewhere to keep what its members measure. Its own
+ * function, and kept out of line, because the binding is 528 bytes and only
+ * the first entry to a frame wants it: a recursive walk holds its frames
+ * already, and this is on no level of it. Inlined, `chain_bits_deep` grew by
+ * that on every level. */
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+static situ_walk_err chain_sum_held(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t depth, uint32_t first,
+                                    uint32_t count, uint32_t *out)
+{
+	situ_walk_image bound = *image;
+	walk_sizes      sizes;
+
+	sizes.message = message;
+	sizes.len     = len;
+	sizes.shape   = shape;
+	sizes.first   = first;
+	sizes.known   = 0u;
+	bound.sizes   = &sizes;
+	return chain_sum(&bound, message, len, shape, index, depth, first, count,
+	                 out);
+}
+
+static situ_walk_err chain_bits_deep(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     uint32_t depth, uint32_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	/* An unknown offset whose row carries a number is measured from the
+	 * frame's end, and past the frame where the frame is shorter (26.905). */
+	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u
+	                && held.offset_bits != SITU_WALK_NONE) {
+		const uint32_t back = held.offset_bits / 8u;
+
+		*out = (len >= back ? len - back : len) * 8u;
+		return SITU_WALK_OK;
+	}
+
+	/* `at expr` says where the member is rather than joining the chain, so
+	 * the program answers the offset outright. The loop below already knows
+	 * to skip one when summing what comes before: a located member
+	 * contributes nothing to the members after it, which is the whole of what
+	 * separates it from an ordinary one. */
+	if (held.located_code != SITU_WALK_NONE) {
+		walk_ctx ctx = {image, message, len, shape, depth};
+		int64_t  at  = 0;
+
+		err = situ_walk_eval(image, held.located_code, ctx_load, &ctx,
+		                     (int64_t)len, &at);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (at < 0 || (uint64_t)at > 0xffffffffu / 8u) {
+			return SITU_WALK_BOUNDS;
+		}
+		*out = (uint32_t)at * 8u;
+		return SITU_WALK_OK;
+	}
+	if ((held.flags & FLAG_OFFSET_KNOWN) != 0u
+	                && held.offset_bits != SITU_WALK_NONE) {
+		*out = held.offset_bits;
+		return SITU_WALK_OK;
+	}
+
+	/* Sum what comes before. The loop is bounded by the struct's member
+	 * count, which the image states, so this needs no guard of its own. */
+	uint32_t first = 0u;
+	uint32_t count = 0u;
+	err = situ_walk_members(image, shape, &first, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	/* Held for the length of the sum, unless this frame is held already. Each
+	 * length in it reads a field, which sums what is in front of that, so a
+	 * read otherwise cost twice the member before it (26.918). */
+	const walk_sizes *now = image->sizes;
+
+	if (now != NULL && now->message == message && now->len == len
+	                && now->shape == shape) {
+		return chain_sum(image, message, len, shape, index, depth, first,
+		                 count, out);
+	}
+	return chain_sum_held(image, message, len, shape, index, depth, first,
+	                      count, out);
 }
 
 /* One value of `width_bits` bits at `start_bits`, in the member's own terms.

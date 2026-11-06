@@ -269,6 +269,20 @@ def chain_bits(view: View, index: int) -> int:
 	# there and answers `ok=1 extent=0`, and `validate` is what calls the
 	# message malformed. A fifth reader that refuses where four agree is the
 	# disagreement the differential exists to surface, and it surfaced.
+	if view.sizes is not None:
+		return _summed(view, index)
+	# Held for the length of the sum, as `struct_extent` holds it. Each length
+	# in it reads a field, which sums what is in front of that, so a read
+	# otherwise cost twice the member before it (26.918).
+	view.sizes = {}
+	try:
+		return _summed(view, index)
+	finally:
+		view.sizes = None
+
+
+def _summed(view: View, index: int) -> int:
+	"""`chain_bits` of a view holding what its members measure."""
 	room  = max(0, view.limit - view.at) * BITS_PER_BYTE
 	total = 0
 	for before in view.image.members(view.shape):

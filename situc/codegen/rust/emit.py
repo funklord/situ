@@ -113,6 +113,7 @@ from situc.traverse import (
 	CursorStep,
 	cursor_walk,
 	offset_plan,
+	offset_walk,
 	read_behind_recursion,
 	own_entries,
 	own_members,
@@ -350,6 +351,8 @@ class Emitter:
 		#: each struct measures itself, asked for every field (26.909).
 		self._marked: dict[str, list[str]] = {}
 		self._cursors: dict[str, list[CursorStep] | None] = {}
+		self._walks: dict[str, tuple[list[CursorStep],
+		                             list[Placement]] | None] = {}
 		self._measures: dict[str, list[str]] = {}
 		self.schema   = schema
 		self.resolved = resolved
@@ -657,6 +660,7 @@ class Emitter:
 		lines.extend(self._region_runs(struct))
 		lines.extend(self._nested_text_values(struct))
 		lines.extend(self._arm_accessors(struct))
+		lines.extend(self._walked(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._validate(struct))
@@ -6872,10 +6876,80 @@ class Emitter:
 		The whole list, or with `own` what the struct's own terms read and so
 		what its helpers have to be handed.
 		"""
+		walk = self._walk(struct)
+		if walk is not None:
+			return walk[1]
 		if self._cursor(struct) is None:
 			return []
 		reads, every = read_behind_recursion(self.resolved.structs, struct)
 		return reads if own else every
+
+	def _passes(self, struct: ResolvedStruct) -> bool:
+		"""Whether anything measures this struct front to back, and so has to
+		be handed a start rather than deriving one."""
+		return self._cursor(struct) is not None \
+			or self._walk(struct) is not None
+
+	def _walk(self, struct: ResolvedStruct
+			) -> tuple[list[CursorStep], list[Placement]] | None:
+		"""The pass to a struct's chained lengths, where each can be rendered.
+
+		Held once known. The rendering asks about the struct's offsets, and
+		those ask this, so the answer is None while it is being worked out.
+		"""
+		if struct.name not in self._walks:
+			self._walks[struct.name] = None
+			walk = offset_walk(self.resolved.structs, struct)
+			if walk is not None and all(
+					step.member is None or step.kind in ("read", "pad")
+					or self._length_expression(struct, step.member) is not None
+					for step in walk[0]):
+				self._walks[struct.name] = walk
+		return self._walks[struct.name]
+
+	def _walked(self, struct: ResolvedStruct) -> list[str]:
+		"""Where each field a length reads is, found in one pass (26.918)."""
+		walk = self._walk(struct)
+		if walk is None:
+			return []
+		steps, reads = walk
+		body = [f"\t\tlet mut marks = [self.bytes.len(); {len(reads)}];",
+		        "\t\tlet mut at = 0usize;"]
+		for step in steps:
+			if step.kind == "advance":
+				body.append(f"\t\tat = situ_rt::advance(at, {step.size},"
+				            " self.bytes.len());")
+				continue
+			member = step.member
+			assert member is not None
+			if step.kind == "read":
+				index = [held.path for held in reads].index(member.path)
+				where = "at"
+				if member.skip:
+					lead  = _ident(c_name(local_name(struct, member)) + "_lead")
+					where = (f"situ_rt::advance(at, self.{lead}(at),"
+					         " self.bytes.len())")
+				body.append(f"\t\tmarks[{index}] = {where};")
+				continue
+			if step.kind == "pad":
+				body.append(f"\t\tat = situ_rt::align_up(at, {step.size},"
+				            " self.bytes.len());")
+				continue
+			if step.kind == "loose":
+				continue
+			rendered = self._length_expression(struct, member, "at")
+			assert rendered is not None, "`_walk` asked"
+			length = self._reading_marks(struct, rendered).replace(
+				"_marked(marks", "_marked(&marks")
+			if member.offset_bits is None:
+				length = length.replace(
+					self._offset_expression(struct, member) or "\0", "at")
+			body.append(f"\t\tat = situ_rt::advance(at, {self._unparen(length)},"
+			            " self.bytes.len());")
+		return ["", "\t/// Where the fields the lengths read are, in one pass.",
+		        "\t#[allow(unused_assignments, unused_mut)]",
+		        "\tfn _walked(&self, index: usize) -> usize {",
+		        *body, "\t\tmarks[index]", "\t}"]
 
 	def _reading_marks(self, struct: ResolvedStruct, text: str,
 			held: str = "self", marks: str = "marks") -> str:
@@ -6914,7 +6988,7 @@ class Emitter:
 		the second measurement, and their length is a term of that extent
 		whether anything reads them (26.909).
 		"""
-		if self._cursor(struct) is None or placement.offset_bits is not None \
+		if not self._passes(struct) or placement.offset_bits is not None \
 				or (placement.varint is None and placement.radix is None
 				    and (not placement.delimiters
 				         or arm_of(struct, placement) is None)):
@@ -7058,6 +7132,12 @@ class Emitter:
 		other backends: the statement form next door is what a caller reads
 		when the cost matters.
 		"""
+		walk = self._walk(struct)
+		if walk is not None:
+			for index, held in enumerate(walk[1]):
+				if held.path == placement.path:
+					return f"self._walked({index})"
+
 		chain = self._chain_expression(struct, placement)
 		if chain is None or not placement.skip:
 			return chain
@@ -8438,6 +8518,12 @@ class Emitter:
 		"""
 		if placement.offset_bits is not None:
 			return None
+
+		walk = self._walk(struct)
+		if walk is not None and not placement.skip \
+				and any(held.path == placement.path for held in walk[1]):
+			expression = self._offset_expression(struct, placement)
+			return [f"\t\t{expression}"]
 
 		parts = preceding_parts(struct, placement)
 		if parts is None:

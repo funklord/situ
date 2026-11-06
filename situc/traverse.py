@@ -3208,6 +3208,16 @@ def _sources_read(struct: "ResolvedStruct", placement: Placement
 	return [str(source) for source in found if source]
 
 
+def _read_from_where_it_is(structs: dict[str, "ResolvedStruct"],
+		member: Placement) -> bool:
+	"""Whether a member's offset alone is enough to read it, or read in it."""
+	return ((member.scalar is not None or member.varint is not None
+	         or (member.type_name in structs and member.array_count is None
+	             and member.size_expr is None))
+	        and not member.parameter and member.located is None
+	        and member.since is None)
+
+
 def read_behind_recursion(structs: dict[str, "ResolvedStruct"],
 		struct: "ResolvedStruct") -> tuple[list[Placement], list[Placement]]:
 	"""The fields behind a recursing member that measuring `struct` reads.
@@ -3227,11 +3237,7 @@ def read_behind_recursion(structs: dict[str, "ResolvedStruct"],
 	if first is None:
 		return [], []
 	behind = [member for member in own[first + 1:]
-	          if (member.scalar is not None or member.varint is not None
-	              or (member.type_name in structs and member.array_count is None
-	                  and member.size_expr is None))
-	          and not member.parameter and member.located is None
-	          and member.since is None]
+	          if _read_from_where_it_is(structs, member)]
 
 	sources = [source for member in own
 	           for source in _sources_read(struct, member)]
@@ -3291,6 +3297,65 @@ def cursor_walk(structs: dict[str, "ResolvedStruct"],
 			or ends_in_the_frame(structs, struct, always=True):
 		return None
 
+	return _steps_over(struct, own, marked)
+
+
+def read_behind_a_length(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct") -> list[Placement]:
+	"""The fields a struct's own lengths read from where the data put them.
+
+	`read_behind_recursion`'s question, with a variable member standing in
+	for the recursion. The answer to why it matters is the same: such a
+	field's accessor finds it by measuring what is in front of it, and that
+	can be another such field.
+	"""
+	own = own_members(struct)
+	first = next((at for at, member in enumerate(own)
+	              if member.located is None
+	              and not occupies_fixed_bytes(member)), None)
+	if first is None:
+		return []
+	sources = [source for member in own
+	           for source in _sources_read(struct, member)]
+	return [member for member in own[first + 1:]
+	        if _read_from_where_it_is(structs, member)
+	        and any(_names_a_field(source, local_name(struct, member))
+	                for source in sources)]
+
+
+def offset_walk(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct") -> tuple[list[CursorStep],
+		                                   list[Placement]] | None:
+	"""One pass to where a struct's chained lengths are, or None without any.
+
+	Each field a length reads found itself by summing the lengths ahead of
+	it, each of which read a field the same way, and read it twice: three
+	calls for every link, so twelve length-prefixed strings took fifteen
+	million calls to validate and SSH's ten name-lists were most of the way
+	there. A pass front to back reads each once (26.918).
+
+	Two or more, because one has nothing to multiply. None for a recursive
+	struct, which `cursor_walk` already measures, and for one a sum cannot be
+	taken of. Past the last field nothing needs walking.
+	"""
+	if is_recursive(structs, struct.name) \
+			or extent_parts(structs, struct) is None:
+		return None
+	reads = read_behind_a_length(structs, struct)
+	if len(reads) < 2 or versioned_tail(structs, struct) is not None \
+			or ends_in_the_frame(structs, struct, always=True):
+		return None
+	steps = _steps_over(struct, own_members(struct),
+	                    {member.path for member in reads})
+	if steps is None:
+		return None
+	last = max(at for at, step in enumerate(steps) if step.kind == "read")
+	return steps[:last + 1], reads
+
+
+def _steps_over(struct: "ResolvedStruct", own: list[Placement],
+		marked: set[str]) -> list[CursorStep] | None:
+	"""A struct's members as cursor steps, stopping to note each in `marked`."""
 	steps: list[CursorStep] = []
 	bits = 0
 
