@@ -96,6 +96,7 @@ def check(schema: ast.Schema) -> None:
 	check_depth_bounds(schema)
 	check_delimiters(schema)
 	check_tlv_grammar(schema)
+	check_known_names(schema)
 	check_index_bases(schema)
 	check_repeats(schema)
 	check_versions(schema)
@@ -968,6 +969,79 @@ def _check_value_size(region: ast.Tlv, varints: set[str]) -> None:
 				notes = ["`prefixed(T)` reads a length in `T` and then that"
 				         " many bytes"],
 			)
+
+
+#: What Rust and Python put on every view whatever its members are called, or
+#: inherit there. `test_a_known_name_is_refused_once.py` harvests the generated
+#: code for names this and the affix tables leave out.
+VIEW_SURFACE = frozenset({
+	"SIZE_BYTES", "SIZE_MIN", "as_bytes", "as_ref", "at", "bytes",
+	"check_which", "new", "required", "validate",
+})
+
+
+def check_known_names(schema: ast.Schema) -> None:
+	"""A `known` name is a method beside everything else the view holds.
+
+	Rust and Python give each one an accessor on the struct's view; C and C++
+	give none. So a name equal to a member's, or to something generated for
+	one, was four answers to one schema: C and C++ accepted it, Rust did not
+	compile, and Python refused it, raised the assertion kept for its own
+	defects, or quietly replaced `View.bytes`. Refused here, as 26.706 refused
+	`arg_n`, so they agree and the answer arrives at the schema line (26.911).
+	"""
+	for struct in schema.structs():
+		members = _walk_members(struct.members)
+		seen: dict[str, ast.KnownTag] = {}
+		for region in members:
+			if not isinstance(region, ast.Tlv):
+				continue
+			for tag in region.known:
+				if tag.name in seen:
+					raise _redeclaration(
+						"known tag", tag.name, seen[tag.name], tag,
+						["two `tlv` regions of one struct share its view, so"
+						 " their `known` names share one namespace (26.911)"])
+				seen[tag.name] = tag
+				_refuse_a_taken_known_name(tag, members)
+
+
+def _spelled_on_the_view(members: list[ast.Member]) -> list[str]:
+	"""Each member as its accessors spell it: an arm is `<variant>_<arm>`."""
+	spelled: list[str] = []
+	for member in members:
+		spelled += [name for name in [getattr(member, "name", None)] if name]
+		if isinstance(member, ast.Variant):
+			spelled += [f"{member.name}_{arm_name}" for arm in nested(member)
+			            if (arm_name := getattr(arm, "name", None))]
+	return spelled
+
+
+def _refuse_a_taken_known_name(tag: ast.KnownTag,
+	members: list[ast.Member]) -> None:
+	"""Refuse `tag` if its accessor would land on a name already generated."""
+	# Here rather than at the top: `situc.codegen.cpp` imports the parser.
+	from situc.codegen.cpp.names import PREFIXES, SUFFIXES
+
+	taken = None
+	if tag.name in VIEW_SURFACE:
+		taken = "a name every view holds"
+	for name in _spelled_on_the_view(members):
+		if tag.name == name:
+			taken = f"the member `{name}`"
+		elif any(tag.name == f"{name}_{one}" for one in SUFFIXES) \
+				or any(tag.name == f"{one}_{name}" for one in PREFIXES):
+			taken = f"a name generated for `{name}`"
+	if taken is None:
+		return
+	raise error(
+		f"known tag `{tag.name}` is {taken}",
+		tag.span,
+		"rename this `known` entry",
+		["Rust and Python make each `known` name a method on the view, beside"
+		 " everything else generated for the struct (26.911)",
+		 "the name is the schema's own: the wire carries the tag, so renaming"
+		 " it changes no message"])
 
 
 def _check_known_tags(region: ast.Tlv) -> None:

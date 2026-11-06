@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.911 A known name is a method on the view
+
+Moved to `doc/decision/26.911-a-known-name-is-a-method.md`.
+
 ### 26.910 A table behind a length, and a pad arm in a cycle
 
 Moved to `doc/decision/26.910-a-table-behind-a-length.md`.
