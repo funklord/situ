@@ -1083,6 +1083,12 @@ pub fn varint_be_len(mut value: u64, max_bytes: usize, terminal_bits: u32) -> us
 /// The bound every leaf of a size expression is held to (14.2b).
 pub const LEAF_MAX: i64 = 0x7FFF_FFFF;
 
+/// A read whole, for `popcount`: a bitmap is not a length (26.899).
+#[must_use]
+pub fn bits_u(value: u64) -> i64 {
+	value as i64
+}
+
 /// One leaf of a size expression, held to `LEAF_MAX`.
 ///
 /// Two names rather than one, for C's reason: a `u64` above the bound is a

@@ -2115,6 +2115,8 @@ Permitted:
 - comparison and boolean operators (in constraints only)
 - `size(X)`, `offset(X)`, `count(X)`, `remaining`
 - `min`, `max`, `align_up(x, n)`
+- `popcount(x)`: the bits set in an unsigned value, for a presence bitmap
+  counting what follows it (26.899)
 - `sum(run)` in a size: the elements of a counted run of unsigned integers
   declared earlier, a table of lengths ahead of what it sizes (26.896)
 

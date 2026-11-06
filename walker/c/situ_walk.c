@@ -6629,6 +6629,20 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			continue;
 		}
 
+		if (op == 0x33u) {				/* POPCOUNT */
+			if (depth < 1u) {
+				return SITU_WALK_MALFORMED;
+			}
+			uint64_t bits = (uint64_t)stack[depth - 1u];
+			int64_t  set  = 0;
+
+			for (; bits != 0u; bits &= bits - 1u) {
+				set++;
+			}
+			stack[depth - 1u] = set;
+			continue;
+		}
+
 		if (depth < 2u) {
 			return SITU_WALK_MALFORMED;
 		}

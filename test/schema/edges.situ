@@ -2631,3 +2631,10 @@ struct held_box [depth = 8] {
 struct held_boxes [depth = 8] {
 	held_box  all[remaining];
 }
+
+// A presence bitmap counting what follows it (26.899).
+struct counted_by_bits {
+	u32  present;
+	u8   values[popcount(present)];
+	u8   after;
+}

@@ -58,6 +58,34 @@ from situc.traverse import messages as messages_of
 #: so a three-byte scalar is read whole here and bit-assembled there.
 FIELD_WIDTHS = (8, 16, 24, 32, 64)
 
+#: Lua refuses a function with more than 200 locals, and a chunk is a function.
+LUA_LOCALS = 200
+
+
+def _within_lua_locals(text: str) -> str:
+	"""A dissector with more top-level names than a Lua chunk may hold.
+
+	Each struct's extent function and proto is a local, so a large schema met
+	"too many local variables" when Wireshark loaded it, and nothing before
+	that said so: `edges` reached 201 (26.899). Past the limit they go in a
+	table of the chunk's own, which `_ENV` makes the scope of every name, and
+	every other dissector stays byte-identical.
+	"""
+	lines = text.split("\n")
+	if sum(line.startswith("local ") for line in lines) < LUA_LOCALS:
+		return text
+	out: list[str] = []
+	for line in lines:
+		if not line.startswith("local "):
+			out.append(line)
+		elif " = " in line or line.startswith("local function "):
+			out.append(line[len("local "):])
+	first = next(at for at, line in enumerate(out)
+	             if not line.startswith("--"))
+	out.insert(first, "local _ENV = setmetatable({}, { __index = _G })")
+	return "\n".join(out)
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str) -> str:
 	"""The whole schema as a dissector.
@@ -149,7 +177,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		              "appears on a wire."])
 
 	lines.extend(_registration(resolved, roots))
-	return "\n".join(lines).rstrip() + "\n"
+	return _within_lua_locals("\n".join(lines).rstrip() + "\n")
 
 
 READ_HELPER = [

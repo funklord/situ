@@ -47,7 +47,7 @@ FIELD_IN = 8
 TAG = 9
 ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, SHL, SHR, NEG, NOT = range(0x10, 0x1C)
 EQ, NE, LT, LE, GT, GE, LAND, LOR = range(0x20, 0x28)
-MIN, MAX, ALIGN_UP = range(0x30, 0x33)
+MIN, MAX, ALIGN_UP, POPCOUNT = range(0x30, 0x34)
 
 
 class VmError(Exception):
@@ -184,6 +184,11 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 				raise VmError("unary operator on an empty stack")
 			value = stack.pop()
 			stack.append(-value if op == NEG else ~value)
+			continue
+		if op == POPCOUNT:
+			if not stack:
+				raise VmError("popcount on an empty stack")
+			stack.append((stack.pop() & (1 << 64) - 1).bit_count())
 			continue
 
 		operator = BINARY.get(op)

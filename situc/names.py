@@ -160,7 +160,7 @@ def with_sums(source: str, sum_of: Callable[[str], str],
 
 #: How many arguments each value builtin takes. `situc.expr` is authoritative
 #: about which exist; this is what a backend has to be able to spell.
-CALL_ARITY = {"min": 2, "max": 2, "align_up": 2}
+CALL_ARITY = {"min": 2, "max": 2, "align_up": 2, "popcount": 1}
 
 
 def expand_calls(source: str, spell: Callable[[str, list[str]], str]) -> str:
@@ -244,9 +244,30 @@ def _rounded(value: str, unit: str, one: str, div: str) -> str:
 	return f"((({value}) + ({unit}) - {one}) {div} ({unit}) * ({unit}))"
 
 
+#: What holds a read to `LEAF_MAX` in each target, and what reads it whole.
+_LEAF_READS = (("::situ::rt::leaf_u(", "static_cast<std::int64_t>("),
+               ("situ_rt::leaf_u(", "situ_rt::bits_u("),
+               ("situ_leaf_u64(", "(int64_t)("),
+               ("leaf(", "int("))
+
+
+def _all_bits(text: str) -> str:
+	"""A size expression's reads, unsaturated, for `popcount` (26.899).
+
+	A leaf is held to 2^31 - 1 so that four targets add up alike, and a bitmap
+	is not a length: bit 31 of a `u32` saturated away reads as thirty-one set
+	bits. No sum follows this, since the count is what comes out.
+	"""
+	for leaf, whole in _LEAF_READS:
+		text = re.sub(rf"(?<![\w:]){re.escape(leaf)}", whole, text)
+	return text
+
+
 def c_spelling(name: str, args: list[str]) -> str:
 	"""C and C++: a conditional operator, and unsigned literals for the flags
 	this project builds generated code under."""
+	if name == "popcount":
+		return f"situ_popcount_i64({_all_bits(args[0])})"
 	left, right = args
 	if name == "align_up":
 		return _rounded(left, right, "1u", "/")
@@ -263,6 +284,8 @@ def rust_spelling(name: str, args: list[str]) -> str:
 	the reason that matters: generated code that warns teaches a reader to
 	ignore warnings.
 	"""
+	if name == "popcount":
+		return f"({unwrap_parens(_all_bits(args[0]))}).count_ones() as i64"
 	left, right = args
 	if name == "align_up":
 		return _rounded(left, right, "1", "/")
@@ -293,6 +316,8 @@ def unwrap_parens(text: str) -> str:
 
 
 def python_spelling(name: str, args: list[str]) -> str:
+	if name == "popcount":
+		return f"({_all_bits(args[0])}).bit_count()"
 	left, right = args
 	if name == "align_up":
 		return _rounded(left, right, "1", "//")
@@ -300,6 +325,9 @@ def python_spelling(name: str, args: list[str]) -> str:
 
 
 def lua_spelling(name: str, args: list[str]) -> str:
+	if name == "popcount":
+		return ("(function(v) local n = 0; while v > 0 do n = n + v % 2; "
+		        f"v = math.floor(v / 2) end; return n end)({args[0]})")
 	left, right = args
 	if name == "align_up":
 		return f"(math.floor((({left}) + ({right}) - 1) / ({right})) * ({right}))"

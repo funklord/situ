@@ -23,7 +23,7 @@ from situc.types import literal_bytes
 from situc.diagnostics import SituError, error
 
 # Builtins whose arguments are values rather than paths.
-VALUE_BUILTINS = {"min": 2, "max": 2, "align_up": 2}
+VALUE_BUILTINS = {"min": 2, "max": 2, "align_up": 2, "popcount": 1}
 
 # Builtins taking a path to a declaration and answering from the layout.
 LAYOUT_BUILTINS = {"size": 1, "offset": 1, "count": 1}
@@ -520,6 +520,16 @@ def _call_interval(expr: ast.Call, env: Env) -> Interval:
 				a.hi for a in args if a.hi is not None)
 			return Interval(max(a.lo for a in args), hi)
 
+		# How many bits are set, for a presence bitmap counting what follows
+		# it (26.899). A set bit of a negative number has no meaning a
+		# width-free reader shares, so it is unsigned or nothing.
+		if expr.name == "popcount":
+			value = args[0]
+			if value.lo < 0 or value.hi is None:
+				raise error("`popcount` counts the bits of an unsigned value",
+				            expr.span, label = f"this is {value}")
+			return Interval(0 if value.lo == 0 else 1, value.hi.bit_length())
+
 		# `align_up` had no rule and widened to "nothing known", which is how
 		# a padding member -- the one construct that needs it -- came out
 		# `size=Unbounded` for a range of three bytes. It is monotone
@@ -769,6 +779,8 @@ def _call(expr: ast.Call, env: Env) -> int:
 			return min(args)
 		if expr.name == "max":
 			return max(args)
+		if expr.name == "popcount":
+			return args[0].bit_count()
 		return _align_up(expr, args[0], args[1])
 
 	if expr.name in LAYOUT_BUILTINS:

@@ -679,6 +679,18 @@ static inline int64_t situ_leaf_i64(int64_t value)
 	return value;
 }
 
+/* How many bits are set, for `popcount` (26.899). */
+static inline int64_t situ_popcount_i64(int64_t value)
+{
+	uint64_t bits = (uint64_t)value;
+	int64_t  set  = 0;
+
+	for (; bits != 0u; bits &= bits - 1u) {
+		set++;
+	}
+	return set;
+}
+
 /* A computed length, with a negative result read as zero (14.2b).
  *
  * Zero rather than a refusal: a member of negative length is a member with

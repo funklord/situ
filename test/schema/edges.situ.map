@@ -113,6 +113,11 @@ struct corrected_nibble size=9 atomic=NonAtomic
   corrected_nibble.body                  offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   corrected_nibble.body.payload          offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct counted_by_bits size=5..37 mutate=Shifting address=Unstable repr=ValueConverted
+  counted_by_bits.present                offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  counted_by_bits.values                 offset=AbsoluteStatic(0x04) size=Bounded(0, 32) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  counted_by_bits.after                  offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
 struct counted_fixed size=2..642 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   counted_fixed.rows_held                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   counted_fixed.rows                     offset=AbsoluteStatic(0x02) size=Bounded(0, 640) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting

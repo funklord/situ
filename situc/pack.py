@@ -289,6 +289,7 @@ class Op:
 	MIN		= 0x30
 	MAX		= 0x31
 	ALIGN_UP	= 0x32
+	POPCOUNT	= 0x33
 
 
 BINARY = {
@@ -514,6 +515,10 @@ class Program:
 					f"`{expr.name}({path})` names a field of a nested struct, "
 					f"and this opcode carries no base")
 			self.emit(PATH_CALLS[expr.name], index)
+			return
+		if expr.name == "popcount" and len(expr.args) == 1:
+			self.compile(expr.args[0], resolve_path, consts, enum_members)
+			self.emit(Op.POPCOUNT)
 			return
 		if expr.name in VALUE_CALLS:
 			if len(expr.args) != 2:
