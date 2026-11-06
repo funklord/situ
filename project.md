@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.908 Names and shapes that broke one backend alone
+
+Moved to `doc/decision/26.908-names-that-broke-one-backend.md`.
+
 ### 26.907 A struct that ends in its frame has a view
 
 Moved to `doc/decision/26.907-a-struct-that-ends-in-its-frame.md`.

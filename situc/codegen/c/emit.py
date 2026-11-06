@@ -7227,6 +7227,10 @@ class Emitter:
 		delim  = placement.delimiter
 		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
 		base   = self._base_expression(struct, placement, gated=False)
+		# An argument can place this member, and every form below asks where
+		# it starts.
+		tail   = self._member_tail(struct, placement)
+		args   = self._member_args(struct, placement)
 		limit  = self._scan_limit(placement, base)
 
 		sym        = ident(self.prefix, struct.name, local, "delim")
@@ -7316,7 +7320,7 @@ class Emitter:
 			"}",
 			"",
 		] if many else []) + [
-			f"static inline uint32_t {scan_len}(situ_view_t view)",
+			f"static inline uint32_t {scan_len}(situ_view_t view{tail})",
 			"{",
 			f"\treturn {scan_len}_from(view, {base});",
 			"}",
@@ -7326,13 +7330,15 @@ class Emitter:
 			f"\treturn {scan_len}_from(view, at) < ({self._scan_limit(placement, 'at')});",
 			"}",
 			"",
-			f"static inline int {terminated}(situ_view_t view)",
+			f"static inline int {terminated}(situ_view_t view{tail})",
 			"{",
 			f"\treturn {terminated}_from(view, {base});",
 			"}",
 			"",
-			f"static inline uint32_t {span}_from(situ_view_t view, uint32_t at)",
+			f"static inline uint32_t {span}_from(situ_view_t view, uint32_t at"
+			f"{tail})",
 			"{",
+			*self._argument_unused(struct, tail),
 			"\t/* The delimiter is this member's too, so the next member starts",
 			"\t * after it. Where it is missing there is nothing to add: the",
 			"\t * member ran to the end of the buffer, and claiming the extra",
@@ -7348,16 +7354,16 @@ class Emitter:
 			 f"({terminated}_from(view, at) ? {len(delim)}u : 0u);"),
 			"}",
 			"",
-			f"static inline uint32_t {span}(situ_view_t view)",
+			f"static inline uint32_t {span}(situ_view_t view{tail})",
 			"{",
-			f"\treturn {span}_from(view, {base});",
+			f"\treturn {span}_from(view, {base}{args});",
 			"}",
 			"",
 		]
 
 		if not placement.trimmed:
 			lines.extend([
-				f"static inline const uint8_t *{ptr}(situ_view_t view)",
+				f"static inline const uint8_t *{ptr}(situ_view_t view{tail})",
 				"{",
 				f"\treturn situ_base(view) + {base};",
 				"}",
@@ -7386,15 +7392,15 @@ class Emitter:
 			" * directive meant. */",
 			f"static const uint8_t {set_}[{count}] = {{{bytes_}}};",
 			"",
-			f"static inline const uint8_t *{ptr}(situ_view_t view)",
+			f"static inline const uint8_t *{ptr}(situ_view_t view{tail})",
 			"{",
 			f"\treturn situ_base(view) + {base} + situ_trim_start(situ_base(view) + {base},"
-			f" {scan_len}(view), {set_}, {count}u);",
+			f" {scan_len}(view{args}), {set_}, {count}u);",
 			"}",
 			"",
-			f"static inline uint32_t {length}(situ_view_t view)",
+			f"static inline uint32_t {length}(situ_view_t view{tail})",
 			"{",
-			f"\treturn situ_trim_len(situ_base(view) + {base}, {scan_len}(view),"
+			f"\treturn situ_trim_len(situ_base(view) + {base}, {scan_len}(view{args}),"
 			f" {set_}, {count}u);",
 			"}",
 		])
@@ -8064,9 +8070,12 @@ class Emitter:
 			" which is",
 			" * what `strncmp` against a literal quietly makes it. */",
 			f"static inline int {ident(self.prefix, struct.name, local, 'eq')}"
-			"(situ_view_t view, const uint8_t *other, uint32_t other_len)",
+			"(situ_view_t view, const uint8_t *other, uint32_t other_len"
+			f"{self._member_tail(struct, placement)})",
 			"{",
-			f"\treturn {fold}({ptr}(view), {length}(view), other, other_len);",
+			f"\treturn {fold}({ptr}(view{self._member_args(struct, placement)}),"
+			f" {length}(view{self._member_args(struct, placement)}),"
+			" other, other_len);",
 			"}",
 		]
 
@@ -11361,7 +11370,8 @@ class Emitter:
 			f"\t/* `{placement.name}` runs to {render_delimiter(delim)}, and a",
 			"\t * frame that does not contain it was cut short: the member ran",
 			"\t * to the end of the buffer rather than to its own end. */",
-			f"\tif (!{ident(self.prefix, struct.name, local, 'terminated')}(view)) {{",
+			f"\tif (!{ident(self.prefix, struct.name, local, 'terminated')}"
+			f"(view{self._member_args(struct, placement)})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		] if must_be_terminated(placement) else []
@@ -12173,7 +12183,7 @@ class Emitter:
 				*([f"\t/* `{placement.name}` runs to"
 				   f" {render_delimiter(placement.delimiter)}, and a frame",
 				   "\t * without it was cut short. */",
-				   f"\tif (!{term}(view)) {{",
+				   f"\tif (!{term}(view{self._member_args(struct, placement)})) {{",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
 				   "\t}"] if term else []),
 				*(self._encoding_check(struct, placement, scalar)

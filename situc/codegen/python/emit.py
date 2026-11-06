@@ -480,8 +480,33 @@ class Emitter:
 		lines.extend(["]", ""])
 		lines.extend(body)
 
+		self._refuse_a_runtime_name(lines)
 		return self._refuse_collisions(
 			self._unshadow("\n".join(lines) + "\n"))
+
+	def _refuse_a_runtime_name(self, lines: list[str]) -> None:
+		"""A class named for something the module imports replaces it.
+
+		`struct leaf` rebound the runtime's `leaf`, so a size read called the
+		class and raised a TypeError from inside a reader, at run time, for
+		one schema in one backend. The import list is read rather than
+		copied, so it cannot fall behind what this emitter imports.
+		"""
+		start  = lines.index("from situ_runtime import (")
+		end    = lines.index(")", start)
+		taken  = {word for line in lines[start + 1:end]
+		          for word in re.findall(r"\w+", line)}
+		for decl in self.schema.structs():
+			if py_name(decl.name) in taken:
+				raise error(
+					f"`struct {decl.name}` is a name Python's runtime module "
+					"holds", decl.span,
+					label = "rename the struct",
+					notes = ["a generated module imports it, and a class of "
+					         "that name would replace what the generated "
+					         "code calls (26.908)",
+					         "C, C++ and Rust scope both and read it as "
+					         "written"])
 
 	def _body(self) -> list[str]:
 		"""Everything after the imports, in the order it is emitted."""

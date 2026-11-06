@@ -613,7 +613,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	name  = _local(struct, placement)
 	# Under `situ.`: Wireshark holds `radiotap.vendor_namespace` as something
 	# else and refuses a second field of that name and another type (26.900).
-	abbrev = f"situ.{_lua(struct.name)}.{name}"
+	abbrev = f"situ.{re.sub(r'\W', '_', struct.name)}.{name}"
 
 	# An array or a run of structs is not a nested struct, which is the order
 	# `traverse.Member` puts these two questions in and the order this did
@@ -2803,6 +2803,11 @@ def _local(struct: ResolvedStruct, placement: Placement) -> str:
 #: with such a field: `function_code function;` is what section 4.1 of the
 #: application protocol calls it, and calling it anything else in the schema
 #: to suit the dissector would be the tail wagging the protocol (26.57).
+#: What a dissector function names itself: its parameters and its cursor. A
+#: proto of one of these was hidden inside its own dissector, so `struct tree`
+#: made `tree:add(tree, tvb())` add the tree to itself and not load (26.908).
+LUA_TAKEN = frozenset({"tree", "tvb", "pinfo", "subtree", "at"})
+
 LUA_KEYWORDS = frozenset({
 	"and", "break", "do", "else", "elseif", "end", "false", "for", "function",
 	"goto", "if", "in", "local", "nil", "not", "or", "repeat", "return",
@@ -2821,4 +2826,5 @@ def _lua(name: str) -> str:
 	"""
 	flattened = "".join(char if char.isalnum() or char == "_" else "_"
 	                    for char in name)
-	return f"{flattened}_" if flattened in LUA_KEYWORDS else flattened
+	return f"{flattened}_" if flattened in LUA_KEYWORDS | LUA_TAKEN \
+		else flattened
