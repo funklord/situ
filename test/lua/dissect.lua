@@ -28,6 +28,7 @@
 local rows    = {}
 local experts = {}
 local protos  = {}
+local by_struct = {}
 
 -- -- the byte range -------------------------------------------------------
 
@@ -237,11 +238,12 @@ function Proto(name, description)
 	local self = { name = name, description = description, fields = {},
 	               prefs = {} }
 	protos[name] = self
-	-- By the struct too: a caller names that, and `Proto` is scoped by the
-	-- schema as well, as Wireshark needs (26.900).
+	-- A caller names the struct, and `Proto` is scoped by the schema as well,
+	-- as Wireshark needs (26.900). Apart from `protos`, which is what
+	-- `Dissector.get` reads, so a wrong name there still fails here.
 	local struct = description:match("^[^.]*%.(.-) %(situ%)$")
 	if struct ~= nil then
-		protos[struct] = self
+		by_struct[struct] = self
 	end
 	return self
 end
@@ -321,7 +323,7 @@ if chunk == nil then
 end
 chunk()
 
-if protos[proto] == nil then
+if by_struct[proto] == nil then
 	io.stderr:write(("no `%s` in %s\n"):format(proto, path))
 	os.exit(1)
 end
@@ -335,11 +337,11 @@ if pref ~= nil then
 		io.stderr:write(("not a preference: %s\n"):format(pref))
 		os.exit(2)
 	end
-	protos[proto].prefs[name] = tonumber(value)
+	by_struct[proto].prefs[name] = tonumber(value)
 end
 
 local pinfo = { cols = {} }
-local read  = protos[proto].dissector(Tvb(buffer, 0), pinfo, tree())
+local read  = by_struct[proto].dissector(Tvb(buffer, 0), pinfo, tree())
 
 print(("consumed\t%d"):format(read))
 for _, row in ipairs(rows) do

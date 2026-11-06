@@ -35,6 +35,7 @@ import pytest
 from every_schema import SCHEMAS, ids, load_schema
 from situc import ast
 from situc import pack as packer
+from situc import traverse
 from situc.cli import analyse
 from situc.diagnostics import SituError
 from situc.dissector import _local, generate
@@ -337,7 +338,7 @@ def test_a_struct_array_is_dissected_element_by_element() -> None:
 	""")
 
 	assert "for i = 0, recs_n - 1 do" in text
-	assert 'Dissector.get("r"):call(tvb(at, 6):tvb(), pinfo, subtree)' in text
+	assert 'Dissector.get("situ_unit_r"):call(tvb(at, 6):tvb(), pinfo, subtree)' in text
 	assert "at = at + 6" in text
 
 
@@ -778,7 +779,7 @@ def test_a_run_of_variants_is_walked_by_extent() -> None:
 	text = emit(DNS_LABEL)
 
 	assert "local size = label_extent(tvb, at)" in text
-	assert 'Dissector.get("label"):call(tvb(at, size):tvb()' in text
+	assert 'Dissector.get("situ_unit_label"):call(tvb(at, size):tvb()' in text
 	assert "elements of no fixed size" not in text
 
 
@@ -815,7 +816,7 @@ def test_a_variable_nested_struct_is_dissected_over_its_extent() -> None:
 	text = emit(DNS_LABEL)
 
 	assert "local size = name_extent(tvb, at)" in text
-	assert 'Dissector.get("name"):call(tvb(at, size):tvb()' in text
+	assert 'Dissector.get("situ_unit_name"):call(tvb(at, size):tvb()' in text
 
 
 def test_helpers_are_defined_before_they_are_called() -> None:
@@ -1181,6 +1182,14 @@ def compare(schema: Path) -> Comparison:
 	# than guessed at from a row that happens to reach the end of the
 	# buffer, which is not the same thing.
 	declined = set(DECLINED.findall(text))
+	# A run holding its own struct: a row from inside it carries the same
+	# abbrev as the run, and where the outer run is cut short and shows no row
+	# the inner one would be read as its answer (26.898).
+	declined |= {f"{struct.name}.{entry.placement.name}"
+	             for struct in resolved.structs.values()
+	             for entry in struct.entries
+	             if traverse.holds_of(entry.placement)
+	             in traverse.recursion_cycle(resolved.structs, struct.name)}
 
 	shown = walked = compared = 0
 	differ: list[str] = []
@@ -1960,4 +1969,37 @@ def test_wireshark_loads_every_dissector(schema: Path, tmp_path: Path) -> None:
 	                         "-G", "protocols"],
 	                        capture_output=True, text=True, timeout=120)
 	assert "Lua: Error" not in loaded.stderr, loaded.stderr
+
+
+@pytest.mark.skipif(shutil.which("tshark") is None
+                    or shutil.which("text2pcap") is None,
+                    reason="needs tshark and text2pcap")
+def test_wireshark_runs_a_dissector_down_through_what_it_holds(
+		tmp_path: Path) -> None:
+	"""In tshark and not the harness: a stand-in cannot say that the name
+	`Dissector.get` asks for is the name `Proto` registered. It went wrong in
+	exactly that way while the harness passed (26.900)."""
+	root = Path(__file__).resolve().parents[2]
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector",
+	                str(root / "example/tls/tls.situ"), "--out", str(tmp_path)],
+	               check=True, capture_output=True, cwd=root)
+	script = tmp_path / "tls.lua"
+	with script.open("a", encoding="ascii") as lua:
+		lua.write('DissectorTable.get("wtap_encap"):add(wtap.USER0, record)\n')
+	vector = next(line.split()[2] for line in
+	              (root / "example/tls/tls.vectors").read_text().splitlines()
+	              if line.startswith("record tls12_only"))
+	data = bytes.fromhex(vector)
+	dump = tmp_path / "hello.hex"
+	dump.write_text("0000 " + " ".join(f"{one:02x}" for one in data) + "\n",
+	                encoding="ascii")
+	capture = tmp_path / "hello.pcap"
+	subprocess.run(["text2pcap", "-q", "-l", "147", str(dump), str(capture)],
+	               check=True, capture_output=True)
+	shown = subprocess.run(["tshark", "-r", str(capture),
+	                        "-X", f"lua_script:{script}",
+	                        "-T", "fields", "-e", "situ.extension.kind"],
+	                       capture_output=True, text=True, timeout=120)
+	assert shown.stdout.strip().split(",") == [
+		str(kind) for kind in (65281, 0, 11, 10, 35, 22, 23, 13)], shown.stderr
 

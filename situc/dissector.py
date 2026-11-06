@@ -58,6 +58,11 @@ from situc.traverse import messages as messages_of
 #: so a three-byte scalar is read whole here and bit-assembled there.
 FIELD_WIDTHS = (8, 16, 24, 32, 64)
 
+def _proto_name(basename: str, struct: str) -> str:
+	"""What Wireshark knows a struct's `Proto` by, and finds its dissector by."""
+	return re.sub(r"\W", "_", f"situ_{basename}_{struct}").lower()
+
+
 #: Lua refuses a function with more than 200 locals, and a chunk is a function.
 LUA_LOCALS = 200
 
@@ -177,7 +182,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		              "appears on a wire."])
 
 	lines.extend(_registration(resolved, roots))
-	return _within_lua_locals("\n".join(lines).rstrip() + "\n")
+	text = "\n".join(lines).rstrip() + "\n"
+	return _within_lua_locals(re.sub(
+		r'Dissector\.get\("([^"]+)"\)',
+		lambda found: f'Dissector.get("{_proto_name(basename, found[1])}")',
+		text))
 
 
 READ_HELPER = [
@@ -532,7 +541,7 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `Proto` of a name, and it already holds `coap`, `radiotap` and `frame`,
 	# so those dissectors did not load. The schema's, because two schemas may
 	# each have a `header` (26.900).
-	scoped = re.sub(r"\W", "_", f"situ_{basename}_{struct.name}")
+	scoped = _proto_name(basename, struct.name)
 	lines = [
 		f"-- struct {struct.name}",
 		f"{'' if declared else 'local '}{proto} = "
@@ -948,7 +957,16 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# generator that nothing in the tree exercises -- which is the thing this
 	# file has been wrong about twice already.
 	lost = False
+	capturable = {held.path for held in _capturable(struct, members)}
+	_captured.clear()
 	for placement in members:
+		if placement.path in capturable and not lost:
+			name   = f"{_lua(placement.name)}_value"
+			little = ("true" if placement.endian is ast.Endian.LITTLE
+			          else "false")
+			lines.append(f"\tlocal {name} = situ_uint(tvb, at, "
+			             f"{placement.size_bits // BITS_PER_BYTE}, {little})")
+			_captured[placement.path] = name
 		if lost:
 			lines.append(f"\t-- {placement.path}: not shown, because the"
 			             " member above it has no extent this")
@@ -963,6 +981,7 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 	lines.extend(_conversation_calls(resolved, struct))
 	lines.extend(_message_calls(struct))
 	lines.extend(["", "\treturn at", "end"])
+	_captured.clear()
 	return lines
 
 
@@ -1147,6 +1166,16 @@ def _member(resolved: ResolvedSchema, struct: ResolvedStruct,
 	showed the packet as malformed -- blaming the capture for the schema.
 	"""
 	lines = _member_body(resolved, struct, placement)
+	held  = traverse.held_here(struct, placement)
+	if held is not None:
+		# The run's own row stands, and what it holds goes under it, framed
+		# by exactly its bytes (26.898).
+		start = f"{_lua(_local(struct, placement))}_held_at"
+		lines = [f"\tlocal {start} = at", *lines,
+		         f"\tif at > {start} then",
+		         f"\t\tDissector.get(\"{held}\"):call("
+		         f"tvb({start}, at - {start}):tvb(), pinfo, subtree)",
+		         "\tend"]
 	guard = _version_guard(struct, placement)
 	if guard is None:
 		return lines
@@ -1551,6 +1580,31 @@ def _at(base: str, offset: int) -> str:
 	return base if offset == 0 else f"{base} + {offset}"
 
 
+#: Length fields the body being written has read at the cursor: path -> local.
+#: Empty outside `_dissector`, because only its walk has a cursor (26.900).
+_captured: dict[str, str] = {}
+
+
+def _capturable(struct: ResolvedStruct,
+		members: list[Placement]) -> list[Placement]:
+	"""What drives a later member from an offset the message decided.
+
+	`u8 n; u8 s[n]; u16 m; u8 t[m];` has `m` where only the walk knows, so
+	no constant offset reads it. Everything after `t` then went unshown, and
+	that is most formats past their first variable member.
+	"""
+	named = " ".join(held.sized_by or held.size_expr or ""
+	                 for held in members)
+	return [held for held in members
+	        if held.kind == "field" and held.scalar is not None
+	        and held.offset_bits is None and held.array_count is None
+	        and not held.scalar.signed and held.radix is None
+	        and held.located is None and held.since is None
+	        and held.size_bits in (8, 16, 24, 32)
+	        and not _host_order(held)
+	        and re.search(rf"\b{re.escape(held.name)}\b", named)]
+
+
 def _read(placement: Placement, base: str) -> str | None:
 	"""Reading one field's value in Lua, from `base`.
 
@@ -1558,6 +1612,8 @@ def _read(placement: Placement, base: str) -> str | None:
 	builds and not in all of them, and a dissector that fails to load is worse
 	than one that divides: these are field widths, not hot code.
 	"""
+	if placement.path in _captured:
+		return _captured[placement.path]
 	if placement.scalar is None or placement.offset_bits is None:
 		return None
 
@@ -2455,6 +2511,27 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\t\tat = tvb:len() - {left}",
 			"\tend",
 		]
+
+	if placement.sized_by == "remaining" and element is not None:
+		stride = _element_stride(resolved, element)
+		if stride is not None:
+			# Each element dissected, as a counted run's is: a whole list of
+			# records in one raw row says nothing about any of them.
+			return [
+				f"\t-- {placement.path}: walked to the end of the frame",
+				*seek,
+				"\twhile at < tvb:len() do",
+				f"\t\tlocal size = {stride}",
+				"\t\tif size == 0 or at + size > tvb:len() then break end",
+				f"\t\tDissector.get(\"{placement.type_name}\"):call("
+				"tvb(at, size):tvb(), pinfo, subtree)",
+				"\t\tat = at + size",
+				"\tend",
+				"\tif tvb:len() > at then",
+				f"\t\tsubtree:add({field}, tvb(at))",
+				"\tend",
+				"\tat = tvb:len()",
+			]
 
 	if placement.sized_by == "remaining":
 		return [
