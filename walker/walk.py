@@ -748,6 +748,15 @@ def _value_in(view: View, index: int, base: int) -> int:
 		raise Refused(f"placement {index} has no static offset to base")
 
 	start = placement.offset_bits + base * BITS_PER_BYTE
+	# A varint is its own width, and zero where the frame cuts it short, as
+	# every length read of one is (26.920).
+	if index in view.image.varints:
+		try:
+			_, raw = decode_varint(view, view.at + start // BITS_PER_BYTE,
+			                       *view.image.varint_rules[index])
+		except Refused:
+			return 0
+		return _varint_transform(view, index, raw)
 	width = content_bits(view, index)
 	if width <= 0 or width > 64:
 		raise Refused(f"a {width}-bit scalar is not one to read")

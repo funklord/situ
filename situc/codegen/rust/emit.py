@@ -48,7 +48,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
-	behind_a_length,
+	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
@@ -5276,6 +5276,21 @@ class Emitter:
 				return leaf(f"{held}.{self._argument_ident(held_at)}",
 				            held_at.scalar is not None
 				            and held_at.scalar.signed)
+			# By the struct's own read, over the struct's own view (26.920).
+			through = read_through_its_struct(struct, held_at)
+			if through is not None:
+				start = self._offset_expression(struct, through)
+				if start is None:
+					raise UnknownName(name)
+				child = _pascal(through.type_name or "")
+				inner = _ident(name.split(".")[1])
+				one   = (f"{child} {{ bytes: self.bytes.get({start}..)"
+				         f".unwrap_or(&[]) }}.{inner}_value()")
+				return leaf(one if held == "self"
+				            else re.sub(r"\bself\.", f"{held}.", one),
+				            held_at.varint_signed or (
+				                held_at.scalar is not None
+				                and held_at.scalar.signed))
 			# Its offset counts from a struct the message places, so the
 			# read starts there, and answers zero where the frame stops
 			# short, as any read at such an offset does (26.916).
@@ -8968,6 +8983,10 @@ class Emitter:
 
 		# A field of a struct the message places: the expression reads it
 		# where it is, and a constant offset here is not one (26.916).
+		if read_through_its_struct(struct, driver.placement) is not None:
+			text = self._over_fields(struct, local_name(struct, driver.placement),
+			                         "self")
+			return (leaf(f"({text}) as u64"), True)
 		if driver.placement.scalar is not None \
 				and is_behind_a_length(struct, driver.placement):
 			text = self._over_fields(struct, local_name(struct, driver.placement),

@@ -51,7 +51,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	behind_a_length,
+	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
@@ -4224,6 +4224,23 @@ class Emitter:
 			if held.parameter:
 				return leaf(self._argument_member(struct, held),
 				            held.scalar is not None and held.scalar.signed)
+			# By the struct's own read, over the struct's own view (26.920).
+			through = read_through_its_struct(struct, held)
+			if through is not None:
+				start = self._offset_expression(struct, through)
+				if start is None:
+					raise UnknownName(name)
+				child = class_name(self.resolved.structs[through.type_name or ""])
+				inner = bare_name(name.split(".")[1])
+				signed = held.varint_signed or (held.scalar is not None
+				                                and held.scalar.signed)
+				kind  = "std::int64_t" if signed else "std::uint64_t"
+				return leaf(f"[&]() noexcept -> {kind} {{ situ_view_t one;"
+				            f" if (situ_view_sub(::situ::rt::view::raw(), ({start}),"
+				            f" situ_remaining_u32(raw_.limit, ({start})), &one)"
+				            f" != SITU_OK) {{ return 0; }}"
+				            f" return ::{self.namespace}::{child}(one)"
+				            f".{inner}_value(); }}()", signed)
 			if "." in name:
 				# Its offset counts from a struct the message places, so the
 				# read starts there, and answers zero where the frame stops

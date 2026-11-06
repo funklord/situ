@@ -49,7 +49,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	behind_a_length,
+	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
@@ -165,6 +165,12 @@ _NO_CHECK = "0xFFFFFFFFu"
 #: which is the instrument this class of fault needs: the C header alone
 #: looks complete, because what is missing is a macro nobody named.
 _REFUSES = re.compile(r"\s*return (?:SITU_ERR_\w+|e|err);\s*$")
+
+
+def _reads_signed(placement: Placement) -> bool:
+	"""Whether a varint or a text number holds a signed value."""
+	return placement.varint_signed \
+		or (placement.scalar is not None and placement.scalar.signed)
 
 
 @dataclass
@@ -2335,6 +2341,7 @@ class Emitter:
 				lines.extend(self._element_view(struct, placement))
 			else:
 				lines.extend(self._sub_view(struct, placement))
+				lines.extend(self._values_through(struct, placement))
 			return lines
 
 		# `data_sized` as well as the two spellings that name a count, because a
@@ -7400,6 +7407,12 @@ class Emitter:
 				return leaf(self._argument_name(placement),
 				            placement.scalar is not None
 				            and placement.scalar.signed)
+			through = read_through_its_struct(struct, placement)
+			if through is not None:
+				return leaf(
+					f"{ident(self.prefix, struct.name, c_name(local), 'value_at')}"
+					f"({held}, {self._base_expression(struct, through)})",
+					_reads_signed(placement))
 			if "." not in local:
 				# A varint's `_get` is fallible and takes an out-parameter;
 				# `_value` is the read that cannot fail, which is what an
@@ -10965,6 +10978,40 @@ class Emitter:
 			"\treturn situ_view_sub(view, base + index * stride, stride, out);",
 			"}",
 		])
+		return lines
+
+	def _values_through(self, struct: ResolvedStruct,
+			outer: Placement) -> list[str]:
+		"""`h.n`'s read, for a varint of a nested struct an expression names.
+
+		From where the caller says `h` starts, by `h`'s own `_value`, and zero
+		where the frame does not reach it, as any read of a length that is not
+		there (26.920).
+		"""
+		lines: list[str] = []
+		for entry in struct.entries:
+			held = entry.placement
+			if read_through_its_struct(struct, held) is not outer:
+				continue
+			local = local_name(struct, held)
+			ctype = "int64_t" if _reads_signed(held) else "uint64_t"
+			inner = local.split(".")[1]
+			lines += [
+				"",
+				f"static inline {ctype}"
+				f" {ident(self.prefix, struct.name, c_name(local), 'value_at')}"
+				"(situ_view_t view, uint32_t at)",
+				"{",
+				"	situ_view_t one;",
+				"",
+				"	if (situ_view_sub(view, at, situ_remaining_u32(view.limit, at),"
+				" &one) != SITU_OK) {",
+				"		return 0;",
+				"	}",
+				f"	return {ident(self.prefix, outer.type_name or '', c_name(inner), 'value')}"
+				"(one);",
+				"}",
+			]
 		return lines
 
 	def _sub_view(self, struct: ResolvedStruct, placement: Placement) -> list[str]:

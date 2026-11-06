@@ -8300,6 +8300,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.920 A header can end in its body's length
+
+Moved to `doc/decision/26.920-a-header-can-end-in-its-body-s-length.md`.
+
 ### 26.919 QUIC has an integer of its own
 
 Moved to `doc/decision/26.919-quic-has-an-integer-of-its-own.md`.

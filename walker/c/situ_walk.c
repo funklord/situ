@@ -1521,6 +1521,22 @@ static situ_walk_err read_based(const situ_walk_image *image,
 	}
 
 	uint64_t value = 0u;
+	/* A varint is its own width, and zero where the frame cuts it short, as
+	 * every length read of one is (26.920). */
+	if (varint_rules(image, index) != NULL) {
+		uint32_t used = 0u;
+
+		err = situ_walk_varint(image, message, len, index,
+		                       held.offset_bits / 8u + (uint32_t)base, &used,
+		                       &value);
+		if (err == SITU_WALK_BOUNDS) {
+			value = 0u;
+		} else if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = (int64_t)value;
+		return SITU_WALK_OK;
+	}
 	err = read_at(message, len, &held,
 	              held.offset_bits + (uint32_t)base * 8u, held.size_bits,
 	              &value);

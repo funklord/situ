@@ -2938,6 +2938,18 @@ class Solver:
 			return
 
 		for inner in nested.placements:
+			# A varint is a field like any other here: a header that ends in
+			# its body's length is the shape QUIC and MQTT both have (26.920).
+			declared = self.varints.get(inner.varint or "")
+			if declared is not None and inner.kind == "field" \
+					and inner.array_count is None and inner.size_expr is None:
+				tail = inner.path[len(nested.name) + 1 :]
+				if "." not in tail:
+					state.fields[f"{name}.{tail}"] = self.constrain(
+						scalar_interval(declared.max_bits,
+						                signed=declared.transform is not None),
+						inner.attrs)
+				continue
 			if inner.kind != "field" or inner.scalar is None:
 				continue
 			# ...and a text number is not an array, one level down. `u8

@@ -14,9 +14,6 @@ from pathlib import Path
 import pytest
 
 import fourway
-from situc.diagnostics import SituError
-from situc.cli import analyse
-from situc.codegen.python import generate
 from situc.parser import parse
 
 SCHEMA = """target buffer;
@@ -128,20 +125,3 @@ def test_a_bit_field_behind_a_length(order: str, tmp_path: Path) -> None:
 			assert len(set(given.values())) == 1, (struct, message, given)
 			assert _line(given["c"], "validate") == verdict, \
 				(struct, message, given["c"])
-
-
-@pytest.mark.parametrize("text", [
-	# A text number.
-	"struct f { decimal u32 v[4]; }\n"
-	"struct s { u8 n; u8 d[n]; f h; u8 t[h.v]; }\n",
-], ids = ["text-number"])
-def test_what_has_no_read_yet_is_refused(text: str, tmp_path: Path) -> None:
-	"""Each read the wrong bytes without a word, in every backend."""
-	path = tmp_path / "unit.situ"
-	path.write_text("target buffer;\nendian big;\nbit_order msb_first;\n"
-	                "struct hdr { u8 kind; u16 len; }\n" + text,
-	                encoding = "ascii")
-	source, resolved, _ = analyse(path)
-	with pytest.raises(SituError) as caught:
-		generate(parse(source), resolved, "unit")
-	assert "is at an offset the message decides" in str(caught.value)

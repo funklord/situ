@@ -48,7 +48,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	behind_a_length,
+	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
 	Check,
@@ -5760,6 +5760,19 @@ class Emitter:
 				          if placement.varint is not None
 				          or placement.radix is not None else "")
 				return leaf(f"{held}.{py_name(local)}{suffix}")
+			# By the struct's own read, over the struct's own view (26.920).
+			through = read_through_its_struct(struct, placement)
+			if through is not None:
+				start = self._offset_expression(struct, through)
+				if start is None:
+					raise UnknownName(local)
+				child = py_name(through.type_name or "")
+				inner = py_name(local.split(".")[1])
+				gated = (f"({child}(self._msg, self._at + ({start}),"
+				         f" self._len - ({start})).{inner}_value"
+				         f" if self._len >= ({start}) else 0)")
+				return leaf(gated if held == "self"
+				            else re.sub(r"\bself\.", f"{held}.", gated))
 			# Its offset counts from a struct the message places, so the
 			# read starts there, and answers zero where the frame stops
 			# short, as any read at such an offset does (26.916).

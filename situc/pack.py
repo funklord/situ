@@ -1226,6 +1226,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if deeper is None:
 			return None
 		index, base = deeper
+		# A varint found by the members in front of it, inside a struct:
+		# a program reads by a placement's offset, and this one's would be
+		# summed over the wrong struct (26.920).
+		held = rows[index][1]
+		if held.varint is not None and held.offset_bits is None:
+			return None
 		return index, base + here.offset_bits // BITS_PER_BYTE
 
 	def resolve_path(path: str | None,

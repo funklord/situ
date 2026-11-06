@@ -243,8 +243,36 @@ def readable_names(struct: ResolvedStruct) -> list[Placement]:
 	        if (entry.placement.scalar is not None
 	            or entry.placement.varint is not None)
 	        and ("." not in entry.placement.path[len(struct.name) + 1:]
+	             or read_through_its_struct(struct, entry.placement) is not None
 	             or (entry.placement.offset_bits is not None
 	                 and entry.placement.scalar is not None))]
+
+
+def read_through_its_struct(struct: ResolvedStruct,
+		placement: Placement) -> Placement | None:
+	"""The nested struct a read of a varint goes through, if this is one.
+
+	`u8 tail[h.n]`, with `n` a varint of `h`. It is read by `h`'s own `_value`
+	over a view from where `h` starts, which has the decoder and knows where
+	`n` is however much of `h` stands in front of it. By `h`'s offset and not
+	by `h`'s accessor, whose offset can be the pass this read is part of, and
+	an offset is what that pass rewrites to its mark. One level, since that is
+	what scope offers (26.920).
+	"""
+	local = local_name(struct, placement)
+	if local.count(".") != 1 or "[" in local or is_varint_run(placement):
+		return None
+	# A text number is the same read, needed only where `h` is behind a length:
+	# where `h` is at a constant offset its digits are too, and read in place.
+	if placement.varint is None and (placement.radix is None
+	                                 or nest_of(struct, local) is None):
+		return None
+	outer = local.split(".")[0]
+	return next((entry.placement for entry in struct.entries
+	             if local_name(struct, entry.placement) == outer
+	             and entry.placement.type_name is not None
+	             and entry.placement.array_count is None
+	             and entry.placement.size_expr is None), None)
 
 
 def is_varint_run(placement: Placement) -> bool:
@@ -2629,15 +2657,16 @@ def behind_a_length(struct: ResolvedStruct,
 	outer, depth = nest
 	held = next(entry.placement for entry in struct.entries
 	            if local_name(struct, entry.placement) == local)
+	if read_through_its_struct(struct, held) is not None:
+		return None
 	if depth > 1 or held.scalar is None or held.radix is not None:
 		raise error(
 			f"`{local}` cannot be read here: `{local_name(struct, outer)}` is "
 			"at an offset the message decides",
 			held.span,
 			label = "read by an expression",
-			notes = ["a text number or a varint there has no "
-			         "read yet, nor has a struct the data places inside "
-			         "another, and a wrong read is worse than none (26.916)",
+			notes = ["a struct the data places inside another has no read "
+			         "yet, and a wrong read is worse than none (26.916)",
 			         "put the value in a whole-byte field of a struct nested "
 			         "directly in this one"])
 	assert held.offset_bits is not None
@@ -2655,8 +2684,13 @@ def bytes_of_a_read(placement: Placement, scalar: ScalarType) -> int:
 
 
 def is_behind_a_length(struct: ResolvedStruct, placement: Placement) -> bool:
-	"""`behind_a_length`, asked of a placement rather than a name."""
-	return behind_a_length(struct, local_name(struct, placement)) is not None
+	"""Whether a read of this has to go by the expression, not by a load.
+
+	`behind_a_length`, asked of a placement rather than a name, and a varint
+	read through its struct, which has no load at all.
+	"""
+	return read_through_its_struct(struct, placement) is not None \
+		or behind_a_length(struct, local_name(struct, placement)) is not None
 
 
 def is_counted_run(structs: dict[str, ResolvedStruct],
