@@ -206,6 +206,7 @@ class Placement:
 #: `extern` codec -- somebody's C function -- and for a kernel this build
 #: does not know.
 KERNEL_NONE, KERNEL_POLYNOMIAL, KERNEL_ONES_COMPLEMENT = 0, 1, 2
+KERNEL_BYTE_SUM = 3
 
 
 @dataclass(frozen=True)

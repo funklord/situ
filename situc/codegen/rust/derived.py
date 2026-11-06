@@ -1285,6 +1285,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
+	if kernel.family is ast.KernelFamily.BYTE_SUM:
+		return _byte_sum(decl, prefix)
 	if kernel.family is ast.KernelFamily.TABLE:
 		return _table(decl, prefix)
 	if kernel.family is ast.KernelFamily.SHIFT:
@@ -1485,6 +1487,44 @@ def _polynomial_bits(decl: ast.CodecDecl, name: str, width: int, poly: int,
 		"\t}",
 		"",
 		f"\t(crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
+		"}",
+	]
+
+
+def _byte_sum(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""A sum of bytes. The C backend's comment carries the reasoning."""
+	kernel = decl.kernel
+	assert kernel is not None
+	name  = _ident(prefix, decl.name)
+	word  = f"u{number(decl, 'width')}"
+	final = "sum.wrapping_neg()" if kernel.flag("negate") else "sum"
+	return [
+		"",
+		f"/// {decl.name}: a sum of bytes.",
+		"#[must_use]",
+		f"pub fn {name}(data: &[u8]) -> {word} {{",
+		f"\t{name}_holed(data, 0, 0, 0)",
+		"}",
+		"",
+		"/// The same sum with the `hole_len` bytes at `hole_at` read as",
+		"/// `fill`.",
+		"#[must_use]",
+		f"pub fn {name}_holed(data: &[u8], hole_at: usize,"
+		f" hole_len: usize, fill: u8) -> {word} {{",
+		f"\t{name}_spans(data, &[], hole_at, hole_len, fill)",
+		"}",
+		"",
+		"/// The sum over `a` followed by `b`, with the hole indexed against",
+		"/// that concatenation.",
+		"#[must_use]",
+		f"pub fn {name}_spans(a: &[u8], b: &[u8], hole_at: usize,"
+		f" hole_len: usize, fill: u8) -> {word} {{",
+		f"\tlet mut sum: {word} = 0;",
+		"\tfor i in 0..a.len() + b.len() {",
+		f"\t\tsum = sum.wrapping_add({word}::from("
+		"span_byte(a, b, i, hole_at, hole_len, fill)));",
+		"\t}",
+		f"\t{final}",
 		"}",
 	]
 

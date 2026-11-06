@@ -409,6 +409,13 @@ codec cobs {
 }
 impl cobs derived;
 
+// The bytes added and negated, so that they and the field sum to zero: ACPI
+// tables, the SMBIOS entry point, an Intel HEX record (26.893).
+codec checksum8 {
+	kernel = byte_sum(width = 8, negate);
+}
+impl checksum8 derived;
+
 // The inside of a JSON string, RFC 8259 section 7: the one-letter escapes,
 // `\uXXXX`, and a surrogate pair as one character (26.892). Six bytes for one
 // is `\u0000`. Framing a string is `[escape = "\\"]`, and this is what turns

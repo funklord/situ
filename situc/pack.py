@@ -1024,6 +1024,7 @@ def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
 #: independent reader of situ's own description rather than of its
 #: arithmetic (26.579).
 KERNEL_NONE, KERNEL_POLYNOMIAL, KERNEL_ONES_COMPLEMENT = 0, 1, 2
+KERNEL_BYTE_SUM = 3
 
 
 def _kernel_row(schema: "ast.Schema", named: str,
@@ -1082,6 +1083,13 @@ def _kernel_row(schema: "ast.Schema", named: str,
 		                    0, xorout, _u32(None)) \
 			+ _struct.pack("<ii", 0,
 			               1 if kernel.flag("zero_means_none") else 0)
+	if family == "BYTE_SUM":
+		# `negate` in the word `zero_means_none` has in the row above.
+		kernel = decl.kernel
+		assert kernel is not None
+		return _struct.pack("<IIIII", KERNEL_BYTE_SUM, number(decl, "width"),
+		                    0, 0, _u32(None)) \
+			+ _struct.pack("<ii", 0, 1 if kernel.flag("negate") else 0)
 	return _struct.pack("<IIIII", KERNEL_NONE, 0, 0, 0, _u32(None)) \
 		+ _struct.pack("<ii", 0, 0)
 

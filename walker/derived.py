@@ -36,7 +36,7 @@ worse than no sentence, because it is the reason nobody writes one.**
 
 from __future__ import annotations
 
-from walker.image import (KERNEL_NONE, KERNEL_ONES_COMPLEMENT,
+from walker.image import (KERNEL_BYTE_SUM, KERNEL_NONE, KERNEL_ONES_COMPLEMENT,
                           KERNEL_POLYNOMIAL, Image, Kernel, NONE)
 
 
@@ -115,6 +115,8 @@ def compute(image: Image, tag: int, covered: bytes,
 		return _polynomial(image, kernel, covered)
 	if kernel.family == KERNEL_ONES_COMPLEMENT:
 		return _ones_complement(kernel, covered)
+	if kernel.family == KERNEL_BYTE_SUM:
+		return byte_sum(kernel, covered)
 	raise Uncomputable(f"kernel family {kernel.family} is not one this "
 	                   f"walker computes")
 
@@ -159,6 +161,13 @@ def _polynomial(image: Image, kernel: Kernel, covered: bytes) -> int:
 
 	held = crc >> kernel.shift if kernel.shift else crc
 	return (held ^ kernel.xorout) & ((1 << kernel.width) - 1)
+
+
+def byte_sum(kernel: Kernel, covered: bytes) -> int:
+	"""The bytes added, negated where `reflect`, which is the row's last word,
+	says so (26.893)."""
+	total = sum(covered)
+	return (-total if kernel.reflect else total) & ((1 << kernel.width) - 1)
 
 
 def _ones_complement(kernel: Kernel, covered: bytes) -> int:

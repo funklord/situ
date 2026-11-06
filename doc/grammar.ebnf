@@ -240,7 +240,7 @@ seekable	= "linear" | "permuted" | "blockwise" "(" size_or_any ")" ;
 (* Section 13.4. A kernel derives both the signature and the implementation,
  * which is the whole difference between the two codec tiers. *)
 kernel		= kernel_family [ "(" [ attr { "," attr } ] ")" ] ;
-kernel_family	= "table" | "polynomial" | "ones_complement"
+kernel_family	= "table" | "polynomial" | "ones_complement" | "byte_sum"
 	| "linear_block" | "shift_register" | "permutation" | "stuffing" ;
 
 (* Properties compose pointwise and conservatively. *)

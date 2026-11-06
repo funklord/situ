@@ -8265,6 +8265,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.893 A sum of bytes
+
+Moved to `doc/decision/26.893-a-sum-of-bytes.md`.
+
 ### 26.892 A JSON string is a stuffing code
 
 Moved to `doc/decision/26.892-a-json-string-is-a-stuffing-code.md`.

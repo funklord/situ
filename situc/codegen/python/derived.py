@@ -1150,6 +1150,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
+	if kernel.family is ast.KernelFamily.BYTE_SUM:
+		return _byte_sum(decl, prefix)
 	if kernel.family is ast.KernelFamily.TABLE:
 		return _table(decl, prefix)
 	if kernel.family is ast.KernelFamily.SHIFT:
@@ -1329,6 +1331,37 @@ def _polynomial_bits(decl: ast.CodecDecl, name: str, width: int, poly: int,
 		*body,
 		"",
 		f"\treturn (crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
+	]
+
+
+def _byte_sum(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""A sum of bytes. The C backend's comment carries the reasoning."""
+	kernel = decl.kernel
+	assert kernel is not None
+	name  = _ident(prefix, decl.name)
+	mask  = (1 << number(decl, "width")) - 1
+	final = "-total" if kernel.flag("negate") else "total"
+	return [
+		"",
+		"",
+		f"def {name}(data: bytes) -> int:",
+		f'\t"""The {decl.name} of `data`."""',
+		f"\treturn {name}_holed(data, 0, 0, 0)",
+		"",
+		"",
+		f"def {name}_holed(data: bytes, hole_at: int, hole_len: int,"
+		f" fill: int) -> int:",
+		f'\t"""The {decl.name} of `data`, with a hole read as `fill`."""',
+		f"\treturn {name}_spans(data, b\"\", hole_at, hole_len, fill)",
+		"",
+		"",
+		f"def {name}_spans(a: bytes, b: bytes, hole_at: int, hole_len: int,"
+		f" fill: int) -> int:",
+		f'\t"""The {decl.name} of `a` followed by `b`, with a hole in it."""',
+		"\ttotal = 0",
+		"\tfor index in range(len(a) + len(b)):",
+		"\t\ttotal += _span_byte(a, b, index, hole_at, hole_len, fill)",
+		f"\treturn ({final}) & {mask:#x}",
 	]
 
 

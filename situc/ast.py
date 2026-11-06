@@ -1340,6 +1340,11 @@ class KernelFamily(Enum):
 	#: family here, and situ could describe every CRC in use while having
 	#: nothing to say about the sum on almost every packet (26.245).
 	ONES_COMPLEMENT = "ones_complement"
+	#: The bytes added up and truncated, and negated where the format wants
+	#: them to sum to zero: ACPI, SMBIOS, Intel HEX, a firmware image's
+	#: header (26.893). No end-around carry, which is the whole difference
+	#: from the family above, and no word order: a sum of bytes has none.
+	BYTE_SUM    = "byte_sum"
 	LINEAR      = "linear_block"
 	SHIFT       = "shift_register"
 	PERMUTATION = "permutation"

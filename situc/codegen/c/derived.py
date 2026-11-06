@@ -229,6 +229,21 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				" uint32_t blen, uint32_t hole_at, uint32_t hole_len,"
 				" uint8_t fill);",
 			])
+		elif decl.kernel.family is ast.KernelFamily.BYTE_SUM:
+			word = f"uint{number(decl, 'width')}_t"
+			lines.extend([
+				"",
+				f"/* `{decl.name}`: derived from a byte-sum kernel. */",
+				f"{word} {ident(prefix, decl.name)}"
+				"(const uint8_t *data, uint32_t len);",
+				f"{word} {ident(prefix, decl.name, 'holed')}"
+				"(const uint8_t *data, uint32_t len, uint32_t hole_at,"
+				" uint32_t hole_len, uint8_t fill);",
+				f"{word} {ident(prefix, decl.name, 'spans')}"
+				"(const uint8_t *a, uint32_t alen, const uint8_t *b,"
+				" uint32_t blen, uint32_t hole_at, uint32_t hole_len,"
+				" uint8_t fill);",
+			])
 		elif decl.kernel.family is ast.KernelFamily.TABLE:
 			# Bits, unless the code pads: a padded table walks whole input
 			# bytes into whole output groups and counts both in bytes. The
@@ -283,6 +298,7 @@ TRANSFORM_FAMILIES = frozenset({
 DIGEST_FAMILIES = frozenset({
 	ast.KernelFamily.POLYNOMIAL,
 	ast.KernelFamily.ONES_COMPLEMENT,
+	ast.KernelFamily.BYTE_SUM,
 	ast.KernelFamily.LINEAR,
 })
 
@@ -498,12 +514,58 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _shift_register(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
+	if kernel.family is ast.KernelFamily.BYTE_SUM:
+		return _byte_sum(decl, prefix)
 	return _stuffing(decl, prefix)
 
 
 # ---------------------------------------------------------------------------
 # One's complement: RFC 1071, the checksum on almost every packet
 # ---------------------------------------------------------------------------
+
+
+def _byte_sum(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""The bytes added and truncated, negated where they should sum to zero.
+
+	`hole_at`, because this is the sum ACPI puts inside what it covers: the
+	field reads as `fill`, zero in every format using it, and the stored value
+	is what brings the total to zero (26.893).
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+	name  = ident(prefix, decl.name)
+	width = number(decl, "width")
+	word  = f"uint{width}_t"
+	final = "0u - sum" if kernel.flag("negate") else "sum"
+	return [
+		"",
+		f"/* {decl.name}: a {width}-bit sum of bytes"
+		+ (", negated. */" if kernel.flag("negate") else ". */"),
+		f"{word} {name}_spans"
+		"(const uint8_t *a, uint32_t alen, const uint8_t *b, uint32_t blen,"
+		" uint32_t hole_at, uint32_t hole_len, uint8_t fill)",
+		"{",
+		"\tconst uint32_t len = alen + blen;",
+		"\tuint64_t sum = 0;",
+		"\tuint32_t i;",
+		"",
+		"\tfor (i = 0; i < len; i++) {",
+		"\t\tsum += situ_span_byte(a, alen, b, i, hole_at, hole_len, fill);",
+		"\t}",
+		f"\treturn ({word})({final});",
+		"}",
+		"",
+		f"{word} {name}_holed(const uint8_t *data, uint32_t len,"
+		" uint32_t hole_at, uint32_t hole_len, uint8_t fill)",
+		"{",
+		f"\treturn {name}_spans(data, len, NULL, 0, hole_at, hole_len, fill);",
+		"}",
+		"",
+		f"{word} {name}(const uint8_t *data, uint32_t len)",
+		"{",
+		f"\treturn {name}_holed(data, len, 0, 0, 0);",
+		"}",
+	]
 
 
 def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:

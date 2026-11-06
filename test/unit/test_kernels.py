@@ -1075,6 +1075,7 @@ codec manch    { kernel = table(input_bits = 1, output_bits = 2,
 codec crc      { kernel = polynomial(width = 16, poly = 0x1021,
                                      init = 0xFFFF); }
 codec sum16    { kernel = ones_complement(width = 16, complement); }
+codec sum8     { kernel = byte_sum(width = 8, negate); }
 
 impl inter derived;
 impl manch derived;
@@ -1085,6 +1086,7 @@ impl selfsync derived;
 impl cobs derived;
 impl hdlc derived;
 impl sum16 derived;
+impl sum8 derived;
 
 struct s { u8 a; }
 """

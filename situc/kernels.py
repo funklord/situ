@@ -185,6 +185,7 @@ KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
 		"taps", "width", "seed", "feedback", "complement_feedback"}),
 	ast.KernelFamily.ONES_COMPLEMENT: frozenset({"width", "complement",
 	                                             "zero_means_none"}),
+	ast.KernelFamily.BYTE_SUM: frozenset({"width", "negate"}),
 	ast.KernelFamily.PERMUTATION: frozenset({"rows", "columns", "span"}),
 	ast.KernelFamily.STUFFING:    frozenset({
 		"worst_case", "per", "unit", "code"}),
@@ -418,6 +419,34 @@ def _polynomial(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		granularity_size = None,
 		systematic       = True,
 		invertible       = False,		# a digest cannot be undone
+		deterministic    = True,
+	)
+
+
+def _byte_sum(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
+	"""The bytes added and truncated, for a format that sums to zero (26.893).
+
+	A digest like a CRC's: the data is left verbatim and the sum cannot be
+	undone. `negate` is the two's complement, so the covered bytes and the
+	field together add up to zero, which is how ACPI and Intel HEX state it.
+	"""
+	width = _positive(kernel, "width", decl)
+	if width not in (8, 16, 32, 64):
+		raise error(
+			f"`{decl.name}` has a {width}-bit sum",
+			kernel.span,
+			label = "not 8, 16, 32 or 64 bits",
+			notes = ["the sum is stored as a field, and every format using "
+			         "one stores a whole word"],
+		)
+	return Derived(
+		expansion        = ast.Expansion.FIXED_ADD,
+		expansion_add    = width,	# BITS (0046)
+		seekable         = ast.Seekable.LINEAR,
+		granularity      = ast.Granularity.BLOCK,
+		granularity_size = None,
+		systematic       = True,
+		invertible       = False,
 		deterministic    = True,
 	)
 
@@ -875,6 +904,7 @@ STUFFING_BOUNDS: dict[str, tuple[int, int, int]] = {
 KERNEL_REQUIRED_FOR_DERIVED: dict[ast.KernelFamily, tuple[str, ...]] = {
 	ast.KernelFamily.SHIFT: ("taps", "width", "seed"),
 	ast.KernelFamily.ONES_COMPLEMENT: ("width",),
+	ast.KernelFamily.BYTE_SUM: ("width",),
 }
 
 
@@ -891,6 +921,7 @@ _FAMILIES = {
 	ast.KernelFamily.LINEAR:      _linear_block,
 	ast.KernelFamily.SHIFT:       _shift_register,
 	ast.KernelFamily.ONES_COMPLEMENT: _ones_complement,
+	ast.KernelFamily.BYTE_SUM: _byte_sum,
 	ast.KernelFamily.PERMUTATION: _permutation,
 	ast.KernelFamily.STUFFING:    _stuffing,
 }
