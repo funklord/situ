@@ -613,7 +613,8 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	name  = _local(struct, placement)
 	# Under `situ.`: Wireshark holds `radiotap.vendor_namespace` as something
 	# else and refuses a second field of that name and another type (26.900).
-	abbrev = f"situ.{re.sub(r'\W', '_', struct.name)}.{name}"
+	owner  = re.sub(r"\W", "_", struct.name)
+	abbrev = f"situ.{owner}.{name}"
 
 	# An array or a run of structs is not a nested struct, which is the order
 	# `traverse.Member` puts these two questions in and the order this did

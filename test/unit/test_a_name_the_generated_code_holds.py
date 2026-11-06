@@ -18,17 +18,42 @@ ROOT = Path(__file__).resolve().parents[2]
 HEAD = "target buffer;\nendian big;\n"
 
 
-@pytest.mark.parametrize("name", ["leaf", "advance", "View", "Message"])
-def test_python_refuses_a_struct_its_runtime_holds(name: str,
+@pytest.mark.parametrize("name", ["leaf", "advance", "View", "Message",
+                                  "acquire", "BoundsError"])
+def test_python_reads_a_struct_its_runtime_holds(name: str,
 		tmp_path: Path) -> None:
+	"""The struct keeps its name and the import gives way.
+
+	The size read and `required` are the two that went wrong: the first called
+	the class, and a first version of the alias renamed `leaf.required`. mypy
+	finds that one without a message reaching it.
+	"""
 	schema = tmp_path / "unit.situ"
-	schema.write_text(HEAD + f"struct {name} {{ u8 n; u8 d[n]; }}\n",
+	schema.write_text(HEAD + f"struct {name} {{ u8 n; u8 d[n]; }}\n"
+	                  f"struct top {{ u8 c; {name} kids[c]; u32 t; }}\n",
 	                  encoding="ascii")
-	ran = subprocess.run([str(ROOT / "bin" / "situc"), "build", "--target",
-	                      "python", "--out", str(tmp_path), str(schema)],
-	                     capture_output=True, text=True)
-	assert ran.returncode != 0
-	assert "rename the struct" in ran.stderr
+	subprocess.run([str(ROOT / "bin" / "situc"), "build", "--target", "python",
+	                "--out", str(tmp_path), str(schema)],
+	               check=True, capture_output=True, text=True)
+	driver = tmp_path / "drive.py"
+	driver.write_text(
+		"import sys\n"
+		f"sys.path[:0] = [{str(tmp_path)!r}, {str(ROOT / 'runtime/python')!r}]\n"
+		"import unit\n"
+		"from situ_runtime import Message\n"
+		"raw = bytes([2, 1, 9, 2, 7, 8, 0, 0, 0, 5])\n"
+		"top = unit.top.at(Message(bytearray(raw)), 0, len(raw))\n"
+		f"assert unit.{name}.__mro__[1].__name__ == 'View'\n"
+		"assert top.t == 5 and bytes(top.kids(1).d) == bytes([7, 8])\n"
+		"assert unit.top.required(raw) == len(raw)\n", encoding="ascii")
+	subprocess.run([sys.executable, str(driver)], check=True, cwd=tmp_path,
+	               capture_output=True, text=True)
+	typed = subprocess.run(
+		[sys.executable, "-m", "mypy", "--no-incremental",
+		 "--cache-dir=/dev/null", "unit.py"], cwd=tmp_path,
+		env={"MYPYPATH": str(ROOT / "runtime/python"), "PATH": "/usr/bin:/bin"},
+		capture_output=True, text=True)
+	assert typed.returncode == 0, typed.stdout
 
 
 @pytest.mark.skipif(shutil.which("tshark") is None, reason="no tshark")

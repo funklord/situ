@@ -3428,7 +3428,7 @@ class Emitter:
 				"\t\t// something to measure, and once at the size it says.",
 				f"\t\tlet whole = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 				"\t\tlet size  = whole.extent();",
-				"\t\tif self.bytes.len() - at < size {",
+				"\t\tif whole.bytes.len() < size {",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
 				f"\t\tOk({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})",

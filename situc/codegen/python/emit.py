@@ -480,33 +480,66 @@ class Emitter:
 		lines.extend(["]", ""])
 		lines.extend(body)
 
-		self._refuse_a_runtime_name(lines)
-		return self._refuse_collisions(
-			self._unshadow("\n".join(lines) + "\n"))
+		return self._refuse_collisions(self._unshadow_runtime(
+			self._unshadow("\n".join(lines) + "\n")))
 
-	def _refuse_a_runtime_name(self, lines: list[str]) -> None:
-		"""A class named for something the module imports replaces it.
+	def _unshadow_runtime(self, text: str) -> str:
+		"""Point what means the runtime past a struct of its name.
 
-		`struct leaf` rebound the runtime's `leaf`, so a size read called the
+		`struct leaf` rebound the imported `leaf`, so a size read called the
 		class and raised a TypeError from inside a reader, at run time, for
-		one schema in one backend. The import list is read rather than
-		copied, so it cannot fall behind what this emitter imports.
+		one schema in one backend. A schema's names are the protocol's, and
+		`leaf`, `Message` and `View` are ordinary ones, so the import takes an
+		alias and the struct keeps its name: this is `_unshadow_calls` for the
+		other thing a module binds (26.908).
+
+		Three uses mean the struct and stay: a construction, for the reason
+		`_unshadow_calls` gives; an attribute, since the runtime's names are
+		called and subclassed here and only a struct is asked for `required`
+		or `at`; and an annotation, except the one on a `msg` parameter, which
+		is always the runtime's buffer. Every other use is a word only this
+		emitter wrote. The import list is read rather than copied, so it
+		cannot fall behind what this emitter imports.
 		"""
-		start  = lines.index("from situ_runtime import (")
-		end    = lines.index(")", start)
-		taken  = {word for line in lines[start + 1:end]
-		          for word in re.findall(r"\w+", line)}
-		for decl in self.schema.structs():
-			if py_name(decl.name) in taken:
-				raise error(
-					f"`struct {decl.name}` is a name Python's runtime module "
-					"holds", decl.span,
-					label = "rename the struct",
-					notes = ["a generated module imports it, and a class of "
-					         "that name would replace what the generated "
-					         "code calls (26.908)",
-					         "C, C++ and Rust scope both and read it as "
-					         "written"])
+		start = text.index("from situ_runtime import (")
+		end   = text.index(")", start)
+		held  = {word for word in re.findall(r"\w+", text[start:end])}
+		names = {py_name(struct) for struct in self.resolved.structs} & held
+		if not names:
+			return text
+
+		tree   = pyast.parse(text)
+		struct = {id(node.func) for node in pyast.walk(tree)
+		          if isinstance(node, pyast.Call)
+		          and self._constructs_a_view(node)}
+		struct |= {id(node.value) for node in pyast.walk(tree)
+		           if isinstance(node, pyast.Attribute)}
+		for node in pyast.walk(tree):
+			annotation = None
+			if isinstance(node, pyast.arg) and node.arg != "msg":
+				annotation = node.annotation
+			elif isinstance(node, pyast.AnnAssign):
+				annotation = node.annotation
+			elif isinstance(node, pyast.FunctionDef):
+				annotation = node.returns
+			if annotation is not None:
+				struct |= {id(part) for part in pyast.walk(annotation)}
+
+		sites = [node for node in pyast.walk(tree)
+		         if isinstance(node, pyast.Name) and node.id in names
+		         and id(node) not in struct]
+		lines = text.split("\n")
+		for site in sorted(sites, reverse=True,
+		                   key=lambda one: (one.lineno, one.col_offset)):
+			line = lines[site.lineno - 1]
+			lines[site.lineno - 1] = (line[:site.col_offset] + f"_situ_{site.id}"
+			                          + line[site.col_offset + len(site.id):])
+		text  = "\n".join(lines)
+		start = text.index("from situ_runtime import (")
+		end   = text.index(")", start)
+		block = re.sub(r"\b(" + "|".join(sorted(names)) + r")\b",
+		               r"\1 as _situ_\1", text[start:end])
+		return text[:start] + block + text[end:]
 
 	def _body(self) -> list[str]:
 		"""Everything after the imports, in the order it is emitted."""
