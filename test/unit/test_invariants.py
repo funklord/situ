@@ -14,6 +14,8 @@ tests below are what stops that from quietly becoming four answers again.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -92,44 +94,41 @@ def from_disk(relative: str) -> dict[str, str]:
 
 
 
-#: A variant arm whose type is a struct the backend cannot measure, and the
-#: name every backend gives the offset accessor for it. C spells it
-#: `situ_packet_body_publish_offset` and the other three
-#: `body_publish_offset`, so the shorter one is a substring of all four.
-ARM_OFFSETS = (
-	("example/mqtt/mqtt.situ",       "body_publish_offset"),
-	("example/mqtt/mqtt.situ",       "body_subscribe_offset"),
-	("example/mqtt/mqtt.situ",       "body_suback_offset"),
-	("example/mqtt/mqtt.situ",       "body_unsubscribe_offset"),
-)
+#: An arm no backend can measure. The corpus has none left: MQTT's four were
+#: the population until a struct ending in its frame got a view (26.907), so
+#: this is written out, a run of such structs being what still has no length.
+UNMEASURED_ARM = """target buffer;
+endian big;
+struct rest { u8 all[remaining]; }
+struct many { u8 n; rest items[n]; }
+struct holder {
+	u8 kind;
+	variant body switch (kind) {
+		case 0:  many  several;
+		default: error;
+	}
+}
+"""
 
 
-@pytest.mark.parametrize("schema,accessor", ARM_OFFSETS,
-                         ids=[a for _, a in ARM_OFFSETS])
 def test_every_backend_offers_an_unmeasurable_arms_offset(
-		schema: str, accessor: str) -> None:
+		tmp_path: Path) -> None:
 	"""The offset is not the extent, and the four used to disagree about it.
 
-	C emitted `situ_packet_body_publish_offset` and the other three emitted
-	nothing; 26.190 recorded that as a divergence it could not resolve --
-	"either C's offset accessor is a capability the other three should have,
-	or it is one C should not offer". The capability map answers it:
-	`packet.body.publish` is `offset=Dynamic`, so it has an offset the
-	message decides, and `packet.body.publish.topic_length` is
-	`FrameStatic(0x00)` from there. A caller holding the offset can reach the
-	interior; a caller holding nothing cannot.
-
-	Asserted here rather than left to
-	`test_the_backends_refuse_the_same_members`, which cannot see it: that
-	file scores a *refusal* by finding a phrase near a member's path, so a
-	member nobody refuses and nobody serves scores the same as one all four
-	serve. Dropping the accessor from Python or Rust leaves all 42 of its
-	cases green.
+	C emitted the offset and the other three emitted nothing; 26.190 recorded
+	that as a divergence it could not resolve. The capability map answers it:
+	such an arm is `offset=Dynamic`, so it has an offset the message decides,
+	and a caller holding the offset can reach the interior.
 	"""
-	for backend, text in sorted(from_disk(schema).items()):
-		assert accessor in text, (
-			f"{backend} offers no offset for this arm; C has emitted one "
-			f"since before 26.190 and the map says the member has one")
+	schema = tmp_path / "unit.situ"
+	schema.write_text(UNMEASURED_ARM, encoding="ascii")
+	# C says no sub-view here and names no offset, and did before 26.907.
+	for target, name in (("cpp", "unit.hpp"), ("rust", "unit.rs"),
+	                     ("python", "unit.py")):
+		subprocess.run([sys.executable, "-m", "situc", "build", "--target",
+		                target, "--out", str(tmp_path), str(schema)],
+		               check=True, cwd=ROOT, capture_output=True)
+		assert "body_several_offset" in (tmp_path / name).read_text(), target
 
 
 def test_an_opaque_arm_is_declined_by_all_four() -> None:
@@ -203,12 +202,14 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: counted the arm nowhere, and a refusal message named a member the
 #: struct does not have. 31 -> 32 is the third of them closing.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                77,
-	("no-scalar", "struct", "fixed"):            94,
-	("no-scalar", "struct", "unmeasurable"):     29,
+	("scalar", "not-struct", ""):                80,
+	("no-scalar", "struct", "fixed"):            95,
+	("no-scalar", "struct", "unmeasurable"):     33,
 	("no-scalar", "not-struct", ""):              1,
 }
 
+#: `edges`' recursion with arguments (26.904) and the frame's end (26.905)
+#: added 3, 1 and 4; `unmeasurable` here counts variable struct arms.
 #: `example/radiotap` added 76: sixteen scalar arms, 26 pads of its twelve
 #: `[align]` variants and their absent arms counted with them, 33 fixed struct
 #: arms, most of them `nothing`, and `more_words`, whose run the data sizes.

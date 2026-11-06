@@ -972,7 +972,7 @@ class Emitter:
 			start: str) -> list[str]:
 		"""`at`: the element an entry reaches, as a borrowed view over it."""
 		if element is None or (not element.layout.is_fixed_size
-		                       and self._extent_expression(element) is None):
+		                       and self._no_element_extent(element)):
 			held = table.element or placement.type_name
 			return ["", f"\t// No `{name}_at`: one `{held}` has no extent this"
 			        " backend can",
@@ -5349,7 +5349,7 @@ class Emitter:
 			placement: Placement) -> list[str]:
 		"""A run ending after the element that fails a condition (8.6.6)."""
 		element = self.resolved.structs.get(placement.type_name or "")
-		if element is None or self._extent_expression(element) is None:
+		if element is None or self._no_element_extent(element):
 			return ["", f"\t// No accessors for {placement.path}: one"
 			        f" `{placement.type_name}` has no extent",
 			        "\t// this backend can compute."]
@@ -5463,7 +5463,7 @@ class Emitter:
 		"""A run of records, ending where the terminator would be an element."""
 		assert placement.delimiters
 		element = self.resolved.structs.get(placement.type_name or "")
-		if element is None or self._extent_expression(element) is None:
+		if element is None or self._no_element_extent(element):
 			return ["", f"\t// No accessors for {placement.path}: one"
 			        f" `{placement.type_name}` has no extent",
 			        "\t// this backend can compute, so the run cannot be walked."]
@@ -6560,6 +6560,12 @@ class Emitter:
 			"\t// Framing such a message is the layer below's job.",
 		]
 
+	def _no_element_extent(self, element: ResolvedStruct) -> bool:
+		"""Whether a run of `element` cannot be walked: one that ends in its
+		frame has a length, and the first would take the rest (26.907)."""
+		return self._extent_expression(element) is None \
+			or not has_element_extent(self.resolved.structs, element)
+
 	def _extent_expression(self, struct: ResolvedStruct,
 			depth: str | None = None) -> str | None:
 		"""How many bytes one instance of a variable struct occupies."""
@@ -7520,7 +7526,7 @@ class Emitter:
 				or not self._element_refuses(element)
 				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
-				    and self._extent_expression(element) is None)):
+				    and self._no_element_extent(element))):
 			return []
 		inner = _pascal(element.name)
 		step  = ["\t\t\tat += size;", "\t\t\tn  += 1;"]
@@ -7601,7 +7607,7 @@ class Emitter:
 				or (member.repeat_while is None
 				    and len(member.delimiters) != 1)
 				or is_recursive(self.resolved.structs, element.name)
-				or self._extent_expression(element) is None):
+				or self._no_element_extent(element)):
 			return None
 		inner = _pascal(element.name)
 		scan: list[str] = []
@@ -8380,7 +8386,7 @@ class Emitter:
 			return (f"self.bytes.len().saturating_sub({start})"
 			        f".saturating_sub({placement.tail_bytes})"
 			        if placement.tail_bytes
-			        else f"(self.bytes.len() - ({start}))")
+			        else f"self.bytes.len().saturating_sub({start})")
 		if placement.sized_by is None:
 			return None
 
@@ -8628,7 +8634,7 @@ class Emitter:
 		# reads `_count()`, and so does the offset of every member after the
 		# run, so declining it would take the rest of the struct with it.
 		walked = (count is None and not nested.layout.is_fixed_size
-		          and has_computable_extent(self.resolved.structs, nested))
+		          and has_element_extent(self.resolved.structs, nested))
 		if count is None and not walked:
 			return lines + [
 				"",

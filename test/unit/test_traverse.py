@@ -447,17 +447,19 @@ def test_an_opaque_default_arm_cannot_be() -> None:
 		"default: opaque; } }", "s")
 
 
-def test_nor_can_an_arm_whose_own_member_cannot() -> None:
-	"""Measurability is only as good as the worst arm."""
-	assert not measurable(
+def test_an_arm_that_ends_in_the_frame_can_be() -> None:
+	"""That arm's length is the view's, as a member's is (26.907); the opaque
+	arm above is the one with none."""
+	assert measurable(
 		"struct s { u8 k; variant v switch (k) { case 0: u8 a; "
 		"case 1: u8 rest[remaining]; default: error; } }", "s")
 
 
-def test_a_remaining_member_cannot_be() -> None:
+def test_a_remaining_member_is_measured_by_its_view() -> None:
 	"""Its length is the view's rather than the struct's, so an instance is
-	exactly whatever view it was handed."""
-	assert not measurable("struct s { u8 a; u8 rest[remaining]; }", "s")
+	exactly whatever view it was handed: known, and known to be the rest. An
+	element of a run is the exception (26.907)."""
+	assert measurable("struct s { u8 a; u8 rest[remaining]; }", "s")
 
 
 def test_it_asks_the_same_of_a_nested_struct() -> None:

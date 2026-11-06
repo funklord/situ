@@ -437,6 +437,10 @@ def member_to_source(member: ast.Member) -> str:
 		         _while_to_source(getattr(member, "repeat", None))]
 		if member.located is not None:
 			parts.append(f" at {expr_to_source(member.located)}")
+		from_end = getattr(member, "from_end", None)
+		if from_end is not None:
+			back = expr_to_source(from_end)
+			parts.append(" at end" if back == "0" else f" at end - {back}")
 		if member.pin is not None:
 			parts.append(f" @ {expr_to_source(member.pin)}")
 		parts.append(_attrs_to_source(member.attrs))

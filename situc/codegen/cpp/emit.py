@@ -1945,8 +1945,7 @@ class Emitter:
 		name a field declared before it.
 		"""
 		if placement.from_end is not None:
-			back = placement.from_end
-			return f"(raw_.limit >= {back}u ? raw_.limit - {back}u : raw_.limit)"
+			return f"situ_from_end_u32(raw_.limit, {placement.from_end}u)"
 		if placement.offset_bits is not None:
 			return str(placement.offset_bits // BITS_PER_BYTE)
 
@@ -2512,7 +2511,7 @@ class Emitter:
 			placement: Placement) -> list[str]:
 		"""A run ending after the element that fails a condition (8.6.6)."""
 		element = self.resolved.structs.get(placement.type_name or "")
-		if element is None or self._extent_terms(element) is None:
+		if element is None or self._no_element_extent(element):
 			return ["", f"\t/* No accessors for {placement.path}: one"
 			        f" `{placement.type_name}` has no",
 			        "\t * extent this backend can compute. */"]
@@ -2707,7 +2706,8 @@ class Emitter:
 		"""
 		assert placement.delimiters
 		element = self.resolved.structs.get(placement.type_name or "")
-		if element is None or not self._extent_terms(element):
+		if element is None or self._no_element_extent(element) \
+				or not has_element_extent(self.resolved.structs, element):
 			return ["", f"\t/* No accessors for {placement.path}: one"
 			        f" `{placement.type_name}` has no",
 			        "\t * extent this backend can compute, so the run cannot be"
@@ -3578,6 +3578,12 @@ class Emitter:
 			"\t * Framing such a message is the layer below's job. */",
 		]
 
+	def _no_element_extent(self, element: ResolvedStruct) -> bool:
+		"""Whether a run of `element` cannot be walked: one that ends in its
+		frame has a length, and the first would take the rest (26.907)."""
+		return not self._extent_terms(element) \
+			or not has_element_extent(self.resolved.structs, element)
+
 	def _extent_terms(self, struct: ResolvedStruct,
 			depth: str | None = None) -> list[str] | None:
 		"""The lengths one instance of a variable struct sums to, or None.
@@ -4180,7 +4186,7 @@ class Emitter:
 				or (member.repeat_while is None
 				    and len(member.delimiters) != 1)
 				or is_recursive(self.resolved.structs, element.name)
-				or self._extent_terms(element) is None):
+				or self._no_element_extent(element)):
 			return None
 		inner = self._struct_class(element.name)
 		head: list[str] = []
@@ -5092,7 +5098,7 @@ class Emitter:
 		# reads `_count()`, and so does the offset of every member after the
 		# run, so declining it would take the rest of the struct with it.
 		walked = (count is None and not nested.layout.is_fixed_size
-		          and has_computable_extent(self.resolved.structs, nested))
+		          and has_element_extent(self.resolved.structs, nested))
 		if count is None and not walked:
 			return lines + [
 				"",
@@ -5149,7 +5155,7 @@ class Emitter:
 		# count as the stopping rule -- which is what an HCI advertising
 		# report is, `num` reports each carrying its own data (26.36).
 		if not nested.layout.is_fixed_size:
-			if not has_computable_extent(self.resolved.structs, nested):
+			if not has_element_extent(self.resolved.structs, nested):
 				return lines + [
 					"",
 					f"\t/* No {name}_at(): one `{placement.type_name}` cannot"
@@ -5625,7 +5631,7 @@ class Emitter:
 		no length is a position and not a frame.
 		"""
 		if element is None or (not element.layout.is_fixed_size
-		                       and self._extent_terms(element) is None):
+		                       and self._no_element_extent(element)):
 			held = table.element or placement.type_name
 			return ["", f"\t/* No `{name}_at`: one `{held}` has no extent this"
 			        " backend can",
@@ -10910,7 +10916,7 @@ class Emitter:
 				or not self._element_refuses(element)
 				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
-				    and self._extent_terms(element) is None)):
+				    and self._no_element_extent(element))):
 			return []
 		inner = f"::{self.namespace}::{self._struct_class(element.name)}"
 		step  = ["\t\t\t\tat += size;", "\t\t\t\tn  += 1;"]

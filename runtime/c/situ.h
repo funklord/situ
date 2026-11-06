@@ -735,6 +735,14 @@ static inline int64_t situ_clamp_i64(int64_t value, int64_t low, int64_t high)
  * Found by fuzzing a schema that had a `[remaining]` tail after two
  * attacker-controlled lengths -- and found only once every schema started
  * being fuzzed rather than two of them. */
+/* Where a member `back` bytes from the frame's end starts, and past the frame
+ * where the frame is shorter, so the read refuses and no other byte is taken
+ * for it (26.905). */
+static inline uint32_t situ_from_end_u32(uint32_t limit, uint32_t back)
+{
+	return limit >= back ? limit - back : limit;
+}
+
 static inline uint32_t situ_remaining_u32(uint32_t limit, uint32_t at)
 {
 	return at >= limit ? 0u : limit - at;

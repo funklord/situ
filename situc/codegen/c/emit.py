@@ -4362,8 +4362,7 @@ class Emitter:
 		if placement.offset_bits is not None:
 			return f"{placement.offset_bytes}u"
 		if placement.from_end is not None:
-			back = placement.from_end
-			return f"(view.limit >= {back}u ? view.limit - {back}u : view.limit)"
+			return f"situ_from_end_u32(view.limit, {placement.from_end}u)"
 		if placement.kind in NOT_A_MEMBER:
 			inside = [held for held in self._top_level(struct)
 			          if placement.name in held.regions]
@@ -7102,7 +7101,8 @@ class Emitter:
 		# one: a fix stated for one construct is a fix owed to its family
 		# (invariant 65).
 		fixed = element.layout.is_fixed_size
-		if not fixed and not self._struct_extent(element):
+		if not fixed and (not self._struct_extent(element)
+				or not has_element_extent(self.resolved.structs, element)):
 			return self._unwalkable_run(struct, placement)
 
 		local  = c_name(self._local(struct, placement))

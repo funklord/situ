@@ -81,28 +81,24 @@ def test_a_recursive_arm_is_validated() -> None:
 		f"a buffer every backend refuses read {verdict}")
 
 
-def test_an_arm_no_backend_can_measure_is_left_alone() -> None:
-	"""mqtt's `publish`, and this is the over-refusal half.
+def test_an_arm_that_ends_in_its_frame_is_asked() -> None:
+	"""mqtt's `publish`, whose `topic_length` here is past the frame.
 
-	The discriminant selects it, so a check that validated the selected arm
-	unconditionally refuses here -- and C has no accessor for it, so C says
-	nothing. Accepting is agreement, not laxity.
+	Left alone until 26.907, when no backend could acquire it, and this pinned
+	that as agreement. All of them can now and all say BOUNDS, which is what
+	a topic of 0x3220 bytes in a 62-byte packet is.
 	"""
 	image = _image("mqtt")
 	verdict, _ = _verdict(image, "packet", MQTT)
-	assert verdict == 0, (
-		f"`packet` read {verdict} where every backend answers 0: the arm "
-		f"its discriminant selects is one no backend can acquire")
+	assert verdict == 1, (
+		f"`packet` read {verdict}: its topic runs past the frame")
 
 
-def test_the_unmeasurable_arm_is_still_the_one_selected() -> None:
+def test_the_arm_is_still_the_one_selected() -> None:
 	"""The control for the test above, and it is load-bearing.
 
 	Without it that assertion passes if the discriminant stops selecting
 	`publish` at all -- a green test over a case that no longer exists.
-	This pins that the arm IS selected and IS the one no backend measures,
-	so the acceptance above is about the `measurable` condition rather than
-	about the arm having gone away.
 	"""
 	image = _image("mqtt")
 	index = next(i for i, _ in enumerate(image.structs)
@@ -118,6 +114,4 @@ def test_the_unmeasurable_arm_is_still_the_one_selected() -> None:
 
 	held = image.placements[arm]
 	assert held.type_struct != NONE
-	assert not image.structs[held.type_struct].measurable, (
-		"`publish_body` is measurable now, so this case no longer tests "
-		"what it was written for")
+	assert image.structs[held.type_struct].to_the_end
