@@ -53,7 +53,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# `validate` takes the argument tail and the accessors for a parameter
 	# are deliberately not emitted. The refusal is about the schema, so it
 	# comes before any vector is read.
-	refuse_parameters(schema)
+	refuse_parameters(schema, {case.struct for case in cases})
 
 	seen: dict[str, Case] = {}
 	for case in cases:

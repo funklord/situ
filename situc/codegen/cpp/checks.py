@@ -23,7 +23,8 @@ from situc import __version__, ast
 from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
                            buffer_size,
                            digit_pattern,
-                           passes_unknown, placed_bytes, refuse_parameters,
+                           passes_unknown, placed_bytes, refuse_only_arguments,
+                           takes_arguments,
                            held_struct_goes_short, required_pattern,
                            required_run, reserved_policy, selected_arms)
 from situc.codegen.c.frame import framed_structs
@@ -619,6 +620,8 @@ def _framing(resolved: ResolvedSchema, basename: str) -> list[str]:
 	"""
 	lines: list[str] = []
 	for struct in framed_structs(resolved):
+		if takes_arguments(struct):
+			continue
 		if arguments(struct):
 			continue
 		if not (struct.layout.is_byte_sized and struct.layout.is_fixed_size):
@@ -836,7 +839,7 @@ def _nested_start(resolved: ResolvedSchema, struct: ResolvedStruct,
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str, prefix: str = "situ") -> str:
 	"""The capability map held to the C++ accessors, as one `main`."""
-	refuse_parameters(schema)
+	refuse_only_arguments(schema, resolved)
 
 	enums  = {decl.name for decl in schema.enums()}
 	bodies: list[str] = []
@@ -852,6 +855,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	framed = _framing(resolved, basename)
 
 	for struct in resolved.structs.values():
+		if takes_arguments(struct):
+			continue
 		if struct.layout.register is not None:
 			continue		# a bus transaction, with no view to acquire
 		if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:

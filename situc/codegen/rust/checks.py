@@ -22,7 +22,8 @@ from situc import __version__, ast
 from situc.capability import Axis
 from situc.codegen import (CHECK_KINDS, PROBE_BYTES, buffer_size,
                            digit_pattern,
-                           passes_unknown, placed_bytes, refuse_parameters,
+                           passes_unknown, placed_bytes, refuse_only_arguments,
+                           takes_arguments,
                            held_struct_goes_short, required_pattern,
                            required_run, reserved_policy, selected_arms)
 from situc.codegen.c.names import c_name
@@ -687,12 +688,14 @@ def _enum(basename: str, schema: ast.Schema, resolved: ResolvedSchema,
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str, prefix: str = "situ") -> str:
 	"""The capability map held to the Rust accessors, as a test crate root."""
-	refuse_parameters(schema)
+	refuse_only_arguments(schema, resolved)
 
 	enums  = {decl.name for decl in schema.enums()}
 	bodies: list[str] = []
 
 	for struct in resolved.structs.values():
+		if takes_arguments(struct):
+			continue
 		if struct.layout.register is not None:
 			continue		# a bus transaction, with no view to acquire
 		if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:

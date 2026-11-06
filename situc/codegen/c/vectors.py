@@ -161,7 +161,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	#
 	# First, so that a vectors file is not validated against a schema this
 	# cannot serve -- the refusal is about the schema, not the vectors.
-	refuse_parameters(schema)
+	refuse_parameters(schema, {case.struct for case in cases})
 
 	seen: dict[str, Case] = {}
 	for case in cases:

@@ -43,8 +43,9 @@
 // 0068 let a parent hand a child an argument: PUBLISH's packet identifier is
 // present when the QoS in the fixed header says so, and `packet` hands
 // `publish_body` that QoS. An earlier version of this file left the identifier
-// out, saying `gen-tests` hands no arguments. It does not need to: the vectors
-// name `packet`, and `packet` hands the argument itself (26.912).
+// out because `gen-tests` hands no arguments and refused the whole schema. The
+// vectors name `packet`, which hands the argument itself, so it no longer does
+// (26.912).
 //
 // The second half of the boundary is not a limitation but a modelling choice,
 // and it is written down because a reader would otherwise wonder. MQTT 5.0

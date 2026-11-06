@@ -28,7 +28,8 @@ from situc.capability import Axis
 from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
                            buffer_size,
                            digit_pattern, passes_unknown, placed_bytes,
-                           refuse_parameters, required_pattern,
+                           refuse_only_arguments, required_pattern,
+                           takes_arguments,
                            held_struct_goes_short, required_run,
                            reserved_policy, selected_arms)
 from situc.codegen.c.frame import framed_structs
@@ -51,11 +52,11 @@ C_KINDS = CHECK_KINDS
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str, prefix: str = "situ") -> str:
 	"""A `unittest` module holding each struct to its own minimum extent."""
-	refuse_parameters(schema)
+	refuse_only_arguments(schema, resolved)
 
 	enums   = {decl.name for decl in schema.enums()}
 	checked = [struct for struct in resolved.structs.values()
-	           if _has_a_minimum(struct)]
+	           if _has_a_minimum(struct) and not takes_arguments(struct)]
 
 	# Built before the preamble because the preamble decides whether to
 	# import the frame module, and that depends on whether any framing
@@ -758,6 +759,8 @@ def _framing_checks(basename: str,
 	"""
 	lines: list[str] = []
 	for struct in framed_structs(resolved):
+		if takes_arguments(struct):
+			continue
 		reason = None
 		if arguments(struct):
 			# The reader takes the argument on construction, so it exists

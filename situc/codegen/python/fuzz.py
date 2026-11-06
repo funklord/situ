@@ -27,7 +27,7 @@ of its claim is reached rather than merely compiled.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import refuse_parameters
+from situc.codegen import refuse_only_arguments, takes_arguments
 from situc.codegen.python.emit import py_name
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_entries
@@ -92,7 +92,7 @@ def _one(basename: str, struct: ResolvedStruct) -> list[str]:
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str, prefix: str = "situ") -> str:
 	"""A dependency-free fuzz harness over the Python accessors."""
-	refuse_parameters(schema)
+	refuse_only_arguments(schema, resolved)
 
 	# A register is a bus transaction rather than bytes off a wire: no view,
 	# no `validate`, and accessors taking a device handle. A zero-byte
@@ -100,6 +100,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	# `--target c`'s exclusions and for its reasons.
 	fuzzable = [struct for struct in resolved.structs.values()
 	            if struct.layout.is_byte_sized
+	            and not takes_arguments(struct)
 	            and struct.layout.register is None
 	            and not (struct.layout.is_fixed_size
 	                     and struct.layout.size_bytes == 0)]

@@ -45,7 +45,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	prefix to disambiguate, and one signature across the backends is what
 	lets `cmd_gen_tests` dispatch without a special case.
 	"""
-	refuse_parameters(schema)
+	refuse_parameters(schema, {case.struct for case in cases})
 
 	seen: dict[str, Case] = {}
 	for case in cases:

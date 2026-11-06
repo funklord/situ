@@ -19,7 +19,7 @@ keeps it from rotting between runs."
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import refuse_parameters
+from situc.codegen import refuse_only_arguments, takes_arguments
 from situc.codegen.c.names import c_name
 from situc.codegen.rust.emit import _ident, _pascal
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -97,7 +97,7 @@ def _one(basename: str, enums: set[str],
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str, prefix: str = "situ") -> str:
 	"""A dependency-free fuzz harness over the Rust accessors."""
-	refuse_parameters(schema)
+	refuse_only_arguments(schema, resolved)
 
 	enums = {decl.name for decl in schema.enums()}
 	# A register is a bus transaction rather than bytes off a wire, and a
@@ -105,6 +105,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	# Both are `--target c`'s exclusions and for its reasons.
 	fuzzable = [struct for struct in resolved.structs.values()
 	            if struct.layout.is_byte_sized
+	            and not takes_arguments(struct)
 	            and struct.layout.register is None
 	            and struct.layout.is_fixed_size
 	            and struct.layout.size_bytes > 0]

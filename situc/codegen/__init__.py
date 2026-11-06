@@ -7,6 +7,7 @@ started before the C backend has proven the lattice.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 from situc import ast, traverse
@@ -22,7 +23,8 @@ if TYPE_CHECKING:		# a cycle at run time, a name at check time
 	from situc.codegen.c.vectors import Case
 
 
-def refuse_parameters(schema: ast.Schema) -> None:
+def refuse_parameters(schema: ast.Schema,
+		among: Collection[str] | None = None) -> None:
 	"""Stop a build that would silently read a parameter off the buffer.
 
 	One function for every generator that has not learned to pass an
@@ -53,8 +55,15 @@ def refuse_parameters(schema: ast.Schema) -> None:
 	offset of the member after it. A size expression naming one compiles
 	cleanly and measures the wrong byte, which is the shape 26.32 rates
 	worst.
+
+	`among` narrows it to the structs a vector file names. A golden vector
+	acquires what it names and nothing else, and a parent handing its child
+	an argument takes none itself, so a schema holding a parameter is no
+	reason to decline `packet` (26.912). The checks and fuzz harnesses reach
+	the same place by skipping such a struct one at a time.
 	"""
-	held = traverse.parameters(schema)
+	held = [one for one in traverse.parameters(schema)
+	        if among is None or one[0] in among]
 	if not held:
 		return
 
@@ -136,6 +145,21 @@ def takes_arguments(struct: ResolvedStruct) -> bool:
 	"""Whether a view of this struct cannot be built without being told
 	something the message does not carry."""
 	return bool(arguments(struct))
+
+
+def refuse_only_arguments(schema: ast.Schema,
+		resolved: ResolvedSchema) -> None:
+	"""Refuse a schema whose every struct takes an argument, and no other.
+
+	A generator skips such a struct one at a time, as `c/checks.py` and
+	`c/fuzz.py` do, so a parameter in one corner does not take the suite of
+	the rest. `example/mqtt` handing `publish_body` its QoS would otherwise
+	have dropped MQTT's checks and fuzzing in three languages, as a skip and
+	not a failure (26.912). An emptied suite stays a refusal, for the reason
+	`c/fuzz.py` gives: it would compile, run and exercise nothing.
+	"""
+	if all(takes_arguments(struct) for struct in resolved.structs.values()):
+		refuse_parameters(schema)
 
 
 def argued_sides(relation: ast.Relation,
