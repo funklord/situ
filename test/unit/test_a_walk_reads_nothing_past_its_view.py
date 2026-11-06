@@ -60,8 +60,16 @@ struct twice {
 	leafy  fifth[e + 1];
 }
 
+struct gap {
+	u8  a;
+	u8  b [max = a - 1];
+	u8  held[a - b - 1];
+	u8  after;
+}
+
 struct list   { node  all[remaining]; }
 struct twices { twice all[remaining]; }
+struct gaps   { gap   all[remaining]; }
 """
 
 #: Small lengths matter most, and half the bytes small keeps a message past
@@ -109,6 +117,10 @@ int main(void)
 				&& situ_twices_validate(view) == SITU_OK) {
 			accepted++;
 		}
+		if (situ_gaps_view(&msg, 0, length, &view) == SITU_OK
+				&& situ_gaps_validate(view) == SITU_OK) {
+			accepted++;
+		}
 		free(bytes);
 	}
 	printf("%ld\\n", accepted);
@@ -134,6 +146,7 @@ int main()
 		::situ::rt::message msg(bytes, length);
 		::situ::list   list;
 		::situ::twices twices;
+		::situ::gaps   gaps;
 
 		if (::situ::list::at(msg, 0u, length, list) == ok
 				&& list.validate() == ok) {
@@ -141,6 +154,10 @@ int main()
 		}
 		if (::situ::twices::at(msg, 0u, length, twices) == ok
 				&& twices.validate() == ok) {
+			accepted++;
+		}
+		if (::situ::gaps::at(msg, 0u, length, gaps) == ok
+				&& gaps.validate() == ok) {
 			accepted++;
 		}
 		std::free(bytes);

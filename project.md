@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.902 A length held by another field's bound
+
+Moved to `doc/decision/26.902-a-length-held-by-a-bound.md`.
+
 ### 26.901 A walk reads nothing past its view
 
 Moved to `doc/decision/26.901-a-walk-reads-nothing-past-its-view.md`.

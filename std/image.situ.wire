@@ -34,7 +34,7 @@ enum image_offset_base : u8 unknown=error
   base_region=0 base_message=1 base_field=2
 
 enum image_check : u8 unknown=error
-  must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8 digits_valid=9 digits_minimal=10 nul_terminated=11 encoded_as=12 pinned_run=14 zero_run=13 encoded_from=15 pad_length_min=17 pad_length_max=18 encoding_arm=16
+  must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8 digits_valid=9 digits_minimal=10 nul_terminated=11 encoded_as=12 pinned_run=14 zero_run=13 encoded_from=15 pad_length_min=17 pad_length_max=18 must_eq_by=19 minimum_by=20 maximum_by=21 encoding_arm=16
 
 enum image_severity : u8 unknown=error
   refuse=0 warn=1 note=2
@@ -87,7 +87,7 @@ struct image_enum_value size=16
 
 struct image_header size=20
   @0x0000   4         u8         magic  little must_eq="SITU"
-  @0x0004   2         u16        format_version  little must_eq=6
+  @0x0004   2         u16        format_version  little must_eq=7
   @0x0006   2         u16        flags  little
   @0x0008   4         u32        image_bytes  little
   @0x000c   4         u32        section_count  little

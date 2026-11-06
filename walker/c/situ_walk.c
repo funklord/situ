@@ -106,7 +106,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 6u) {
+	if (u16_at(image + 4) != 7u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -3770,6 +3770,12 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_ENCODING_ARM   16u
 #define CHECK_PAD_LENGTH_MIN 17u
 #define CHECK_PAD_LENGTH_MAX 18u
+/* A bound written over a field: the row's value is where its program starts,
+ * and the kind less BY is the comparison (26.902). */
+#define CHECK_MUST_EQ_BY     19u
+#define CHECK_MINIMUM_BY     20u
+#define CHECK_MAXIMUM_BY     21u
+#define CHECK_BY             19u
 
 /* `text_flags` bit 2: the member compares case-insensitively (0055). */
 #define TEXT_CASE_INSENSITIVE 4u
@@ -5644,6 +5650,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			const uint8_t kind = checks[c * image->constraint_stride + 12];
 			if (kind != CHECK_MUST_EQ && kind != CHECK_MINIMUM
 			                && kind != CHECK_MAXIMUM
+			                && kind != CHECK_MUST_EQ_BY
+			                && kind != CHECK_MINIMUM_BY
+			                && kind != CHECK_MAXIMUM_BY
 			                && kind != CHECK_MUST_BE_ZERO
 			                && kind != CHECK_MUST_BE_ONE
 			                && kind != CHECK_ENUM_KNOWN
@@ -6349,16 +6358,36 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				return SITU_WALK_OK;
 			}
 
+			int64_t bound = want;
+			uint8_t asked = kind;
+
+			if (kind >= CHECK_MUST_EQ_BY && kind <= CHECK_MAXIMUM_BY) {
+				walk_ctx  ctx    = {image, message, len, shape, depth};
+				walk_from anchor = {image, message, len, shape, index, depth};
+
+				err = eval_lazy(image, (uint32_t)want, ctx_load, &ctx,
+				                remaining_from_member, &anchor, 0, 0, &bound);
+				if (err == SITU_WALK_UNSUPPORTED) {
+					return err;
+				}
+				if (err != SITU_WALK_OK) {
+					record(why, index, SITU_WALK_NO_CHECK);
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
+				asked = (uint8_t)(kind - CHECK_BY);
+			}
+
 			int broken = 0;
-			switch (kind) {
+			switch (asked) {
 			case CHECK_MUST_EQ:
-				broken = ((int64_t)value != want);
+				broken = ((int64_t)value != bound);
 				break;
 			case CHECK_MINIMUM:
-				broken = ((int64_t)value < want);
+				broken = ((int64_t)value < bound);
 				break;
 			case CHECK_MAXIMUM:
-				broken = ((int64_t)value > want);
+				broken = ((int64_t)value > bound);
 				break;
 			case CHECK_MUST_BE_ZERO:
 				broken = (value != 0u);
@@ -6420,7 +6449,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 
 			if (broken) {
-				record(why, index, kind);
+				record(why, index, asked);
 				*verdict = SITU_WALK_CONSTRAINT;
 				return SITU_WALK_OK;
 			}

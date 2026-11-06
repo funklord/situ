@@ -90,7 +90,7 @@ def test_the_axis_keeps_its_order() -> None:
 def test_the_image_format_moved_with_the_axis() -> None:
 	"""The image stores an index, and an old walker reading a new one would
 	call `Dynamic` something else, so the two refuse each other."""
-	assert pack.FORMAT_VERSION == walker_image.FORMAT_VERSION == 6
+	assert pack.FORMAT_VERSION == walker_image.FORMAT_VERSION == 7
 	assert walker_image.DOMAINS["offset"].index("MessageStatic") == 2
 
 

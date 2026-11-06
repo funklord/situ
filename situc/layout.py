@@ -23,7 +23,8 @@ from typing import TypeVar
 
 from situc import ast, unparse
 from situc.diagnostics import SituError, Span, error
-from situc.expr import Env, Interval, build_env, evaluate, interval_of, scalar_interval
+from situc.expr import (Env, Interval, Relations, build_env, evaluate,
+                        interval_of, relational_floor, scalar_interval)
 from situc.invariant import paths_in
 from situc.types import (BITS_PER_DIGIT, NUMERIC_BOUNDS, ScalarType,
                          lookup)
@@ -1038,6 +1039,9 @@ class Walk:
 
 	fields: dict[str, Interval]
 	cursor: Extent
+	# What a field's own bound says of it in terms of another field, which an
+	# interval cannot hold: `relational_floor` reads it.
+	relations: Relations = field(default_factory=dict)
 	# Set once a `[remaining]` member has been placed at this level, for
 	# `_leave_the_tail` to judge what followed.
 	closed_span: Span | None = None
@@ -1429,6 +1433,7 @@ class Solver:
 		# The interior is placed at the region's base. Its offsets are what the
 		# decoded bytes look like, which is what a caller addresses.
 		inner = Walk(fields=dict(state.fields), cursor=cursor,
+		             relations=dict(state.relations),
 		             cause=state.cause, decode_cause=state.decode_cause)
 		self.place_members(decl, region.members, scope, layout,
 		                   f"{prefix}.{region.name}", inner)
@@ -2295,6 +2300,7 @@ class Solver:
 		assert arm.member is not None
 
 		arm_state = Walk(fields=dict(state.fields), cursor=state.cursor,
+		                 relations=dict(state.relations),
 		                 cause=state.cause, decode_cause=state.decode_cause,
 		                 nested=True)
 		before    = state.cursor
@@ -2880,6 +2886,23 @@ class Solver:
 		self.check_bound_arithmetic(member.attrs, state)
 		state.fields[name] = self.constrain(
 			scalar_interval(scalar.bits, scalar.signed), member.attrs)
+		self.record_relations(member, state, name)
+
+	def record_relations(self, member: ast.Field, state: Walk,
+			name: str) -> None:
+		"""A bound written over a field, for `relational_floor` (26.902).
+
+		A member of this struct only: a nested struct's bound names its own
+		fields, and those are not the paths a size here reads.
+		"""
+		if "." in name:
+			return
+		held = [(attr.name, attr.value) for attr in member.attrs
+		        if attr.name in ("min", "max", "must_eq")
+		        and isinstance(attr.value, ast.Expr)
+		        and not isinstance(attr.value, ast.StringLiteral)]
+		if held:
+			state.relations[name] = held
 
 	def _radix_digits(self, member: ast.Field) -> int | None:
 		"""How many digits a fixed-width text number is written in."""
@@ -3530,6 +3553,12 @@ class Solver:
 
 		env   = self.result.env.with_layout(self.result.lookup, self.result.explain).with_fields(state.fields)
 		count = interval_of(member.array.size, env)
+
+		# One field bounded by another, which no interval holds (26.902).
+		if count.lo_known and count.lo < 0:
+			floor = relational_floor(member.array.size, env, state.relations)
+			if floor is not None and floor >= 0:
+				count = Interval(floor, count.hi)
 
 		if not count.lo_known:
 			# Distinct from the negative case, and worth its own sentence: the

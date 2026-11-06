@@ -43,7 +43,10 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.wellformed import _encoding_source
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 6
+FORMAT_VERSION	= 7
+
+#: The check a bound over a field makes: its row holds a program (26.902).
+BOUND_BY = {"must_eq": 19, "min": 20, "max": 21}
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
@@ -1310,6 +1313,28 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		code_at[placement.path] = start
 		coverage.expressions += 1
 
+	# A bound written over a field, `u8 pad [max = len - 1]`: not a number the
+	# row can hold, so the row holds where its program starts (26.902).
+	bound_at: dict[tuple[str, str], int] = {}
+	for owner, placement in rows:
+		for attr in placement.attrs:
+			if attr.name not in BOUND_BY or attr.value is None:
+				continue
+			try:
+				evaluate(attr.value, resolved.layout.env)
+				continue
+			except SituError:
+				pass
+			start = len(program.code)
+			try:
+				program.compile(attr.value, lambda p: resolve_path(p, owner),
+				                consts, enum_members)
+			except PackError:
+				del program.code[start:]
+				continue
+			program.emit(Op.END)
+			bound_at[placement.path, attr.name] = start
+
 	# A coded or sealed region's extent is its interior's extent put through
 	# the codec's expansion (13.5), and nothing in the region's own bytes can
 	# say how many there are -- they are the transform's output. The rule is
@@ -1838,7 +1863,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					try:
 						held = evaluate(attr.value, resolved.layout.env)
 					except SituError:
-						whole = False
+						written = bound_at.get((placement.path, attr.name))
+						if written is None or kind is not \
+								traverse.Check.CONSTRAINED:
+							whole = False
+							continue
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, written, BOUND_BY[attr.name])
 						continue
 					if not fits_q(int(held)):
 						whole = False

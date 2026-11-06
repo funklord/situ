@@ -705,6 +705,9 @@ BY_MESSAGE_INDEX = -2
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
+
+#: `pack.BOUND_BY`, and the check each asks once its program has answered.
+BOUND_BY = {19: MUST_EQ, 20: MINIMUM, 21: MAXIMUM}
 FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
 DIGITS_VALID, DIGITS_MINIMAL = 9, 10
 NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
@@ -1548,6 +1551,13 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		except Refused:
 			return fail(ERR_BOUNDS, index)
 		for check, against in value_checks:
+			# A bound written over a field: the row holds its program.
+			if check in BOUND_BY:
+				check = BOUND_BY[check]
+				try:
+					against = _evaluate(view, against)
+				except Refused:
+					return fail(ERR_BOUNDS, index)
 			if check == MUST_EQ and value != against:
 				return fail(ERR_CONSTRAINT, index, check)
 			if check == MINIMUM and value < against:
@@ -1693,6 +1703,7 @@ CHECK_NAMES = {
 	# is what stops a third one doing it.
 	ENCODED_FROM: "encoding", ENCODING_ARM: "encoding",
 	PAD_LENGTH_MIN: "pad_min", PAD_LENGTH_MAX: "pad_max",
+	19: "must_eq", 20: "min", 21: "max",
 }
 
 
@@ -1702,7 +1713,7 @@ ALL_CHECKS = frozenset({
 	MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN,
 	FITS_FRAME, TERMINATED, ARM_SELECTED, DIGITS_VALID, DIGITS_MINIMAL,
 	NUL_TERMINATED, ENCODED_AS, ZERO_RUN, PINNED_RUN, ENCODED_FROM,
-	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX,
+	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX, *BOUND_BY,
 })
 
 

@@ -785,6 +785,15 @@ require  size(udp_header) == 8;
 require  offset(tcp_header.options) == 20;
 ```
 
+A length that is the difference of two fields is proved by the bound one of
+them states, so what SSH's packet says is what the schema says:
+
+```situ
+u32  packet_length;
+u8   padding_length [max = packet_length - 1];
+u8   payload[packet_length - padding_length - 1];
+```
+
 `remaining` is the one keyword that is not an expression: it means "to the
 end of the frame", and it is what makes a member's size depend on the buffer
 rather than on the message.

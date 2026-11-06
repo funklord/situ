@@ -409,6 +409,114 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 	raise error("expression is not usable as a size or bound", expr.span)
 
 
+#: A field's bound by another: `u8 pad [max = len - 1]` is `len - 1` under
+#: "max". Keyed by the path an expression names the field by.
+Relations = dict[str, list[tuple[str, ast.Expr]]]
+
+
+def _linear(expr: ast.Expr, env: Env) -> tuple[dict[str, int], int] | None:
+	"""An expression as a sum of fields and a constant, or None.
+
+	Only what the sum can say exactly: a field whose range is one number is
+	that number, and a product wants one side constant.
+	"""
+	if isinstance(expr, ast.IntLiteral):
+		return {}, expr.value
+	if isinstance(expr, (ast.NameRef, ast.Access)):
+		path = path_text(expr)
+		held = env.fields.get(path) if path is not None else None
+		if held is None or path is None:
+			try:
+				return {}, interval_of(expr, env).value()
+			except (SituError, ValueError):
+				return None
+		return ({}, held.value()) if held.is_point else ({path: 1}, 0)
+	if isinstance(expr, ast.Unary) and expr.op == "-":
+		inner = _linear(expr.operand, env)
+		if inner is None:
+			return None
+		return {path: -by for path, by in inner[0].items()}, -inner[1]
+	if isinstance(expr, ast.Binary) and expr.op in ("+", "-", "*"):
+		left  = _linear(expr.left, env)
+		right = _linear(expr.right, env)
+		if left is None or right is None:
+			return None
+		if expr.op == "*":
+			if left[0] and right[0]:
+				return None
+			terms, by = (left[0], right[1]) if left[0] else (right[0], left[1])
+			constant  = left[1] * right[1]
+			return {path: n * by for path, n in terms.items()}, constant
+		sign  = 1 if expr.op == "+" else -1
+		terms = dict(left[0])
+		for path, by in right[0].items():
+			terms[path] = terms.get(path, 0) + sign * by
+		return terms, left[1] + sign * right[1]
+	return None
+
+
+def _floor_of(terms: dict[str, int], constant: int, env: Env) -> int | None:
+	"""The least a sum can be, each field at its own worst, or None."""
+	floor = constant
+	for path, by in terms.items():
+		if by == 0:
+			continue
+		held  = env.fields[path]
+		worst = held.lo if by > 0 else held.hi
+		if worst is None or not held.lo_known:
+			return None
+		floor += by * worst
+	return floor
+
+
+def relational_floor(expr: ast.Expr, env: Env,
+		relations: Relations) -> int | None:
+	"""The least `expr` can be, given bounds one field states by another.
+
+	An interval holds one field at a time, so `a - b - 1` with `b` at most
+	`a - 1` reads as negative though it never is: the two are held apart. A
+	sum can put them together. A field subtracted is replaced by what bounds
+	it from above, a field added by what bounds it from below; each step is a
+	lower bound, so the best of them is one too.
+
+	Sound only because the bound is a check: `validate` refuses a message
+	that breaks it before the length is read as a length, and a view asked
+	without `validate` has the frame to answer, as for `[min = N]`.
+	"""
+	linear = _linear(expr, env)
+	if linear is None:
+		return None
+	terms, constant = linear
+	best = _floor_of(terms, constant, env)
+	spent: set[str] = set()
+	while True:
+		step = None
+		for path, by in terms.items():
+			wanted = "max" if by < 0 else "min"
+			if by == 0 or path in spent:
+				continue
+			for name, bound in relations.get(path, ()):
+				if name in (wanted, "must_eq"):
+					step = path, by, bound
+					break
+			if step is not None:
+				break
+		if step is None:
+			return best
+		path, by, bound = step
+		spent.add(path)
+		other = _linear(bound, env)
+		if other is None:
+			continue
+		del terms[path]
+		for inner, times in other[0].items():
+			terms[inner] = terms.get(inner, 0) + by * times
+		constant += by * other[1]
+		floor = _floor_of(terms, constant, env)
+		if floor is not None and (best is None or floor > best):
+			best = floor
+
+
 def _padding_interval(expr: ast.Binary, env: Env) -> Interval | None:
 	"""`align_up(x, k) - x`: how many bytes of padding follow `x`.
 
