@@ -28,6 +28,7 @@ import sys
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+from struct import pack as pack_bytes
 from typing import NamedTuple
 
 import pytest
@@ -2003,3 +2004,27 @@ def test_wireshark_runs_a_dissector_down_through_what_it_holds(
 	assert shown.stdout.strip().split(",") == [
 		str(kind) for kind in (65281, 0, 11, 10, 35, 22, 23, 13)], shown.stderr
 
+
+
+@pytest.mark.skipif(shutil.which("tshark") is None, reason="no tshark")
+def test_the_dissector_steps_over_what_a_table_sums(tmp_path: Path) -> None:
+	"""In Wireshark: it showed the rest of the frame raw, tail included."""
+	root   = Path(__file__).resolve().parents[2]
+	schema = tmp_path / "laced.situ"
+	schema.write_text("target buffer;\nendian big;\nstruct laced {\n"
+	                  "\tu8 n; u8 lace[n]; u8 body[sum(lace)]; u8 tail[2];\n}\n",
+	                  encoding="ascii")
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector",
+	                str(schema), "--out", str(tmp_path)],
+	               check=True, cwd=root, capture_output=True)
+	packet  = bytes.fromhex("02" "0201" "aabbcc" "eeff")
+	capture = pack_bytes("<IHHiIII", 0xa1b2c3d4, 2, 4, 0, 0, 65535, 147) \
+		+ pack_bytes("<IIII", 0, 0, len(packet), len(packet)) + packet
+	(tmp_path / "laced.pcap").write_bytes(capture)
+	ran = subprocess.run(
+		["tshark", "-X", f"lua_script:{tmp_path / 'laced.lua'}", "-o",
+		 'uat:user_dlts:"User 0 (DLT=147)","situ_laced_laced","0","","0",""',
+		 "-r", str(tmp_path / "laced.pcap"), "-T", "fields",
+		 "-e", "situ.laced.body", "-e", "situ.laced.tail"],
+		check=True, capture_output=True, text=True, timeout=60)
+	assert ran.stdout.replace(":", "").split() == ["aabbcc", "eeff"]

@@ -41,7 +41,8 @@ from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.relation import conversation_key
 from situc.names import (
-	expand_calls, lua_spelling, over_fields, render_delimiter,
+	UnknownName, expand_calls, lua_spelling, over_fields, render_delimiter,
+	with_sums,
 	translate_operators,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -205,6 +206,18 @@ READ_HELPER = [
 	"\t\treturn tvb(at, width):le_uint()",
 	"\tend",
 	"\treturn tvb(at, width):uint()",
+	"end",
+	"",
+	"-- `sum(run)`: the elements the frame holds, added (26.896).",
+	"local function situ_sum(tvb, at, count, width, little)",
+	"\tlocal total = 0",
+	"\tfor i = 0, count - 1 do",
+	"\t\tif at + (i + 1) * width > tvb:len() then",
+	"\t\t\tbreak",
+	"\t\tend",
+	"\t\ttotal = total + situ_uint(tvb, at + i * width, width, little)",
+	"\tend",
+	"\treturn total",
 	"end",
 	"",
 ]
@@ -1743,6 +1756,14 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 	file still parts from the compiled backends -- Lua's is float division,
 	theirs truncates -- and no schema in this repository has one (26.37).
 	"""
+	if "sum(" in source:
+		try:
+			source, sums = with_sums(
+				source, lambda run: _sum_read(struct, run, base))
+		except UnknownName:
+			return None
+		extra = {**(extra or {}), **sums}
+
 	reads: dict[str, str] = {}
 	for entry in struct.entries:
 		held = entry.placement
@@ -1795,6 +1816,27 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 			lua_spelling)
 	except KeyError:
 		return None		# names something this cannot read
+
+
+def _sum_read(struct: ResolvedStruct, run: str, base: str) -> str | None:
+	"""`sum(run)` as Lua, where the run sits at a constant offset.
+
+	A table of lengths comes before what it sizes and usually first, and one
+	placed by the data has no offset an expression can name, so that declines.
+	"""
+	member = next((entry.placement for entry in struct.entries
+	               if entry.placement.path == f"{struct.name}.{run}"), None)
+	if member is None or member.offset_bits is None:
+		return None
+	count = (str(member.array_count) if member.array_count is not None
+	         else _over_fields(struct, member.size_expr or member.sized_by or "",
+	                           base))
+	if count is None:
+		return None
+	width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+	little = "true" if member.endian is ast.Endian.LITTLE else "false"
+	return (f"situ_sum(tvb, {_at(base, member.offset_bits // BITS_PER_BYTE)},"
+	        f" {count}, {width}, {little})")
 
 
 def _extent_functions(resolved: ResolvedSchema) -> list[str]:

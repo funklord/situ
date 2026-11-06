@@ -130,7 +130,7 @@ def translate_operators(source: str, *, conj: str, disj: str,
 	return re.sub(r"\s+", " ", source).strip()
 
 
-def with_sums(source: str, sum_of: Callable[[str], str],
+def with_sums(source: str, sum_of: Callable[[str], str | None],
 		size_of: Callable[[str], str | None] | None = None
 		) -> tuple[str, dict[str, str]]:
 	"""`source` with each `sum(run)` and `size(member)` lifted out, and what
