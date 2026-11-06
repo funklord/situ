@@ -234,7 +234,7 @@ def _codec_lines(decl: ast.CodecDecl) -> list[str]:
 	if decl.key_bytes is not None:
 		lines.append(f"\tkey_bytes = {decl.key_bytes};")
 	if decl.kernel is not None:
-		lines.append(f"\tkernel = {_kernel_to_source(decl.kernel)};")
+		lines.append(f"\tkernel = {kernel_to_source(decl.kernel)};")
 
 	lines += [f"\t{codec_expansion(decl)};",
 	          f"\tgranularity = {codec_granularity(decl)};"]
@@ -253,7 +253,7 @@ def _codec_lines(decl: ast.CodecDecl) -> list[str]:
 	return lines
 
 
-def _kernel_to_source(kernel: ast.Kernel) -> str:
+def kernel_to_source(kernel: ast.Kernel) -> str:
 	"""`stuffing(worst_case = 2, per = 1, unit = byte, code = slip)`.
 
 	The family and its arguments, which are what name the code generated for

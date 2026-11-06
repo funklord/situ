@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: usb.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -19,6 +19,8 @@ bit_order lsb_first
 endian little
 target buffer
 
+kernel crc5_usb : polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F, reflect)
+
 enum packet_id : u8 unknown=error
   out=225 in=105 setup=45 sof=165
 
@@ -26,5 +28,5 @@ struct token size=3
   @0x0000   1         packet_id  pid
   @0x0001   7bit      u7         address  lsb_first max=127
   @0x0001:7 4bit      u4         endpoint  lsb_first
-  @0x0002:3 5bit      u5         crc  lsb_first
+  @0x0002:3 5bit      u5         crc  lsb_first codec=crc5_usb
   crc covers: address addressed endpoint

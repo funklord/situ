@@ -8265,6 +8265,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.891 The signature did not say what a checksum computes
+
+Moved to `doc/decision/26.891-the-signature-did-not-say-what-a-checksum-computes.md`.
+
 ### 26.890 An augmented CRC is a constant
 
 Moved to `doc/decision/26.890-an-augmented-crc-is-a-constant.md`.

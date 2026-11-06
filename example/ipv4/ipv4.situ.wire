@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: ipv4.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -19,6 +19,8 @@ bit_order msb_first
 endian big
 target buffer
 
+kernel internet_checksum : ones_complement(width = 16, complement)
+
 enum protocol : u8 unknown=error
   icmp=1 igmp=2 tcp=6 udp=17 gre=47 esp=50 ah=51
 
@@ -38,7 +40,7 @@ struct ipv4_header size=20..60
   @0x0006:3 13bit     u13        fragment_offset  big msb_first
   @0x0008   1         u8         time_to_live
   @0x0009   1         protocol   protocol
-  @0x000a   2         u8         header_checksum  self_as=0
+  @0x000a   2         u8         header_checksum  codec=internet_checksum self_as=0
   @0x000c   4         ipv4_address source  big
   @0x0010   4         ipv4_address destination  big
   @0x0014   0..40     u8         options  sized-by=(ihl-5)*4

@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: edges.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -24,6 +24,18 @@ varint edge_varint : be128 bits=64 bytes=9
 varint edge_signed : leb128 bits=64 bytes=10 zigzag
 
 varint edge_canonical : leb128 bits=64 bytes=10 minimal
+
+kernel stuffed_apart : stuffing(worst_case = 2, per = 1, unit = byte, code = slip)
+
+kernel scramble : shift_register(taps = 0x8810, width = 16, seed = 0xFFFF, feedback = input)
+
+kernel summing : ones_complement(width = 16)
+
+kernel extended_hamming : linear_block(n = 8, k = 4, parity = 0b1101, parity = 0b1011, parity = 0b0111, parity = 0b1111)
+
+kernel crc7_mmc : polynomial(width = 7, poly = 0x09, init = 0x00)
+
+kernel crc5_usb : polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F, reflect)
 
 enum signature : u8[2] unknown=error
   bmp="BM" pe="MZ"
@@ -313,7 +325,7 @@ struct hp_split size=10
 
 struct inner_body size=4
   @0x0000   2         u16        inner_value  big
-  @0x0002   2         u8         inner_sum
+  @0x0002   2         u8         inner_sum  codec=summing
   inner_sum covers: body inner_value
 
 struct inner_left size=3
@@ -429,7 +441,7 @@ struct messy size=3..
 struct mmc_command size=6
   @0x0000   1         u8         index
   @0x0001   4         u32        argument  big
-  @0x0005   7bit      u7         crc  msb_first
+  @0x0005   7bit      u7         crc  msb_first codec=crc7_mmc
   @0x0005:7 1bit      u1         <reserved0>  msb_first must_be_one
   crc covers: argument command index
 
@@ -479,7 +491,7 @@ struct oob_run size=1..1095216727036
 struct outer_body size=8
   @0x0000   2         u16        outer_value  big
   @0x0002   4         inner_body nested  big
-  @0x0006   2         u8         outer_sum
+  @0x0006   2         u8         outer_sum  codec=summing
   nested.inner_sum covers: nested.body nested.inner_value
   outer_sum covers: body outer_value
 
@@ -675,7 +687,7 @@ struct split_coverage size=8
   @0x0000   2         u16        a  big
   @0x0002   2         u16        between  big
   @0x0004   2         u16        b  big
-  @0x0006   2         u8         sum
+  @0x0006   2         u8         sum  codec=summing
   sum covers: a b first second
 
 struct spoken size=3..
@@ -775,7 +787,7 @@ struct unwalkable_arm size=4..65284
 struct usb_token size=2
   @0x0000   7bit      u7         address  lsb_first
   @0x0000:7 4bit      u4         endpoint  lsb_first
-  @0x0001:3 5bit      u5         crc  lsb_first
+  @0x0001:3 5bit      u5         crc  lsb_first codec=crc5_usb
   crc covers: address body endpoint
 
 struct utf16 size=17

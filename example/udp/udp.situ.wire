@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: udp.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -18,11 +18,13 @@
 endian big
 target buffer
 
+kernel internet_checksum : ones_complement(width = 16, complement, zero_means_none)
+
 struct udp_header size=8..65535
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
   @0x0004   2         u16        length  big min=8
-  @0x0006   2         u8         checksum  self_as=0
+  @0x0006   2         u8         checksum  codec=internet_checksum self_as=0
   @0x0008   0..65527  u8         payload  sized-by=length-8
   checksum covers: udp_pseudo_header(prefix) destination_port length payload source_port summed
 

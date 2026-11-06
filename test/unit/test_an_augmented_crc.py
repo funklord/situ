@@ -19,8 +19,11 @@ from pathlib import Path
 import pytest
 
 import fourway
+from situc import wire
 from situc.codegen.kernel_math import crc_init
+from situc.layout import solve
 from situc.parser import parse_text
+from situc.resolve import resolve
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -113,3 +116,37 @@ def test_the_four_compute_one_digest(tmp_path: Path) -> None:
 	good = fourway.answers(command["c"], b"\x12\x34"
 	                       + right.to_bytes(2, "big"), tmp_path)
 	assert "validate 0" in good
+
+
+def signature(text: str) -> str:
+	schema = parse_text(text, path="s.situ")
+	return wire.render(schema, resolve(schema, solve(schema)), "s.situ")
+
+
+@pytest.mark.parametrize("before, after", [
+	(", augmented", ""),
+	("init = 65535", "init = 1"),
+	("poly = 4107", "poly = 4109"),
+])
+def test_a_changed_kernel_breaks_the_signature(before: str, after: str) -> None:
+	"""`wire --check` stayed green over each of these, and no two peers
+	survive one: every digest stops verifying (26.891)."""
+	text = schema(16, 0x100B, 0xFFFF)
+	assert before in text
+	found = wire.compare(signature(text),
+	                     signature(text.replace(before, after))).findings
+	assert [one.kind for one in found] == ["breaking"]
+	assert found[0].subject == "kernel check"
+
+
+def test_an_unchanged_kernel_finds_nothing() -> None:
+	text = schema(16, 0x100B, 0xFFFF)
+	assert not wire.compare(signature(text), signature(text)).findings
+
+
+def test_a_codec_nothing_names_is_not_in_the_contract() -> None:
+	"""A schema importing forty codecs is bound by the ones it calls."""
+	text = schema(16, 0x100B, 0xFFFF) + (
+		"codec idle { kernel = polynomial(width = 8, poly = 7); }\n")
+	assert "kernel idle" not in signature(text)
+	assert "kernel check" in signature(text)

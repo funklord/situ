@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: smtp.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -17,6 +17,8 @@
 
 endian big
 target buffer
+
+kernel dot_stuffing : stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot)
 
 struct command size=3..528
   @0x0000   until:20  command_verb verb  fold-case cap=16 encoding=ascii

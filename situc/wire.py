@@ -37,7 +37,7 @@ from situc.invariant import paths_in
 from situc.diagnostics import SituError
 from situc.expr import Env, evaluate
 from situc.traverse import own_members
-from situc.unparse import expr_to_source
+from situc.unparse import expr_to_source, kernel_to_source
 
 #: Bumped from 0, which 0041 kept because new facts on existing lines are
 #: what the fact list is for and a comparator ignores tokens it does not know.
@@ -58,7 +58,9 @@ from situc.unparse import expr_to_source
 #: signature's first line and `compare` never looked at it: written and
 #: read by nothing, which is a vacuous pass wearing a format's clothes.
 #: Bumping it while that was true would have been a second inert value.
-FORMAT_VERSION = 2
+#:
+#: **v3 adds a kind of line again**, the kernel block, for v1's reason.
+FORMAT_VERSION = 3
 
 
 def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
@@ -84,6 +86,7 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 
 	lines.extend(_directives(schema))
 	lines.extend(_varints(schema))
+	lines.extend(_kernels(schema, resolved))
 	lines.extend(_enums(schema, resolved))
 
 	for name in sorted(resolved.structs):
@@ -140,6 +143,26 @@ def _directives(schema: ast.Schema) -> list[str]:
 			found.append(f"target {decl.kind.value}")
 
 	return ["", *sorted(found)] if found else []
+
+
+def _kernels(schema: ast.Schema, resolved: ResolvedSchema) -> list[str]:
+	"""What each codec the message reaches computes.
+
+	`varint`'s reason: the parameters ARE the bytes. `init = 0xFFFF` becoming
+	`init = 0` makes every checksum a peer sends fail, and the member line said
+	nothing at all, so `wire --check` stayed green over a change no two
+	implementations could survive (26.891). Only what a member names: a schema
+	importing `std/kernels.situ` is not bound by forty codecs it never calls.
+	"""
+	used = {name for struct in resolved.structs.values()
+	        for entry in struct.entries
+	        for name in (entry.placement.codec, entry.placement.tag_codec)}
+	lines: list[str] = []
+	for decl in schema.codecs():
+		if decl.kernel is not None and decl.name in used:
+			lines.extend(["", f"kernel {decl.name} : "
+			              f"{kernel_to_source(decl.kernel)}"])
+	return lines
 
 
 def _varints(schema: ast.Schema) -> list[str]:
@@ -431,6 +454,8 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		facts.append(f"varint={placement.varint}")
 	if placement.codec is not None:
 		facts.append(f"codec={placement.codec}")
+	if placement.tag_codec is not None:
+		facts.append(f"codec={placement.tag_codec}")
 	# Which field seeds the nonce and which selects the key (0040) is what
 	# the region's bytes *mean* -- a receiver that disagrees about either
 	# cannot interoperate -- and both are enforced, which is this file's
@@ -584,7 +609,7 @@ def _valued_source(tree: ast.Expr | None, shown: str | None,
 	build; the guard against it is that the two are set together, in four
 	places, named here so the next reader can check.
 	"""
-	from situc.unparse import expr_to_source
+	from situc.unparse import expr_to_source, kernel_to_source
 
 	if tree is None:
 		return _squash(shown or "")
@@ -628,7 +653,7 @@ def _sized_by(name: str, env: Env) -> str:
 
 
 def _attribute_facts(placement: Placement, env: Env) -> list[str]:
-	from situc.unparse import expr_to_source
+	from situc.unparse import expr_to_source, kernel_to_source
 
 	facts = []
 	for attr in placement.attrs:
@@ -1073,8 +1098,28 @@ def _compare_globals(before: str, after: str) -> list[Finding]:
 				f"read differently, and nothing about the structure says so"))
 
 	findings.extend(_compare_varints(before, after))
+	findings.extend(_compare_kernels(before, after))
 	findings.extend(_compare_enums(before, after))
 	return findings
+
+
+def _compare_kernels(before: str, after: str) -> list[Finding]:
+	"""A codec recomputed: every digest a peer sends stops verifying (26.891)."""
+	old = _parse_kernels(before)
+	new = _parse_kernels(after)
+	return [Finding("breaking", f"kernel {name}",
+	                f"now computes {new[name]}, was {old[name]}")
+	        for name in sorted(old.keys() & new.keys())
+	        if old[name] != new[name]]
+
+
+def _parse_kernels(text: str) -> dict[str, str]:
+	found: dict[str, str] = {}
+	for line in text.splitlines():
+		if line.startswith("kernel "):
+			name, _, rest = line[len("kernel "):].partition(" : ")
+			found[name] = rest
+	return found
 
 
 def _compare_varints(before: str, after: str) -> list[Finding]:

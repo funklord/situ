@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: tcp.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -19,6 +19,8 @@ bit_order msb_first
 endian big
 target buffer
 
+kernel internet_checksum : ones_complement(width = 16, complement)
+
 struct tcp_header size=20..
   @0x0000   2         u16        source_port  big
   @0x0002   2         u16        destination_port  big
@@ -35,7 +37,7 @@ struct tcp_header size=20..
   @0x000d:6 1bit      bit        syn  msb_first
   @0x000d:7 1bit      bit        fin  msb_first
   @0x000e   2         u16        window  big
-  @0x0010   2         u8         checksum  self_as=0
+  @0x0010   2         u8         checksum  codec=internet_checksum self_as=0
   @0x0012   2         u16        urgent_pointer  big
   @0x0014   0..40     u8         options  sized-by=(data_offset-5)*4
   ~         0..       u8         payload  sized-by=remaining

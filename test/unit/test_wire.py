@@ -1163,7 +1163,7 @@ def test_a_signature_from_another_format_version_says_so() -> None:
 	found = wire.compare(_as_version(now, 1), now)
 
 	assert "format" in kinds(found)
-	assert "v1, compared against v2" in detail(found)
+	assert "v1, compared against v3" in detail(found)
 
 
 def test_the_same_version_says_nothing_about_the_format() -> None:
@@ -1180,7 +1180,7 @@ def test_a_signature_with_no_version_line_reads_as_v0() -> None:
 	found = wire.compare(_as_version(now, None), now)
 
 	assert "format" in kinds(found)
-	assert "v0, compared against v2" in detail(found)
+	assert "v0, compared against v3" in detail(found)
 
 
 def test_the_format_notice_is_not_a_break_and_is_not_tallied() -> None:

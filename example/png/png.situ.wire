@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: png.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -19,6 +19,8 @@ bit_order msb_first
 endian big
 target file
 
+kernel crc32 : polynomial(width = 32, poly = 0x04C11DB7, init = 0xFFFFFFFF, xorout = 0xFFFFFFFF, reflect)
+
 enum chunk_type : u8[4] unknown=pass
   ihdr="IHDR" plte="PLTE" idat="IDAT" iend="IEND"
 
@@ -26,7 +28,7 @@ struct chunk size=12..2147483659
   @0x0000   4         u32        length  big max=2147483647
   @0x0004   4         chunk_type kind  big
   @0x0008   0..2147483647 u8         data  sized-by=length
-  ~         4         u8         crc
+  ~         4         u8         crc  codec=crc32
   crc covers: data kind summed
 
 struct png_signature size=8

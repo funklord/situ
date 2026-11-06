@@ -1,4 +1,4 @@
-# situ wire signature v2
+# situ wire signature v3
 # schema: slip.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -18,6 +18,8 @@
 bit_order msb_first
 endian big
 target buffer
+
+kernel slip : stuffing(worst_case = 2, per = 1, unit = byte, code = slip)
 
 struct frame size=1..
   @0x0000   until:c0  slip       datagram  codec=slip
