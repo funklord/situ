@@ -30,7 +30,7 @@ from situc.codegen.c.names import ident, macro
 from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
 from situc.traverse import table_is_padded
 from situc.kernels import parity_rows
-from situc.codegen.kernel_math import (WORD_WIDTHS, LinearCode, accumulator,
+from situc.codegen.kernel_math import (WORD_WIDTHS, crc_init, LinearCode, accumulator,
                                        gf_tables, linear_code,
                                        NAMED_LINEAR,
                                        rs_generator_coefficients,
@@ -612,7 +612,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return None
 
 	poly    = number(decl, "poly")
-	init    = number(decl, "init")
+	init    = crc_init(decl)
 	xorout  = number(decl, "xorout")
 	kernel  = decl.kernel
 	assert kernel is not None

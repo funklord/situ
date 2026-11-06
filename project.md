@@ -2863,7 +2863,7 @@ design.
 | Family | Description form | Covers | Derived properties |
 |---|---|---|---|
 | **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, base16/32/64 (not NRZI, 8b10b, Gray or BCD -- see 26.140) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
-| **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon. BCH takes the same route and none is written | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
+| **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout, and `augmented` where `init` enters as Mellanox's does (26.890) | CRC (all variants), Reed-Solomon. BCH takes the same route and none is written | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
 | **linear block** | parity-check matrix over GF(2): a named code, or one `parity` row per check bit | Hamming(7,4) by name; any `(n,k)` from its matrix, bounded to a codeword that fits the byte the generated pair takes and to rows that locate a single error. Not LDPC, for the reason below the table | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form, which rows given outright are by construction; `seekable = blockwise(n)` |
 | **shift register** | taps, feedback source, initial state, and whether the feedback is complemented | additive and multiplicative scramblers, NRZI in both conventions. **Not convolutional codes, and not Miller** -- see below the table, which is a sharper refusal than the other rows' | `length_preserving`, always; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output. `complement_feedback` moves none of them |
@@ -8264,6 +8264,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.890 An augmented CRC is a constant
+
+Moved to `doc/decision/26.890-an-augmented-crc-is-a-constant.md`.
 
 ### 26.888 A constant offset from the message
 

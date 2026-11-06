@@ -27,7 +27,7 @@ from __future__ import annotations
 from math import lcm
 
 from situc import ast
-from situc.codegen.kernel_math import (accumulator, crc_register, crc_shift,
+from situc.codegen.kernel_math import (accumulator, crc_init, crc_register, crc_shift,
                                        crc_start, crc_table, crc_width,
                                        gf_tables, number, reverse,
                                        rs_generator_coefficients)
@@ -1181,7 +1181,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	kernel = decl.kernel
 	assert kernel is not None
 	reflect = kernel.flag("reflect")
-	init    = number(decl, "init")
+	init    = crc_init(decl)
 	xorout  = number(decl, "xorout")
 
 	table  = crc_table(width, poly, reflect)

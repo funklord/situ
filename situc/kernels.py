@@ -168,6 +168,8 @@ KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
 		"symbol"}),
 	ast.KernelFamily.POLYNOMIAL:  frozenset({
 		"width", "poly", "init", "xorout", "reflect",
+		# How `init` enters: `crc_init` is what reads it (26.890).
+		"augmented",
 		# Reed-Solomon and BCH: `field` is what selects them.
 		"field", "n", "k", "first_root", "primitive"}),
 	ast.KernelFamily.LINEAR:      frozenset({

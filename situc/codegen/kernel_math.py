@@ -70,6 +70,34 @@ def number(decl: ast.CodecDecl, name: str, default: int = 0) -> int:
 	return value.value if isinstance(value, ast.IntLiteral) else default
 
 
+def crc_init(decl: ast.CodecDecl) -> int:
+	"""The register a table-driven CRC starts from, whichever way `init` entered.
+
+	`init` is the catalogue's: the register before the first message bit is
+	folded in. `augmented` says the other convention, Mellanox's among them,
+	which shifts the message into the register and flushes `width` zero bits
+	at the end. The two are one CRC with different starting values: the
+	augmented `init` clocked `width` times with nothing coming in. So this is
+	a constant worked out here, and no backend has a second algorithm. They
+	agree only where `init` is zero, which is how a wrong one goes unseen
+	(26.890).
+	"""
+	init   = number(decl, "init")
+	kernel = decl.kernel
+	assert kernel is not None
+	if not kernel.flag("augmented"):
+		return init
+	width = number(decl, "width")
+	poly  = number(decl, "poly")
+	mask  = (1 << width) - 1
+	for _ in range(width):
+		carry = init >> (width - 1) & 1
+		init  = init << 1 & mask
+		if carry:
+			init ^= poly
+	return init
+
+
 def reverse(value: int, width: int) -> int:
 	"""`value` with its low `width` bits in the opposite order."""
 	result = 0

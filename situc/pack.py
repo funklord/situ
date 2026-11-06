@@ -1040,7 +1040,7 @@ def _kernel_row(schema: "ast.Schema", named: str,
 	which is the honest half `situ-edit` was already saying -- it was just
 	saying it about every tag.
 	"""
-	from situc.codegen.kernel_math import (crc_shift, crc_start, crc_table,
+	from situc.codegen.kernel_math import (crc_init, crc_shift, crc_start, crc_table,
 	                                       crc_width, number)
 
 	decl = next((one for one in schema.codecs() if one.name == named), None)
@@ -1063,7 +1063,7 @@ def _kernel_row(schema: "ast.Schema", named: str,
 		tables.append(table)
 		return _struct.pack(
 			"<IIIII", KERNEL_POLYNOMIAL, width,
-			crc_start(number(decl, "init"), width, reflect),
+			crc_start(crc_init(decl), width, reflect),
 			number(decl, "xorout"), at) \
 			+ _struct.pack("<ii", crc_shift(width, reflect),
 			               1 if reflect else 0)
