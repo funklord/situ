@@ -24,6 +24,7 @@ from enum import Enum
 from situc import ast
 from situc import kernels
 from situc.ast import Schema
+from situc.diagnostics import error
 from situc.types import ScalarType, pinned_shown, literal_bytes
 from math import lcm
 
@@ -2584,6 +2585,69 @@ def preceding_parts(struct: ResolvedStruct,
 		return None
 	parts.append(bits // BITS_PER_BYTE)
 	return parts
+
+
+def nest_of(struct: ResolvedStruct,
+		local: str) -> tuple[Placement, int] | None:
+	"""The struct a dynamic offset sets `local` inside, and how deep it is.
+
+	`h.len` with `h` behind a variable member is frame-relative (section 12.2):
+	its `offset_bits` counts from `h`, which is what this names. None for a
+	member whose offset means what it says. Every struct entry and not only
+	the readable ones, or `h` itself is not found (26.916).
+	"""
+	by_local = {local_name(struct, entry.placement): entry.placement
+	            for entry in struct.entries}
+	held = by_local.get(local)
+	if held is None or "." not in local or "[" in local \
+			or held.offset_bits is None \
+			or not (held.frame_relative and held.frame_base_dynamic):
+		return None
+
+	parts = local.split(".")
+	for length in range(len(parts) - 1, 0, -1):
+		outer = by_local.get(".".join(parts[:length]))
+		if outer is not None and outer.offset_bits is None:
+			return outer, length
+	return None
+
+
+def behind_a_length(struct: ResolvedStruct,
+		local: str) -> tuple[Placement, int] | None:
+	"""Where a read of `local` has to start, for a backend about to read it.
+
+	The struct, and how many bytes into it. Every backend took `offset_bits`
+	as a place in the message, so the wrong bytes sized a run and all four
+	agreed (26.916). Refused where no read is built, since a wrong one is
+	worse than none: a bit field and a text number have no plain load here,
+	and a struct placed by the data inside another has no offset expression.
+	"""
+	nest = nest_of(struct, local)
+	if nest is None:
+		return None
+
+	outer, depth = nest
+	held = next(entry.placement for entry in struct.entries
+	            if local_name(struct, entry.placement) == local)
+	if depth > 1 or held.scalar is None or held.scalar.is_bit_packed \
+			or held.radix is not None:
+		raise error(
+			f"`{local}` cannot be read here: `{local_name(struct, outer)}` is "
+			"at an offset the message decides",
+			held.span,
+			label = "read by an expression",
+			notes = ["a bit field, a text number or a varint there has no "
+			         "read yet, nor has a struct the data places inside "
+			         "another, and a wrong read is worse than none (26.916)",
+			         "put the value in a whole-byte field of a struct nested "
+			         "directly in this one"])
+	assert held.offset_bits is not None
+	return outer, held.offset_bits // BITS_PER_BYTE
+
+
+def is_behind_a_length(struct: ResolvedStruct, placement: Placement) -> bool:
+	"""`behind_a_length`, asked of a placement rather than a name."""
+	return behind_a_length(struct, local_name(struct, placement)) is not None
 
 
 def is_counted_run(structs: dict[str, ResolvedStruct],

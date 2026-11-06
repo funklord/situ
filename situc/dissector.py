@@ -50,6 +50,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
 	extent_parts, fixed_span_bits, is_counted_run, is_recursive, local_name,
+	nest_of,
 	nests_one_struct, occupies_fixed_bytes, own_members, pinned_bytes,
 	version_steps, versioned_tail,
 )
@@ -1781,6 +1782,11 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 		held = entry.placement
 		if held.scalar is None:
 			continue
+		# Counted from a struct the message places, and `_read` takes the
+		# number as a place in the frame. Left out, so an expression naming
+		# it is declined rather than read wrong (26.916).
+		if nest_of(struct, local_name(struct, held)) is not None:
+			continue
 		# Nested scalars too: a cpio entry's padding is an expression over
 		# `header.namesize`, and stopping at the dot left the dotted path in
 		# the emitted Lua as a global that does not exist.
@@ -2733,6 +2739,10 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `_read` answers None for what it genuinely cannot read -- a host-order
 	# field, a width Wireshark's `uint` cannot take -- so the refusals that
 	# were true survive and only the false ones go.
+	# Counted from a struct the message places, and `_read` takes the number
+	# as a place in the frame: declined rather than read wrong (26.916).
+	if nest_of(struct, local_name(struct, driver.placement)) is not None:
+		return None
 	return _read(driver.placement, "0")
 
 

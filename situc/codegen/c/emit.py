@@ -48,6 +48,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
+	behind_a_length,
+	is_behind_a_length,
 	Check,
 	NOT_A_MEMBER,
 	RESERVED_STATED,
@@ -7328,6 +7330,21 @@ class Emitter:
 					f"{ident(self.prefix, struct.name, c_name(local), which)}"
 					f"({held}{self._member_args(struct, placement)})",
 					placement.scalar is not None and placement.scalar.signed)
+			# Its offset counts from a struct the message places, so the
+			# read starts there, and answers zero where the frame stops
+			# short, as any read at such an offset does (26.916).
+			nest = behind_a_length(struct, local)
+			if nest is not None:
+				outer = c_name(local_name(struct, nest[0]))
+				start = (f"{ident(self.prefix, struct.name, outer, 'offset')}"
+				         f"({held}{self._member_args(struct, nest[0])})")
+				assert placement.scalar is not None
+				width = nest[1] + placement.scalar.bits // BITS_PER_BYTE
+				load  = self._load_expression(placement.scalar, placement,
+				                              f"(situ_base({held}) + {start})")
+				return leaf(f"(situ_remaining_u32({held}.limit, {start})"
+				            f" >= {width}u ? {load} : 0)",
+				            placement.scalar.signed)
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
 			# -- a plausible number nobody wrote, which is the shape 26.32
@@ -10264,6 +10281,12 @@ class Emitter:
 		# same reason a lying varint did.
 		if target.placement.parameter:
 			return (leaf(self._argument_name(target.placement)), True)
+
+		# A field of a struct the message places: the expression reads it
+		# where it is, and a constant offset here is not one (26.916).
+		if is_behind_a_length(struct, target.placement):
+			return (leaf(self._over_fields(
+				struct, local_name(struct, target.placement), held)), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# load below nor the check above applies to it. It reached the `scalar

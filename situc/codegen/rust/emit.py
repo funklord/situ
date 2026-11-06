@@ -47,6 +47,8 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
+	behind_a_length,
+	is_behind_a_length,
 	Check,
 	Member,
 	RESERVED_STATED,
@@ -5260,6 +5262,23 @@ class Emitter:
 				return leaf(f"{held}.{self._argument_ident(held_at)}",
 				            held_at.scalar is not None
 				            and held_at.scalar.signed)
+			# Its offset counts from a struct the message places, so the
+			# read starts there, and answers zero where the frame stops
+			# short, as any read at such an offset does (26.916).
+			nest = behind_a_length(struct, name)
+			if nest is not None:
+				start = self._offset_expression(struct, nest[0])
+				if start is None or held_at.scalar is None:
+					raise UnknownName(name)
+				place = f"situ_rt::advance({start}, {nest[1]}, self.bytes.len())"
+				width = held_at.scalar.bits // BITS_PER_BYTE
+				load  = self._unparen(self._raw_load(held_at, held_at.scalar,
+				                                     place))
+				gated = (f"(if self.bytes.len().saturating_sub({place}) >= {width}"
+				         f" {{ {load} }} else {{ 0 }})")
+				if held != "self":
+					gated = re.sub(r"\bself\.", f"{held}.", gated)
+				return leaf(gated, held_at.scalar.signed)
 			# A text number is digits, not bytes of an integer: reading it
 			# where it sits parses ASCII as a binary integer, which is a
 			# plausible number nobody wrote.
@@ -8843,6 +8862,15 @@ class Emitter:
 		if driver.placement.parameter:
 			name = self._argument_ident(driver.placement)
 			return (leaf(f"self.{name} as u64"), True)
+
+		# A field of a struct the message places: the expression reads it
+		# where it is, and a constant offset here is not one (26.916).
+		if driver.placement.scalar is not None \
+				and is_behind_a_length(struct, driver.placement):
+			text = self._over_fields(struct, local_name(struct, driver.placement),
+			                         "self")
+			return (leaf(f"({text}) as {_wide(driver.placement.scalar)}",
+			             driver.placement.scalar), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the

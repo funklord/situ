@@ -47,6 +47,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
+	behind_a_length,
+	is_behind_a_length,
 	Check,
 	Member,
 	RESERVED_STATED,
@@ -5751,6 +5753,22 @@ class Emitter:
 				          if placement.varint is not None
 				          or placement.radix is not None else "")
 				return leaf(f"{held}.{py_name(local)}{suffix}")
+			# Its offset counts from a struct the message places, so the
+			# read starts there, and answers zero where the frame stops
+			# short, as any read at such an offset does (26.916).
+			nest = behind_a_length(struct, local)
+			if nest is not None:
+				start = self._offset_expression(struct, nest[0])
+				if start is None:
+					raise UnknownName(local)
+				at    = f"{start} + {nest[1]}"
+				width = (placement.scalar.bits // BITS_PER_BYTE
+				         if placement.scalar else 0)
+				load  = self._raw_load(placement, placement.scalar, at) \
+					if placement.scalar else "0"
+				gated = f"({load} if self._len - ({at}) >= {width} else 0)"
+				return leaf(gated if held == "self"
+				            else re.sub(r"\bself\.", f"{held}.", gated))
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
 			# -- a plausible number nobody wrote, which is the shape 26.32
@@ -8435,6 +8453,12 @@ class Emitter:
 		# reason a lying varint did.
 		if driver.placement.parameter:
 			return (leaf(f"self.{self._argument_ident(driver.placement)}"), True)
+
+		# A field of a struct the message places: the expression reads it
+		# where it is, and a constant offset here is not one (26.916).
+		if is_behind_a_length(struct, driver.placement):
+			return (leaf(self._over_fields(
+				struct, local_name(struct, driver.placement), "self")), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the

@@ -8296,6 +8296,14 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.916 A field behind a length is read where it is
+
+Moved to `doc/decision/26.916-a-field-behind-a-length-is-read-where-it-is.md`.
+
+### 26.915 A when reads a nested field
+
+Moved to `doc/decision/26.915-a-when-reads-a-nested-field.md`.
+
 ### 26.914 A whole DNS message
 
 Moved to `doc/decision/26.914-a-whole-dns-message.md`.

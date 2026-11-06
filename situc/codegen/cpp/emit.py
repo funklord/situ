@@ -50,6 +50,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
+	behind_a_length,
+	is_behind_a_length,
 	Check,
 	Member,
 	RESERVED_STATED,
@@ -4131,6 +4133,20 @@ class Emitter:
 				return leaf(self._argument_member(struct, held),
 				            held.scalar is not None and held.scalar.signed)
 			if "." in name:
+				# Its offset counts from a struct the message places, so the
+				# read starts there, and answers zero where the frame stops
+				# short, as any read at such an offset does (26.916).
+				nest = behind_a_length(struct, name)
+				if nest is not None:
+					start = self._offset_expression(struct, nest[0])
+					if start is None or held.scalar is None:
+						raise UnknownName(name)
+					at    = f"({start}) + {nest[1]}u"
+					width = held.scalar.bits // BITS_PER_BYTE
+					load  = self._load(held.scalar, held, at)
+					return leaf(f"(situ_remaining_u32(raw_.limit, {at})"
+					            f" >= {width}u ? {load} : 0)",
+					            held.scalar.signed)
 			# A text number is digits, not bytes of an integer: reading it
 			# where it sits parses eight ASCII characters as a binary
 			# integer, which is a plausible number nobody wrote.
@@ -5260,6 +5276,13 @@ class Emitter:
 		if driver.placement.parameter:
 			member = self._argument_member(struct, driver.placement)
 			return (leaf(member), True)
+
+		# A field of a struct the message places: the expression reads it
+		# where it is, and a constant offset here is not one (26.916).
+		if is_behind_a_length(struct, driver.placement):
+			return (leaf(self._over_fields(
+				struct, local_name(struct, driver.placement)),
+				driver.placement.scalar), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the
