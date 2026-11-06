@@ -946,13 +946,10 @@ def _index_base(placement: Placement) -> int:
 def _measurable(resolved: ResolvedSchema, struct: ResolvedStruct) -> bool:
 	"""Whether a sub-view over one instance of `struct` exists.
 
-	The same question `situ_packet_body_connect_view` answers and
-	`situ_packet_body_publish_view` does not: a struct that ends in its
-	frame carries no length of its own, so nothing can hand back a view
-	bounded by it. Recorded in the image rather than re-derived by each
-	reader, because a walker deciding this for itself would be deciding it
-	differently -- which is what made every `publish` packet BOUNDS where C
-	said OK.
+	The same question `situ_packet_body_connect_view` answers. Recorded in
+	the image rather than re-derived by each reader, because a walker
+	deciding this for itself would be deciding it differently -- which is
+	what made every `publish` packet BOUNDS where C said OK.
 	"""
 	return struct.layout.is_fixed_size \
 		or traverse.has_computable_extent(resolved.structs, struct)
@@ -2669,6 +2666,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		flags = 1 if validatable.get(name) and whole else 0
 		if _measurable(resolved, rstruct) and whole:
 			flags |= 2
+		if traverse.ends_in_the_frame(resolved.structs, rstruct, always=True):
+			flags |= 4
 		# AND THE MINIMUM, which this computed and threw away (26.577).
 		# `layout.size_bits` is the static minimum for a variable struct,
 		# which is what the generated headers carry as `SIZE_MIN` -- and

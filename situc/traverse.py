@@ -1897,6 +1897,62 @@ def must_be_terminated(placement: "Placement") -> bool:
 	        and not placement.delimiter_or_end)
 
 
+def ends_in_the_frame(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct, seen: frozenset[str] = frozenset(),
+		always: bool = False) -> bool:
+	"""Whether one instance runs to the end of whatever view it is handed.
+
+	Directly, through a `[remaining]` member, or through a nested member or an
+	arm that does. Such a struct is measured by the view, so it can be a
+	parent's last member and it has no length of its own: not an element of a
+	run, where the first would take the rest, and not a thing a prefix of a
+	stream can be asked about (26.907).
+
+	`always` asks it of every arm and not of any: then the view IS the extent,
+	and a walked sum would stop short at a cut element and hide it.
+	"""
+	if struct.name in seen:
+		return False
+	seen = seen | {struct.name}
+
+	def reaches(one: Placement) -> bool:
+		if one.sized_by == "remaining":
+			return True
+		inner = structs.get(one.type_name or "")
+		return inner is not None and nests_one_struct(structs, one) \
+			and ends_in_the_frame(structs, inner, seen, always)
+
+	for placement in own_members(struct):
+		if placement.kind != "variant":
+			if reaches(placement):
+				return True
+			continue
+		arms = [member for _, member in arm_members(struct, placement)
+		        if member is not None]
+		if arms and (all if always else any)(reaches(one) for one in arms):
+			return True
+	return False
+
+
+def _measured_by_view(structs: dict[str, ResolvedStruct], member: Placement,
+		element: ResolvedStruct, seen: frozenset[str]) -> bool:
+	"""Whether `member`, of type `element`, has an extent to ask for.
+
+	One nested member may end in its frame; a run of them may not.
+	"""
+	return has_computable_extent(structs, element, seen) \
+		if nests_one_struct(structs, member) \
+		else has_element_extent(structs, element, seen)
+
+
+def has_element_extent(structs: dict[str, ResolvedStruct],
+		element: ResolvedStruct,
+		seen: frozenset[str] = frozenset()) -> bool:
+	"""`has_computable_extent`, for one element of a run."""
+	return has_computable_extent(structs, element, seen) \
+		and not ends_in_the_frame(structs, element)
+
+
 def has_computable_extent(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct,
 		seen: frozenset[str] = frozenset()) -> bool:
@@ -1912,8 +1968,10 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 
 	False where any member's own length is unknown. A `[remaining]` member's
 	is the view's rather than the struct's, so an instance of the struct is
-	exactly whatever view it was handed and there is nothing after it to
-	place.
+	exactly whatever view it was handed: known, and known to be the rest, which
+	is what a parent's last member or arm needs (26.907). This answered no, so
+	MQTT's PUBLISH body had no view at all. An element of a run is the
+	exception, and `has_element_extent` asks that.
 
 	A `variant` is measurable when every arm is. This read "never" at first,
 	on the reasoning that a variant's extent is whichever arm the discriminant
@@ -1936,7 +1994,7 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 		if placement.is_fixed_size:
 			continue
 		if placement.sized_by == "remaining":
-			return False
+			continue
 		if placement.kind in ("coded", "sealed") and not placement.delimiters:
 			return False		# the extent is the codec's expansion, not a length
 
@@ -1951,8 +2009,8 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 
 		# A run or a nested struct is only as measurable as its element.
 		if not element.layout.is_fixed_size \
-				and not has_computable_extent(structs, element,
-				                              seen | {struct.name}):
+				and not _measured_by_view(structs, placement, element,
+				                          seen | {struct.name}):
 			return False
 	return True
 
@@ -2048,14 +2106,14 @@ def _variant_is_measurable(structs: dict[str, ResolvedStruct],
 		if member.is_fixed_size:
 			continue
 		if member.sized_by == "remaining":
-			return False
+			continue
 
 		element = structs.get(member.type_name or "")
 		if element is not None and element.name not in seen \
 				and element is not struct \
 				and not element.layout.is_fixed_size \
-				and not has_computable_extent(structs, element,
-				                              seen | {struct.name}):
+				and not _measured_by_view(structs, member, element,
+				                          seen | {struct.name}):
 			return False
 	return True
 
@@ -2668,7 +2726,7 @@ def offset_unresolvable(structs: dict[str, ResolvedStruct],
 		# this predicate name six members all four backends emit.
 		if is_counted_run(structs, other):
 			element = structs.get(other.type_name or "")
-			if element is None or not has_computable_extent(structs, element):
+			if element is None or not has_element_extent(structs, element):
 				return True
 		# In an ARM it blocks whatever the element is, because an arm is
 		# emitted by a family of its own that writes no walk at all -- and
@@ -2879,6 +2937,8 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		return False
 	if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
 		return True
+	if ends_in_the_frame(structs, struct):
+		return False
 
 	parts = extent_parts(structs, struct)
 	if parts is None:

@@ -89,6 +89,8 @@ from situc.traverse import (
 	nests_one_struct,
 	framing_gaps,
 	has_computable_extent,
+	ends_in_the_frame,
+	has_element_extent,
 	index_entry_bytes,
 	indexed_elements,
 	invalidating_members,
@@ -5167,6 +5169,10 @@ class Emitter:
 		again.
 		"""
 		terms: list[str | tuple[str, int]] = []
+		# The view, and not a sum: a walked run stops at a cut element, and a
+		# view narrowed to it would hide it from `validate` (26.907).
+		if ends_in_the_frame(self.resolved.structs, struct, always=True):
+			constant, variable, terms = 0, [], ["view.limit"]
 		for placement in variable:
 			if not self._has_length(struct, placement):
 				return []
@@ -8546,7 +8552,7 @@ class Emitter:
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
 		if (element is None or not self._is_counted_run(placement)
-				or not has_computable_extent(self.resolved.structs, element)
+				or not has_element_extent(self.resolved.structs, element)
 				or self._element_extent_call(element) is None):
 			return []
 		# `_is_counted_run` admits a `[remaining]` run, and this asks no
@@ -8998,7 +9004,7 @@ class Emitter:
 		# (26.471).
 		element = self.resolved.structs.get(placement.type_name or "")
 		if (element is not None and self._is_counted_run(placement)
-				and not has_computable_extent(self.resolved.structs, element)):
+				and not has_element_extent(self.resolved.structs, element)):
 			return run_fits + [
 				f"\t/* {placement.path}: no extent this backend can compute,",
 				f"\t * one `{placement.type_name}` being as long as the view it",
@@ -9708,7 +9714,9 @@ class Emitter:
 			                 and placement.sized_by is None)
 			if (placement.repeat_while is not None
 					or self._is_record_run(placement) or nested_member):
-				return has_computable_extent(self.resolved.structs, element)
+				return (has_computable_extent(self.resolved.structs, element)
+				        if nested_member else
+				        has_element_extent(self.resolved.structs, element))
 
 		# A LENGTH THIS VIEW CANNOT READ is not a length (26.440). A member
 		# inside a `sealed` region is reached through the gate, so its
@@ -13810,7 +13818,7 @@ class Emitter:
 		# `_at` narrows to the element's extent, so it exists only where
 		# one can be measured.
 		if not element.layout.is_fixed_size \
-				and not has_computable_extent(self.resolved.structs, element):
+				and not has_element_extent(self.resolved.structs, element):
 			return []
 		return [
 			f"\t/* {placement.path}: each `{element.name}` its table"

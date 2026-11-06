@@ -1731,6 +1731,9 @@ situ_walk_err situ_walk_arm_at(const situ_walk_image *image, uint32_t index,
  * its own, so nothing may descend into one. */
 #define STRUCT_VALIDATABLE 0x01u
 #define STRUCT_MEASURABLE  0x02u
+/* Runs to the end of whatever frame it is handed, so the frame and not a
+ * walked sum is its span (26.907). */
+#define STRUCT_TO_THE_END  0x04u
 
 /* How many bytes the selected arm occupies.
  *
@@ -4558,9 +4561,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
  *
  * An arm whose type cannot be MEASURED from its own bytes has no sub-view,
  * so nothing asks whether it fits the frame either: there is nothing to
- * compare against. `packet.body.publish` is that arm, and measuring it
- * anyway called a three-byte MQTT publish malformed where the four backends
- * call it fine.
+ * compare against.
  *
  * Measured through the variant MEMBER rather than the arm, because an arm is
  * not in the struct's member chain -- asking for an arm's offset refuses.
@@ -4751,8 +4752,15 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	 * the four backends frame it. Handing it the frame let the arm's floor
 	 * pass on bytes past the arm, so `["` measured a one-byte array and
 	 * validated it: an accepted message every other reader refuses. */
-	return validate_deep(&bound, message + at / 8u, wide / 8u, arm_type,
-	                     depth + 1u, verdict, why);
+	{
+		const uint32_t flags = u32_at(image->structs
+		                              + arm_type * image->struct_stride + 12u);
+		const uint32_t span  = (flags & STRUCT_TO_THE_END) != 0u
+		                     ? len - at / 8u : wide / 8u;
+
+		return validate_deep(&bound, message + at / 8u, span, arm_type,
+		                     depth + 1u, verdict, why);
+	}
 }
 
 

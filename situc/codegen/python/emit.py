@@ -88,6 +88,8 @@ from situc.traverse import (
 	nests_one_struct,
 	framing_gaps,
 	has_computable_extent,
+	ends_in_the_frame,
+	has_element_extent,
 	index_entry_bytes,
 	indexed_elements,
 	invalidating_members,
@@ -6510,6 +6512,11 @@ class Emitter:
 				         f" else {chain})")
 			return f"({base} if self._len < {base} else {chain})"
 
+		# The view, and not a sum: a walked run stops at a cut element, and a
+		# view narrowed to it would hide it from `validate` (26.907).
+		if ends_in_the_frame(self.resolved.structs, struct, always=True):
+			return "self._len"
+
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return None
@@ -6854,7 +6861,7 @@ class Emitter:
 		element = self.resolved.structs.get(placement.type_name or "")
 		if (element is None
 				or not is_counted_run(self.resolved.structs, placement)
-				or not has_computable_extent(self.resolved.structs, element)):
+				or not has_element_extent(self.resolved.structs, element)):
 			return []
 		# `is_counted_run` admits a `[remaining]` run -- mqtt's
 		# `subscription filters[remaining]` -- and this asks no further: the
@@ -7261,7 +7268,7 @@ class Emitter:
 				or member.delimiters
 				or member.repeat_while is not None
 				or element.layout.is_fixed_size
-				or not has_computable_extent(self.resolved.structs, element)):
+				or not has_element_extent(self.resolved.structs, element)):
 			return None
 		step = ("_extent_at(1)" if is_recursive(self.resolved.structs, element.name)
 		        else "_extent")
@@ -7457,7 +7464,7 @@ class Emitter:
 		element = self.resolved.structs.get(placement.type_name or "")
 		if (element is not None
 				and is_counted_run(self.resolved.structs, placement)
-				and has_computable_extent(self.resolved.structs, element)):
+				and has_element_extent(self.resolved.structs, element)):
 			member = local_name(struct, placement)
 			lines += [
 				f"\t\t# {placement.path}: and every element the count",

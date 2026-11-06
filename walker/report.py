@@ -1324,13 +1324,12 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			if arm is not None and arm != NONE:
 				arm_placement = image.placements[arm]
 				# AND ONLY AN ARM THE BACKENDS CAN ACQUIRE. C emits no
-				# `_view` for an arm whose struct it cannot measure --
-				# there is no `situ_packet_body_publish_view` in mqtt's
-				# header at all -- so `packet_check` has no block for one
-				# and says nothing about it. Validating it here refused
-				# three schemas C accepts, which is the second thing this
-				# check got wrong by reasoning from the field case instead
-				# of reading what C emits.
+				# `_view` for an arm whose struct it cannot measure, so
+				# `packet_check` has no block for one and says nothing
+				# about it. Validating it here refused three schemas C
+				# accepts, which is the second thing this check got wrong
+				# by reasoning from the field case instead of reading what
+				# C emits.
 				# Nor a RUN of records, which is not one record: an
 				# empty one is shorter than the element's minimum and was
 				# refused for it. `_arm_validates` walks the run (26.779).
@@ -1371,10 +1370,11 @@ def _validate_here(image: Image, view: View, struct_index: int,
 					floor = image.structs[inner_struct].size_min_bits
 					if floor != NONE and wide * BITS_PER_BYTE < floor:
 						return fail(ERR_BOUNDS, arm)
+					ends = (view.limit if image.structs[inner_struct].to_the_end
+					        else min(view.limit, at + wide))
 					verdict = _validate(
 						image, View(image, view.buffer, inner_struct,
-						            at, min(view.limit, at + wide),
-						            child_args(view, arm)),
+						            at, ends, child_args(view, arm)),
 						inner_struct)
 					if verdict:
 						return verdict

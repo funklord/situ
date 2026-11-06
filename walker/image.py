@@ -274,6 +274,11 @@ class Struct:
 		return bool(self.struct_flags & 1)
 
 	@property
+	def to_the_end(self) -> bool:
+		"""Whether it runs to the end of whatever frame it is handed."""
+		return bool(self.struct_flags & 4)
+
+	@property
 	def measurable(self) -> bool:
 		"""Whether one instance can be measured from its own bytes.
 

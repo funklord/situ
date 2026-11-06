@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.907 A struct that ends in its frame has a view
+
+Moved to `doc/decision/26.907-a-struct-that-ends-in-its-frame.md`.
+
 ### 26.906 The C walker reads a byte-order marker
 
 Moved to `doc/decision/26.906-the-c-walker-reads-a-byte-order-marker.md`.

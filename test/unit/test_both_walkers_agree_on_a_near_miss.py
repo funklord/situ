@@ -37,6 +37,9 @@ FOUND = [
 	# of an arm the frame cuts answered CONSTRAINT.
 	("mqtt", "packet", "1010000c4d5154540402003c0004", "1"),
 	("modbus", "request", "10000100007f000a0102", "1"),
+	# A body that ends in its frame, cut inside its last record: a view
+	# narrowed to the walk hid the record, in C and in the backends (26.907).
+	("mqtt", "packet", "80070003612f69", "1"),
 	# A located run past 2^29 bytes overflowed the C walker's count of bits.
 	("bmp", "bitmap_file",
 	 "424d4e00000000000000360000002800000003000000020000000100180000000000"

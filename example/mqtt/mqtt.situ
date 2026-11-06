@@ -39,12 +39,11 @@
 // situ had no construct for it and recorded a limitation that was not there,
 // which is worse than saying nothing: a reader designs around it (26.56).
 //
-// What is *not* expressible is the same question asked across a struct
-// boundary. PUBLISH's packet identifier is present when the QoS in the fixed
-// header says so, and the fixed header is this struct while the body is
-// another -- a variant switches on a field it can name, and an arm's members
-// cannot see the struct the arm is in. That one is recorded in
-// `publish_body`, where it arises.
+// The same question asked across a struct boundary is expressible too, since
+// 0068 let a parent hand a child an argument: PUBLISH's packet identifier is
+// present when the QoS in the fixed header says so, and `publish_body` could
+// take the QoS as a parameter. This file does not, because `gen-tests` hands no
+// arguments and these vectors are what it is held to. See `publish_body`.
 // (verified 2026-10-22)
 //
 // The second half of the boundary is not a limitation but a modelling choice,
@@ -225,21 +224,10 @@ struct publish_body {
 	u16  topic_length;
 	u8   topic[topic_length];                       // 3.3.2.1
 
-	// THE BOUNDARY, and the whole of it. 3.3.2.2: a two-byte packet
-	// identifier sits here, and only when the QoS in the *fixed header's*
-	// flags is 1 or 2.
-	//
-	// CONNECT's optional fields are a variant on a bit of the same struct,
-	// which is exactly what this needs and cannot have: the bits that decide
-	// are in the packet's first byte and this struct is the body, and a
-	// variant switches on a field it can name. An arm's members do not see
-	// the struct the arm is in.
-	//
-	// A caller that has read the fixed header knows the QoS, so it knows
-	// whether the two bytes are there; what it cannot do is ask this schema.
-	// A schema that assumed QoS 0 would read two bytes of the payload as the
-	// last of the topic on every published message above QoS 0, which is why
-	// this says so rather than guessing.
+	// 3.3.2.2: a two-byte packet identifier sits here, and only when the QoS
+	// in the *fixed header's* flags is 1 or 2. Not stated, for the reason at
+	// the top of this file, so at QoS 1 and 2 those two bytes read as the
+	// start of the payload.
 
 	u8   payload[remaining];                        // 3.3.3
 }
