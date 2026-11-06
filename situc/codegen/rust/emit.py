@@ -3005,7 +3005,7 @@ class Emitter:
 		None where the variant is one this cannot dispatch on: with no
 		`case` to negate, a `default` arm has no test to write.
 		"""
-		held = self._over_fields(struct, variant.discriminant or "", "self")
+		held = self._rule_text(struct, variant.discriminant or "")
 
 		# `[since]` ON THE ARM, in the same sentence (26.424). An arm the
 		# message's own version predates is ABSENT, which is what this test
@@ -4641,8 +4641,7 @@ class Emitter:
 			return ["", f"\t// {placement.path}: an arm of this shape has no",
 			        "\t// gated accessor in this backend."]
 		if variant is not None and arm is not None:
-			held = self._over_fields(struct, variant.discriminant or "",
-			                         "self", extra=reads)
+			held = self._rule_text(struct, variant.discriminant or "", reads)
 			if arm.value is None:
 				matched = matched_values(variant)
 				if not matched:
@@ -5170,6 +5169,22 @@ class Emitter:
 		big    = "true" if member.endian is ast.Endian.BIG else "false"
 		return (f"situ_rt::sum_run(&self.bytes[core::cmp::min({start},"
 		        f" self.bytes.len())..], {count}, {width}, {big})")
+
+	def _rule_text(self, struct: ResolvedStruct, local: str,
+			extra: dict[str, str] | None = None) -> str:
+		"""A `when` over a struct's fields, as a Rust condition.
+
+		`usize` is a length's type, and a rule over a signed field is not one:
+		`i8 x; when s.x >= 0` read -1 as a huge number and refused it, where
+		the other three did not. Wide enough for a `u64` beside it (26.920).
+		"""
+		signed = any((held.scalar is not None and held.scalar.signed)
+		             or held.varint_signed
+		             for held in readable_names(struct)
+		             if re.search(rf"\b{re.escape(local_name(struct, held))}\b",
+		                          local))
+		return self._over_fields(struct, local, "self", extra = extra,
+		                         cast = "i128" if signed else "usize")
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str, cast: str = "usize", bounded: bool = False,
@@ -6413,7 +6428,7 @@ class Emitter:
 		if not any(call for _, call, _, _ in plan):
 			return None
 
-		disc = self._over_fields(struct, placement.discriminant, "self")
+		disc = self._rule_text(struct, placement.discriminant)
 		disc = self._unparen(disc).replace("self.", "probe.")
 		lines = [
 			"",
@@ -7153,7 +7168,7 @@ class Emitter:
 		arms = arm_alignments(struct, other)
 		if arms is None or other.discriminant is None:
 			return None
-		held  = self._over_fields(struct, other.discriminant, "self")
+		held  = self._rule_text(struct, other.discriminant)
 		chain = "1"
 		for arm, unit in reversed(arms):
 			chain = (str(unit) if arm.value is None
@@ -7770,7 +7785,7 @@ class Emitter:
 		has no closed-form length, so `check` said nothing about any arm
 		and a record overrunning the message validated clean (26.689).
 		"""
-		disc  = self._over_fields(struct, placement.discriminant or "", "self")
+		disc  = self._rule_text(struct, placement.discriminant or "")
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		# What follows the variant is placed by nothing, so it is held to
@@ -7847,7 +7862,7 @@ class Emitter:
 		base = self._offset_expression(struct, placement)
 		if base is None:
 			return []
-		disc  = self._over_fields(struct, placement.discriminant or "", "self")
+		disc  = self._rule_text(struct, placement.discriminant or "")
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		lines: list[str] = []
@@ -8320,7 +8335,7 @@ class Emitter:
 		if not values or placement.discriminant is None:
 			return []
 
-		held = self._over_fields(struct, placement.discriminant, "self")
+		held = self._rule_text(struct, placement.discriminant)
 		test = " && ".join(f"{held} != {arm.value}" for arm in values)
 		named = ", ".join(arm.source or str(arm.value) for arm in values)
 		return [
@@ -8435,7 +8450,7 @@ class Emitter:
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
-		held  = self._over_fields(struct, placement.discriminant, "self")
+		held  = self._rule_text(struct, placement.discriminant)
 		chain = "0"
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
@@ -10256,7 +10271,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._over_fields(struct, local, 'self')} {{",
+				f"\t\tif {self._rule_text(struct, local)} {{",
 				f"\t\t\t// {when.name}",
 				"\t\t\treturn Err(situ_rt::Error::Constraint);",
 				"\t\t}",
@@ -10298,7 +10313,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t// {when.severity.value} {when.name}",
-				f"\t\tif {self._over_fields(struct, local, 'self')} {{",
+				f"\t\tif {self._rule_text(struct, local)} {{",
 				"\t\t\tif found < ids.len() {",
 				f"\t\t\t\tids[found] = Self::MSG_{_ident(when.name).upper()};",
 				"\t\t\t}",
@@ -10423,7 +10438,7 @@ class Emitter:
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
 				continue
-			disc = self._over_fields(struct, placement.discriminant, "self")
+			disc = self._rule_text(struct, placement.discriminant)
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue
