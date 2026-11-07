@@ -8323,6 +8323,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.928 A pad is part of an element
+
+Moved to `doc/decision/26.928-a-pad-is-part-of-an-element.md`.
+
 ### 26.927 A `while` run ends by its rule, or says the frame may end it
 
 Moved to `doc/decision/26.927-a-while-run-ends-by-its-rule.md`.

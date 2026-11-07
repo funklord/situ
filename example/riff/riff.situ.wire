@@ -1,0 +1,39 @@
+# situ wire signature v3
+# schema: riff.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian little
+target buffer
+
+struct chunk size=8..4294967304
+  @0x0000   4         u8         id  little
+  @0x0004   4         u32        size  little
+  @0x0008   0..4294967295 u8         data  sized-by=size
+  ~         0..1      u8         <pad>  pad-to=2 must_be_zero
+
+struct format size=16
+  @0x0000   2         u16        tag  little
+  @0x0002   2         u16        channels  little
+  @0x0004   4         u32        samples_per_second  little
+  @0x0008   4         u32        bytes_per_second  little
+  @0x000c   2         u16        block_align  little
+  @0x000e   2         u16        bits_per_sample  little
+
+struct riff size=12..
+  @0x0000   4         u8         tag  little must_eq="RIFF"
+  @0x0004   4         u32        size  little
+  @0x0008   4         u8         form  little
+  @0x000c   0..       chunk      chunks  sized-by=remaining

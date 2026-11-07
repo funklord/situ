@@ -5155,6 +5155,15 @@ class Emitter:
 			depth: str | None = None,
 			leaf_bounded: bool = True) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
+		# A pad at an offset the data decides, as C's says (26.928).
+		if placement.pad_to is not None and placement.offset_bits is None:
+			start = running if running is not None else \
+				self._offset_expression(struct, placement)
+			if start is None:
+				return None
+			return (f"(situ_align_up_u32({start}, {placement.pad_to}u,"
+			        f" raw_.limit) - ({start}))")
+
 		# A length only a transform can produce is not a length (26.570).
 		# The sibling of 26.440's name branch below: a varint, a delimited
 		# run and a `while` run have no name to ask the renderer about --

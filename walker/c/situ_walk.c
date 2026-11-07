@@ -3009,7 +3009,14 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		*out = ((off + unit - 1u) / unit) * unit - off;
+		/* Clamped to the frame, as `walk.py` has it: a pad past the end is as
+		 * many bytes as are there (26.578), and this measured a run's last
+		 * element past the frame where the other five read it (26.928). */
+		const uint64_t aligned = (((uint64_t)off + unit - 1u) / unit) * unit;
+		const uint64_t room    = (uint64_t)len * 8u;
+
+		*out = (aligned < room ? (uint32_t)aligned
+		        : room > off ? (uint32_t)room : off) - off;
 		return SITU_WALK_OK;
 	}
 

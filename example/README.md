@@ -51,6 +51,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [matroska](matroska/) | What ffmpeg writes down a pipe: an ID that keeps the bit saying its width, a size that drops it, and a Segment of unknown size. |
 | [flac](flac/) | Frame numbers spelled as code points, read at the offsets `flac -a` gives, in a header of bit fields under a CRC-8. |
 | [git](git/) | A pack's entries as `git verify-pack` lists them: a size sharing its first byte with a type, and a delta offset no number spells twice. |
+| [riff](riff/) | A WAV ffmpeg wrote, with a chunk of odd size: padding the data decides, in an element of a run, which the next chunk has to start past. |
 | [bitcoin](bitcoin/) | The genesis coinbase, whose hash is the published transaction id: CompactSize counting records of no one size, each with another as a length. |
 | [cbor](cbor/) | RFC 8949's appendix A: a number that starts in the low bits of a byte, under a major type that is an ordinary bit field, and items that hold items through counted runs. |
 | [hpack](hpack/) | RFC 7541's appendix C: an N-bit prefix integer of four widths, each chosen by the pattern above it, and a string length sharing its byte with the Huffman flag. |

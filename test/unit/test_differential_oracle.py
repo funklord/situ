@@ -1354,6 +1354,8 @@ UNORACLED = {
 	             "test_a_number_can_say_its_own_form",
 	"git":       "git verify-pack's reading is pinned in "
 	             "test_a_number_can_say_its_own_form",
+	"riff":      "Python's `wave` reads the same file in "
+	             "test_a_pad_is_part_of_an_element",
 	"bitcoin":   "no node here; the genesis coinbase's hash is recomputed in "
 	             "test_a_marked_integer_says_its_own_width",
 	# As edges, and for a construct rather than a format: `import` had no

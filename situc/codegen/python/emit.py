@@ -8368,6 +8368,14 @@ class Emitter:
 			placement: Placement, running: str | None = None,
 			depth: str | None = None,
 			leaf_bounded: bool = True) -> str | None:
+		# A pad at an offset the data decides, as C's says (26.928).
+		if placement.pad_to is not None and placement.offset_bits is None:
+			start = running if running is not None else \
+				self._offset_expression(struct, placement)
+			if start is None:
+				return None
+			return f"(align_up({start}, {placement.pad_to}, self._len) - ({start}))"
+
 		# A length only a transform can produce is not a length (26.570).
 		# The sibling of 26.440's branch below: that one asks the renderer
 		# about a NAME, and a varint, a delimited run and a `while` run

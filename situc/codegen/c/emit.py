@@ -9922,6 +9922,17 @@ class Emitter:
 		"""
 		gated = held != "view"
 
+		# A pad at an offset the data decides is whatever reaches the next
+		# multiple from where it stands. This said nothing for one, and the
+		# sum read that as zero: a RIFF chunk of odd size ended a byte early,
+		# and the next was read from its pad (26.928). Clamped, as a pad past
+		# the frame is as many bytes as are there (26.578).
+		if placement.pad_to is not None and placement.offset_bits is None:
+			start = running if running is not None else \
+				self._base_expression(struct, placement, gated=gated)
+			return (f"(situ_align_up_u32({start}, {placement.pad_to}u,"
+			        f" {held}.limit) - ({start}))")
+
 		# A delimited member's extent is not a closed form: it is wherever the
 		# delimiter turns out to be. The member emits its own `_span`, which
 		# scans, and everything downstream sums that call rather than trying to

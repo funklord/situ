@@ -1,0 +1,37 @@
+# situ capability map v1
+# schema: riff.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct chunk size=8..4294967304 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  chunk.id                               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  chunk.size                             offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  chunk.data                             offset=AbsoluteStatic(0x08) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  chunk.<pad>                            offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct format size=16 repr=ValueConverted
+  format.tag                             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  format.channels                        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  format.samples_per_second              offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  format.bytes_per_second                offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  format.block_align                     offset=AbsoluteStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  format.bits_per_sample                 offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+
+struct riff size=12.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  riff.tag                               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  riff.size                              offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  riff.form                              offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  riff.chunks                            offset=AbsoluteStatic(0x0C) size=Unbounded align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  riff.chunks[]                          offset=FrameStatic(0x00) size=Bounded(8, 4294967304) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  riff.chunks[].id                       offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  riff.chunks[].size                     offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  riff.chunks[].data                     offset=FrameStatic(0x08) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  riff.chunks[].<pad>                    offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
