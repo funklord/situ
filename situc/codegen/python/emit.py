@@ -6477,7 +6477,7 @@ class Emitter:
 			f"(data[{cursor}:]{self._child(struct, placement, 'probe')[1]})",
 			"\t\texcept TruncatedError as short:",
 			f'\t\t\traise TruncatedError("{placement.path}: incomplete",',
-			"\t\t\t\tat + short.needed) from None",
+			"\t\t\t\tmin(at + short.needed, 0xFFFFFFFF)) from None",
 			"\t\tat  = min(at + len_, 0xFFFFFFFF)",
 			*([f"\t\t{ahead} = min({ahead} + len_, 0xFFFFFFFF)"]
 			  if ahead else []),
@@ -6554,7 +6554,7 @@ class Emitter:
 					"\t\t\texcept TruncatedError as short:",
 					f'\t\t\t\traise TruncatedError("{placement.path}:'
 					' incomplete",',
-					"\t\t\t\t\tat + short.needed) from None",
+					"\t\t\t\t\tmin(at + short.needed, 0xFFFFFFFF)) from None",
 				])
 		# A chain with no `default:` arm leaves `len_` unbound for an
 		# unexpected discriminant, which is a NameError at run time here
@@ -6612,7 +6612,7 @@ class Emitter:
 			f"\t\t\t\tpart = {inner}.required(data[pos:]{self._child(struct, placement, 'probe')[1]})",
 			"\t\t\texcept TruncatedError as short:",
 			f'\t\t\t\traise TruncatedError("{placement.path}: incomplete",',
-			"\t\t\t\t\tat + short.needed) from None",
+			"\t\t\t\t\tmin(at + short.needed, 0xFFFFFFFF)) from None",
 		]
 		cap     = placement.repeat_cap if placement.repeat_while else None
 		counted = is_counted_run(self.resolved.structs, placement)
@@ -6629,7 +6629,7 @@ class Emitter:
 				f"\t\t\t_element = {self._child(struct, placement, 'probe')[0]}"
 				f"(probe._msg, pos, part{self._child(struct, placement, 'probe')[1]})",
 				"\t\t\tat  = min(at + part, 0xFFFFFFFF)",
-				"\t\t\tpos += part",
+				"\t\t\tpos = min(pos + part, 0xFFFFFFFF)",
 				"",
 				"\t\t\t# The condition is asked about the element just"
 				" read, which",
@@ -6674,11 +6674,11 @@ class Emitter:
 				"\t\t\t\t# report once reached (26.724).",
 				f'\t\t\t\traise TruncatedError("{placement.path}:'
 				' incomplete",',
-				"\t\t\t\t\tat + short.needed",
-				f"\t\t\t\t\t+ ({count} - seen - 1) * {floor})"
-				" from None",
-				"\t\t\tat  += part",
-				"\t\t\tpos += part",
+				"\t\t\t\t\tmin(at + short.needed",
+				f"\t\t\t\t\t+ ({count} - seen - 1) * {floor},"
+				" 0xFFFFFFFF)) from None",
+				"\t\t\tat  = min(at + part, 0xFFFFFFFF)",
+				"\t\t\tpos = min(pos + part, 0xFFFFFFFF)",
 				"\t\t\tseen += 1",
 			])
 
@@ -6706,8 +6706,8 @@ class Emitter:
 				"\t\t\t\tbreak",
 				"",
 				*read,
-				"\t\t\tat  += part",
-				"\t\t\tpos += part",
+				"\t\t\tat  = min(at + part, 0xFFFFFFFF)",
+				"\t\t\tpos = min(pos + part, 0xFFFFFFFF)",
 			])
 
 		# WHERE THIS ELEMENT STARTS, which is not the running total

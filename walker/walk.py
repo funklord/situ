@@ -791,6 +791,14 @@ def _value_of(view: View, index: int) -> int:
 			return parse_digits(view, index)
 		except Refused:
 			return 0
+	# And a varint's `_value`, for the same reason. An element cut inside its
+	# length is measured by the backends, whose read is zero there, and this
+	# refused and ended the run a member early (26.921).
+	if index in view.image.varints and not is_run(view.image, index):
+		try:
+			return read_scalar(view, index)
+		except Refused:
+			return 0
 	return read_scalar(view, index)
 
 
@@ -2375,8 +2383,9 @@ def sized_run_count(view: View, index: int, depth: int = 0) -> int:
 		# Negative reads as zero and an overflow saturates high (14.2b),
 		# the same two lines `size_bits` carries and for the same reason:
 		# this walker evaluates in Python and cannot overflow, so the
-		# bound is here to AGREE with the three backends that can.
-		return min(max(_count(view, index), 0), 0xFFFFFFFF)
+		# bound is here to AGREE with the three backends that can. Theirs is
+		# the leaf's, `SITU_LEAF_MAX`, at every width of driver (26.921).
+		return min(max(_count(view, index), 0), 0x7FFFFFFF)
 
 	reach = size_bits(view, index, depth) // BITS_PER_BYTE
 	if placement.element_bits != NONE and placement.element_bits:

@@ -1109,7 +1109,11 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 			values.pop(local, None)
 			continue
 		seen.add(local)
-		values[local] = int(value)
+		# Lua's integer is signed and Wireshark's `uint64` is not: real
+		# tshark shows 0xA214D4F29F17AF0E as 11679193872194842382, so a
+		# negative here is the stand-in's and not the dissector's.
+		values[local] = int(value) % (1 << 64) if kind == "uint64" \
+			else int(value)
 	return total, values
 
 

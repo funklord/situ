@@ -1743,14 +1743,23 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		 * time (26.271). */
 		situ_walk_placement held;
 
-		if (err != SITU_WALK_CONSTRAINT) {
+		if (err != SITU_WALK_CONSTRAINT && err != SITU_WALK_BOUNDS) {
 			return err;
 		}
 		if (situ_walk_placement_at(ctx->image, index, &held)
 		                != SITU_WALK_OK) {
 			return err;
 		}
-		if (held.radix == 0u) {
+		/* And a varint's `_value`, for the same reason: an element cut
+		 * inside its length is measured by the backends, whose read is zero
+		 * there (26.921). */
+		if (varint_rules(ctx->image, index) != NULL
+		    && held.array_count == SITU_WALK_NONE
+		    && held.size_code == SITU_WALK_NONE) {
+			*out = 0;
+			return SITU_WALK_OK;
+		}
+		if (err != SITU_WALK_CONSTRAINT || held.radix == 0u) {
 			return err;
 		}
 		*out = 0;
@@ -4021,11 +4030,13 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	if (count < 0 || (uint64_t)count > 0xffffffffu) {
+	if (count < 0) {
 		return SITU_WALK_BOUNDS;
 	}
 
-	*out = (uint32_t)count;
+	/* The leaf's bound, which the backends hold a count to at every width of
+	 * driver (26.921). */
+	*out = count > 0x7fffffff ? 0x7fffffffu : (uint32_t)count;
 	return SITU_WALK_OK;
 }
 
