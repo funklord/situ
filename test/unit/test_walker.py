@@ -1393,17 +1393,18 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	# does -- and it worked: `example/coap` arriving is what moved these
 	# from 45 and 760 to 46 and 776, `example/pes` to 47 and 867,
 	# `example/radiotap` to 48 and 950, `example/tls` to 49 and 987, and
-	# `example/rtp` to 50 and 1008.
-	assert len(SCHEMAS) == 50, (
+	# `example/rtp` to 50 and 1008, and `example/quic`, `example/x509` and
+	# `example/bitcoin` to 53 and 1070.
+	assert len(SCHEMAS) == 53, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 50; re-measure and re-pin both")
+		f"measured over 53; re-measure and re-pin both")
 
-	assert both >= 998, (
-		f"the differential compares {both} members, down from 1008; "
+	assert both >= 1060, (
+		f"the differential compares {both} members, down from 1070; "
 		f"C asks about {asked} and the walker renders {walked}")
-	assert both * 100 >= asked * 91, (
+	assert both * 100 >= asked * 92, (
 		f"only {100 * both // asked}% of what C asks is compared, "
-		f"down from 92%")
+		f"down from 93%")
 
 
 def test_the_walk_checks_a_pinned_byte_run() -> None:

@@ -8234,14 +8234,14 @@ class Emitter:
 		ctype  = "std::int64_t" if signed else "std::uint64_t"
 		decoded = ("static_cast<std::int64_t>(situ_zigzag_decode(raw))"
 		           if signed else "raw")
-		stem   = f"situ_{varint_stem(declared)}"
 
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries.
-		read = (f"{stem}_get(situ_base(raw_) + at,"
+		read = (f"situ_{varint_stem(declared)}_get(situ_base(raw_) + at,"
 		        f" situ_remaining_u32(raw_.limit, at),"
 		        f" {varint_limits(declared, 'u')}, &raw)")
-		encoded = f"{stem}_len({varint_measure(declared, 'raw', 'u')})"
+		encoded = (f"situ_{varint_stem(declared)}_len("
+		           f"{varint_measure(declared, 'raw', 'u')})")
 
 		# A RUN of varints, whose `access` `project.md` documents as
 		# Sequential. The dispatch above returns on `varint is not None`

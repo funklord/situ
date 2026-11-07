@@ -53,7 +53,8 @@ KEYWORDS = CPP_KEYWORDS | frozenset({
 #: which is the half a literal needs: a list nobody checks is a list that has
 #: drifted.
 RUNTIME_SYMBOLS = frozenset({
-	"SITU_ALWAYS_INLINE", "SITU_H", "SITU_HOST_BIG", "SITU_LEAF_MAX",
+	"SITU_ALWAYS_INLINE", "SITU_COMPACTSIZE_FORM", "SITU_DER_FORM", "SITU_H",
+	"SITU_HOST_BIG", "SITU_LEAF_MAX", "SITU_LENENC_FORM",
 	"SITU_NO_BYTE", "SITU_RUNTIME_ABI", "SITU_STALE",
 	"SITU_VERSION_MAJOR", "SITU_VERSION_MINOR",
 	"situ_adler32", "situ_advance_u32",

@@ -123,10 +123,16 @@ RUST_CENSUS = {
 	"pes.situ": 14,
 	"radiotap.situ": 33,
 	"protobuf.situ": 1,
+	# Read rather than added, on 2026-11-07: both rows are tlv reads and
+	# certificate.outer. A varint read answers only where the bytes it
+	# consumed are inside the frame, so `at` cannot pass `len()` at the
+	# subtraction, and `outer` tests `len() < at` first.
+	"quic.situ": 2,
 	"rtc.situ": 2,
 	"rtp.situ": 1,
 	"tcp.situ": 2,
 	"telemetry.situ": 1,
+	"x509.situ": 3,
 }
 
 
