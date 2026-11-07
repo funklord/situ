@@ -84,3 +84,8 @@ struct http3_frames {
 struct http3_settings {
 	quic_varint pairs[remaining];
 }
+
+// RFC 9000, 17.2: what stands before the first length.
+require offset(initial.version) == 1;
+require offset(initial.destination_length) == 5;
+require offset(initial.destination) == 6;

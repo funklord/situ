@@ -1336,6 +1336,14 @@ UNORACLED = {
 	"keystore":  "a private record; its own header says every other example "
 	             "directory is a public format and this one is not",
 	"edges":     "carries the constructs no worked example has (26.27)",
+	# Each holds real bytes from outside this tree in its own test, over one
+	# message rather than a corpus: nothing here writes more of them.
+	"quic":      "no QUIC stack here; RFC 9000's and 9001's numbers are in "
+	             "test_quic_reads_its_own_integer",
+	"x509":      "`openssl asn1parse` is asked of one certificate in "
+	             "test_a_marked_integer_says_its_own_width",
+	"bitcoin":   "no node here; the genesis coinbase's hash is recomputed in "
+	             "test_a_marked_integer_says_its_own_width",
 	# As edges, and for a construct rather than a format: `import` had no
 	# corpus schema at all, so the sweeps had never read an imported type
 	# (26.568). The pair describes nothing anybody else has implemented.

@@ -61,7 +61,10 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/json/json.situ \
 		   example/message/message.situ example/modbus/modbus.situ \
 		   example/keystore/keystore.situ \
+		   example/bitcoin/bitcoin.situ \
 		   example/mqtt/mqtt.situ \
+		   example/quic/quic.situ \
+		   example/x509/x509.situ \
 		   example/netlink/netlink.situ \
 		   example/ntp/ntp.situ \
 		   example/packet/packet.situ example/pes/pes.situ example/pickle/pickle.situ \

@@ -41,3 +41,8 @@ struct transaction {
 	output outputs[output_count];
 	u32 lock_time;
 }
+
+// The outpoint is a hash and an index, and the version stands before the count.
+require offset(input.previous_index) == 32;
+require offset(input.script_length) == 36;
+require offset(transaction.input_count) == 4;
