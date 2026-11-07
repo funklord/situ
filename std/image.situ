@@ -124,7 +124,7 @@ struct image_header {
 	// checked them, which is 14.5 in the schema that describes situ's own
 	// artifact.
 	u8   magic[4] [must_eq = "SITU"];
-	u16  format_version [must_eq = 7];
+	u16  format_version [must_eq = 8];
 	u16  flags;                       // bit 0: the metadata sections are present
 	u32  image_bytes;                 // the whole image, header included
 	u32  section_count;
@@ -376,6 +376,11 @@ struct image_codec {
 // flag and the byte is read whole -- SQLite's ninth. Both fall out of
 // arithmetic the compiler already does, and rederiving them here would be a
 // second implementation of it.
+//
+// A big-endian group encoding that says its own width has no continuation
+// bit for `terminal_bits` to describe, so with bit 1 set the byte means
+// something else: 0 is QUIC's two-bit prefix, and 200, 201 and 202 are DER's
+// length, Bitcoin's CompactSize and MySQL's lenenc (26.919, 26.921).
 struct image_varint {
 	u32  placement;
 	u32  encoding;                    // core string pool offset
