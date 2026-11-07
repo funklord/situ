@@ -2558,6 +2558,7 @@ class Solver:
 				)
 			total = Interval(low, high)
 
+		self.check_shared(member, local)
 		self.check_alignment(decl, member, scalar, cursor, element)
 		position = self.bit_position(scalar, local, cursor, element)
 
@@ -3678,6 +3679,30 @@ class Solver:
 		"""How many bits of this member's first byte are fields' before it."""
 		varint = self.varints.get(member.type_ref.name)
 		return varint.shared_bits if varint is not None else 0
+
+	def check_shared(self, member: ast.Field | ast.Reserved,
+			scope: Scope) -> None:
+		"""What a number sharing its first byte cannot also be (26.922).
+
+		Each of these compiled and read the wrong bits: a run states the top
+		bits of its first element alone, `at` leaves them where the cursor
+		was, and under `lsb_first` the first field takes the low bits, which
+		are the number's.
+		"""
+		if not self._shared_bits(member):
+			return
+		why = None
+		if member.array is not None:
+			why = "a run states the bits above its first element alone"
+		elif getattr(member, "located", None) is not None:
+			why = "`at` places it away from the bits stated before it"
+		elif scope.bit_order is ast.BitOrder.LSB_FIRST:
+			why = "under `lsb_first` the field before it takes the low bits"
+		if why is not None:
+			raise error(
+				f"`{member.type_ref.name}` shares its first byte with the bit "
+				f"fields before it: {why}",
+				member.span, label = "cannot be placed this way")
 
 	def check_alignment(self, decl: ast.StructDecl, member: ast.Field | ast.Reserved,
 			scalar: ScalarType | None, extent: Extent, element: Interval) -> None:

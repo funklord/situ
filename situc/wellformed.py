@@ -663,11 +663,32 @@ def check_tlv_grammar(schema: ast.Schema) -> None:
 	parsed, compiled, and described nothing.
 	"""
 	varints = {decl.name for decl in schema.varints()}
+	shared  = {decl.name for decl in schema.varints() if decl.shared_bits}
 
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
 			if isinstance(member, ast.Tlv):
 				_check_one_tlv(member, varints)
+				_check_no_shared_number(member, shared)
+
+
+def _check_no_shared_number(region: ast.Tlv, shared: set[str]) -> None:
+	"""A tag or a length has no bit fields stated above it (26.922).
+
+	Its top bits would be read as nothing and written as nothing, so a CBOR
+	head here reads every major type as one tag.
+	"""
+	named = [region.argument("tag_type"), region.argument("length_type")]
+	found = {one.name for one in named if isinstance(one, ast.NameRef)}
+	if region.value_size is not None:
+		found |= {case.rule.length_type for case in region.value_size.cases
+		          if isinstance(case.rule, ast.PrefixedValue)}
+	for name in sorted(found & shared):
+		raise error(
+			f"`{name}` shares its first byte, and a tlv states no field above it",
+			region.span,
+			label = "use a struct, whose bit fields can say those bits",
+		)
 
 
 def _check_one_tlv(region: ast.Tlv, varints: set[str]) -> None:

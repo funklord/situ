@@ -19,6 +19,7 @@ import pytest
 
 import fourway
 from every_schema import ROOT
+from situc import wellformed
 from situc.diagnostics import SituError, Source
 from situc.layout import solve
 from situc.parser import parse
@@ -439,8 +440,10 @@ def test_all_three_runtimes_write_it_and_keep_the_bits_above(form: str,
 
 def _refusal(text: str) -> str:
 	with pytest.raises(SituError) as caught:
-		solve(parse(Source("t.situ", "target buffer;\nbit_order msb_first;\n"
-		                   + text)))
+		order = "" if "bit_order" in text else "bit_order msb_first;\n"
+		parsed = parse(Source("t.situ", "target buffer;\n" + order + text))
+		wellformed.check(parsed)
+		solve(parsed)
 	return str(caught.value)
 
 
@@ -463,6 +466,21 @@ def _refusal(text: str) -> str:
 	 " max_bytes = 3; }\nstruct s { }", "declares `max_bytes`"),
 	("varint_type t { encoding = bertag; max_bits = 32; }\nstruct s { }",
 	 "bits in a `bertag`"),
+	("varint_type c { encoding = cbor; max_bits = 64; }\n"
+	 "struct s { u3 a; c v[3]; }", "its first element alone"),
+	("varint_type c { encoding = cbor; max_bits = 64; }\n"
+	 "struct s { u8 x; u3 a; c v at 0; }", "away from the bits"),
+	("bit_order lsb_first;\nvarint_type c { encoding = cbor; max_bits = 64; }\n"
+	 "struct s { u3 a; c v; }", "takes the low bits"),
+	("varint_type c { encoding = cbor; max_bits = 64; }\n"
+	 "varint_type l { encoding = leb128; max_bits = 32; }\n"
+	 "struct s { tlv items ( tag_type = c, tag_decode = { kind = tag },"
+	 " tag_identity = kind, value_size = switch (kind) { default:"
+	 " prefixed(l) }, ); }", "a tlv states no field"),
+	("varint_type c { encoding = cbor; max_bits = 64; }\n"
+	 "struct s { tlv items ( tag_type = u8, tag_decode = { kind = tag },"
+	 " tag_identity = kind, value_size = switch (kind) { default:"
+	 " prefixed(c) }, ); }", "a tlv states no field"),
 ])
 def test_a_number_inside_a_byte_is_stated_or_refused(text: str,
 		said: str) -> None:
