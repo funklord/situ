@@ -7955,6 +7955,7 @@ Moved to
 
 Moved to
 `doc/decision/26.753-c-s-required-read-a-discriminant-that-had-not-arrived.md`.
+Its closing note is settled by 26.922: over no bytes the answer is the peek's byte.
 
 ### 26.754 A UDP sum of zero is sent as all ones
 

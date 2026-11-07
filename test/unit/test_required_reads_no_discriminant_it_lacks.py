@@ -8,6 +8,10 @@ it: its answer for an empty buffer varied with whatever followed the
 buffer, and the corpus differential caught it as C answering 2 where C++,
 Rust and Python, whose reads check, answered 3 (26.753).
 
+Three was no better an answer. It is the default arm's size, and a two-byte
+'a' message exists, so it was not the lower bound `required` promises. All
+four now stop at the peek and ask for the byte that decides (26.922).
+
 The probe below puts an 'a' in the slack after an empty prefix, which is
 the byte that picks the two-byte arm: a C that reads it answers 2.
 """
@@ -54,6 +58,11 @@ int main(void)
 	uint32_t need = 0u;
 	p[0] = 'a';		/* slack: not part of the zero bytes handed over */
 	(void)situ_kinded_required(p, 0u, &need);
+	printf("%u ", need);
+	(void)situ_kinded_required(p, 1u, &need);
+	printf("%u ", need);
+	p[0] = 'b';
+	(void)situ_kinded_required(p, 1u, &need);
 	printf("%u\\n", need);
 	free(p);
 	return 0;
@@ -77,7 +86,8 @@ def test_c_does_not_read_the_slack(tmp_path: Path) -> None:
 	assert made.returncode == 0, made.stderr[-2000:]
 	ran = subprocess.run([str(tmp_path / "bin")], capture_output=True,
 	                     text=True)
-	assert ran.stdout.strip() == "3", ran.stdout
+	# Nothing arrived: the peek's byte. Then each arm's own whole size.
+	assert ran.stdout.strip() == "1 2 3", ran.stdout
 
 
 def test_all_four_answer_alike_for_an_empty_buffer(tmp_path: Path) -> None:
