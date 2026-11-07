@@ -2166,7 +2166,7 @@ def counted_run_fits(view: View, index: int, depth: int = 0,
 			# exception as a reason to stop walking.
 			return False
 		if size == 0:
-			return True
+			return view.image.structs[placement.type_struct].size_min_bits == 0
 		if size > view.limit - at:
 			return False
 		at += size
@@ -2207,7 +2207,7 @@ def _remaining_run_fits(view: View, index: int, depth: int) -> bool:
 		except Refused:
 			return False
 		if size == 0:
-			return True
+			return view.image.structs[placement.type_struct].size_min_bits == 0
 		if size > view.limit - at:
 			return False
 		at += size

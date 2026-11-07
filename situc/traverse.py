@@ -1081,6 +1081,19 @@ def occupies_fixed_bytes(placement: Placement) -> bool:
 	return placement.is_fixed_size and not placement.skip
 
 
+def never_empty(structs: dict[str, "ResolvedStruct"],
+		placement: Placement) -> bool:
+	"""Whether one element of this run has bytes whatever the message says.
+
+	A walk steps by an element's extent, and a varint the frame cuts short
+	measures zero. A zero read as the end of the walk passed `01 ff` under
+	`{ u8 n; e es[n]; u8 last; }` with `e { uvar v; }`, in all six readers, so
+	a zero means the frame fell short unless the element can really be empty.
+	"""
+	element = structs.get(placement.type_name or "")
+	return element is not None and element.layout.size_bits > 0
+
+
 def fixed_span_bits(placement: Placement) -> int:
 	"""How many bits this member adds to an offset chain.
 

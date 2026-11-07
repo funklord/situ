@@ -89,6 +89,7 @@ from situc.traverse import (
 	frameable,
 	framing_floor,
 	nests_one_struct,
+	never_empty,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -8141,7 +8142,8 @@ class Emitter:
 			f"\t\t\t\tlet size    = element.{step};",
 			"",
 			"\t\t\t\tif size == 0 {",
-			"\t\t\t\t\tbreak;",
+			("\t\t\t\t\treturn Err(Error::Bounds);"
+			 if never_empty(self.resolved.structs, member) else "\t\t\t\t\tbreak;"),
 			"\t\t\t\t}",
 			"\t\t\t\tif size > situ_rt::remaining(self.bytes.len(), at) {",
 			"\t\t\t\t\treturn Err(Error::Bounds);",
@@ -9302,7 +9304,9 @@ class Emitter:
 					 "\t\t\tlet size    = element.extent_at(depth + 1);"),
 					"",
 					"\t\t\tif size == 0 {",
-					"\t\t\t\treturn true;",
+					("\t\t\t\treturn false;"
+					 if never_empty(self.resolved.structs, placement)
+					 else "\t\t\t\treturn true;"),
 					"\t\t\t}",
 					"\t\t\tif size > situ_rt::remaining(self.bytes.len(),"
 					" at) {",

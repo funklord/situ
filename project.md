@@ -8304,6 +8304,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.923 A cut element is not the end of a run
+
+Moved to `doc/decision/26.923-a-cut-element-is-not-the-end-of-a-run.md`.
+
 ### 26.921 A first byte can say how wide the number is
 
 Moved to `doc/decision/26.921-a-first-byte-can-say-how-wide-the-number-is.md`.

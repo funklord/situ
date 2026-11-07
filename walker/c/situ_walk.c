@@ -3108,7 +3108,8 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		}
 	}
 
-	if ((uint64_t)count > 0xffffffffu / held.element_bits) {
+	if (held.element_bits != 0u
+	    && (uint64_t)count > 0xffffffffu / held.element_bits) {
 		return SITU_WALK_BOUNDS;
 	}
 
@@ -4078,7 +4079,7 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	if (at > 0xffffffffu / held.element_bits) {
+	if (held.element_bits != 0u && at > 0xffffffffu / held.element_bits) {
 		return SITU_WALK_BOUNDS;
 	}
 	const uint32_t into = at * held.element_bits;
@@ -5193,6 +5194,14 @@ static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at);
  * record run walks to the end, which serves a fixed element as well as a
  * variable one; a scalar run asks whether its width divides what is left.
  * The walk's other answers are `counted_run_fits`' and for its reasons. */
+/* Whether a struct can be no bytes at all. A varint the frame cuts short
+ * measures zero, so anywhere else a zero means the frame fell short. */
+static int struct_may_be_empty(const situ_walk_image *image, uint32_t shape)
+{
+	return shape >= image->struct_count
+	       || u32_at(image->structs + shape * image->struct_stride + 16u) == 0u;
+}
+
 static situ_walk_err remaining_run_fits(const situ_walk_image *image,
                                         const uint8_t *message, uint32_t len,
                                         uint32_t shape, uint32_t index,
@@ -5251,6 +5260,7 @@ static situ_walk_err remaining_run_walk(const situ_walk_image *elements,
 			return SITU_WALK_OK;
 		}
 		if (extent == 0u) {
+			*fits = struct_may_be_empty(elements, held->type_struct);
 			return SITU_WALK_OK;
 		}
 		if (extent > len - at) {
@@ -5400,6 +5410,7 @@ static situ_walk_err counted_run_walk(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 		if (extent == 0u) {
+			*fits = struct_may_be_empty(elements, run->type_struct);
 			return SITU_WALK_OK;
 		}
 		if (extent > len - at) {

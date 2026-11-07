@@ -92,6 +92,7 @@ from situc.traverse import (
 	frameable,
 	framing_floor,
 	nests_one_struct,
+	never_empty,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -7167,7 +7168,7 @@ class Emitter:
 			"		}",
 			f"		size = {size};",
 			"		if (size == 0u) {",
-			"			return 1;",
+			f"			return {0 if never_empty(self.resolved.structs, placement) else 1};",
 			"		}",
 			"		if (size > situ_remaining_u32(view.limit, at)) {",
 			"			return 0;",
@@ -7314,7 +7315,8 @@ class Emitter:
 		member = found.placement
 		base   = self._base_expression(struct, member)
 		count  = self._count_expression(struct, member, held)
-		width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		width  = (BITS_PER_BYTE if member.element_bits is None
+		          else member.element_bits) // BITS_PER_BYTE
 		big    = int(member.endian is ast.Endian.BIG)
 		return (f"((int64_t)situ_sum_run(situ_base({held}) + {base}, {count},"
 		        f" {width}u, {big}, situ_remaining_u32({held}.limit, {base})))")
@@ -9308,7 +9310,8 @@ class Emitter:
 			"\t\t\t}",
 			f"\t\t\tsize = {size};",
 			"\t\t\tif (size == 0u) {",
-			"\t\t\t\tbreak;",
+			("\t\t\t\treturn SITU_ERR_BOUNDS;"
+			 if never_empty(self.resolved.structs, member) else "\t\t\t\tbreak;"),
 			"\t\t\t}",
 			"\t\t\tif (size > situ_remaining_u32(view.limit, at)) {",
 			"\t\t\t\treturn SITU_ERR_BOUNDS;",
@@ -10001,7 +10004,8 @@ class Emitter:
 				return f"situ_need_mul_u32((uint32_t){table}, {entry}u)"
 			return f"(uint32_t){table} * {entry}u"
 
-		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		element = (BITS_PER_BYTE if placement.element_bits is None
+		           else placement.element_bits) // BITS_PER_BYTE
 
 		if placement.sized_by == "remaining":
 			# Saturating. A plain subtraction wraps when the members before it

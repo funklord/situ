@@ -90,6 +90,7 @@ from situc.traverse import (
 	frameable,
 	framing_floor,
 	nests_one_struct,
+	never_empty,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -5368,7 +5369,9 @@ class Emitter:
 				 if not descends(self.resolved.structs, struct, placement.type_name or "") else
 				 "			size    = _element._extent_at(depth + 1)"),
 				"			if size == 0:",
-				"				return True",
+				("				return False"
+				 if never_empty(self.resolved.structs, placement)
+				 else "				return True"),
 				"			if size > self._len - at:",
 				"				return False",
 				"			at += size",
@@ -7850,7 +7853,8 @@ class Emitter:
 			f"\t\t\t\tsize = {self._child(struct, member)[0] if member.arguments else inner}(self._msg, self._at + {at},",
 			f"\t\t\t\t\tself._len - {at}{self._child(struct, member)[1]}).{step}",
 			"\t\t\t\tif size == 0:",
-			"\t\t\t\t\tbreak",
+			(f"\t\t\t\t\traise BoundsError({why})"
+			 if never_empty(self.resolved.structs, member) else "\t\t\t\t\tbreak"),
 			f"\t\t\t\tif size > self._len - {at}:",
 			f"\t\t\t\t\traise BoundsError({why})",
 			f"\t\t\t\t{at} += size",
