@@ -2504,20 +2504,10 @@ class Solver:
 			digits = count.value() if count.is_point else None
 			if digits is not None:
 				total = Interval.point(digits * BITS_PER_BYTE)
-			elif self.sizing_field(member) is not None \
-					or _size_source(member) is not None:
-				# Accepted until 26.880, and no two readers agreed: C parsed a
-				# span of zero, three backends handed back bytes and dropped
-				# the number, and the walkers took two bytes a digit.
-				raise error(
-					f"`{member.name}` takes its width from the message, and a "
-					"text number's width has to be written",
-					member.span,
-					label = "write `[3]` for a width, or `until \":\"` to end it",
-					notes = ["`[n]` on a text number counts digits (8.6.2), and "
-					         "no backend reads a count of digits a field gives "
-					         "(26.880)",
-					         "a plain `u8` run holds the same bytes, unparsed"])
+			else:
+				# A digit is a byte, whoever states how many (26.924).
+				element = Interval.point(BITS_PER_BYTE)
+				total   = _multiply(element, count)
 
 		pinned = self.pinned_extent(member, total)
 		if pinned is not None:

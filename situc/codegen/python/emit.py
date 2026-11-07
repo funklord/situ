@@ -2978,12 +2978,19 @@ class Emitter:
 			return []
 
 		name  = py_name(local_name(struct, placement))
-		width = placement.array_count or 0
+		width = placement.array_count or \
+			self._length_expression(struct, placement)
 		limit = placement.radix_max or 0
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
 			        " where the digits start."]
+		sized = placement.array_count is None
+		# A count the message states is held to the frame, as no written
+		# width has to be (26.924).
+		reach = (f"min({width}, max(0, self._len - ({start})))"
+		         if sized else width)
+		width = "as many as the message says" if sized else width
 
 		return [
 			"",
@@ -2992,7 +2999,7 @@ class Emitter:
 			f'\t\t"""{placement.path}: the {width} bytes as written."""',
 			"\t\tself._check()",
 			f"\t\tstart = self._at + ({start})",
-			f"\t\treturn self._msg.buffer[start:start + {width}]",
+			f"\t\treturn self._msg.buffer[start:start + {reach}]",
 			"",
 			"\t@property",
 			f"\tdef {name}(self) -> int:",
@@ -3005,6 +3012,10 @@ class Emitter:
 			"\t\ttype would accept a value the field cannot represent.",
 			"",
 			'\t\tRaises ConstraintError where the bytes are not digits."""',
+			*([f"\t\tif {self._length_expression(struct, placement)}"
+			   f" > max(0, self._len - ({start})):",
+			   f'\t\t\traise BoundsError("{placement.path}: the digits are '
+			   'not all here")'] if sized else []),
 			f"\t\tvalue = parse_uint(self.{name}_digits,"
 			f" {placement.radix}, {limit})",
 			"\t\tif value is None:",
@@ -3015,7 +3026,7 @@ class Emitter:
 			# `_nested_text_values` has the rest, reading at a constant: this
 			# is the one with no constant, and `d[n]` behind a variable member
 			# named a property nothing defined.
-			*([] if placement.offset_bits is not None else [
+			*([] if placement.offset_bits is not None and not sized else [
 				"",
 				"\t@property",
 				f"\tdef {name}_value(self) -> int:",
@@ -8606,6 +8617,8 @@ class Emitter:
 		                            driver.placement.scalar)), True)
 
 	def _element_bytes(self, placement: Placement) -> int | None:
+		if placement.radix is not None:
+			return 1		# a digit, whatever the value's type
 		nested = self.resolved.structs.get(placement.type_name or "")
 		if nested is not None:
 			return (int(nested.layout.size_bytes)

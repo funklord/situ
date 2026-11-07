@@ -449,6 +449,9 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	if is_varint_run(placement):
 		return Member.VARINT
 
+	if placement.radix is not None and not placement.delimiters:
+		return Member.TEXT_NUMBER
+
 	if data_sized(placement):
 		return Member.VARIABLE
 
@@ -458,9 +461,6 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# about a type that plainly has one -- because the array branch was the
 	# only one that could have it. The delimited form of the same construct
 	# is caught above by its delimiter.
-	if placement.radix is not None and not placement.delimiters:
-		return Member.TEXT_NUMBER
-
 	# Before NESTED: an array of structs names a struct type and is not one.
 	if placement.array_count is not None:
 		# A literal count of elements with NO SINGLE SIZE is a counted run:

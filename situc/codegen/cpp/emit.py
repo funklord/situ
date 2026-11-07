@@ -5454,6 +5454,8 @@ class Emitter:
 		return (leaf(load, driver.placement.scalar), True)
 
 	def _element_bytes(self, placement: Placement) -> int | None:
+		if placement.radix is not None:
+			return 1		# a digit, whatever the value's type
 		nested = self.resolved.structs.get(placement.type_name or "")
 		if nested is not None:
 			return (int(nested.layout.size_bytes)
@@ -8964,9 +8966,23 @@ class Emitter:
 			        " where the digits start. */"]
 
 		ctype = self._ctype(scalar)
-		held_fits = self._fits(struct, placement, width)
+		sized = placement.array_count is None
+		declared = self._length_expression(struct, placement) if sized else ""
+		held_fits = (f"(({declared}) <= situ_remaining_u32(raw_.limit, {start}))"
+		             if sized else self._fits(struct, placement, width))
+		count = f"{name}_len()" if sized else f"{width}u"
 
 		return [
+			# A count the message states is held to the frame, as no written
+			# width has to be (26.924).
+			*(["",
+			   f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
+			   "\t{",
+			   f"\t\tconst std::uint32_t room = situ_remaining_u32(raw_.limit, {start});",
+			   f"\t\tconst std::uint32_t held = {declared};",
+			   "",
+			   "\t\treturn held < room ? held : room;",
+			   "\t}"] if sized else []),
 			"",
 			f"\t/* {placement.path}: {width} digits, padded, holding"
 			f" 0..{limit}.",
@@ -8978,6 +8994,8 @@ class Emitter:
 			f"\t[[nodiscard]] ::situ::rt::const_bytes {name}_digits()"
 			" const noexcept",
 			"\t{",
+			f"\t\treturn ::situ::rt::const_bytes(situ_base(raw_) + ({start}),"
+			f" {name}_len());" if sized else
 			f"\t\treturn ::situ::rt::const_bytes(situ_base(raw_) + ({start}),"
 			f" {width});",
 			"\t}",
@@ -9002,13 +9020,22 @@ class Emitter:
 			   ""] if held_fits is not None else []),
 			f"\t\t/* Zero is success, which is C's convention here and not",
 			"\t\t * this backend's. */",
-			f"\t\tif (situ_parse_uint(situ_base(raw_) + ({start}), {width}u,"
+			f"\t\tif (situ_parse_uint(situ_base(raw_) + ({start}), {count},"
 			f" {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
 			f"\t\tout = static_cast<{ctype}>(value);",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
+			*(["",
+			   f"\t[[nodiscard]] {ctype} {name}_value() const noexcept",
+			   "\t{",
+			   "\t\tstd::uint64_t value = 0;",
+			   "",
+			   f"\t\t(void)situ_parse_uint(situ_base(raw_) + ({start}), {count},"
+			   f" {placement.radix}, {limit}, &value);",
+			   f"\t\treturn static_cast<{ctype}>(value);",
+			   "\t}"] if sized else []),
 		]
 
 	def _tag(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
@@ -10592,9 +10619,12 @@ class Emitter:
 			      f"situ_base(raw_) + {name}_offset() + situ_trim_start("
 			      f"situ_base(raw_) + {name}_offset(), {name}_raw_len(),"
 			      f" {name}_trim_set, {len(placement.trim_set)}u)")
+			if placement.array_count is None and not placement.delimiters:
+				at = f"{name}_digits().data()"
 			# The fixed-width form has no `_len`: its length is the digit
 			# count the schema declared, which is a constant here.
-			count = (f"{name}_len()" if placement.delimiters
+			count = (f"{name}_len()"
+			         if placement.delimiters or placement.array_count is None
 			         else f"{placement.array_count}u")
 			lines.extend([
 				"\t\t/* `[minimal]`: one spelling per value. */",

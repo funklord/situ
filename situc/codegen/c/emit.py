@@ -7926,11 +7926,30 @@ class Emitter:
 		# field quietly reading 12 is worse than the over-read, because
 		# nothing downstream can tell. `SITU_ERR_BOUNDS` rather than
 		# `CONSTRAINT`: the digits are not wrong, they are absent.
-		held_fits = self._fits(struct, placement, width)
+		sized = placement.array_count is None
+		reach = ""
+		if sized:
+			reach = self._length_expression(struct, placement) or "0u"
+		at = self._base_expression(struct, placement)
+		held_fits = (f"(({reach}) <= situ_remaining_u32(view.limit, {at}))"
+		             if sized else self._fits(struct, placement, width))
 		fits = ([f"\tif (!{held_fits}) {{", "\t\treturn SITU_ERR_BOUNDS;",
 		         "\t}", ""] if held_fits is not None else [])
+		digits = (f"{ident(self.prefix, struct.name, local, 'len')}(view)"
+		          if sized else f"{width}u")
 
 		return [
+			# A count the message states is held to the frame, as no written
+			# width has to be (26.924).
+			*(["",
+			   f"static inline uint32_t "
+			   f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
+			   "{",
+			   f"\tconst uint32_t room = situ_remaining_u32(view.limit, {at});",
+			   f"\tconst uint32_t held = {reach};",
+			   "",
+			   "\treturn held < room ? held : room;",
+			   "}"] if sized else []),
 			"",
 			f"/* `{placement.name}`: {width} digits, padded, holding 0..{limit}.",
 			" *",
@@ -7953,7 +7972,7 @@ class Emitter:
 			"",
 			*fits,
 			f"\tif (situ_parse_uint({ident(self.prefix, struct.name, local, 'ptr')}"
-			f"(view), {width}u, {placement.radix}u, {limit}u, &value) != 0) {{",
+			f"(view), {digits}, {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 			f"\t*out = ({ctype})value;",
@@ -12008,7 +12027,8 @@ class Emitter:
 		wide = ident(self.prefix, struct.name, local, "len")
 		# The fixed-width form has no `_len`: its length is the digit count
 		# the schema declared, which is a constant here.
-		count = (f"{wide}(view)" if placement.delimiters
+		count = (f"{wide}(view)"
+		         if placement.delimiters or placement.array_count is None
 		         else f"{placement.array_count}u")
 
 		if placement.radix_minimal:

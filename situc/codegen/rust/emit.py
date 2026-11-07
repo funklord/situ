@@ -2272,6 +2272,39 @@ class Emitter:
 
 		rtype = self._rust_type(scalar)
 		at    = self._unparen(start)
+		if placement.array_count is None:
+			# A count the message states is held to the frame, as no written
+			# width has to be (26.924).
+			declared = self._length_expression(struct, placement)
+			return [
+				"",
+				f"\t/// `{placement.path}`: as many digits as the message says.",
+				f"\tpub fn {name}_digits(&self) -> &[u8] {{",
+				f"\t\tlet at = {at};",
+				"\t\tlet room = situ_rt::remaining(self.bytes.len(), at);",
+				f"\t\tlet held = {declared};",
+				"\t\tif at > self.bytes.len() {",
+				"\t\t\treturn &[];",
+				"\t\t}",
+				"\t\t&self.bytes[at..at + if held < room { held } else { room }]",
+				"\t}",
+				"",
+				f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
+				f"\t\tif {declared} > situ_rt::remaining(self.bytes.len(), {at}) {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tsitu_rt::parse_uint(self.{name}_digits(),"
+				f" {placement.radix}, {limit})",
+				f"\t\t\t.map(|v| v as {rtype})",
+				"\t\t\t.ok_or(Error::Constraint)",
+				"\t}",
+				"",
+				f"\tpub fn {name}_value(&self) -> {rtype} {{",
+				f"\t\tsitu_rt::parse_uint(self.{name}_digits(),"
+				f" {placement.radix}, {limit})",
+				f"\t\t\t.map_or(0, |v| v as {rtype})",
+				"\t}",
+			]
 
 		return [
 			"",
@@ -9039,6 +9072,8 @@ class Emitter:
 		             driver.placement.scalar), True)
 
 	def _element_bytes(self, placement: Placement) -> int | None:
+		if placement.radix is not None:
+			return 1		# a digit, whatever the value's type
 		nested = self.resolved.structs.get(placement.type_name or "")
 		if nested is not None:
 			return (int(nested.layout.size_bytes)

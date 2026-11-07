@@ -6862,7 +6862,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				 * the loop happened to be on would attribute a bounds
 				 * refusal to a `[min]` that never ran, which is what the
 				 * Python walk records as no check at all. */
-				const int digits_failed = (kind == CHECK_DIGITS_VALID
+				const int digits_failed = !(err == SITU_WALK_BOUNDS
+				                            && held.size_code != SITU_WALK_NONE)
+				                          && (kind == CHECK_DIGITS_VALID
 				                           || kind == CHECK_DIGITS_MINIMAL);
 
 				record(why, index,

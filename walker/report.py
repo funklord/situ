@@ -1202,8 +1202,14 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		# CONSTRAINT. udp's `payload[length - 8]` is the shape. Which runs
 		# carry this is the packer's to say -- `remaining` and a `while`
 		# run do not.
+		#
+		# And a text number the message counts, for any way of counting: past
+		# the frame its digits are absent, which is no parse to fail.
 		if any(check == FITS_FRAME
-		       for check, _ in image.constraints.get(index, ())):
+		       for check, _ in image.constraints.get(index, ())) \
+				or (image.placements[index].radix
+				    and not image.placements[index].radix_digits
+				    and index not in image.delimiters):
 			if view.at * 8 + reach > view.limit * 8:
 				return fail(ERR_BOUNDS, index, FITS_FRAME)
 

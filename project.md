@@ -8308,6 +8308,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.924 A field can count a text number's digits
+
+Moved to `doc/decision/26.924-a-field-can-count-a-text-number-s-digits.md`.
+
 ### 26.923 A cut element is not the end of a run
 
 Moved to `doc/decision/26.923-a-cut-element-is-not-the-end-of-a-run.md`.
@@ -8492,6 +8496,8 @@ below the bar as before, the second the project's own prefix.
 Moved to `doc/decision/26.881-several-variants-are-one-builder-taking-each-arm-as-a-value.md`.
 
 ### 26.880 A text number's width has to be written
+
+Superseded by 26.924, which builds what this refused.
 
 `decimal u16 code[n]` was accepted and no two readers agreed: C parsed a span of
 zero and named a `_len` nothing defined, C++, Rust and Python handed back bytes
