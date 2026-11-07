@@ -93,6 +93,7 @@ from situc.traverse import (
 	framing_floor,
 	nests_one_struct,
 	never_empty,
+	peek_floor,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -5825,6 +5826,11 @@ class Emitter:
 			        " so every buffer already holds one")
 
 		steps: list[str] = []
+		floor = peek_floor(struct)
+		if floor:
+			steps.extend(["", f"\tif (have < {floor}u) {{",
+			              f"\t\t*need = {floor}u;",
+			              "\t\treturn SITU_ERR_TRUNCATED;", "\t}"])
 		tail = versioned_tail(self.resolved.structs, struct)
 		at = str(constant - (tail[1] if tail else 0)) + "u"
 		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).

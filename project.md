@@ -898,6 +898,10 @@ the top two bits of the first byte say one, two, four or eight bytes, so
 read over three published tables: a first byte below a threshold is the value, and
 above it a marker for how many bytes hold it (26.921).
 
+**And three start inside a byte.** `encoding = cbor`, `hpack` with `prefix = N`, and
+`bertag` take the low bits of a byte whose top bits are bit fields stated just before
+them, and the number counts that byte (26.922).
+
 **Two encodings, and what a declared `max_bytes` means.** `be128` is the same
 shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
 SQLite's record varints. A format may also cap the encoded length below what
@@ -8307,6 +8311,10 @@ Moved to
 ### 26.923 A cut element is not the end of a run
 
 Moved to `doc/decision/26.923-a-cut-element-is-not-the-end-of-a-run.md`.
+
+### 26.922 A number can start inside a byte
+
+Moved to `doc/decision/26.922-a-number-can-start-inside-a-byte.md`.
 
 ### 26.921 A first byte can say how wide the number is
 

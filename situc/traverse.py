@@ -1081,6 +1081,50 @@ def occupies_fixed_bytes(placement: Placement) -> bool:
 	return placement.is_fixed_size and not placement.skip
 
 
+def peek_floor(struct: "ResolvedStruct") -> int:
+	"""The bytes this struct's own peeks read, which framing has to see first.
+
+	A peek spans nothing, so the running total framing checks against stays at
+	zero: `required` over no bytes read the first byte to choose an arm.
+	"""
+	return max((-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
+	            for held in own_members(struct)
+	            if held.peek and held.offset_bits is not None
+	            and held.from_end is None), default = 0)
+
+
+def recursion_is_not_in_the_minimum(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct") -> bool:
+	"""Whether a nested member closes a cycle, so the minimum leaves it out.
+
+	A struct of CBOR's `tagged` needs its content, and the solver counts a cycle
+	as nothing, so a buffer of the minimum holds no message to break.
+	"""
+	return any(held.kind == "field" and held.array_count is None
+	           and held.type_name in structs
+	           and descends(structs, struct, held.type_name)
+	           for held in own_members(struct))
+
+
+def selected_by_a_peek(struct: "ResolvedStruct",
+		placement: Placement) -> bool:
+	"""Whether a peeked member reads this member's own bits.
+
+	Then a value this does not admit is a value of another arm and no refusal:
+	HPACK's `size_update.pattern` is the top of the kind its arm was chosen by,
+	and breaking it makes a valid literal. The struct holding the member says
+	what a pin means, where no arm stands between it and the bytes.
+	"""
+	start = placement.offset_bits
+	if start is None:
+		return False
+	return any(held.peek and held.offset_bits is not None
+	           and held.path != placement.path
+	           and held.offset_bits < start + placement.size_bits
+	           and start < held.offset_bits + held.size_bits
+	           for held in struct.layout.placements)
+
+
 def never_empty(structs: dict[str, "ResolvedStruct"],
 		placement: Placement) -> bool:
 	"""Whether one element of this run has bytes whatever the message says.
@@ -1116,7 +1160,8 @@ def fixed_span_bits(placement: Placement) -> int:
 	width, so the member after a `parameter u8` was read one byte late in
 	generated Python that was otherwise correct.
 	"""
-	return 0 if placement.peek or placement.parameter else placement.size_bits
+	return 0 if placement.peek or placement.parameter or placement.shares_byte \
+		else placement.size_bits
 
 
 def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],

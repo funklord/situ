@@ -545,6 +545,9 @@ class Placement:
 	#: the enclosing struct's extent, so the member after it begins where
 	#: it began (0057). The arm owns the bytes; this only looked at them.
 	peek: bool			= False
+	#: A bit field at the top of the byte a number starts in (26.922), so the
+	#: number's length counts the byte and this member spans nothing.
+	shares_byte: bool		= False
 	#: `peek u8 count at end;` -- bytes from the frame's end back to where
 	#: this member starts: its own width and what follows it (26.905).
 	from_end: int | None		= None
@@ -1261,7 +1264,11 @@ class Solver:
 		# below this struct -- written out rather than imported, because
 		# `traverse` is built on this module.
 		own = f"{name}."
-		reaches = [held.offset_bits + held.size_bits
+		# To a whole byte, as a read takes one: `peek u3 major` raised the
+		# minimum to three bits, and a struct of no whole size is measured by
+		# nothing.
+		reaches = [-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
+		           * BITS_PER_BYTE
 		           for held in layout.placements
 		           if held.peek and held.offset_bits is not None
 		           and held.size_bits is not None
@@ -2564,6 +2571,18 @@ class Solver:
 		self.check_alignment(decl, member, scalar, cursor, element)
 		position = self.bit_position(scalar, local, cursor, element)
 
+		# The bit fields before it are the top of this number's first byte, so
+		# it starts where they did and the byte is counted once (26.922).
+		shared = self._shared_bits(member)
+		if shared:
+			cursor = Extent(cursor.lo - shared,
+			                None if cursor.hi is None else cursor.hi - shared)
+			layout.placements[:] = [
+				replace(held, shares_byte = True)
+				if held.offset_bits is not None
+				and cursor.lo <= held.offset_bits else held
+				for held in layout.placements]
+
 		layout.placements.append(Placement(
 			path           = path,
 			name           = name,
@@ -3665,6 +3684,11 @@ class Solver:
 				         "file level, or `[bit_order = ...]` on the struct"],
 			)
 
+	def _shared_bits(self, member: ast.Field | ast.Reserved) -> int:
+		"""How many bits of this member's first byte are fields' before it."""
+		varint = self.varints.get(member.type_ref.name)
+		return varint.shared_bits if varint is not None else 0
+
 	def check_alignment(self, decl: ast.StructDecl, member: ast.Field | ast.Reserved,
 			scalar: ScalarType | None, extent: Extent, element: Interval) -> None:
 		"""Byte-aligned types must start on a byte boundary.
@@ -3679,6 +3703,24 @@ class Solver:
 		enum demand a byte boundary it can never have.
 		"""
 		packed = scalar is not None and scalar.is_bit_packed
+		shared = self._shared_bits(member)
+
+		if shared and (not extent.is_exact
+		               or extent.lo % BITS_PER_BYTE != shared):
+			raise error(
+				f"`{member.type_ref.name}` shares its first byte, and the "
+				f"{shared} bit{'s' if shared != 1 else ''} above it are not "
+				"stated here",
+				member.span,
+				label = (f"lands {extent.lo % BITS_PER_BYTE} bits into a byte"
+				         if extent.is_exact else "after a dynamic member"),
+				notes = [f"state the top {shared} bits as bit fields just "
+				         "before it, in a struct of their own where something "
+				         "before them has no fixed size: a writer has to be "
+				         "told them, and a reader asks for them by name"],
+			)
+		if shared:
+			return
 
 		if not extent.is_exact:
 			# A dynamic cursor cannot be checked here, and a bit-packed field

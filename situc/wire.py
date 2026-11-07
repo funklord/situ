@@ -181,6 +181,9 @@ def _varints(schema: ast.Schema) -> list[str]:
 	lines = []
 	for decl in schema.varints():
 		facts = [f"bits={decl.max_bits}", f"bytes={decl.max_bytes}"]
+		# Where the number starts, which moves every value read.
+		if decl.prefix is not None:
+			facts.append(f"prefix={decl.prefix}")
 		# Whether one number has one spelling. Without it a receiver must
 		# accept a padded encoding of a value it also sees unpadded, which is
 		# a fact about the bytes and not about the values they carry.
@@ -426,6 +429,10 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		# change at all.
 		facts.append("trim=" + "".join(f"{byte:02x}"
 		                               for byte in placement.trim_set))
+	if placement.shares_byte:
+		# The number after it starts in this member's byte (26.922), so a peer
+		# that missed this places everything one byte late.
+		facts.append("shares-byte")
 	if placement.peek:
 		# The sharpest interpretation fact there is: a peeked member is read
 		# and not spent (0057), so everything after it -- above all the arm

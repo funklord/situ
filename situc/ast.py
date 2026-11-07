@@ -1256,6 +1256,16 @@ class VarintEncoding(Enum):
 	DER         = "der"
 	COMPACTSIZE = "compactsize"
 	LENENC      = "lenenc"
+	#: The same in the low five bits of a byte whose top three are the major
+	#: type, which the struct states as a bit field before it (RFC 8949, 3).
+	CBOR        = "cbor"
+	#: In the low `prefix` bits of a byte shared with fields before it, where
+	#: all of them set says leb128 groups follow, added to that value. HPACK's
+	#: and QPACK's (RFC 7541, 5.1).
+	HPACK       = "hpack"
+	#: In the low five bits of a BER identifier, where all of them set says
+	#: be128 groups hold the number instead (X.690, 8.1.2).
+	BERTAG      = "bertag"
 
 
 @dataclass(frozen=True)
@@ -1273,6 +1283,8 @@ class MarkedForm:
 	first: int
 	widths: tuple[int, ...]
 	big: bool
+	#: The first byte's bits that are the number's.
+	mask: int = 0xFF
 
 
 MARKED = {
@@ -1283,6 +1295,8 @@ MARKED = {
 	VarintEncoding.COMPACTSIZE: MarkedForm(201, 0xFD, 0xFD, (2, 4, 8), False),
 	#: MySQL's length-encoded integer.
 	VarintEncoding.LENENC: MarkedForm(202, 0xFB, 0xFC, (2, 3, 8), False),
+	#: CBOR's head, and it is 24 and up that are the markers.
+	VarintEncoding.CBOR: MarkedForm(203, 24, 24, (1, 2, 4, 8), True, 0x1F),
 }
 
 
@@ -1309,6 +1323,18 @@ class VarintDecl(Decl):
 	#: A declared ceiling on the encoded length, where the format sets one
 	#: shorter than seven bits per byte would need. See `terminal_bits`.
 	declared_max_bytes: int | None = None
+	#: How many bits of its first byte an `hpack` integer has.
+	prefix: int | None = None
+
+	@property
+	def shared_bits(self) -> int:
+		"""How many bits of the first byte are the fields' before it."""
+		if self.encoding is VarintEncoding.HPACK:
+			assert self.prefix is not None
+			return 8 - self.prefix
+		if self.encoding in (VarintEncoding.CBOR, VarintEncoding.BERTAG):
+			return 3
+		return 0
 
 	@property
 	def max_bytes(self) -> int:
@@ -1323,6 +1349,8 @@ class VarintDecl(Decl):
 		if self.encoding in MARKED:
 			return 1 + min(width for width in MARKED[self.encoding].widths
 			               if width * 8 >= self.max_bits)
+		if self.encoding in (VarintEncoding.HPACK, VarintEncoding.BERTAG):
+			return 1 + (self.max_bits + 6) // 7
 		if self.declared_max_bytes is not None:
 			return self.declared_max_bytes
 		return (self.max_bits + 6) // 7
@@ -1341,6 +1369,11 @@ class VarintDecl(Decl):
 			return 0
 		if self.encoding in MARKED:
 			return MARKED[self.encoding].code
+		if self.encoding is VarintEncoding.BERTAG:
+			return 204
+		if self.encoding is VarintEncoding.HPACK:
+			assert self.prefix is not None
+			return 210 + self.prefix
 		return self.max_bits - 7 * (self.max_bytes - 1)
 
 	@property

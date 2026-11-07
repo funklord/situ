@@ -1318,27 +1318,27 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	# THE POPULATION, so the floors cannot decay as the corpus grows. A
 	# new schema fails here, and the message says to re-measure -- which is
 	# the only moment anybody does.
-	assert len(SCHEMAS) == 53, (
+	assert len(SCHEMAS) == 55, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 53. Re-measure and re-pin all three: a floor left "
+		f"measured over 55. Re-measure and re-pin all three: a floor left "
 		f"at an older total goes slack by exactly what the new schemas "
 		f"contribute, which is how this one came to permit a 40% loss")
 
-	# RE-MEASURED 2026-11-07 over 53, `example/quic`, `example/x509` and
-	# `example/bitcoin` having joined: 5526 compared of 6848 shown, and
-	# 8807 walked. The share is 81%. A schema
+	# RE-MEASURED 2026-11-07 over 55, `example/cbor` and `example/hpack`
+	# having joined: 5651 compared of 6981 shown, and 9103 walked. The
+	# share is 81%. A schema
 	# whose options the walker counts and the dissector shows row by row
 	# moves the two sides by different amounts, which is the reason there
 	# are three floors and not one.
-	assert compared >= 5470, (
+	assert compared >= 5595, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 5526; the dissector shows {shown} rows and the walker "
+		f"down from 5651; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
 	assert compared * 100 >= shown * 80, (
 		f"{compared} of the dissector's {shown} rows are compared against "
 		f"the walker, down from 81%")
-	assert walked >= 8720, (
-		f"the walker renders {walked} member lines, down from 8807; the "
+	assert walked >= 9010, (
+		f"the walker renders {walked} member lines, down from 9103; the "
 		"share above can be met by the dissector showing less")
 
 

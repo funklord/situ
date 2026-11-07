@@ -907,18 +907,35 @@ typedef struct marked_form {
 	uint8_t first;
 	uint8_t count;
 	uint8_t big;
+	uint8_t mask;
 	uint8_t widths[8];
 } marked_form;
 
 static const marked_form *marked_of(uint32_t code)
 {
 	static const marked_form forms[] = {
-		{ 0x80u, 0x81u, 8u, 1u, { 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u } },
-		{ 0xFDu, 0xFDu, 3u, 0u, { 2u, 4u, 8u, 0u, 0u, 0u, 0u, 0u } },
-		{ 0xFBu, 0xFCu, 3u, 0u, { 2u, 3u, 8u, 0u, 0u, 0u, 0u, 0u } },
+		{ 0x80u, 0x81u, 8u, 1u, 0xFFu, { 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u } },
+		{ 0xFDu, 0xFDu, 3u, 0u, 0xFFu, { 2u, 4u, 8u, 0u, 0u, 0u, 0u, 0u } },
+		{ 0xFBu, 0xFCu, 3u, 0u, 0xFFu, { 2u, 3u, 8u, 0u, 0u, 0u, 0u, 0u } },
+		{ 24u, 24u, 4u, 1u, 0x1Fu, { 1u, 2u, 4u, 8u, 0u, 0u, 0u, 0u } },
 	};
 
-	return code >= 200u && code <= 202u ? &forms[code - 200u] : NULL;
+	return code >= 200u && code <= 203u ? &forms[code - 200u] : NULL;
+}
+
+/* The image's code for a BER tag number, and the base of HPACK's: the code
+ * less this is its prefix. */
+#define VARINT_BERTAG 204u
+#define VARINT_HPACK  210u
+
+/* How many bits of its first byte a prefixed integer has, 0 if it is not one. */
+static uint32_t prefix_of(uint32_t code)
+{
+	if (code == VARINT_BERTAG) {
+		return 5u;
+	}
+	return code > VARINT_HPACK && code <= VARINT_HPACK + 8u
+	       ? code - VARINT_HPACK : 0u;
 }
 /* The TRANSFORM, which the image had no bit for until 26.687 -- so this
  * walker answered a `svar`'s raw groups where four backends answer the
@@ -1054,6 +1071,19 @@ static situ_walk_err varint_admissible(const uint8_t *rules,
 		      : raw < (1u << 30) ? 4u : 8u;
 		return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
 	}
+	const uint32_t prefix = (rules[10] & VARINT_BIG) != 0u
+	                        ? prefix_of(rules[9]) : 0u;
+	if (prefix != 0u) {
+		const uint32_t mask = (1u << prefix) - 1u;
+		if (raw >= mask) {
+			uint64_t rest = rules[9] == VARINT_BERTAG ? raw : raw - mask;
+			do {
+				least++;
+				rest >>= 7;
+			} while (rest != 0u);
+		}
+		return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
+	}
 	const marked_form *form = (rules[10] & VARINT_BIG) != 0u
 	                          ? marked_of(rules[9]) : NULL;
 	if (form != NULL) {
@@ -1181,7 +1211,7 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
 		if (avail == 0u) {
 			return SITU_WALK_BOUNDS;
 		}
-		const uint8_t lead = message[at];
+		const uint8_t lead = message[at] & form->mask;
 		if (lead < form->direct) {
 			*consumed = 1u;
 			*value    = lead;
@@ -1200,6 +1230,52 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
 		*consumed = size + 1u;
 		*value    = held;
 		return SITU_WALK_OK;
+	}
+
+	/* An integer in the low bits of a byte (26.922): all of them set says
+	 * groups follow, and HPACK's add to the prefix where a tag number's do
+	 * not. */
+	const uint32_t prefix = big ? prefix_of(terminal_bits) : 0u;
+	if (prefix != 0u) {
+		if (avail == 0u) {
+			return SITU_WALK_BOUNDS;
+		}
+		const uint32_t mask = (1u << prefix) - 1u;
+		const int high = terminal_bits == VARINT_BERTAG;
+		if ((message[at] & mask) != mask) {
+			*consumed = 1u;
+			*value    = message[at] & mask;
+			return SITU_WALK_OK;
+		}
+		uint64_t held = 0u;
+		for (uint32_t i = 1u; i < avail; i++) {
+			const uint8_t byte = message[at + i];
+			const uint64_t group = byte & 0x7Fu;
+			const uint32_t shift = 7u * (i - 1u);
+
+			if (high) {
+				if ((held >> 57) != 0u) {
+					return SITU_WALK_BOUNDS;
+				}
+				held = (held << 7) | group;
+			} else if (shift < 64u && ((group << shift) >> shift) == group) {
+				held |= group << shift;
+			} else if (group != 0u) {
+				return SITU_WALK_BOUNDS;
+			}
+			if ((byte & 0x80u) == 0u) {
+				if (!high) {
+					if (held > UINT64_MAX - mask) {
+						return SITU_WALK_BOUNDS;
+					}
+					held += mask;
+				}
+				*consumed = i + 1u;
+				*value    = held;
+				return SITU_WALK_OK;
+			}
+		}
+		return SITU_WALK_BOUNDS;
 	}
 
 	uint64_t acc = 0u;
@@ -5048,7 +5124,18 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		                              + arm_type * image->struct_stride + 12u);
 		const uint32_t span  = (flags & STRUCT_TO_THE_END) != 0u
 		                     ? len - at / 8u : wide / 8u;
+		const uint32_t least = image->struct_stride >= 20u
+		                     ? u32_at(image->structs
+		                              + arm_type * image->struct_stride + 16u)
+		                     : SITU_WALK_NONE;
 
+		/* Named here, as `report.py` names it: inside, the struct has no
+		 * member to blame for being short. */
+		if (least != SITU_WALK_NONE && wide < least) {
+			record(why, chosen, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
 		return validate_deep(&bound, message + at / 8u, span, arm_type,
 		                     depth + 1u, verdict, why);
 	}

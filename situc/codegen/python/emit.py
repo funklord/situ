@@ -91,6 +91,7 @@ from situc.traverse import (
 	framing_floor,
 	nests_one_struct,
 	never_empty,
+	peek_floor,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -1688,7 +1689,8 @@ class Emitter:
 			            if rule.kind == "prefixed"
 			            and rule.length_type in declared)
 
-		order   = ("varint", "varint_be", "varint_compactsize", "varint_der",
+		order   = ("varint", "varint_be", "varint_bertag", "varint_cbor",
+		           "varint_compactsize", "varint_der", "varint_hpack",
 		           "varint_lenenc", "varint_quic")
 		reads   = {varint_stem(decl) for decl in read}
 		lengths = {varint_stem(decl) for decl in members if decl.minimal}
@@ -6202,6 +6204,11 @@ class Emitter:
 			        " holds one")
 
 		steps: list[str] = []
+		floor = peek_floor(struct)
+		if floor:
+			steps.extend(["", f"\t\tif have < {floor}:",
+			              f'\t\t\traise TruncatedError("{struct.name}: '
+			              f'incomplete", {floor})'])
 		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684):
 		# `at` is a running TOTAL and includes every fixed member, the ones
 		# after this one included, so it is not an offset. The C emitter's
@@ -7246,7 +7253,7 @@ class Emitter:
 				f"\t\t\tfound = {held}.nesting_at(depth + 1)",
 				"\t\t\tif found > deepest:",
 				"\t\t\t\tdeepest = found",
-				f"\t\t\tsize = {held}._extent",
+				f"\t\t\tsize = {held}._extent_at(depth + 1)",
 				"\t\t\tif size == 0 or size > self._len - at:",
 				"\t\t\t\tbreak",
 				"\t\t\tat += size",

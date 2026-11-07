@@ -37,7 +37,9 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (data_sized, enclosing_arm,
                             has_computable_extent,
                             inside_an_unresolved_arm,
-                            measured_from_a_moving_base, own_entries)
+                            measured_from_a_moving_base, own_entries,
+                            recursion_is_not_in_the_minimum,
+                            selected_by_a_peek)
 from situc.types import ScalarKind
 
 OK = "::situ::rt::err::ok"
@@ -501,7 +503,9 @@ def _must_eq(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.offset_bits is None or not placement.size_bits:
 		return []
 	if inside_an_unresolved_arm(struct, placement) \
-			or measured_from_a_moving_base(placement):
+			or measured_from_a_moving_base(placement) \
+			or selected_by_a_peek(struct, placement) \
+			or recursion_is_not_in_the_minimum(resolved.structs, struct):
 		return []
 	if (placement.offset_bits + placement.size_bits - 1) \
 			// BITS_PER_BYTE >= extent:

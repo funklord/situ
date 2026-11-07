@@ -1,0 +1,136 @@
+# situ wire signature v3
+# schema: hpack.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+varint prefix4 : hpack bits=32 bytes=6 prefix=4
+
+varint prefix5 : hpack bits=32 bytes=6 prefix=5
+
+varint prefix6 : hpack bits=32 bytes=6 prefix=6
+
+varint prefix7 : hpack bits=32 bytes=6 prefix=7
+
+struct block size=0..
+  @0x0000   0..       field      fields  sized-by=remaining
+  body switch: kind
+  body case 0: plain
+  body case 1: sensitive
+  body case 2: resize
+  body case 3: resize_high
+  body case 4: added
+  body case 5: added_5
+  body case 6: added_6
+  body case 7: added_7
+  body case default: from_table
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+
+struct field size=1..8589934608
+  @0x0000   4bit      u4         kind  msb_first peek
+  @0x0000   1..8589934608 variant    body
+  body switch: kind
+  body case 0: plain without_indexing
+  body case 1: sensitive never_indexed
+  body case 2: resize size_update
+  body case 3: resize_high size_update
+  body case 4: added incremental
+  body case 5: added_5 incremental
+  body case 6: added_6 incremental
+  body case 7: added_7 incremental
+  body case default: from_table table_entry
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+  name switch: index
+  name case 0: named
+  name case default: by_index
+
+struct incremental size=2..8589934608
+  @0x0000   2bit      u2         pattern  msb_first shares-byte must_eq=1
+  @0x0000   1..6      prefix6    index  varint=prefix6
+  ~         0..4294967301 variant    name
+  ~         1..4294967301 string     value
+  name switch: index
+  name case 0: named literal_name
+  name case default: by_index nothing
+
+struct literal_name size=1..4294967301
+  @0x0000   1..4294967301 string     name
+
+struct never_indexed size=2..8589934608
+  @0x0000   4bit      u4         pattern  msb_first shares-byte must_eq=1
+  @0x0000   1..6      prefix4    index  varint=prefix4
+  ~         0..4294967301 variant    name
+  ~         1..4294967301 string     value
+  name switch: index
+  name case 0: named literal_name
+  name case default: by_index nothing
+
+struct nothing size=0
+
+struct size_update size=1..6
+  @0x0000   3bit      u3         pattern  msb_first shares-byte must_eq=1
+  @0x0000   1..6      prefix5    max_size  varint=prefix5
+
+struct string size=1..4294967301
+  @0x0000   1bit      u1         huffman  msb_first shares-byte
+  @0x0000   1..6      prefix7    length  varint=prefix7
+  ~         0..4294967295 u8         data  sized-by=length
+
+struct table_entry size=1..6
+  @0x0000   1bit      u1         pattern  msb_first shares-byte must_eq=1
+  @0x0000   1..6      prefix7    index  varint=prefix7
+
+struct without_indexing size=2..8589934608
+  @0x0000   4bit      u4         pattern  msb_first shares-byte must_eq=0
+  @0x0000   1..6      prefix4    index  varint=prefix4
+  ~         0..4294967301 variant    name
+  ~         1..4294967301 string     value
+  name switch: index
+  name case 0: named literal_name
+  name case default: by_index nothing

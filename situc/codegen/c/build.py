@@ -36,7 +36,7 @@ from dataclasses import dataclass
 
 from situc import ast, invariant, traverse
 from situc.codegen.c.names import bare_name, ident, macro
-from situc.codegen.varint import varint_stem
+from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.c.owned import _ctype, order_suffix, storage_width
 from situc.layout import Arm, BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -178,6 +178,9 @@ class Part:
 		self.length = ""		# where a run's length comes from,
 					# where it is not the caller's `_len`
 		self.stated: int | None = None	# a packed tag the arm decides
+		self.peeked: Placement | None = None
+					# the discriminant an arm's first
+					# byte answers to
 		self.others    = others		# values that would make the message
 					# read as something else: another
 					# arm, or an older version
@@ -325,6 +328,8 @@ def _supplies_a_value(part: "Part") -> bool:
 	if part.role == BITS and (part.stated is not None
 	                          or part.chooser is not None):
 		return False		# the arm being built decides it
+	if part.role == VARINT and part.stated is not None:
+		return False		# so does this
 	if part.role == BITS and part.placement.kind == "reserved":
 		return not _states_its_content(part.placement)
 	if part.role in (BITS, VARINT) and part.sizes is not None:
@@ -690,8 +695,8 @@ def packed(placement: Placement) -> bool:
 	"""
 	if placement.scalar is None or placement.size_bits is None:
 		return False
-	if placement.offset_bits is None:
-		return False
+	if placement.offset_bits is None or placement.peek:
+		return False		# a peek writes nothing, so it joins no group
 	return bool(placement.size_bits % BITS_PER_BYTE
 	            or placement.offset_bits % BITS_PER_BYTE)
 
@@ -719,14 +724,27 @@ def _packed_groups(members: list[Placement]
 		first_bit = members[index].offset_bits or 0
 		end_bit = ((members[last].offset_bits or 0)
 		           + (members[last].size_bits or 0))
+		# Bits above a number that starts in their byte end part way through
+		# it, and the number's own writer keeps them (26.922).
 		if first_bit % BITS_PER_BYTE == 0 \
-				and (end_bit - first_bit) % BITS_PER_BYTE == 0:
-			span = (end_bit - first_bit) // BITS_PER_BYTE
+				and ((end_bit - first_bit) % BITS_PER_BYTE == 0
+				     or members[last].shares_byte):
+			span = -(-(end_bit - first_bit) // BITS_PER_BYTE)
 			for at in range(index, last + 1):
 				found[at] = ((members[at].offset_bits or 0) - first_bit,
 				             span, index)
 		index = last + 1
 	return found
+
+
+def peeked_byte(local: str, part: Part) -> str:
+	"""An arm's first byte, as much of it as its peeked discriminant reads."""
+	disc = part.peeked
+	if disc is None or disc.size_bits >= BITS_PER_BYTE:
+		return f"{local}[0]"
+	if disc.bit_order is ast.BitOrder.LSB_FIRST:
+		return f"({local}[0] & {(1 << disc.size_bits) - 1})"
+	return f"({local}[0] >> {BITS_PER_BYTE - disc.size_bits})"
 
 
 def _arm_placement(struct: ResolvedStruct, path: str) -> Placement | None:
@@ -855,6 +873,7 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		value = case.value
 		part.value  = -1 if value is None else int(value)
 		part.others = claimed
+		part.peeked = disc
 	return part, None
 
 
@@ -1152,6 +1171,15 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			                  minimal=declared.transform
 			                  is ast.VarintTransform.ZIGZAG))
 			parts[-1].declared = declared
+			# A number an arm is chosen by, which the arm then states: HPACK's
+			# literal name is an index of zero, and a caller's index said
+			# another arm (26.922).
+			if held.name in tags and arm is not None:
+				case, claimed = tags[held.name]
+				if case is not None and case.value is None:
+					parts[-1].others = claimed
+				elif case is not None and case.value is not None:
+					parts[-1].stated = int(case.value)
 			# A varint can be the size field too, and SQLite's is: a cell
 			# is `payload_size`, `rowid`, `payload[payload_size]`, and the
 			# caller was passing the size AND the payload's length -- two
@@ -1207,8 +1235,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "packed and its value is not its bits"
 			part = Part(BITS, held, local, span,
 			            bit_at=bit_at, opens=index == first,
-			            closes=(index + 1 not in groups
-			                    or groups[index + 1][2] != first))
+			            closes=not held.shares_byte
+			            and (index + 1 not in groups
+			                 or groups[index + 1][2] != first))
 			if held.name in tags and arm is not None:
 				# The arm decides it, or `present = 0` goes out ahead of a
 				# body the reader then steps over. The default arm's value
@@ -1269,11 +1298,12 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# therefore carries the check that they say what this arm is:
 			# see where the arm part is built.
 			if (held.name in tags and arm is not None
-					and held.size_bits != BITS_PER_BYTE):
+					and (held.size_bits > BITS_PER_BYTE
+					     or (held.offset_bits or 0) % BITS_PER_BYTE)):
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"peeked {held.size_bits}-bit discriminant, and " \
-				           "this writer checks an arm's first BYTE against " \
-				           "the case it was called for"
+				           "this writer checks the top of an arm's first " \
+				           "byte against the case it was called for"
 			parts.append(Part(PEEKED, held, local))
 			continue
 
@@ -2838,6 +2868,14 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 			assert part.declared is not None
 			big  = part.declared.encoding is ast.VarintEncoding.BE128
 			call = f"situ_{varint_stem(part.declared)}_put"
+			if part.stated is not None:
+				zig = f"(uint64_t){part.stated}u"
+			if part.others:
+				lines += [
+					f"\tif ({' || '.join(f'(uint64_t){part.local} == {v}u' for v in part.others)}) {{",
+					"\t\treturn SITU_ERR_CONSTRAINT;",
+					"\t}",
+				]
 			if part.sizes is not None:
 				# The length it states, in whatever unit the schema
 				# counts: elements for a run of wider ones, bytes
@@ -2862,14 +2900,16 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				   " bits, which is what the",
 				   "\t * reader's `_get` is passed as well. */"]
 				  if big else ["\t */"]),
-				*([f"\tif ((uint64_t){part.local} > {most}u) {{",
+				*([f"\tif ({zig if part.sizes is not None or part.stated is not None else f'(uint64_t){part.local}'} > {most}u) {{",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
-				   "\t}"] if part.value < 64 else []),
+				   "\t}"] if part.value < 64
+				   and not (part.sizes is not None and part.value >= 32) else []),
 				"\t{",
 				f"\t\tconst uint32_t {USED} = {call}({OUT} + {AT},",
 				(f"\t\t                        {CAP} - {AT}, {zig},"
 				 if big else
-				 f"\t\t                        {CAP} - {AT}, {zig});"),
+				 f"\t\t                        {CAP} - {AT}, {zig}"
+				 f"{varint_put_tail(part.declared, 'u')});"),
 				*([f"\t\t                        "
 				   f"{part.declared.max_bytes}u, "
 				   f"{part.declared.terminal_bits}u);"] if big else []),
@@ -2909,7 +2949,8 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t\t\tconst uint32_t {USED} = {call}({OUT} + {AT},",
 				(f"\t\t\t                        {CAP} - {AT}, {one},"
 				 if big else
-				 f"\t\t\t                        {CAP} - {AT}, {one});"),
+				 f"\t\t\t                        {CAP} - {AT}, {one}"
+				 f"{varint_put_tail(part.declared, 'u')});"),
 				*([f"\t\t\t                        "
 				   f"{part.declared.max_bytes}u, "
 				   f"{part.declared.terminal_bits}u);"] if big else []),
@@ -3000,9 +3041,9 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 					f"\tif ({part.local}_len == 0u) {{",
 					"\t\treturn SITU_ERR_CONSTRAINT;",
 					"\t}",
-					*([f"\tif ({part.local}[0] != {part.value}u) {{"]
+					*([f"\tif ({peeked_byte(part.local, part)} != {part.value}u) {{"]
 					  if part.value >= 0 else
-					  [f"\tif ({' || '.join(f'{part.local}[0] == {v}u' for v in part.others)}) {{"]),
+					  [f"\tif ({' || '.join(f'{peeked_byte(part.local, part)} == {v}u' for v in part.others)}) {{"]),
 					"\t\treturn SITU_ERR_CONSTRAINT;",
 					"\t}",
 				]),

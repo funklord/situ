@@ -46,7 +46,7 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return any(_serves_arm(one, parts) for one in part.arms)
 	if part.role not in SERVED or part.length:
 		return False
-	if part.others and part.role not in (BITS, NESTED, SCALAR):
+	if part.others and part.role not in (BITS, NESTED, SCALAR, VARINT):
 		return False
 	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field":
 		return False

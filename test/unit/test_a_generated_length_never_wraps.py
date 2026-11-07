@@ -89,9 +89,13 @@ SUBTRACTION = re.compile(r"\blimit\s*-\s*(?!=)|\.len\(\)\s*-\s*(?!=)")
 #: gate stops measuring what it claims to.
 RUST_CENSUS = {
 	"bmp.situ": 3,
+	# Read rather than added, on 2026-11-07: every site in both is a nested
+	# member's own bound, and each tests `len() < at` first.
+	"cbor.situ": 3,
 	"coap.situ": 1,
 	"cpio.situ": 1,
 	"dnsname.situ": 4,
+	"hpack.situ": 7,
 	# 30 -> 33 on 2026-11-03, when 26.833 added `marked_tag`,
 	# `marked_index` and `marked_prefix`: a tlv and an offset table inside
 	# an `endian_marker` struct, which is the arrangement where four

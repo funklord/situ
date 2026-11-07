@@ -90,6 +90,7 @@ from situc.traverse import (
 	framing_floor,
 	nests_one_struct,
 	never_empty,
+	peek_floor,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -6113,6 +6114,11 @@ class Emitter:
 			        " holds one")
 
 		steps: list[str] = []
+		floor = peek_floor(struct)
+		if floor:
+			steps.extend(["", f"\t\tif have < {floor} {{",
+			              f"\t\t\treturn situ_rt::Framing::Need({floor});",
+			              "\t\t}"])
 		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
 		# The C emitter's `_required` carries the reasoning and the proof.
 		gaps = framing_gaps(self.resolved.structs, struct)

@@ -999,21 +999,24 @@ def zigzag_encode(value: int) -> int:
 	return (value << 1) ^ (value >> 63) if value < 0 else value << 1
 
 
-#: A marked integer's tables: `(direct, first, widths, big)`. A first byte below
-#: `direct` is the value, and marker `first + i` says `widths[i]` bytes hold it.
-_DER         = (0x80, 0x81, (1, 2, 3, 4, 5, 6, 7, 8), True)
-_COMPACTSIZE = (0xFD, 0xFD, (2, 4, 8), False)
-_LENENC      = (0xFB, 0xFC, (2, 3, 8), False)
+#: A marked integer's tables: `(direct, first, widths, big, mask)`. A first byte
+#: under `mask` below `direct` is the value, and marker `first + i` says
+#: `widths[i]` bytes hold it. Bits above `mask` are another field's.
+_Marked      = tuple[int, int, tuple[int, ...], bool, int]
+_DER         = (0x80, 0x81, (1, 2, 3, 4, 5, 6, 7, 8), True, 0xFF)
+_COMPACTSIZE = (0xFD, 0xFD, (2, 4, 8), False, 0xFF)
+_LENENC      = (0xFB, 0xFC, (2, 3, 8), False, 0xFF)
+_CBOR        = (24, 24, (1, 2, 4, 8), True, 0x1F)
 
 
-def _marked_get(form: tuple[int, int, tuple[int, ...], bool], data: Buffer,
+def _marked_get(form: _Marked, data: Buffer,
 		at: int, max_bytes: int) -> tuple[int, int] | None:
 	"""Decode one marked integer, or None where it is cut short, no marker, or
 	longer than `max_bytes`."""
-	direct, first, widths, big = form
+	direct, first, widths, big, mask = form
 	if at >= len(data):
 		return None
-	byte = data[at]
+	byte = data[at] & mask
 	if byte < direct:
 		return byte, 1
 	if not 0 <= byte - first < len(widths):
@@ -1025,28 +1028,129 @@ def _marked_get(form: tuple[int, int, tuple[int, ...], bool], data: Buffer,
 	return int.from_bytes(held, "big" if big else "little"), n + 1
 
 
-def _marked_len(form: tuple[int, int, tuple[int, ...], bool],
-		value: int) -> int:
+def _marked_len(form: _Marked, value: int) -> int:
 	"""The shortest encoding of `value`, 0 past the widest."""
 	if value < form[0]:
 		return 1
 	return next((n + 1 for n in form[2] if value < 1 << (8 * n)), 0)
 
 
-def _marked_put(form: tuple[int, int, tuple[int, ...], bool], out: bytearray,
-		at: int, value: int) -> int:
+def _marked_put(form: _Marked, out: bytearray, at: int, value: int) -> int:
 	"""Encode one marked integer minimally: bytes written, 0 for want of room."""
-	direct, first, widths, big = form
+	_, first, widths, big, mask = form
 	total = _marked_len(form, value)
 	if total == 0 or at + total > len(out):
 		return 0
 	if total == 1:
-		out[at] = value
+		out[at] = (out[at] & ~mask & 0xFF) | value
 		return 1
-	out[at] = first + widths.index(total - 1)
+	out[at] = (out[at] & ~mask & 0xFF) | (first + widths.index(total - 1))
 	out[at + 1:at + total] = value.to_bytes(total - 1,
 	                                        "big" if big else "little")
 	return total
+
+
+def _prefixed_get(data: Buffer, at: int, prefix: int, big: bool,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""An integer in the low `prefix` bits of a byte, where all of them set
+	says base-128 groups follow: high first and alone the value under `big`, a
+	BER tag number; low first and added to the prefix otherwise, HPACK's. None
+	where it is cut short, too long, or past sixty-four bits."""
+	mask = (1 << prefix) - 1
+	if at >= len(data):
+		return None
+	if data[at] & mask != mask:
+		return data[at] & mask, 1
+	acc = 0
+	for i in range(1, min(max_bytes, len(data) - at)):
+		byte = data[at + i]
+		acc  = (acc << 7) | (byte & 0x7F) if big \
+			else acc | ((byte & 0x7F) << (7 * (i - 1)))
+		if acc >> 64:
+			return None
+		if not byte & 0x80:
+			if not big:
+				acc += mask
+			return (acc, i + 1) if not acc >> 64 else None
+	return None
+
+
+def _prefixed_len(value: int, prefix: int, big: bool) -> int:
+	"""The shortest encoding of `value`."""
+	mask = (1 << prefix) - 1
+	if value < mask:
+		return 1
+	rest = value if big else value - mask
+	return 1 + max(1, (rest.bit_length() + 6) // 7)
+
+
+def _prefixed_put(out: bytearray, at: int, value: int, prefix: int,
+		big: bool) -> int:
+	"""Encode one minimally: bytes written, 0 for want of room. The first
+	byte's bits above the prefix are another field's, and stay."""
+	mask  = (1 << prefix) - 1
+	total = _prefixed_len(value, prefix, big)
+	if at + total > len(out):
+		return 0
+	if total == 1:
+		out[at] = (out[at] & ~mask & 0xFF) | value
+		return 1
+	out[at] |= mask
+	rest   = value if big else value - mask
+	groups = [(rest >> (7 * i)) & 0x7F for i in range(total - 1)]
+	if big:
+		groups.reverse()
+	for i, group in enumerate(groups):
+		out[at + 1 + i] = group | (0x80 if i + 2 < total else 0)
+	return total
+
+
+def varint_hpack_get(data: Buffer, at: int, prefix: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""HPACK's integer (RFC 7541, 5.1)."""
+	return _prefixed_get(data, at, prefix, False, max_bytes)
+
+
+def varint_hpack_len(value: int, prefix: int) -> int:
+	"""The shortest encoding under `varint_hpack_get`."""
+	return _prefixed_len(value, prefix, False)
+
+
+def varint_hpack_put(out: bytearray, at: int, value: int, prefix: int) -> int:
+	"""Encode HPACK's integer minimally."""
+	return _prefixed_put(out, at, value, prefix, False)
+
+
+def varint_bertag_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""A BER tag number (X.690, 8.1.2)."""
+	return _prefixed_get(data, at, 5, True, max_bytes)
+
+
+def varint_bertag_len(value: int) -> int:
+	"""The shortest encoding under `varint_bertag_get`."""
+	return _prefixed_len(value, 5, True)
+
+
+def varint_bertag_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode a BER tag number minimally."""
+	return _prefixed_put(out, at, value, 5, True)
+
+
+def varint_cbor_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""CBOR's head (RFC 8949, 3): the low five bits of the first byte."""
+	return _marked_get(_CBOR, data, at, max_bytes)
+
+
+def varint_cbor_len(value: int) -> int:
+	"""The shortest encoding under `varint_cbor_get`."""
+	return _marked_len(_CBOR, value)
+
+
+def varint_cbor_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode CBOR's head minimally, keeping the major type."""
+	return _marked_put(_CBOR, out, at, value)
 
 
 def varint_der_get(data: Buffer, at: int,

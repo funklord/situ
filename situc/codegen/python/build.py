@@ -39,6 +39,7 @@ from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
 from situc.codegen.plain_build import plain
+from situc.codegen.c.build import peeked_byte
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -109,7 +110,10 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	tail = varint_put_tail(part.declared)
 	path = part.placement.path
 	call = f"{varint_stem(part.declared)}_put"
-	if part.sizes is not None:
+	if part.stated is not None:
+		held  = str(part.stated)
+		value = held
+	elif part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)
 		held  = f"len({py_name(run)})"
@@ -121,6 +125,9 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 		held  = f"{py_name(part.local)} & 0xFFFFFFFFFFFFFFFF"
 		value = held
 	return [
+		*([f"\tif {py_name(part.local)} in {tuple(part.others)!r}:",
+		   f'\t\traise ConstraintError("{path}: another arm\'s value")']
+		  if part.others else []),
 		*([f"\tif {held} > {most}:",
 		   f'\t\traise ConstraintError("{path}: wider than it may be")']
 		  if part.value < 64 else []),
@@ -146,8 +153,8 @@ def _nested(part: Part) -> list[str]:
 	return [
 		*([] if not part.others and part.value <= 0 else [
 			f"\tif not {local}:", refuse,
-			(f"\tif {local}[0] != {part.value}:" if part.value >= 0
-			 else f"\tif {local}[0] in {tuple(part.others)!r}:"),
+			(f"\tif {peeked_byte(local, part)} != {part.value}:" if part.value >= 0
+			 else f"\tif {peeked_byte(local, part)} in {tuple(part.others)!r}:"),
 			refuse]),
 		"\ttry:",
 		f"\t\tsitu_need = {inner}.required({local})",
@@ -678,7 +685,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
 		"                          TruncatedError, View, format_int,",
 		"                          format_uint, varint_be_put, varint_put,",
+		"                          varint_bertag_put, varint_cbor_put,",
 		"                          varint_compactsize_put, varint_der_put,",
+		"                          varint_hpack_put,",
 		"                          varint_lenenc_put, varint_quic_put,",
 		"                          zigzag_encode)",
 		"",

@@ -29,6 +29,7 @@ from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
 from situc.codegen.cpp.names import class_name
 from situc.codegen.plain_build import plain
+from situc.codegen.c.build import peeked_byte
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -195,7 +196,10 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	most = (1 << part.value) - 1
 	tail = varint_put_tail(part.declared)
 	call = f"situ_{varint_stem(part.declared)}_put"
-	if part.sizes is not None:
+	if part.stated is not None:
+		held  = f"static_cast<std::uint64_t>({part.stated}u)"
+		value = held
+	elif part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)
 		held  = _length(run, parts)
@@ -207,6 +211,9 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 		held  = f"static_cast<std::uint64_t>({part.local})"
 		value = held
 	return [
+		*(["\tif ("
+		   + " || ".join(f"{part.local} == {v}u" for v in part.others)
+		   + ") {", CONSTRAINT, "\t}"] if part.others else []),
 		*([f"\tif ({held} > {most}u) {{", CONSTRAINT, "\t}"]
 		  if part.value < 64 else []),
 		"\t{",
@@ -233,9 +240,9 @@ def _nested(part: Part, inner: str) -> list[str]:
 	return [
 		*([] if not part.others and part.value <= 0 else [
 			f"\tif ({local}_len == 0u) {{", CONSTRAINT, "\t}",
-			(f"\tif ({local}[0] != {part.value}u) {{" if part.value >= 0
+			(f"\tif ({peeked_byte(local, part)} != {part.value}u) {{" if part.value >= 0
 			 else "\tif ("
-			      + " || ".join(f"{local}[0] == {v}u" for v in part.others)
+			      + " || ".join(f"{peeked_byte(local, part)} == {v}u" for v in part.others)
 			      + ") {"),
 			CONSTRAINT, "\t}"]),
 		f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS, "\t}",

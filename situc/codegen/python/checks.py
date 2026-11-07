@@ -40,7 +40,9 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (data_sized, enclosing_arm,
                             has_computable_extent, indexed_elements,
                             inside_an_unresolved_arm,
-                            measured_from_a_moving_base, own_entries)
+                            measured_from_a_moving_base, own_entries,
+                            recursion_is_not_in_the_minimum,
+                            selected_by_a_peek)
 from situc.types import ScalarKind
 
 #: `CHECK_KINDS` under this module's own name, the generated prose
@@ -685,6 +687,10 @@ def _one_must_eq(basename: str, resolved: ResolvedSchema,
 		          " no message can be built that carries it")
 	elif not placement.size_bits:
 		reason = "it owns no bit to break"
+	elif selected_by_a_peek(struct, placement):
+		reason = "breaking it selects another arm, which is no refusal"
+	elif recursion_is_not_in_the_minimum(resolved.structs, struct):
+		reason = "the minimum leaves out a member that closes a cycle"
 	elif (placement.offset_bits + placement.size_bits - 1) \
 			// BITS_PER_BYTE >= extent:
 		reason = "its pinned value lies outside the frame this builds"

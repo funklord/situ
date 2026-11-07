@@ -1569,7 +1569,8 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			# overwrote the mistake; visible in `example/json`, where the
 			# discriminant is one this dissector cannot read, so the step
 			# was all that was left and `value` reported a byte too many.
-			*([] if placement.peek else [f"\tat = at + {width}"]),
+			*([] if placement.peek or placement.shares_byte
+			  else [f"\tat = at + {width}"]),
 		]
 
 	first, count = span
@@ -1583,7 +1584,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# is always readable. Sabotaging it leaves the suite green. Carried
 		# anyway, because two branches of one rule that disagree are how the
 		# reachable one gets "fixed" back to the wrong answer later.
-		f"\tat = {first if placement.peek else first + count}",
+		f"\tat = {first if placement.peek or placement.shares_byte else first + count}",
 	]
 
 

@@ -1039,18 +1039,24 @@ struct Marked {
 	first: u8,
 	widths: &'static [usize],
 	big: bool,
+	/// The first byte's bits this number has. The others are another field's.
+	mask: u8,
 }
 
 const DER: Marked = Marked { direct: 0x80, first: 0x81,
-                             widths: &[1, 2, 3, 4, 5, 6, 7, 8], big: true };
+                             widths: &[1, 2, 3, 4, 5, 6, 7, 8], big: true,
+                             mask: 0xFF };
 const COMPACTSIZE: Marked = Marked { direct: 0xFD, first: 0xFD,
-                                     widths: &[2, 4, 8], big: false };
+                                     widths: &[2, 4, 8], big: false,
+                                     mask: 0xFF };
 const LENENC: Marked = Marked { direct: 0xFB, first: 0xFC,
-                                widths: &[2, 3, 8], big: false };
+                                widths: &[2, 3, 8], big: false, mask: 0xFF };
+const CBOR: Marked = Marked { direct: 24, first: 24, widths: &[1, 2, 4, 8],
+                              big: true, mask: 0x1F };
 
 fn marked_get(form: &Marked, bytes: &[u8], at: usize, max_bytes: usize)
 		-> Option<(u64, usize)> {
-	let byte = *bytes.get(at)?;
+	let byte = *bytes.get(at)? & form.mask;
 
 	if byte < form.direct {
 		return Some((byte as u64, 1));
@@ -1090,17 +1096,155 @@ fn marked_put(form: &Marked, out: &mut [u8], value: u64) -> usize {
 		return 0;
 	}
 	if total == 1 {
-		out[0] = value as u8;
+		out[0] = (out[0] & !form.mask) | value as u8;
 		return 1;
 	}
 
 	let n = total - 1;
 	let at = form.widths.iter().position(|one| *one == n).unwrap_or(0);
-	out[0] = form.first + at as u8;
+	out[0] = (out[0] & !form.mask) | (form.first + at as u8);
 	for i in 0..n {
 		out[1 + i] = (value >> (8 * if form.big { n - 1 - i } else { i })) as u8;
 	}
 	total
+}
+
+/// An integer in the low `prefix` bits of a byte, where all of them set says
+/// base-128 groups follow: high first and alone the value under `big`, a BER
+/// tag number; low first and added to the prefix otherwise, HPACK's.
+fn prefixed_get(bytes: &[u8], at: usize, prefix: u32, big: bool, max_bytes: usize)
+		-> Option<(u64, usize)> {
+	let mask = ((1u32 << prefix) - 1) as u8;
+	let lead = *bytes.get(at)? & mask;
+
+	if lead != mask {
+		return Some((lead as u64, 1));
+	}
+
+	let mut acc: u64 = 0;
+	let mut i = 1;
+	while i < max_bytes && at + i < bytes.len() {
+		let byte  = bytes[at + i];
+		let group = (byte & 0x7F) as u64;
+
+		if big {
+			if acc >> 57 != 0 {
+				return None;
+			}
+			acc = (acc << 7) | group;
+		} else {
+			let shift = 7 * (i as u32 - 1);
+			if shift >= 64 || (group << shift) >> shift != group {
+				if group != 0 {
+					return None;
+				}
+			} else {
+				acc |= group << shift;
+			}
+		}
+		if byte & 0x80 == 0 {
+			if !big {
+				acc = acc.checked_add(mask as u64)?;
+			}
+			return Some((acc, i + 1));
+		}
+		i += 1;
+	}
+	None
+}
+
+fn prefixed_len(value: u64, prefix: u32, big: bool) -> usize {
+	let mask = (1u64 << prefix) - 1;
+
+	if value < mask {
+		return 1;
+	}
+	let mut rest = if big { value } else { value - mask };
+	let mut n = 1;
+	loop {
+		n += 1;
+		rest >>= 7;
+		if rest == 0 {
+			return n;
+		}
+	}
+}
+
+fn prefixed_put(out: &mut [u8], value: u64, prefix: u32, big: bool) -> usize {
+	let mask  = (1u64 << prefix) - 1;
+	let total = prefixed_len(value, prefix, big);
+
+	if total > out.len() {
+		return 0;
+	}
+	if total == 1 {
+		out[0] = (out[0] & !(mask as u8)) | value as u8;
+		return 1;
+	}
+	out[0] |= mask as u8;
+
+	let rest = if big { value } else { value - mask };
+	for i in 1..total {
+		let group = if big { total - 1 - i } else { i - 1 };
+		let more  = if i + 1 < total { 0x80 } else { 0 };
+		out[i] = ((rest >> (7 * group as u32)) & 0x7F) as u8 | more;
+	}
+	total
+}
+
+/// HPACK's integer, RFC 7541 5.1.
+#[inline]
+pub fn varint_hpack_get(bytes: &[u8], at: usize, prefix: u32, max_bytes: usize)
+		-> Option<(u64, usize)> {
+	prefixed_get(bytes, at, prefix, false, max_bytes)
+}
+
+/// The shortest encoding under `varint_hpack_get`.
+#[inline]
+pub fn varint_hpack_len(value: u64, prefix: u32) -> usize {
+	prefixed_len(value, prefix, false)
+}
+
+/// Encode HPACK's integer minimally, keeping the bits above the prefix.
+#[inline]
+pub fn varint_hpack_put(out: &mut [u8], value: u64, prefix: u32) -> usize {
+	prefixed_put(out, value, prefix, false)
+}
+
+/// A BER tag number, X.690 8.1.2.
+#[inline]
+pub fn varint_bertag_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	prefixed_get(bytes, at, 5, true, max_bytes)
+}
+
+/// The shortest encoding under `varint_bertag_get`.
+#[inline]
+pub fn varint_bertag_len(value: u64) -> usize {
+	prefixed_len(value, 5, true)
+}
+
+/// Encode a BER tag number minimally, keeping the class and form.
+#[inline]
+pub fn varint_bertag_put(out: &mut [u8], value: u64) -> usize {
+	prefixed_put(out, value, 5, true)
+}
+
+/// CBOR's head, RFC 8949 3: the low five bits of the first byte.
+#[inline]
+pub fn varint_cbor_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	marked_get(&CBOR, bytes, at, max_bytes)
+}
+
+/// The shortest encoding under `varint_cbor_get`.
+#[inline]
+pub fn varint_cbor_len(value: u64) -> usize {
+	marked_len(&CBOR, value)
+}
+
+/// Encode CBOR's head minimally, keeping the major type.
+#[inline]
+pub fn varint_cbor_put(out: &mut [u8], value: u64) -> usize {
+	marked_put(&CBOR, out, value)
 }
 
 /// A definite length, X.690 8.1.3.

@@ -3169,7 +3169,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			| (4 if placement.case_insensitive else 0) \
 			| (8 if is_bcd else 0) \
 			| (16 if placement.scaled else 0) \
-			| (32 if placement.peek else 0) \
+			| (32 if placement.peek or placement.shares_byte else 0) \
 			| (TEXT_PARAMETER if placement.parameter else 0) \
 			| (TEXT_FRAME_CAP if placement.remaining_cap is not None else 0)
 		placements_blob += _struct.pack(

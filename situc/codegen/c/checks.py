@@ -47,6 +47,7 @@ from situc.traverse import (Obligation, covered_run, data_sized,
 	enclosing_arm, has_computable_extent, indexed_elements,
 	inside_a_nested_member, inside_an_unresolved_arm, invalidating_members,
 	is_varint_run, local_name, measured_from_a_moving_base, obligations,
+	recursion_is_not_in_the_minimum, selected_by_a_peek,
 	own_members, reserved_constraint)
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -2166,6 +2167,16 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 			suite.skip(placement.path,
 			           "its pinned value lies outside the frame this check"
 			           " builds")
+			continue
+
+		if selected_by_a_peek(struct, placement):
+			suite.skip(placement.path,
+			           "breaking it selects another arm, which is no refusal")
+			continue
+
+		if recursion_is_not_in_the_minimum(resolved.structs, struct):
+			suite.skip(placement.path,
+			           "the minimum leaves out a member that closes a cycle")
 			continue
 
 		# A `must_eq` inside a variant arm is a constraint on bytes that are

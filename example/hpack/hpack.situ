@@ -1,0 +1,106 @@
+// HPACK: a header block, as RFC 7541 defines it.
+//
+// SOURCE. RFC 7541, sections 5 and 6. A block is a run of representations,
+// each opening with a pattern of one to four bits, and the rest of that byte
+// starts a number: an N-bit prefix, where all ones says leb128 groups follow
+// and are added to it (5.1). QPACK (RFC 9204) uses the same integer.
+//
+// WHY THIS ONE. A prefix has five widths here, chosen by the pattern above it,
+// and the string's length shares its byte with the Huffman flag: a number that
+// starts inside a byte and then sizes what follows it.
+//
+// WHICH SUBSET. The bytes on the wire. A string the Huffman flag marks stays
+// its coded bytes, and the static and dynamic tables that give an index its
+// meaning are the decoder's state, which is no property of a message.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+varint_type prefix4 { encoding = hpack; prefix = 4; max_bits = 32; }
+varint_type prefix5 { encoding = hpack; prefix = 5; max_bits = 32; }
+varint_type prefix6 { encoding = hpack; prefix = 6; max_bits = 32; }
+varint_type prefix7 { encoding = hpack; prefix = 7; max_bits = 32; }
+
+struct nothing {
+}
+
+// 5.2.
+struct string {
+	u1      huffman;
+	prefix7 length;
+	u8      data[length];
+}
+
+// A name is an index into the tables, or where that is zero a string (6.2).
+struct literal_name {
+	string name;
+}
+
+// 6.1.
+struct table_entry {
+	u1      pattern [must_eq = 1];
+	prefix7 index;
+}
+
+// 6.2.1.
+struct incremental {
+	u2      pattern [must_eq = 1];
+	prefix6 index;
+	variant name switch (index) {
+		case 0:  literal_name named;
+		default: nothing      by_index;
+	}
+	string  value;
+}
+
+// 6.2.2.
+struct without_indexing {
+	u4      pattern [must_eq = 0];
+	prefix4 index;
+	variant name switch (index) {
+		case 0:  literal_name named;
+		default: nothing      by_index;
+	}
+	string  value;
+}
+
+// 6.2.3.
+struct never_indexed {
+	u4      pattern [must_eq = 1];
+	prefix4 index;
+	variant name switch (index) {
+		case 0:  literal_name named;
+		default: nothing      by_index;
+	}
+	string  value;
+}
+
+// 6.3.
+struct size_update {
+	u3      pattern [must_eq = 1];
+	prefix5 max_size;
+}
+
+struct field {
+	peek u4 kind;
+	variant body switch (kind) {
+		case 0:  without_indexing plain;
+		case 1:  never_indexed    sensitive;
+		case 2:  size_update      resize;
+		case 3:  size_update      resize_high;
+		case 4:  incremental      added;
+		case 5:  incremental      added_5;
+		case 6:  incremental      added_6;
+		case 7:  incremental      added_7;
+		default: table_entry      from_table;
+	}
+}
+
+struct block {
+	field fields[remaining];
+}
+
+// The flag's byte is the length's first.
+require offset(string.length) == 0;
+require offset(table_entry.index) == 0;

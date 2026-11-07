@@ -1,0 +1,87 @@
+# situ wire signature v3
+# schema: cbor.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+varint head : cbor bits=64 bytes=9
+
+struct array size=1..
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=4
+  @0x0000   1..9      head       count  varint=head
+  ~         0..       item       items  sized-by=count
+  body switch: major
+  body case 0: as_unsigned
+  body case 1: as_negative
+  body case 2: as_bytes
+  body case 3: as_text
+  body case 4: as_array
+  body case 5: as_map
+  body case 6: as_tagged
+  body case 7: as_simple
+  body case default: error
+
+struct byte_string size=1..18446744073709551624
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=2
+  @0x0000   1..9      head       length  varint=head
+  ~         0..18446744073709551615 u8         bytes  sized-by=length
+
+struct item size=1..
+  @0x0000   3bit      u3         major  msb_first peek
+  @0x0000   0..       variant    body
+  body switch: major
+  body case 0: as_unsigned unsigned_integer
+  body case 1: as_negative negative_integer
+  body case 2: as_bytes byte_string
+  body case 3: as_text text_string
+  body case 4: as_array array
+  body case 5: as_map map
+  body case 6: as_tagged tagged
+  body case 7: as_simple simple
+  body case default: error
+
+struct map size=1..
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=5
+  @0x0000   1..9      head       count  varint=head
+  ~         0..       pair       pairs  sized-by=count
+
+struct negative_integer size=1..9
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=1
+  @0x0000   1..9      head       value  varint=head
+
+struct pair size=0..
+  @0x0000   0..       item       key
+  ~         0..       item       value
+
+struct simple size=1..9
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=7
+  @0x0000   1..9      head       value  varint=head
+
+struct tagged size=1..
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=6
+  @0x0000   1..9      head       tag  varint=head
+  ~         0..       item       content
+
+struct text_string size=1..18446744073709551624
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=3
+  @0x0000   1..9      head       length  varint=head
+  ~         0..18446744073709551615 u8         text  sized-by=length
+
+struct unsigned_integer size=1..9
+  @0x0000   3bit      u3         major  msb_first shares-byte must_eq=0
+  @0x0000   1..9      head       value  varint=head

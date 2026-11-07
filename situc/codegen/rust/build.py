@@ -24,6 +24,7 @@ from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
+from situc.codegen.c.build import peeked_byte
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
@@ -175,7 +176,10 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	most = (1 << part.value) - 1
 	tail = varint_put_tail(part.declared)
 	call = f"situ_rt::{varint_stem(part.declared)}_put"
-	if part.sizes is not None:
+	if part.stated is not None:
+		held  = f"{part.stated}u64"
+		value = held
+	elif part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)
 		held  = f"{_ident(run)}.len() as u64"
@@ -187,6 +191,10 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 		held  = f"{_ident(part.local)} as u64"
 		value = held
 	return [
+		*(["\tif " + " || ".join(f"{_ident(part.local)} == {v}"
+		                         for v in part.others)
+		   + " {", "\t\treturn Err(Error::Constraint);", "\t}"]
+		  if part.others else []),
 		*([f"\tif {held} > {most} {{",
 		   "\t\treturn Err(Error::Constraint);", "\t}"]
 		  if part.value < 64 else []),
@@ -212,9 +220,9 @@ def _nested(part: Part) -> list[str]:
 	return [
 		*([] if not part.others and part.value <= 0 else [
 			f"\tif {local}.is_empty() {{", *refuse,
-			(f"\tif {local}[0] != {part.value} {{" if part.value >= 0
+			(f"\tif {peeked_byte(local, part)} != {part.value} {{" if part.value >= 0
 			 else "\tif "
-			      + " || ".join(f"{local}[0] == {v}" for v in part.others)
+			      + " || ".join(f"{peeked_byte(local, part)} == {v}" for v in part.others)
 			      + " {"),
 			*refuse]),
 		f"\tmatch {inner}::required({local}) {{",

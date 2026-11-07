@@ -1416,6 +1416,7 @@ class Parser:
 		transform: ast.VarintTransform | None = None
 		max_bits: int | None                  = None
 		max_bytes: int | None                 = None
+		prefix: int | None                    = None
 		minimal                               = False
 		seen: set[str] = set()
 
@@ -1444,6 +1445,17 @@ class Parser:
 						label = ("out of range" if max_bytes is not None
 						         else "not a literal"),
 					)
+			elif prop.text == "prefix":
+				self.expect_symbol("=", "after `prefix`")
+				token = self.current
+				prefix = evaluate_literal(self.parse_expr())
+				if prefix is None or not 1 <= prefix <= 8:
+					raise error(
+						"`prefix` must be a literal from 1 to 8",
+						token.span,
+						label = ("out of range" if prefix is not None
+						         else "not a literal"),
+					)
 			elif prop.text == "max_bits":
 				self.expect_symbol("=", "after `max_bits`")
 				token = self.current
@@ -1460,7 +1472,7 @@ class Parser:
 					f"unknown varint property `{prop.text}`",
 					prop.span,
 					label = "expected `encoding`, `transform`, `max_bits`,"
-					        " `max_bytes` or `minimal`",
+					        " `max_bytes`, `prefix` or `minimal`",
 				)
 
 			self.expect_symbol(";", "after the varint property")
@@ -1472,7 +1484,8 @@ class Parser:
 				f"varint type `{name.text}` does not declare an encoding",
 				self.span_from(start),
 				label = "expected `encoding = leb128;`, `be128;`, `quic;`, `der;`,"
-				        " `compactsize;` or `lenenc;`",
+				        " `compactsize;`, `lenenc;`, `cbor;`, `hpack;` or"
+				        " `bertag;`",
 			)
 		if max_bits is None:
 			raise error(
@@ -1483,8 +1496,18 @@ class Parser:
 				         "nothing downstream can be bounded"],
 			)
 
+		if (encoding is ast.VarintEncoding.HPACK) != (prefix is not None):
+			raise error(
+				f"`{name.text}` needs `prefix` if and only if it is `hpack`",
+				self.span_from(start),
+				label = ("expected `prefix = N;`"
+				         if prefix is None else "only `hpack` has a choice"),
+				notes = ["it is how many bits of the first byte are the number's,"
+				         " and the rest are the fields' before it"],
+			)
+
 		decl = ast.VarintDecl(self.span_from(start), name.text, encoding,
-		                      max_bits, minimal, transform, max_bytes)
+		                      max_bits, minimal, transform, max_bytes, prefix)
 		self._check_varint_width(decl, name)
 		return decl
 
@@ -1518,7 +1541,18 @@ class Parser:
 				)
 			return
 
-		if decl.encoding in ast.MARKED:
+		if decl.encoding is ast.VarintEncoding.BERTAG and decl.max_bits % 7:
+			raise error(
+				f"`{name.text}` cannot be {decl.max_bits} bits in a `bertag`"
+				f" encoding",
+				decl.span,
+				label = "expected a multiple of seven",
+				notes = ["each following octet holds seven bits, and no reader"
+				         " here stops part way through one"],
+			)
+
+		if decl.encoding in ast.MARKED or decl.encoding in (
+				ast.VarintEncoding.HPACK, ast.VarintEncoding.BERTAG):
 			if decl.declared_max_bytes is not None:
 				raise error(
 					f"`{name.text}` declares `max_bytes` on a"

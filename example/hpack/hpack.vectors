@@ -1,0 +1,12 @@
+# Golden vectors for the HPACK worked example.
+#
+# RFC 7541, appendix C, each named for the section that gives it.
+
+block c_2_1 40 0a 63 75 73 74 6f 6d 2d 6b 65 79 0d 63 75 73 74 6f 6d 2d 68 65 61 64 65 72
+block c_2_2 04 0c 2f 73 61 6d 70 6c 65 2f 70 61 74 68
+block c_2_3 10 08 70 61 73 73 77 6f 72 64 06 73 65 63 72 65 74
+block c_2_4 82
+block c_3_1 82 86 84 41 0f 77 77 77 2e 65 78 61 6d 70 6c 65 2e 63 6f 6d
+block c_3_2 82 86 84 be 58 08 6e 6f 2d 63 61 63 68 65
+block c_3_3 82 87 85 bf 40 0a 63 75 73 74 6f 6d 2d 6b 65 79 0c 63 75 73 74 6f 6d 2d 76 61 6c 75 65
+block c_4_1 82 86 84 41 8c f1 e3 c2 e5 f2 3a 6b a0 ab 90 f4 ff

@@ -283,7 +283,9 @@ def test_hover_is_never_weaker_than_explain(path: Path) -> None:
 
 	compared = 0
 	for (start, _end), entries in alone.items():
-		if len(entries) != 1:
+		# `block.fields` and `block.fields[]` are one member, a run's row and
+		# its element's, and HPACK's schema has no other that stands alone.
+		if len({one.placement.path.replace("[]", "") for one in entries}) != 1:
 			continue
 		entry = entries[0]
 		line  = source.text.count("\n", 0, start)

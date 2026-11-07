@@ -1,0 +1,99 @@
+// CBOR: one data item, as RFC 8949 defines it.
+//
+// SOURCE. RFC 8949, section 3. A data item opens with one byte: the top three
+// bits are the major type, and the low five are the start of a number. Below
+// 24 they are the number; 24, 25, 26 and 27 say it is in the next one, two,
+// four or eight bytes, high byte first. What that number means depends on the
+// major type: the value itself, a length in bytes, a count of items.
+//
+// WHY THIS ONE. The number starts inside a byte. `u3 major` above it is an
+// ordinary bit field, so a reader asks for it by name and a writer sets it,
+// and the number that follows counts the byte. A map, an array or a tag holds
+// items in turn, which is the recursion: `item` peeks the major type, so each
+// arm owns the byte it was chosen by.
+//
+// WHICH SUBSET. Definite lengths only. An additional value of 31 opens an
+// indefinite item, ended by a break byte, and no reader here takes it as a
+// number; COSE, CTAP2 and deterministic encoding (4.2) leave it out too. A
+// float is the bits of its head, and `simple.value` says them as an integer.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+varint_type head {
+	encoding = cbor;
+	max_bits = 64;
+}
+
+struct unsigned_integer {
+	u3   major [must_eq = 0];
+	head value;
+}
+
+// Holds -1 - value, so 0x20 is -1.
+struct negative_integer {
+	u3   major [must_eq = 1];
+	head value;
+}
+
+struct byte_string {
+	u3   major [must_eq = 2];
+	head length;
+	u8   bytes[length];
+}
+
+struct text_string {
+	u3   major [must_eq = 3];
+	head length;
+	u8   text[length];
+}
+
+struct array [depth = 64] {
+	u3   major [must_eq = 4];
+	head count;
+	item items[count];
+}
+
+struct pair [depth = 64] {
+	item key;
+	item value;
+}
+
+struct map [depth = 64] {
+	u3   major [must_eq = 5];
+	head count;
+	pair pairs[count];
+}
+
+struct tagged [depth = 64] {
+	u3   major [must_eq = 6];
+	head tag;
+	item content;
+}
+
+struct simple {
+	u3   major [must_eq = 7];
+	head value;
+}
+
+// `[depth]` is the bound situ asks of a cycle, in structs: item to array and
+// back is two a level.
+struct item [depth = 64] {
+	peek u3 major;
+	variant body switch (major) {
+		case 0:  unsigned_integer as_unsigned;
+		case 1:  negative_integer as_negative;
+		case 2:  byte_string      as_bytes;
+		case 3:  text_string      as_text;
+		case 4:  array            as_array;
+		case 5:  map              as_map;
+		case 6:  tagged           as_tagged;
+		case 7:  simple           as_simple;
+		default: error;
+	}
+}
+
+// The major type's byte is the head's first, so the bytes begin where it does.
+require offset(byte_string.length) == 0;
+require offset(array.count) == 0;

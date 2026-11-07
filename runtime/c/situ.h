@@ -1949,24 +1949,26 @@ static inline uint32_t situ_varint_be_put(uint8_t *p, uint32_t avail,
  * no marker, or the whole is longer than `max_bytes`. */
 static inline uint32_t situ_varint_marked_get(const uint8_t *p, uint32_t avail,
         uint32_t max_bytes, uint32_t direct, uint32_t first, uint32_t count,
-        uint32_t widths, int big, uint64_t *out)
+        uint32_t widths, int big, uint32_t mask, uint64_t *out)
 {
 	uint64_t acc = 0;
+	uint32_t lead;
 	uint32_t n;
 	uint32_t i;
 
 	if (avail == 0u) {
 		return 0;
 	}
-	if (p[0] < direct) {
-		*out = p[0];
+	lead = p[0] & mask;
+	if (lead < direct) {
+		*out = lead;
 		return 1u;
 	}
-	if (p[0] < first || p[0] - first >= count) {
+	if (lead < first || lead - first >= count) {
 		return 0;
 	}
 
-	n = (widths >> (4u * (p[0] - first))) & 0xFu;
+	n = (widths >> (4u * (lead - first))) & 0xFu;
 	if (n + 1u > avail || n + 1u > max_bytes) {
 		return 0;
 	}
@@ -1998,10 +2000,10 @@ static inline uint32_t situ_varint_marked_len(uint64_t value, uint32_t direct,
 }
 
 /* Encode one marked integer minimally. Returns bytes written, or 0 if there is
- * no room. */
+ * no room. The first byte's bits above `mask` are another field's, and stay. */
 static inline uint32_t situ_varint_marked_put(uint8_t *p, uint32_t avail,
         uint64_t value, uint32_t direct, uint32_t first, uint32_t count,
-        uint32_t widths, int big)
+        uint32_t widths, int big, uint32_t mask)
 {
 	const uint32_t total = situ_varint_marked_len(value, direct, count, widths);
 	uint32_t i;
@@ -2011,13 +2013,13 @@ static inline uint32_t situ_varint_marked_put(uint8_t *p, uint32_t avail,
 		return 0;
 	}
 	if (total == 1u) {
-		p[0] = (uint8_t)value;
+		p[0] = (uint8_t)((p[0] & ~mask) | (uint32_t)value);
 		return 1u;
 	}
 	while (((widths >> (4u * at)) & 0xFu) != total - 1u) {
 		at++;
 	}
-	p[0] = (uint8_t)(first + at);
+	p[0] = (uint8_t)((p[0] & ~mask) | (first + at));
 	for (i = 0u; i < total - 1u; i++) {
 		p[1u + i] = (uint8_t)(value
 		            >> (8u * (big ? total - 2u - i : i)));
@@ -2025,11 +2027,12 @@ static inline uint32_t situ_varint_marked_put(uint8_t *p, uint32_t avail,
 	return total;
 }
 
-/* The three published tables. `ast.MARKED` names each, and each reader holds a
- * copy, since a walker carries no table of its own to be handed. */
-#define SITU_DER_FORM         0x80u, 0x81u, 8u, 0x87654321u, 1
-#define SITU_COMPACTSIZE_FORM 0xFDu, 0xFDu, 3u, 0x842u, 0
-#define SITU_LENENC_FORM      0xFBu, 0xFCu, 3u, 0x832u, 0
+/* The published tables. `ast.MARKED` names each, and each reader holds a copy,
+ * since a walker carries no table of its own to be handed. */
+#define SITU_DER_FORM         0x80u, 0x81u, 8u, 0x87654321u, 1, 0xFFu
+#define SITU_COMPACTSIZE_FORM 0xFDu, 0xFDu, 3u, 0x842u, 0, 0xFFu
+#define SITU_LENENC_FORM      0xFBu, 0xFCu, 3u, 0x832u, 0, 0xFFu
+#define SITU_CBOR_FORM        24u, 24u, 4u, 0x8421u, 1, 0x1Fu
 
 static inline uint32_t situ_varint_der_get(const uint8_t *p, uint32_t avail,
         uint32_t max_bytes, uint64_t *out)
@@ -2081,6 +2084,160 @@ static inline uint32_t situ_varint_lenenc_put(uint8_t *p, uint32_t avail,
         uint64_t value)
 {
 	return situ_varint_marked_put(p, avail, value, SITU_LENENC_FORM);
+}
+
+/* CBOR's head (RFC 8949, 3): the low five bits of a byte whose top three are
+ * the major type. */
+static inline uint32_t situ_varint_cbor_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_marked_get(p, avail, max_bytes, SITU_CBOR_FORM, out);
+}
+
+static inline uint32_t situ_varint_cbor_len(uint64_t value)
+{
+	return situ_varint_marked_len(value, 24u, 4u, 0x8421u);
+}
+
+static inline uint32_t situ_varint_cbor_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	return situ_varint_marked_put(p, avail, value, SITU_CBOR_FORM);
+}
+
+/* An integer in the low `prefix` bits of a byte, where all of them set says
+ * base-128 groups follow. `big` picks the form: high group first and the
+ * groups alone are the value, a BER tag number; or low group first and added
+ * to the prefix's own value, HPACK's (RFC 7541, 5.1).
+ *
+ * Returns bytes consumed, or 0 where the buffer ends inside it, it is longer
+ * than `max_bytes`, or it is past sixty-four bits. */
+static inline uint32_t situ_varint_prefixed_get(const uint8_t *p, uint32_t avail,
+        uint32_t prefix, int big, uint32_t max_bytes, uint64_t *out)
+{
+	const uint32_t mask = (1u << prefix) - 1u;
+	uint64_t acc = 0;
+	uint32_t shift = 0;
+	uint32_t i;
+
+	if (avail == 0u) {
+		return 0;
+	}
+	if ((p[0] & mask) != mask) {
+		*out = p[0] & mask;
+		return 1u;
+	}
+
+	for (i = 1u; i < avail && i < max_bytes; i++) {
+		const uint64_t group = p[i] & 0x7Fu;
+
+		if (big) {
+			if ((acc >> 57) != 0u) {
+				return 0;
+			}
+			acc = (acc << 7) | group;
+		} else {
+			if (shift >= 64u || ((group << shift) >> shift) != group) {
+				if (group != 0u) {
+					return 0;
+				}
+			} else {
+				acc |= group << shift;
+			}
+			shift += 7u;
+		}
+		if ((p[i] & 0x80u) == 0u) {
+			if (!big) {
+				if (acc > UINT64_MAX - mask) {
+					return 0;
+				}
+				acc += mask;
+			}
+			*out = acc;
+			return i + 1u;
+		}
+	}
+	return 0;
+}
+
+/* The shortest encoding under `situ_varint_prefixed_get`. */
+static inline uint32_t situ_varint_prefixed_len(uint64_t value, uint32_t prefix,
+        int big)
+{
+	const uint32_t mask = (1u << prefix) - 1u;
+	uint64_t rest = big ? value : value - mask;
+	uint32_t n = 1u;
+
+	if (value < mask) {
+		return 1u;
+	}
+	do {
+		n++;
+		rest >>= 7;
+	} while (rest != 0u);
+	return n;
+}
+
+/* Encode one minimally. Returns bytes written, or 0 if there is no room. The
+ * first byte's bits above the prefix are another field's, and stay. */
+static inline uint32_t situ_varint_prefixed_put(uint8_t *p, uint32_t avail,
+        uint64_t value, uint32_t prefix, int big)
+{
+	const uint32_t mask = (1u << prefix) - 1u;
+	const uint32_t total = situ_varint_prefixed_len(value, prefix, big);
+	uint64_t rest = big ? value : value - mask;
+	uint32_t i;
+
+	if (total > avail) {
+		return 0;
+	}
+	if (total == 1u) {
+		p[0] = (uint8_t)((p[0] & ~mask) | (uint32_t)value);
+		return 1u;
+	}
+	p[0] = (uint8_t)(p[0] | mask);
+	for (i = 1u; i < total; i++) {
+		const uint32_t group = big ? total - 1u - i : i - 1u;
+
+		p[i] = (uint8_t)(((rest >> (7u * group)) & 0x7Fu)
+		                 | (i + 1u < total ? 0x80u : 0u));
+	}
+	return total;
+}
+
+static inline uint32_t situ_varint_hpack_get(const uint8_t *p, uint32_t avail,
+        uint32_t prefix, uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_prefixed_get(p, avail, prefix, 0, max_bytes, out);
+}
+
+static inline uint32_t situ_varint_hpack_len(uint64_t value, uint32_t prefix)
+{
+	return situ_varint_prefixed_len(value, prefix, 0);
+}
+
+static inline uint32_t situ_varint_hpack_put(uint8_t *p, uint32_t avail,
+        uint64_t value, uint32_t prefix)
+{
+	return situ_varint_prefixed_put(p, avail, value, prefix, 0);
+}
+
+/* A BER tag number (X.690, 8.1.2): the low five bits of the identifier. */
+static inline uint32_t situ_varint_bertag_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_prefixed_get(p, avail, 5u, 1, max_bytes, out);
+}
+
+static inline uint32_t situ_varint_bertag_len(uint64_t value)
+{
+	return situ_varint_prefixed_len(value, 5u, 1);
+}
+
+static inline uint32_t situ_varint_bertag_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	return situ_varint_prefixed_put(p, avail, value, 5u, 1);
 }
 
 /* Decode one QUIC varint (RFC 9000, section 16): the top two bits of the

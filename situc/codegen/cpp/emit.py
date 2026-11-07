@@ -95,6 +95,7 @@ from situc.traverse import (
 	framing_floor,
 	nests_one_struct,
 	never_empty,
+	peek_floor,
 	framing_gaps,
 	has_computable_extent,
 	ends_in_the_frame,
@@ -3036,6 +3037,11 @@ class Emitter:
 			        " holds one")
 
 		steps: list[str] = []
+		floor = peek_floor(struct)
+		if floor:
+			steps.extend(["", f"\t\tif (have < {floor}u) {{",
+			              f"\t\t\tneed = {floor}u;",
+			              "\t\t\treturn ::situ::rt::err::truncated;", "\t\t}"])
 		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
 		# The C emitter's `_required` carries the reasoning and the proof.
 		gaps = framing_gaps(self.resolved.structs, struct)
@@ -8319,10 +8325,10 @@ class Emitter:
 			"\t * put an error path in every accessor after this one. */",
 			f"\t[[nodiscard]] {ctype} {name}_value() const noexcept",
 			"\t{",
-			f"\t\t{ctype} value = 0;",
+			f"\t\t{ctype} held = 0;",
 			"",
-			f"\t\t(void){name}(value);",
-			"\t\treturn value;",
+			f"\t\t(void){name}(held);",
+			"\t\treturn held;",
 			"\t}",
 		]
 

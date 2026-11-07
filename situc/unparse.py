@@ -157,6 +157,8 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		if decl.transform is not None:
 			lines.append(f"\ttransform = {decl.transform.value};")
 		lines.append(f"\tmax_bits = {decl.max_bits};")
+		if decl.prefix is not None:
+			lines.append(f"\tprefix = {decl.prefix};")
 		if decl.declared_max_bytes is not None:
 			lines.append(f"\tmax_bytes = {decl.declared_max_bytes};")
 		if decl.minimal:

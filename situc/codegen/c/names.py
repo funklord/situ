@@ -53,7 +53,8 @@ KEYWORDS = CPP_KEYWORDS | frozenset({
 #: which is the half a literal needs: a list nobody checks is a list that has
 #: drifted.
 RUNTIME_SYMBOLS = frozenset({
-	"SITU_ALWAYS_INLINE", "SITU_COMPACTSIZE_FORM", "SITU_DER_FORM", "SITU_H",
+	"SITU_ALWAYS_INLINE", "SITU_CBOR_FORM", "SITU_COMPACTSIZE_FORM",
+	"SITU_DER_FORM", "SITU_H",
 	"SITU_HOST_BIG", "SITU_LEAF_MAX", "SITU_LENENC_FORM",
 	"SITU_NO_BYTE", "SITU_RUNTIME_ABI", "SITU_STALE",
 	"SITU_VERSION_MAJOR", "SITU_VERSION_MINOR",
@@ -91,6 +92,11 @@ RUNTIME_SYMBOLS = frozenset({
 	"situ_varint_compactsize_put", "situ_varint_lenenc_get",
 	"situ_varint_lenenc_len", "situ_varint_lenenc_put",
 	"situ_varint_marked_get", "situ_varint_marked_len", "situ_varint_marked_put",
+	"situ_varint_prefixed_get", "situ_varint_prefixed_len",
+	"situ_varint_prefixed_put", "situ_varint_cbor_get", "situ_varint_cbor_len",
+	"situ_varint_cbor_put", "situ_varint_hpack_get", "situ_varint_hpack_len",
+	"situ_varint_hpack_put", "situ_varint_bertag_get", "situ_varint_bertag_len",
+	"situ_varint_bertag_put",
 	"situ_varint_len", "situ_varint_put", "situ_view_assert",
 	"situ_view_at", "situ_view_check", "situ_view_sub", "situ_view_t",
 	"situ_zeroize", "situ_zigzag_decode", "situ_zigzag_encode"
