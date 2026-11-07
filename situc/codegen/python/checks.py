@@ -30,7 +30,7 @@ from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
                            digit_pattern, passes_unknown, placed_bytes,
                            refuse_only_arguments, required_pattern,
                            takes_arguments,
-                           held_struct_goes_short, required_run,
+                           no_baseline_stands, required_run,
                            reserved_policy, selected_arms)
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.python.emit import py_name
@@ -996,7 +996,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 	"""
 	writes: list[str] = []
 	carried = selected_arms(resolved, struct, inside)
-	if held_struct_goes_short(resolved, struct, carried):
+	if no_baseline_stands(resolved, struct, carried):
 		return None
 
 	for entry in struct.entries:

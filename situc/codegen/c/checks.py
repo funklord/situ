@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from situc.codegen import (INSTANCE_CEILING, PROBE_BYTES, argued_sides,
 	arguments, buffer_size, digit_pattern, passes_unknown, placed_bytes,
-	held_struct_goes_short, refuse_parameters, required_pattern, required_run,
+	no_baseline_stands, refuse_parameters, zero_is_no_message, required_pattern, required_run,
 	reserved_policy, selected_arms)
 from situc import __version__
 
@@ -675,6 +675,11 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	run time. Two different routes to the same number, which is what makes
 	disagreement mean something.
 	"""
+	if zero_is_no_message(resolved, struct):
+		suite.skip(struct.name, "a zero byte is no number here, so a zeroed"
+		           " instance holds no message")
+		return
+
 	members = own_members(struct)
 	# A member sized by *arithmetic* is driven too, and this counted only the
 	# bare references: `u8 value[length - 1]` has a `size_expr` and no
@@ -816,6 +821,11 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 		prefix: str, offset: int, chosen: dict[str, int]) -> list[str]:
 	"""Ask one member where it starts, however it is willing to say."""
 	if placement.kind != "field":
+		return []
+	# A varint has a value and a length, and no view to ask: this called a
+	# `_view` nothing emits, for `document`'s `segment` in `example/matroska`,
+	# the first struct with no worst case to hold one past a run.
+	if placement.varint is not None:
 		return []
 
 	local = c_name(placement.path[len(struct.name) + 1:])
@@ -2051,7 +2061,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 	"""
 	writes: list[str] = []
 	carried = selected_arms(resolved, struct, inside)
-	if held_struct_goes_short(resolved, struct, carried):
+	if no_baseline_stands(resolved, struct, carried):
 		return None
 
 	for entry in struct.entries:

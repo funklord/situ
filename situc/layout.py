@@ -294,6 +294,9 @@ class Placement:
 	#: integer, and the two disagreed about -39 while agreeing about its
 	#: bits (26.687).
 	varint_signed: bool		= False
+	#: A zero byte is no number in this encoding: EBML's first set bit says the
+	#: width, so a zeroed buffer holds nothing to read (26.925).
+	varint_needs_a_mark: bool	= False
 	# The earlier member that made this one's offset dynamic, and where it is
 	# declared. Section 17 asks a blame chain to name the root cause and point
 	# at it, not at the field that suffers.
@@ -2614,6 +2617,7 @@ class Solver:
 			                  if member.type_ref.name in self.varints else None),
 			varint_minimal = self._varint_minimal(member),
 			varint_signed = self._varint_signed(member),
+			varint_needs_a_mark = self._varint_needs_a_mark(member),
 			# Not for a delimited member. `array_extent` returns one run for
 			# `x[] until "D"` because that is what a run is, and recording it
 			# here said "an array of exactly one element", which is false and
@@ -2832,6 +2836,11 @@ class Solver:
 	def _varint_minimal(self, member: ast.Field | ast.Reserved) -> bool:
 		varint = self.varints.get(member.type_ref.name)
 		return True if varint is None else varint.minimal
+
+	def _varint_needs_a_mark(self, member: ast.Field | ast.Reserved) -> bool:
+		varint = self.varints.get(member.type_ref.name)
+		return varint is not None and varint.encoding in (
+			ast.VarintEncoding.EBML, ast.VarintEncoding.EBML_ID)
 
 	def _varint_signed(self, member: ast.Field | ast.Reserved) -> bool:
 		"""Whether this member's varint decodes to a signed number.

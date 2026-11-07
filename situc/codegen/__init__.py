@@ -613,6 +613,51 @@ def required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return None
 
 
+def zero_is_no_message(resolved: ResolvedSchema, struct: ResolvedStruct,
+		seen: frozenset[str] = frozenset()) -> bool:
+	"""Whether a zeroed buffer holds no message, whatever it is sized to.
+
+	Every fixture here starts from zeros, and in EBML a zero byte is no number
+	at all. Nothing a check could write fixes that without knowing the format.
+	"""
+	if struct.name in seen:
+		return False
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.varint_needs_a_mark:
+			return True
+		nested = resolved.structs.get(placement.type_name or "")
+		if nested is not None and zero_is_no_message(
+				resolved, nested, seen | {struct.name}):
+			return True
+	return False
+
+
+def no_baseline_stands(resolved: ResolvedSchema, struct: ResolvedStruct,
+		carried: set[str]) -> bool:
+	"""Whether no zeroed buffer can be made to satisfy this struct.
+
+	Three ways: a held struct it starves, a form with no zero, and a pin behind
+	a variable member, which has no byte to write to from here and which zeros
+	break: `example/wasm`'s `op [must_eq = 0x41]` behind a varint, so `validate`
+	refused the fixture before a check had broken anything.
+	"""
+	if held_struct_goes_short(resolved, struct, carried) \
+			or zero_is_no_message(resolved, struct):
+		return True
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.offset_bits is not None or not placement.size_bits \
+				or "[]" in placement.path:
+			continue
+		chosen = traverse.enclosing_arm(struct, placement)
+		if (chosen is None or chosen[1].member in carried) \
+				and (required_pattern(resolved, struct, placement)
+				     or any(required_run(placement) or b"")):
+			return True
+	return False
+
+
 def held_struct_goes_short(resolved: ResolvedSchema, struct: ResolvedStruct,
 		carried: set[str]) -> bool:
 	"""Whether a baseline's zeroed buffer starves a struct this one holds.
