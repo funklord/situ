@@ -531,6 +531,8 @@ class Placement:
 	repeat_while: str | None	= None
 	#: A bound on the number of elements, from `while (...) max N`.
 	repeat_cap: int | None		= None
+	#: `while (c) | end`: the frame may end the run as well (26.927).
+	repeat_or_end: bool		= False
 	#: `decimal`/`hex`: the base the value is written in. The `scalar` beside
 	#: it gives the value's domain rather than its width in the buffer, which
 	#: for a text number depends on the number (section 8.6.2).
@@ -2655,6 +2657,7 @@ class Solver:
 			repeat_shown       = _repeat_source(member, explicit=False),
 			repeat_ast         = _repeat_tree(member),
 			repeat_cap         = self._repeat_cap(member),
+			repeat_or_end      = _repeat_or_end(member),
 			radix              = getattr(member, "radix", None),
 			scaled             = bool(getattr(member, "scaled", False)),
 			peek               = bool(getattr(member, "peek", False)),
@@ -4503,6 +4506,12 @@ def _size_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
 def _repeat_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
 	repeat = getattr(member, "repeat", None)
 	return None if repeat is None else repeat.predicate
+
+
+def _repeat_or_end(member: ast.Field | ast.Reserved) -> bool:
+	"""Whether a `while` run says the frame may end it (26.927)."""
+	repeat = getattr(member, "repeat", None)
+	return repeat is not None and repeat.or_end
 
 
 def _repeat_source(member: ast.Field | ast.Reserved,

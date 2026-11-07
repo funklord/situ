@@ -140,7 +140,7 @@ byte_set	= char { "|" char } ;
  * the message. Distinct from `pin`, which asserts the offset the solver
  * computed and places nothing -- section 9.8. *)
 located		= "at" expr ;
-repeat		= "while" "(" expr ")" [ "max" expr ] ;	(* section 8.6.6 *)
+repeat		= "while" "(" expr ")" [ "|" "end" ] [ "max" expr ] ;	(* section 8.6.6 *)
 (* Section 8.6.2 and decision 0056. `decimal`, `hex` and `octal` read an
  * integer; `scaled` reads a decimal that may carry a point and an
  * exponent, whose value is an exact (significand, power of ten) rather

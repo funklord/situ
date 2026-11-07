@@ -2471,6 +2471,8 @@ def record_run_ended(view: View, index: int) -> bool:
 	Asked of the walk and not of the last bytes: an element may end in the
 	terminator's byte, and that is the element's.
 	"""
+	if view.image.placements[index].repeat_code != NONE:
+		return _while_walk(view, index)[2]
 	return _record_run_walk(view, index)[2] > 0
 
 
@@ -2575,8 +2577,9 @@ def sized_run_count(view: View, index: int, depth: int = 0) -> int:
 
 
 def _while_walk(view: View, index: int,
-		depth: int = 0) -> tuple[int, int]:
-	"""How many elements a `while` run holds.
+		depth: int = 0) -> tuple[int, int, bool]:
+	"""How many elements a `while` run holds, how far it reaches, and whether
+	it ended by its own rule rather than where the frame stopped (26.927).
 
 	The predicate is asked about the element *just parsed*, which is the
 	whole difference from `until`: `until` asks about the position before
@@ -2633,8 +2636,8 @@ def _while_walk(view: View, index: int,
 		# members after the run. The only `_evaluate` here that did not
 		# say where `remaining` starts.
 		if not while_holds(sub, placement.repeat_code, extent):
-			break
-	return count, at - start
+			return count, at - start, True
+	return count, at - start, count >= cap
 
 
 def while_holds(sub: View, code: int, extent: int) -> bool:

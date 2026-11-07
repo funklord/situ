@@ -2940,12 +2940,20 @@ class Parser:
 		predicate = self.parse_expr()
 		self.expect_symbol(")", "after the condition")
 
+		or_end = self.current.is_symbol("|")
+		if or_end:
+			self.advance()
+			if not self.current.is_ident("end"):
+				raise error("a `while` run may go on to `| end` and nothing else",
+				            self.current.span, label = "expected `end`")
+			self.advance()
+
 		cap: ast.Expr | None = None
 		if self.current.is_ident("max"):
 			self.advance()
 			cap = self.parse_expr()
 
-		return ast.While(self.span_from(start), predicate, cap)
+		return ast.While(self.span_from(start), predicate, cap, or_end)
 
 	def parse_until(self) -> ast.Until | None:
 		"""`until "\\r\\n"`, optionally bounded and optionally relaxed.

@@ -2524,7 +2524,7 @@ static situ_walk_err while_walk(const situ_walk_image *image,
                                 const uint8_t *message, uint32_t len,
                                 uint32_t shape, uint32_t index,
                                 uint32_t depth, uint32_t *count,
-                                uint32_t *bytes)
+                                uint32_t *bytes, int *ended)
 {
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
@@ -2617,11 +2617,17 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 		 * others take three, swallowing the two members after the run. */
 		err = situ_walk_eval(image, held.repeat_code, ctx_load, &ctx,
 		                     (int64_t)(len - at), &more);
+		if (err == SITU_WALK_OK && more == 0) {
+			*ended = 1;
+		}
 		if (err != SITU_WALK_OK || more == 0) {
 			break;
 		}
 	}
 
+	if (n >= cap) {
+		*ended = 1;
+	}
 	*count = n;
 	*bytes = at - start;
 	return SITU_WALK_OK;
@@ -3028,8 +3034,9 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		}
 		uint32_t count = 0u;
 		uint32_t bytes = 0u;
+		int      ended = 0;
 		err = while_walk(image, message, len, shape, index, depth,
-		                 &count, &bytes);
+		                 &count, &bytes, &ended);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -4245,8 +4252,9 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 	 * the walk rather than continuing one. */
 	if (held.repeat_code != SITU_WALK_NONE) {
 		uint32_t bytes = 0u;
+		int      ended = 0;
 		return while_walk(image, message, len, shape, index, 0u, out,
-		                  &bytes);
+		                  &bytes, &ended);
 	}
 
 	if (held.array_count != SITU_WALK_NONE) {
@@ -5290,12 +5298,19 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 			uint32_t count = 0u;
 			uint32_t bytes = 0u;
 			uint32_t took  = 0u;
-			err = record_run_walk(image, message, len, shape, chosen, depth,
-			                      &count, &bytes, &took);
+			int      ended = 0;
+			if (arm.repeat_code != SITU_WALK_NONE) {
+				err = while_walk(image, message, len, shape, chosen, depth,
+				                 &count, &bytes, &ended);
+			} else {
+				err = record_run_walk(image, message, len, shape, chosen,
+				                      depth, &count, &bytes, &took);
+				ended = took != 0u;
+			}
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
 			}
-			if (err != SITU_WALK_OK || took == 0u) {
+			if (err != SITU_WALK_OK || !ended) {
 				record(why, chosen, CHECK_TERMINATED);
 				*verdict = err != SITU_WALK_OK ? SITU_WALK_BOUNDS
 				                               : SITU_WALK_CONSTRAINT;
@@ -6706,7 +6721,12 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			uint32_t content    = 0u;
 			uint32_t took       = 0u;
 			int      terminated = 0;
-			if (held.type_struct != SITU_WALK_NONE) {
+			if (held.repeat_code != SITU_WALK_NONE) {
+				/* A `while` run: the last element read says (26.927). */
+				uint32_t count = 0u;
+				err = while_walk(image, message, len, shape, index, depth,
+				                 &count, &content, &terminated);
+			} else if (held.type_struct != SITU_WALK_NONE) {
 				/* A run: the walk says, and not the last bytes, as an
 				 * element may end in the terminator's byte (26.926). */
 				uint32_t count = 0u;

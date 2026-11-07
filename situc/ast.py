@@ -314,7 +314,8 @@ class Skip(Node):
 @dataclass(frozen=True)
 class While(Node):
 	"""`while (separator == 0x2D)` -- a run that ends after an element that
-	fails a predicate (section 8.6.6).
+	fails a predicate (section 8.6.6), or at the frame's end as well where
+	`| end` says the frame may end it (26.927).
 
 	Different from `until` in the quantifier, which is the whole of it.
 	`until` asks about the position *before* each element: is the terminator
@@ -336,6 +337,7 @@ class While(Node):
 	span: Span
 	predicate: Expr
 	cap: Expr | None = None
+	or_end: bool = False
 
 
 @dataclass(frozen=True)

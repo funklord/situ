@@ -175,7 +175,7 @@ struct nl_message [allow_host_dependent] {
 	// a malformed message this walks one attribute the kernel would not. The
 	// element is refused by `validate` either way, and a walk with no
 	// stopping rule at all would loop on a length of zero (invariant 24).
-	nlattr  attrs[] while (nla_len >= 4);
+	nlattr  attrs[] while (nla_len >= 4) | end;
 }
 
 // netlink.h:246. `nla_type & NLA_TYPE_MASK` is what the kernel compares

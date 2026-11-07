@@ -38,7 +38,7 @@ struct nl_message size=20..
   @0x0008   4         u32        nlmsg_seq  native
   @0x000c   4         u32        nlmsg_pid  native
   @0x0010   0..4294967279 variant    body
-  ~         4..       nlattr     attrs  native while=nla_len>=4
+  ~         4..       nlattr     attrs  native while=nla_len>=4 while-or-end
   body switch: nlmsg_type
   body case 2: err nlmsgerr
   body case 3: terminator i32

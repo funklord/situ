@@ -117,6 +117,7 @@ from situc.traverse import (
 	local_name,
 	matched_values,
 	must_be_terminated,
+	must_end,
 	obligation,
 	obligations,
 	CursorStep,
@@ -2624,7 +2625,27 @@ class Emitter:
 			"\t}",
 		]
 
+		ended = [
+			"",
+			"\t/* Whether the last element read says the run is over: a frame",
+			"\t * that stops first cut it short. */",
+			f"\t[[nodiscard]] bool {name}_ended() const noexcept",
+			"\t{",
+			*[line.replace("break;", "return false;") for line in walk],
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			f"\t\t\tif (!({self._element_cond(element, placement)})) {{",
+			"\t\t\t\treturn true;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t\t(void)n;",
+			("\t\treturn false;" if placement.repeat_cap is None
+			 else f"\t\treturn n >= {placement.repeat_cap}u;"),
+			"\t}",
+		] if must_end(placement) else []
+
 		return [
+			*ended,
 			"",
 			f"\t/* {placement.path} is a run of `{placement.type_name}` ending",
 			f"\t * after the element for which `{placement.repeat_while}` is",
@@ -4608,8 +4629,7 @@ class Emitter:
 		element = self.resolved.structs.get(member.type_name or "")
 		# With no tail the walk is asked for the terminator alone (26.926).
 		ended = not tail
-		if ((ended and (member.repeat_while is not None
-		                or not must_be_terminated(member)))
+		if ((ended and not must_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None
@@ -4626,6 +4646,7 @@ class Emitter:
 			loop  = f"\t\t\twhile (at < raw_.limit{cap}) {{"
 			after = [
 				f"\t\t\t\tif (!({self._element_cond(element, member)})) {{",
+				*(["\t\t\t\t\tfound = true;"] if ended else []),
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 				"\t\t\t}",
@@ -4671,7 +4692,9 @@ class Emitter:
 			"\t\t\t\tn  += 1;",
 			*after,
 			"\t\t\t(void)n;",
-			*(["\t\t\tif (!found) {",
+			*(["\t\t\tif (!found"
+			   + ("" if member.repeat_cap is None
+			      else f" && n < {member.repeat_cap}u") + ") {",
 			   "\t\t\t\treturn ::situ::rt::err::constraint;",
 			   "\t\t\t}"] if ended else [
 				f"\t\t\tif (situ_remaining_u32(raw_.limit, at) < {tail}u) {{",
@@ -11426,8 +11449,9 @@ class Emitter:
 	def _run_ended_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run a terminator ends has it, or the frame stopped early (26.926)."""
-		if classify(struct, placement, self.structs) is not Member.RECORD_RUN \
-				or not must_be_terminated(placement):
+		if classify(struct, placement, self.structs) not in (
+				Member.RECORD_RUN, Member.REPEAT_WHILE) \
+				or not must_end(placement):
 			return []
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or self._no_element_extent(element) \

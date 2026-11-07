@@ -1470,6 +1470,10 @@ about one would be circular, and its earlier members are a temptation worth
 refusing, because a condition mixing both scopes reads as though it were
 evaluated once and it is evaluated per element.
 
+**A frame that stops first cut the run short**, and `| end` says it may stop one:
+netlink's attributes run to the end of their message, where an IPv6 chain may not.
+`max N` ends a run as well (26.927).
+
 **A `while` run is never empty.** The first element is parsed before the
 condition is evaluated. Whether the run is there at all is a different
 question and `variant` is what asks it.
@@ -8318,6 +8322,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.927 A `while` run ends by its rule, or says the frame may end it
+
+Moved to `doc/decision/26.927-a-while-run-ends-by-its-rule.md`.
 
 ### 26.926 A run a terminator ends has one
 

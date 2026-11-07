@@ -756,7 +756,8 @@ def _while_to_source(repeat: "ast.While | None") -> str:
 		return ""
 
 	cap = f" max {expr_to_source(repeat.cap)}" if repeat.cap is not None else ""
-	return f" while ({expr_to_source(repeat.predicate)}){cap}"
+	end = " | end" if repeat.or_end else ""
+	return f" while ({expr_to_source(repeat.predicate)}){end}{cap}"
 
 
 def _escape(text: str, quote: str = '"') -> str:

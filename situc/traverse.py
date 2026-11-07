@@ -1125,6 +1125,18 @@ def selected_by_a_peek(struct: "ResolvedStruct",
 	           for held in struct.layout.placements)
 
 
+def must_end(placement: "Placement") -> bool:
+	"""Whether `validate` requires a run to have ended by its own rule.
+
+	A frame that stops first cut the run short (26.926), and `| end` says it
+	may stop one, as netlink's attributes run to the end of their message
+	(26.927).
+	"""
+	if placement.repeat_while is not None:
+		return not placement.repeat_or_end
+	return must_be_terminated(placement)
+
+
 def never_empty(structs: dict[str, "ResolvedStruct"],
 		placement: Placement) -> bool:
 	"""Whether one element of this run has bytes whatever the message says.

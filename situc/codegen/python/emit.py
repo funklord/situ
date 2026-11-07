@@ -113,6 +113,7 @@ from situc.traverse import (
 	local_name,
 	matched_values,
 	must_be_terminated,
+	must_end,
 	obligation,
 	obligations,
 	CursorStep,
@@ -5936,9 +5937,27 @@ class Emitter:
 			f"\t\treturn self._{name}_walk_from(at, depth)[-1] - at",
 		]
 		marked = self._marked_copy(struct, walked)
+		plain  = self._element_condition(element, placement, "at", "self._len")
+		ended = [
+			"",
+			f"\tdef _{name}_ended(self) -> bool:",
+			'\t\t"""Whether the last element read says the run is over: a frame',
+			'\t\tthat stops first cut it short."""',
+			f"\t\tstarts = self._{name}_walk()",
+			"\t\tif len(starts) < 2:",
+			"\t\t\treturn False",
+			*([f"\t\tif len(starts) > {placement.repeat_cap}:",
+			   "\t\t\treturn True"] if placement.repeat_cap is not None else []),
+			"\t\tat = starts[-1]",
+			f"\t\t_element = {self._made(struct, placement, inner)}(self._msg,"
+			" self._at + starts[-2],",
+			f"\t\t\tself._len - starts[-2]{self._child(struct, placement)[1]})",
+			f"\t\treturn not ({plain})",
+		] if must_end(placement) else []
 		return [
 			*walked,
 			*marked,
+			*ended,
 			*spans,
 			*self._marked_copy(struct, spans),
 			"",
@@ -7799,8 +7818,7 @@ class Emitter:
 		element = self.resolved.structs.get(member.type_name or "")
 		# With no tail the walk is asked for the terminator alone (26.926).
 		ended = not tail
-		if ((ended and (member.repeat_while is not None
-		                or not must_be_terminated(member)))
+		if ((ended and not must_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None
@@ -7824,6 +7842,7 @@ class Emitter:
 			loop  = f"\t\t\twhile {at} < self._len{cap}:"
 			after = [
 				f"\t\t\t\tif not ({cond}):",
+				*([f"\t\t\t\t\t{at}_ended = True"] if ended else []),
 				"\t\t\t\t\tbreak",
 			]
 		else:
@@ -7850,9 +7869,11 @@ class Emitter:
 			f"\t\t\t\t{at} += size",
 			f"\t\t\t\t{n} += 1",
 			*after,
-			*([f"\t\t\tif not {at}_ended:",
+			*([f"\t\t\tif not {at}_ended"
+			   + ("" if member.repeat_cap is None
+			      else f" and {n} < {member.repeat_cap}") + ":",
 			   "\t\t\t\traise ConstraintError(",
-			   f'\t\t\t\t\t"{member.path} has no terminator:'
+			   f'\t\t\t\t\t"{member.path} does not end:'
 			   ' the frame stops first")'] if ended else [
 				*([] if member.repeat_while is not None else [
 					f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
@@ -9621,8 +9642,9 @@ class Emitter:
 	def _run_ended_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run a terminator ends has it, or the frame stopped early (26.926)."""
-		if classify(struct, placement, self.structs) is not Member.RECORD_RUN \
-				or not must_be_terminated(placement):
+		if classify(struct, placement, self.structs) not in (
+				Member.RECORD_RUN, Member.REPEAT_WHILE) \
+				or not must_end(placement):
 			return []
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or self._no_element_extent(element) \
@@ -9631,7 +9653,7 @@ class Emitter:
 		name = py_name(local_name(struct, placement))
 		return [f"\t\tif not self._{name}_ended():",
 		        "\t\t\traise ConstraintError(",
-		        f'\t\t\t\t"{placement.path} has no terminator:'
+		        f'\t\t\t\t"{placement.path} does not end:'
 		        ' the frame stops first")']
 
 	def _member_check(self, struct: ResolvedStruct,

@@ -113,6 +113,7 @@ from situc.traverse import (
 	local_name,
 	matched_values,
 	must_be_terminated,
+	must_end,
 	obligation,
 	obligations,
 	offset_plan,
@@ -7040,7 +7041,28 @@ class Emitter:
 			"}",
 		]
 
+		ended = [
+			"/* Whether the last element read says the run is over: a frame that",
+			" * stops first cut it short. */",
+			f"static inline int {ident(self.prefix, struct.name, local, 'ended')}"
+			f"(situ_view_t view{reach})",
+			"{",
+			*[line.replace("break;", "return 0;") for line in walk],
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			f"\t\tif (!({cond})) {{",
+			"\t\t\treturn 1;",
+			"\t\t}",
+			"\t}",
+			"\t(void)n;",
+			("\treturn 0;" if placement.repeat_cap is None
+			 else f"\treturn n >= {placement.repeat_cap}u;"),
+			"}",
+			"",
+		] if must_end(placement) else []
+
 		return [
+			*ended,
 			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"
 			f" after the",
 			f" * element for which `{placement.repeat_while}` is false. The"
@@ -9385,8 +9407,7 @@ class Emitter:
 		element = self.resolved.structs.get(member.type_name or "")
 		# With no tail the walk is asked for the terminator alone (26.926).
 		ended = not tail
-		if ((ended and (member.repeat_while is not None
-		                or not must_be_terminated(member)))
+		if ((ended and not must_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None and not member.delimiters)
@@ -9401,13 +9422,19 @@ class Emitter:
 			        else f" && n < {member.repeat_cap}u")
 			cond = self._element_condition(element, member, struct)
 			body = [
+				*(["\tint found = 0;"] if ended else []),
 				*self._walk_prologue(base, cap, extent),
 				"\t\tat = at + size;",
 				"\t\tn  = n + 1u;",
 				f"\t\tif (!({cond})) {{",
+				*(["\t\t\tfound = 1;"] if ended else []),
 				"\t\t\tbreak;",
 				"\t\t}",
 				"\t}",
+				*([("\tif (!found) {" if member.repeat_cap is None else
+				    f"\tif (!found && n < {member.repeat_cap}u) {{"),
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if ended else []),
 			]
 		else:
 			delim  = member.delimiter
@@ -14488,7 +14515,20 @@ class Emitter:
 		# element entry beside it, which is not the same as one with a count.
 		if self._is_array(placement) or self._is_record_run(placement) \
 				or placement.repeat_while is not None:
-			return self._element_validation(struct, placement)
+			element = self.resolved.structs[placement.type_name]
+			walked  = element.layout.is_fixed_size or (
+				self._struct_extent(element)
+				and has_element_extent(self.resolved.structs, element))
+			return [*([
+				f"\t/* `{placement.name}` ends by its own rule, and a frame that",
+				"\t * stops first cut it short. */",
+				f"\tif (!{ident(self.prefix, struct.name, local, 'ended')}"
+				f"(view{self._member_args(struct, placement)})) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			] if walked and placement.repeat_while is not None
+			     and must_end(placement) else []),
+				*self._element_validation(struct, placement)]
 
 		return [
 			*self._entering_depth(struct, placement),

@@ -1,9 +1,12 @@
-"""A run a terminator ends has one, or the frame stopped early (26.926).
+"""A run ends by its own rule, or the frame stopped early (26.926, 26.927).
 
 `T x[] until "D"` passed `validate` with no terminator anywhere, in all six
 readers, wherever the run was the last member: the walk stopped at the frame
 and nothing asked why. `required` has always called the same bytes incomplete.
 The verdicts below are worked by hand, as agreement is what went wrong.
+
+`T x[] while (c)` had the same hole, and `| end` is its answer as well: netlink's
+attributes run to the end of their message, and an IPv6 chain may not.
 """
 
 from __future__ import annotations
@@ -43,6 +46,33 @@ struct direct {
 		default: error;
 	}
 }
+struct link   { u8 next; u8 v; }
+struct chain  { link es[] while (next != 0); }
+struct capped { link es[] while (next != 0) max 2; }
+struct open   { link es[] while (next != 0) | end; }
+struct after  { link es[] while (next != 0); u8 tail; }
+struct in_arm {
+	u8 kind;
+	variant body switch (kind) {
+		case 1:  link es[] while (next != 0);
+		default: error;
+	}
+}
+struct capped_arm {
+	u8 kind;
+	variant body switch (kind) {
+		case 1:  link es[] while (next != 0) max 2;
+		default: error;
+	}
+}
+struct open_arm {
+	u8 kind;
+	variant body switch (kind) {
+		case 1:  link es[] while (next != 0) | end;
+		default: error;
+	}
+}
+struct chained { u8 tag; chain inner; }
 """
 
 WHOLE, CUT = "0", "2"
@@ -71,6 +101,26 @@ CASES = [
 	("chosen", "0101", CUT),
 	("direct", "0101ff", WHOLE),
 	("direct", "0101", CUT),
+	# `next` says one more follows, and the frame stops.
+	("chain", "0102", CUT),
+	("chain", "0102" "0003", WHOLE),
+	("chain", "0102" "0103", CUT),
+	# Half an element is no element, and the last whole one said go on.
+	("chain", "0102" "00", CUT),
+	# The cap ends it as well as the condition.
+	("capped", "0102" "0103", WHOLE),
+	("capped", "0102", CUT),
+	("capped", "0003", WHOLE),
+	("open", "0102", WHOLE),
+	("open", "0102" "0003", WHOLE),
+	("after", "0102" "0003" "07", WHOLE),
+	("in_arm", "01" "0102" "0003", WHOLE),
+	("in_arm", "01" "0102", CUT),
+	("capped_arm", "01" "0102" "0103", WHOLE),
+	("capped_arm", "01" "0102", CUT),
+	("open_arm", "01" "0102", WHOLE),
+	("chained", "07" "0003", WHOLE),
+	("chained", "07" "0102", CUT),
 ]
 
 
@@ -91,3 +141,11 @@ def test_both_walkers_ask_the_walk(tmp_path: Path) -> None:
 		assert python_verdict(blob, data, shape) == verdict, (struct, sample)
 		assert c_verdict(tmp_path, blob, data, shape, drive) == verdict, \
 			(struct, sample)
+
+
+def test_it_reads_back_as_it_was_written() -> None:
+	from situc.parser import parse_text
+	from situc.unparse import unparse
+	said = unparse(parse_text(SCHEMA, path = "s.situ"))
+	assert "while (next != 0) | end;" in said
+	assert "while (next != 0) max 2;" in said

@@ -396,6 +396,8 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 	if placement.repeat_while is not None:
 		facts.append(f"while="
 		             f"{_valued_source(placement.repeat_ast, placement.repeat_shown or placement.repeat_while, env, fields=True)}")
+	if placement.repeat_or_end:
+		facts.append("while-or-end")
 	if placement.repeat_cap is not None:
 		facts.append(f"while-max={placement.repeat_cap}")
 	# The alignment a pad promises (0043): a peer that pads to a different
