@@ -203,11 +203,14 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: struct does not have. 31 -> 32 is the third of them closing.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                80,
-	("no-scalar", "struct", "fixed"):            105,
-	("no-scalar", "struct", "unmeasurable"):     61,
+	("no-scalar", "struct", "fixed"):            123,
+	("no-scalar", "struct", "unmeasurable"):     80,
 	("no-scalar", "not-struct", ""):              1,
 }
 
+#: `example/wasm`, `example/matroska`, `example/flac` and `example/git`, with
+#: `example/cbor`'s four forms that go without a length, added 18 and 19.
+#:
 #: `example/cbor` added 8 variable struct arms, and `example/hpack` 12 of them
 #: and 3 fixed, the arms a first byte's top bits choose between (26.922).
 #:

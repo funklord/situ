@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 8
+FORMAT_VERSION	= 9
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16

@@ -1483,9 +1483,8 @@ class Parser:
 			raise error(
 				f"varint type `{name.text}` does not declare an encoding",
 				self.span_from(start),
-				label = "expected `encoding = leb128;`, `be128;`, `quic;`, `der;`,"
-				        " `compactsize;`, `lenenc;`, `cbor;`, `hpack;` or"
-				        " `bertag;`",
+				label = "expected `encoding = leb128;`, or another a varint"
+				        " can be",
 			)
 		if max_bits is None:
 			raise error(
@@ -1496,15 +1495,35 @@ class Parser:
 				         "nothing downstream can be bounded"],
 			)
 
-		if (encoding is ast.VarintEncoding.HPACK) != (prefix is not None):
+		if (encoding in ast.PREFIXED) != (prefix is not None):
 			raise error(
-				f"`{name.text}` needs `prefix` if and only if it is `hpack`",
+				f"`{name.text}` needs `prefix` if and only if it is `hpack` or"
+				f" `lebprefix`",
 				self.span_from(start),
 				label = ("expected `prefix = N;`"
-				         if prefix is None else "only `hpack` has a choice"),
+				         if prefix is None else "only those have a choice"),
 				notes = ["it is how many bits of the first byte are the number's,"
 				         " and the rest are the fields' before it"],
 			)
+		if encoding is ast.VarintEncoding.LEBPREFIX and not (
+				prefix is not None and prefix <= 6):
+			raise error(
+				f"`{name.text}` cannot have {prefix} bits of its first byte",
+				self.span_from(start),
+				label = "expected 1 to 6",
+				notes = ["the top bit is the continuation, and at seven nothing"
+				         " is left of the byte for a field: that is `leb128`"],
+			)
+		if encoding is ast.VarintEncoding.SLEB128:
+			if transform is not None:
+				raise error(
+					f"`{name.text}` is already signed",
+					self.span_from(start),
+					label = "`sleb128` has its sign in its last group",
+				)
+			# Not a claim about the bytes: the zigzag form is how a signed
+			# value reaches an accessor, and `unparse` says nothing of it.
+			transform = ast.VarintTransform.ZIGZAG
 
 		decl = ast.VarintDecl(self.span_from(start), name.text, encoding,
 		                      max_bits, minimal, transform, max_bytes, prefix)
@@ -1541,6 +1560,25 @@ class Parser:
 				)
 			return
 
+		widest = {ast.VarintEncoding.EBML: 56, ast.VarintEncoding.EBML_ID: 64,
+		          ast.VarintEncoding.UTF8: 36}.get(decl.encoding)
+		if widest is not None and decl.max_bits > widest:
+			raise error(
+				f"`{name.text}` cannot be {decl.max_bits} bits in a"
+				f" `{decl.encoding.value}` encoding",
+				decl.span,
+				label = f"expected at most {widest}",
+				notes = ["the first byte runs out of bits to say a width with"],
+			)
+		if decl.encoding is ast.VarintEncoding.EBML_ID and decl.max_bits % 8:
+			raise error(
+				f"`{name.text}` cannot be {decl.max_bits} bits in an `ebml_id`"
+				f" encoding",
+				decl.span,
+				label = "expected a multiple of eight",
+				notes = ["an ID is its bytes, the width's marker with them"],
+			)
+
 		if decl.encoding is ast.VarintEncoding.BERTAG and decl.max_bits % 7:
 			raise error(
 				f"`{name.text}` cannot be {decl.max_bits} bits in a `bertag`"
@@ -1551,15 +1589,15 @@ class Parser:
 				         " here stops part way through one"],
 			)
 
-		if decl.encoding in ast.MARKED or decl.encoding in (
-				ast.VarintEncoding.HPACK, ast.VarintEncoding.BERTAG):
+		if decl.encoding in ast.MARKED or decl.encoding in ast.PREFIXED \
+				or decl.encoding in ast.VARINT_CODE:
 			if decl.declared_max_bytes is not None:
 				raise error(
 					f"`{name.text}` declares `max_bytes` on a"
 					f" `{decl.encoding.value}` encoding",
 					decl.span,
 					label = "`max_bits` decides it",
-					notes = ["the marker says the length, so the widest value"
+					notes = ["its own form says the length, so the widest value"
 					         " is the longest encoding"],
 				)
 			return

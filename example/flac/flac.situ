@@ -1,0 +1,96 @@
+// FLAC: the stream's opening, and a frame's header.
+//
+// SOURCE. RFC 9639. A stream is a marker, metadata blocks and frames, and a
+// frame's header carries its frame number spelled as a UTF-8 code point, taken
+// past Unicode to thirty-six bits: section 9.1.5 calls it the coded number.
+//
+// WHY THIS ONE. A number that is neither base-128 nor a length prefix, in the
+// middle of a header of bit fields, and two fields after it that exist only for
+// the codes of two fields before it.
+//
+// WHICH SUBSET. The last metadata block says it is, so the blocks are a run
+// that ends on a condition. A frame has no length, and its subframes are coded
+// to the bit, so `frame_header` is read where a caller finds one.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+varint_type coded_number { encoding = utf8; max_bits = 36; }
+
+codec crc8_smbus {
+	kernel = polynomial(width = 8, poly = 0x07);
+}
+impl crc8_smbus derived;
+
+struct stream_info [allow_straddle] {
+	u16 min_block;
+	u16 max_block;
+	u24 min_frame;
+	u24 max_frame;
+	u20 sample_rate;
+	u3  channels_less_one;
+	u5  bits_less_one;
+	u36 total_samples;
+	u8  md5[16];
+}
+
+struct nothing { }
+
+struct info_body  { stream_info info; }
+struct other_body { parameter u32 size [stream]; u8 bytes[size]; }
+
+struct metadata_block {
+	u1  last;
+	u7  type;
+	u24 length;
+	variant body switch (type) {
+		case 0:  info_body                 as_info;
+		default: other_body(size = length) as_other;
+	}
+}
+
+struct stream_head {
+	u8             marker[4] [must_eq = "fLaC"];
+	metadata_block blocks[] while (last == 0);
+}
+
+struct block_u8  { u8  size_less_one; }
+struct block_u16 { u16 size_less_one; }
+struct rate_khz  { u8  khz; }
+struct rate_hz   { u16 hz; }
+struct rate_daz  { u16 tens_of_hz; }
+
+struct frame_fields [allow_straddle] {
+	u14 sync [must_eq = 0x3FFE];
+	u1  reserved [must_eq = 0];
+	u1  variable_blocks;
+	u4  block_code;
+	u4  rate_code;
+	u4  channels;
+	u3  sample_size;
+	u1  reserved_too [must_eq = 0];
+	coded_number number;
+	variant block switch (block_code) {
+		case 6:  block_u8  as_u8;
+		case 7:  block_u16 as_u16;
+		default: nothing   block_implied;
+	}
+	variant rate switch (rate_code) {
+		case 12: rate_khz as_khz;
+		case 13: rate_hz  as_hz;
+		case 14: rate_daz as_daz;
+		default: nothing  rate_implied;
+	}
+}
+
+// Polynomial 0x07 from zero, over the header from its sync code.
+struct frame_header {
+	authenticated summed {
+		frame_fields fields;
+	}
+	checksum u8 crc[1] covers(summed) is crc8_smbus;
+}
+
+// A frame is found by its sync code, so the header begins with it.
+require offset(frame_fields.sync) == 0;

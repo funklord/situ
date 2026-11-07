@@ -1,0 +1,12 @@
+# Golden vectors for the git worked example.
+#
+# Entries of a pack git 2.47.3 wrote under `gc --aggressive`, each named for
+# where `git verify-pack -v` says it stands and what it says it is: a commit of
+# 165 bytes, a blob of 57866, and deltas of 33 and 30 whose bases stand 27613
+# and 46 bytes back. Only the header: the zlib stream after it has no length.
+
+pack_header head 5041434b0000000200000012
+entry commit_at_12 950a
+entry blob_at_726 baa01c
+entry delta_at_28339 e10280d65d
+entry delta_at_28385 ee012e

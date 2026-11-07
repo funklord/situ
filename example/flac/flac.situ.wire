@@ -1,0 +1,111 @@
+# situ wire signature v3
+# schema: flac.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+varint coded_number : utf8 bits=36 bytes=7
+
+kernel crc8_smbus : polynomial(width = 8, poly = 0x07)
+
+struct block_u16 size=2
+  @0x0000   2         u16        size_less_one  big
+
+struct block_u8 size=1
+  @0x0000   1         u8         size_less_one
+
+struct frame_fields size=5..15
+  @0x0000   14bit     u14        sync  big msb_first must_eq=16382
+  @0x0001:6 1bit      u1         reserved  msb_first must_eq=0
+  @0x0001:7 1bit      u1         variable_blocks  msb_first
+  @0x0002   4bit      u4         block_code  msb_first
+  @0x0002:4 4bit      u4         rate_code  msb_first
+  @0x0003   4bit      u4         channels  msb_first
+  @0x0003:4 3bit      u3         sample_size  msb_first
+  @0x0003:7 1bit      u1         reserved_too  msb_first must_eq=0
+  @0x0004   1..7      coded_number number  varint=coded_number
+  ~         0..2      variant    block
+  ~         0..2      variant    rate
+  block switch: block_code
+  block case 6: as_u8 block_u8
+  block case 7: as_u16 block_u16
+  block case default: block_implied nothing
+  rate switch: rate_code
+  rate case 12: as_khz rate_khz
+  rate case 13: as_hz rate_hz
+  rate case 14: as_daz rate_daz
+  rate case default: rate_implied nothing
+
+struct frame_header size=6..16
+  @0x0000   5..15     frame_fields fields  big
+  ~         1         u8         crc  codec=crc8_smbus
+  block switch: block_code
+  block case 6: as_u8
+  block case 7: as_u16
+  block case default: block_implied
+  rate switch: rate_code
+  rate case 12: as_khz
+  rate case 13: as_hz
+  rate case 14: as_daz
+  rate case default: rate_implied
+  crc covers: fields fields.block fields.block.as_u16 fields.block.as_u16.size_less_one fields.block.as_u8 fields.block.as_u8.size_less_one fields.block.block_implied fields.block_code fields.channels fields.number fields.rate fields.rate.as_daz fields.rate.as_daz.tens_of_hz fields.rate.as_hz fields.rate.as_hz.hz fields.rate.as_khz fields.rate.as_khz.khz fields.rate.rate_implied fields.rate_code fields.reserved fields.reserved_too fields.sample_size fields.sync fields.variable_blocks summed
+
+struct info_body size=34
+  @0x0000   34        stream_info info  big
+
+struct metadata_block size=4..4294967299
+  @0x0000   1bit      u1         last  msb_first
+  @0x0000:1 7bit      u7         type  msb_first
+  @0x0001   3         u24        length  big
+  @0x0004   0..4294967295 variant    body
+  body switch: type
+  body case 0: as_info info_body
+  body case default: as_other other_body
+
+struct nothing size=0
+
+struct other_body size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size
+
+struct rate_daz size=2
+  @0x0000   2         u16        tens_of_hz  big
+
+struct rate_hz size=2
+  @0x0000   2         u16        hz  big
+
+struct rate_khz size=1
+  @0x0000   1         u8         khz
+
+struct stream_head size=8..
+  @0x0000   4         u8         marker  big must_eq="fLaC"
+  @0x0004   4..       metadata_block blocks  big while=last==0
+  body switch: type
+  body case 0: as_info
+  body case default: as_other
+
+struct stream_info size=34
+  @0x0000   2         u16        min_block  big
+  @0x0002   2         u16        max_block  big
+  @0x0004   3         u24        min_frame  big
+  @0x0007   3         u24        max_frame  big
+  @0x000a   20bit     u20        sample_rate  big msb_first
+  @0x000c:4 3bit      u3         channels_less_one  msb_first
+  @0x000c:7 5bit      u5         bits_less_one  msb_first
+  @0x000d:4 36bit     u36        total_samples  big msb_first
+  @0x0012   16        u8         md5  big

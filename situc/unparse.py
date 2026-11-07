@@ -154,7 +154,8 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.VarintDecl):
 		lines = [f"varint_type {decl.name} {{",
 		         f"\tencoding = {decl.encoding.value};"]
-		if decl.transform is not None:
+		if decl.transform is not None \
+				and decl.encoding is not ast.VarintEncoding.SLEB128:
 			lines.append(f"\ttransform = {decl.transform.value};")
 		lines.append(f"\tmax_bits = {decl.max_bits};")
 		if decl.prefix is not None:

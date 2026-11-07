@@ -1266,6 +1266,22 @@ class VarintEncoding(Enum):
 	#: In the low five bits of a BER identifier, where all of them set says
 	#: be128 groups hold the number instead (X.690, 8.1.2).
 	BERTAG      = "bertag"
+	#: Base-128, low group first, where bit six of the last group is the sign.
+	#: DWARF's and WebAssembly's. A signed value, and it goes the way a zigzag
+	#: one does: the read hands the zigzag form to the one signed path.
+	SLEB128     = "sleb128"
+	#: The first set bit says the width and is not the value (RFC 8794, 4).
+	EBML        = "ebml"
+	#: The same bytes with that bit kept: an element ID, as written in hex.
+	EBML_ID     = "ebml_id"
+	#: A number spelled as a code point, to FLAC's seven bytes.
+	UTF8        = "utf8"
+	#: Base-128, high group first, where a following group adds one first, so
+	#: no number has two spellings. Git's delta offset, Bitcoin Core's VARINT.
+	BIJECTIVE128 = "bijective128"
+	#: Base-128, low group first, whose first group is the low `prefix` bits of
+	#: a byte shared with fields. Git's pack entry.
+	LEBPREFIX   = "lebprefix"
 
 
 @dataclass(frozen=True)
@@ -1304,6 +1320,20 @@ class VarintTransform(Enum):
 	ZIGZAG = "zigzag"
 
 
+#: The forms that have a `prefix`.
+PREFIXED = (VarintEncoding.HPACK, VarintEncoding.LEBPREFIX)
+
+#: What the image says of each form with no groups a last byte's bits describe.
+VARINT_CODE = {
+	VarintEncoding.BERTAG:       204,
+	VarintEncoding.SLEB128:      205,
+	VarintEncoding.EBML:         206,
+	VarintEncoding.EBML_ID:      207,
+	VarintEncoding.UTF8:         208,
+	VarintEncoding.BIJECTIVE128: 209,
+}
+
+
 @dataclass(frozen=True)
 class VarintDecl(Decl):
 	"""A variable-length integer type (section 8.1.1).
@@ -1323,13 +1353,13 @@ class VarintDecl(Decl):
 	#: A declared ceiling on the encoded length, where the format sets one
 	#: shorter than seven bits per byte would need. See `terminal_bits`.
 	declared_max_bytes: int | None = None
-	#: How many bits of its first byte an `hpack` integer has.
+	#: How many bits of its first byte a prefixed integer has.
 	prefix: int | None = None
 
 	@property
 	def shared_bits(self) -> int:
 		"""How many bits of the first byte are the fields' before it."""
-		if self.encoding is VarintEncoding.HPACK:
+		if self.encoding in PREFIXED:
 			assert self.prefix is not None
 			return 8 - self.prefix
 		if self.encoding in (VarintEncoding.CBOR, VarintEncoding.BERTAG):
@@ -1351,6 +1381,13 @@ class VarintDecl(Decl):
 			               if width * 8 >= self.max_bits)
 		if self.encoding in (VarintEncoding.HPACK, VarintEncoding.BERTAG):
 			return 1 + (self.max_bits + 6) // 7
+		if self.encoding is VarintEncoding.LEBPREFIX:
+			assert self.prefix is not None
+			return 1 + (max(self.max_bits - self.prefix, 0) + 6) // 7
+		if self.encoding is VarintEncoding.EBML_ID:
+			return self.max_bits // 8
+		if self.encoding is VarintEncoding.UTF8:
+			return 1 if self.max_bits <= 7 else (self.max_bits + 3) // 5
 		if self.declared_max_bytes is not None:
 			return self.declared_max_bytes
 		return (self.max_bits + 6) // 7
@@ -1369,11 +1406,14 @@ class VarintDecl(Decl):
 			return 0
 		if self.encoding in MARKED:
 			return MARKED[self.encoding].code
-		if self.encoding is VarintEncoding.BERTAG:
-			return 204
+		if self.encoding in VARINT_CODE:
+			return VARINT_CODE[self.encoding]
 		if self.encoding is VarintEncoding.HPACK:
 			assert self.prefix is not None
 			return 210 + self.prefix
+		if self.encoding is VarintEncoding.LEBPREFIX:
+			assert self.prefix is not None
+			return 220 + self.prefix
 		return self.max_bits - 7 * (self.max_bytes - 1)
 
 	@property

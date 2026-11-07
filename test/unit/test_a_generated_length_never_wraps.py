@@ -96,6 +96,12 @@ RUST_CENSUS = {
 	"cpio.situ": 1,
 	"dnsname.situ": 4,
 	"hpack.situ": 7,
+	# Read rather than added too: each is a nested or an arm member's own
+	# bound, behind `len() < at`, in all four (26.925).
+	"wasm.situ": 6,
+	"matroska.situ": 1,
+	"flac.situ": 10,
+	"git.situ": 5,
 	# 30 -> 33 on 2026-11-03, when 26.833 added `marked_tag`,
 	# `marked_index` and `marked_prefix`: a tlv and an offset table inside
 	# an `endian_marker` struct, which is the arrangement where four

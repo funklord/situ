@@ -2345,6 +2345,401 @@ static inline int64_t situ_zigzag_decode(uint64_t raw)
 	return (int64_t)((raw >> 1) ^ (~(raw & 1u) + 1u));
 }
 
+/* Signed LEB128: DWARF's and WebAssembly's. Low group first, and bit six of
+ * the last group is the sign, which fills everything above it. A signed value
+ * reaches an accessor in the zigzag form, so this hands that over and there is
+ * one signed path behind every read. Returns bytes consumed, or 0 where the
+ * buffer ends inside it, it is longer than `max_bytes`, or a tenth byte says
+ * anything but the sign. */
+static inline uint32_t situ_varint_sleb_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc = 0;
+	uint32_t i;
+
+	for (i = 0u; i < avail && i < max_bytes; i++) {
+		const uint64_t group = p[i] & 0x7Fu;
+		const uint32_t shift = 7u * i;
+
+		if (shift >= 64u) {
+			return 0;
+		}
+		if (shift == 63u && group != 0u && group != 0x7Fu) {
+			return 0;
+		}
+		acc |= group << shift;
+		if ((p[i] & 0x80u) == 0u) {
+			if (shift + 7u < 64u && (p[i] & 0x40u) != 0u) {
+				acc |= UINT64_MAX << (shift + 7u);
+			}
+			*out = situ_zigzag_encode((int64_t)acc);
+			return i + 1u;
+		}
+	}
+	return 0;
+}
+
+/* The shortest encoding under `situ_varint_sleb_get`, of the zigzag form. */
+static inline uint32_t situ_varint_sleb_len(uint64_t raw)
+{
+	uint64_t rest = raw >> 1;
+	uint32_t n = 1u;
+
+	while (rest >= 0x40u) {
+		rest >>= 7;
+		n++;
+	}
+	return n;
+}
+
+/* Encode one minimally. Returns bytes written, or 0 if there is no room. */
+static inline uint32_t situ_varint_sleb_put(uint8_t *p, uint32_t avail,
+        uint64_t raw)
+{
+	const uint32_t total = situ_varint_sleb_len(raw);
+	const uint64_t held = (uint64_t)situ_zigzag_decode(raw);
+	const uint64_t fill = (raw & 1u) != 0u ? UINT64_MAX : 0u;
+	uint32_t i;
+
+	if (total > avail) {
+		return 0;
+	}
+	for (i = 0u; i < total; i++) {
+		const uint32_t shift = 7u * i;
+		const uint64_t bits = (held >> shift)
+		                      | (shift + 7u > 64u ? fill << (64u - shift) : 0u);
+
+		p[i] = (uint8_t)((bits & 0x7Fu) | (i + 1u < total ? 0x80u : 0u));
+	}
+	return total;
+}
+
+/* How wide an EBML number is: the first set bit of its first byte says, and
+ * an all-zero byte says nothing. */
+static inline uint32_t situ_ebml_width(uint8_t first)
+{
+	uint32_t n = 1u;
+
+	while (n <= 8u && (first & (0x80u >> (n - 1u))) == 0u) {
+		n++;
+	}
+	return n <= 8u ? n : 0u;
+}
+
+/* EBML's number (RFC 8794, section 4): the marker bit says the width, and what
+ * follows it is the value, high byte first. All value bits set is the reserved
+ * "unknown" of an element's size, and reads as that number: what it means is
+ * the caller's. Returns bytes consumed, or 0 where the buffer ends inside it,
+ * or the first byte is zero or says more than `max_bytes`. */
+static inline uint32_t situ_varint_ebml_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc;
+	uint32_t n;
+	uint32_t i;
+
+	if (avail == 0u) {
+		return 0;
+	}
+	n = situ_ebml_width(p[0]);
+	if (n == 0u || n > avail || n > max_bytes) {
+		return 0;
+	}
+	acc = p[0] & (0xFFu >> n);
+	for (i = 1u; i < n; i++) {
+		acc = (acc << 8) | p[i];
+	}
+	*out = acc;
+	return n;
+}
+
+/* The shortest encoding: a value of all ones at a width is the reserved one,
+ * so it takes the next, and the widest holds the "unknown" a writer means. */
+static inline uint32_t situ_varint_ebml_len(uint64_t value)
+{
+	uint32_t n = 1u;
+
+	while (n < 8u && value >= (UINT64_C(1) << (7u * n)) - 1u) {
+		n++;
+	}
+	return n;
+}
+
+/* Encode one minimally. Returns bytes written, or 0 if there is no room or the
+ * value needs more than fifty-six bits. */
+static inline uint32_t situ_varint_ebml_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	const uint32_t n = situ_varint_ebml_len(value);
+	uint32_t i;
+
+	if (n > avail || value >= (UINT64_C(1) << 56)) {
+		return 0;
+	}
+	for (i = 0u; i < n; i++) {
+		p[i] = (uint8_t)(value >> (8u * (n - 1u - i)));
+	}
+	p[0] = (uint8_t)(p[0] | (0x80u >> (n - 1u)));
+	return n;
+}
+
+/* An EBML element ID, which is the same bytes with the marker kept: IDs are
+ * written in hex with it, 0x1A45DFA3. */
+static inline uint32_t situ_varint_ebml_id_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc;
+	uint32_t n;
+	uint32_t i;
+
+	if (avail == 0u) {
+		return 0;
+	}
+	n = situ_ebml_width(p[0]);
+	if (n == 0u || n > avail || n > max_bytes) {
+		return 0;
+	}
+	acc = 0u;
+	for (i = 0u; i < n; i++) {
+		acc = (acc << 8) | p[i];
+	}
+	*out = acc;
+	return n;
+}
+
+/* How wide an ID is, which its own top byte says: 0 if that byte's marker does
+ * not stand where the value's width puts it, as no such ID can be written. */
+static inline uint32_t situ_varint_ebml_id_len(uint64_t value)
+{
+	uint32_t n = 1u;
+
+	while (n < 8u && (value >> (8u * n)) != 0u) {
+		n++;
+	}
+	return situ_ebml_width((uint8_t)(value >> (8u * (n - 1u)))) == n ? n : 0u;
+}
+
+/* Encode an ID. Returns bytes written, or 0 if there is no room or the value
+ * is no ID. */
+static inline uint32_t situ_varint_ebml_id_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	const uint32_t n = situ_varint_ebml_id_len(value);
+	uint32_t i;
+
+	if (n == 0u || n > avail) {
+		return 0;
+	}
+	for (i = 0u; i < n; i++) {
+		p[i] = (uint8_t)(value >> (8u * (n - 1u - i)));
+	}
+	return n;
+}
+
+/* A number written as UTF-8 writes a code point, to the seven bytes and
+ * thirty-six bits FLAC's frame header takes it to. The leading ones of the
+ * first byte say the width, and each byte after holds six bits under a `10`.
+ * Returns bytes consumed, or 0 where the buffer ends inside it, it says more
+ * than `max_bytes`, or a byte is not what its place needs. */
+static inline uint32_t situ_varint_utf8_get(const uint8_t *p, uint32_t avail,
+        uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc;
+	uint32_t n = 0u;
+	uint32_t i;
+
+	if (avail == 0u) {
+		return 0;
+	}
+	if (p[0] < 0x80u) {
+		*out = p[0];
+		return 1u;
+	}
+	while (n < 8u && (p[0] & (0x80u >> n)) != 0u) {
+		n++;
+	}
+	if (n < 2u || n > 7u || n > avail || n > max_bytes) {
+		return 0;
+	}
+	acc = p[0] & (0x7Fu >> n);
+	for (i = 1u; i < n; i++) {
+		if ((p[i] & 0xC0u) != 0x80u) {
+			return 0;
+		}
+		acc = (acc << 6) | (p[i] & 0x3Fu);
+	}
+	*out = acc;
+	return n;
+}
+
+/* The shortest encoding, or 0 for a value past thirty-six bits. */
+static inline uint32_t situ_varint_utf8_len(uint64_t value)
+{
+	uint32_t n;
+
+	if (value < 0x80u) {
+		return 1u;
+	}
+	for (n = 2u; n <= 7u; n++) {
+		if (value < (UINT64_C(1) << (5u * n + 1u))) {
+			return n;
+		}
+	}
+	return 0;
+}
+
+/* Encode one minimally. Returns bytes written, or 0 if it cannot be. */
+static inline uint32_t situ_varint_utf8_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	const uint32_t n = situ_varint_utf8_len(value);
+	uint32_t i;
+
+	if (n == 0u || n > avail) {
+		return 0;
+	}
+	if (n == 1u) {
+		p[0] = (uint8_t)value;
+		return 1u;
+	}
+	for (i = n - 1u; i > 0u; i--) {
+		p[i] = (uint8_t)(0x80u | (value & 0x3Fu));
+		value >>= 6;
+	}
+	p[0] = (uint8_t)((0xFF00u >> n) | (uint32_t)value);
+	return n;
+}
+
+/* Base-128 where a following group adds one first, so no number has two
+ * spellings: git's offset of a delta's base, and Bitcoin Core's VARINT. High
+ * group first. Returns bytes consumed, or 0 where the buffer ends inside it,
+ * it is longer than `max_bytes`, or it is past sixty-four bits. */
+static inline uint32_t situ_varint_bijective_get(const uint8_t *p,
+        uint32_t avail, uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc = 0;
+	uint32_t i;
+
+	for (i = 0u; i < avail && i < max_bytes; i++) {
+		if (i != 0u) {
+			if (acc == UINT64_MAX || ((acc + 1u) >> 57) != 0u) {
+				return 0;
+			}
+			acc += 1u;
+		}
+		acc = (acc << 7) | (p[i] & 0x7Fu);
+		if ((p[i] & 0x80u) == 0u) {
+			*out = acc;
+			return i + 1u;
+		}
+	}
+	return 0;
+}
+
+/* Its only encoding's length. */
+static inline uint32_t situ_varint_bijective_len(uint64_t value)
+{
+	uint32_t n = 1u;
+
+	while (value >= 0x80u) {
+		value = (value >> 7) - 1u;
+		n++;
+	}
+	return n;
+}
+
+/* Encode one. Returns bytes written, or 0 if there is no room. */
+static inline uint32_t situ_varint_bijective_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	const uint32_t total = situ_varint_bijective_len(value);
+	uint32_t i = total;
+
+	if (total > avail) {
+		return 0;
+	}
+	p[--i] = (uint8_t)(value & 0x7Fu);
+	while (value >= 0x80u) {
+		value = (value >> 7) - 1u;
+		p[--i] = (uint8_t)(0x80u | (value & 0x7Fu));
+	}
+	return total;
+}
+
+/* Base-128, low group first, whose first group is the low `prefix` bits of a
+ * byte shared with fields: git's pack entry. The byte's top bit is the
+ * continuation as in any other, and only the bits between are the fields'.
+ * Returns bytes consumed, or 0 where the buffer ends inside it, it is longer
+ * than `max_bytes`, or it is past sixty-four bits. */
+static inline uint32_t situ_varint_lebprefix_get(const uint8_t *p,
+        uint32_t avail, uint32_t prefix, uint32_t max_bytes, uint64_t *out)
+{
+	uint64_t acc;
+	uint32_t shift = prefix;
+	uint32_t i;
+
+	if (avail == 0u || max_bytes == 0u) {
+		return 0;
+	}
+	acc = p[0] & ((1u << prefix) - 1u);
+	if ((p[0] & 0x80u) == 0u) {
+		*out = acc;
+		return 1u;
+	}
+	for (i = 1u; i < avail && i < max_bytes; i++) {
+		const uint64_t group = p[i] & 0x7Fu;
+
+		if (shift >= 64u || ((group << shift) >> shift) != group) {
+			if (group != 0u) {
+				return 0;
+			}
+		} else {
+			acc |= group << shift;
+		}
+		shift += 7u;
+		if ((p[i] & 0x80u) == 0u) {
+			*out = acc;
+			return i + 1u;
+		}
+	}
+	return 0;
+}
+
+/* The shortest encoding under `situ_varint_lebprefix_get`. */
+static inline uint32_t situ_varint_lebprefix_len(uint64_t value, uint32_t prefix)
+{
+	uint64_t rest = value >> prefix;
+	uint32_t n = 1u;
+
+	while (rest != 0u) {
+		rest >>= 7;
+		n++;
+	}
+	return n;
+}
+
+/* Encode one minimally. Returns bytes written, or 0 if there is no room. The
+ * first byte's bits between the continuation and the prefix stay. */
+static inline uint32_t situ_varint_lebprefix_put(uint8_t *p, uint32_t avail,
+        uint64_t value, uint32_t prefix)
+{
+	const uint32_t mask = (1u << prefix) - 1u;
+	const uint32_t total = situ_varint_lebprefix_len(value, prefix);
+	uint64_t rest = value >> prefix;
+	uint32_t i;
+
+	if (total > avail) {
+		return 0;
+	}
+	p[0] = (uint8_t)((p[0] & 0x7Fu & ~mask) | ((uint32_t)value & mask)
+	                 | (total > 1u ? 0x80u : 0u));
+	for (i = 1u; i < total; i++) {
+		p[i] = (uint8_t)((rest & 0x7Fu) | (i + 1u < total ? 0x80u : 0u));
+		rest >>= 7;
+	}
+	return total;
+}
+
 /* ------------------------------------------------------------------------
  * Tag-length-value iteration
  *

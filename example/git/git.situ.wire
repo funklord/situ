@@ -1,0 +1,51 @@
+# situ wire signature v3
+# schema: git.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+varint object_size : lebprefix bits=64 bytes=10 prefix=4
+
+varint delta_offset : bijective128 bits=64 bytes=10
+
+struct entry size=1..30
+  @0x0000   1bit      u1         more  msb_first shares-byte
+  @0x0000:1 3bit      u3         type  msb_first shares-byte
+  @0x0000   1..10     object_size size  varint=object_size
+  ~         0..20     variant    base
+  base switch: type
+  base case 1: commit nothing
+  base case 2: tree nothing
+  base case 3: blob nothing
+  base case 4: tag nothing
+  base case 6: by_offset offset_delta
+  base case 7: by_name named_delta
+  base case default: error
+
+struct named_delta size=20
+  @0x0000   20        u8         base  big
+
+struct nothing size=0
+
+struct offset_delta size=1..10
+  @0x0000   1..10     delta_offset back  varint=delta_offset
+
+struct pack_header size=12
+  @0x0000   4         u8         signature  big must_eq="PACK"
+  @0x0004   4         u32        version  big must_eq=2
+  @0x0008   4         u32        objects  big

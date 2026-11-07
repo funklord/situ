@@ -106,7 +106,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 8u) {
+	if (u16_at(image + 4) != 9u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -928,6 +928,169 @@ static const marked_form *marked_of(uint32_t code)
 #define VARINT_BERTAG 204u
 #define VARINT_HPACK  210u
 
+/* The rest of the image's codes (26.925). `VARINT_LEBPREFIX` is a base like
+ * HPACK's. */
+#define VARINT_SLEB128      205u
+#define VARINT_EBML         206u
+#define VARINT_EBML_ID      207u
+#define VARINT_UTF8         208u
+#define VARINT_BIJECTIVE128 209u
+#define VARINT_LEBPREFIX    220u
+
+/* How many bits of a shared first byte a `lebprefix` number has, 0 if not. */
+static uint32_t lebprefix_of(uint32_t code)
+{
+	return code > VARINT_LEBPREFIX && code <= VARINT_LEBPREFIX + 6u
+	       ? code - VARINT_LEBPREFIX : 0u;
+}
+
+/* Whether a number is of a form whose first bytes say how it ends. */
+static int own_form_is(uint32_t code)
+{
+	return (code >= VARINT_SLEB128 && code <= VARINT_BIJECTIVE128)
+	       || lebprefix_of(code) != 0u;
+}
+
+/* The fewest bytes of such a number. A signed one is its zigzag form. */
+static uint32_t own_form_length(uint64_t value, uint32_t code)
+{
+	const uint32_t prefix = lebprefix_of(code);
+	uint32_t n = 1u;
+
+	if (prefix != 0u) {
+		for (uint64_t rest = value >> prefix; rest != 0u; rest >>= 7) {
+			n++;
+		}
+	} else if (code == VARINT_SLEB128) {
+		for (uint64_t rest = value >> 1; rest >= 0x40u; rest >>= 7) {
+			n++;
+		}
+	} else if (code == VARINT_EBML) {
+		while (n < 8u && value >= ((uint64_t)1 << (7u * n)) - 1u) {
+			n++;
+		}
+	} else if (code == VARINT_EBML_ID) {
+		while (n < 8u && (value >> (8u * n)) != 0u) {
+			n++;
+		}
+	} else if (code == VARINT_UTF8) {
+		if (value >= 0x80u) {
+			n = 2u;
+			while (n < 7u && value >= ((uint64_t)1 << (5u * n + 1u))) {
+				n++;
+			}
+		}
+	} else {
+		while (value >= 0x80u) {
+			value = (value >> 7) - 1u;
+			n++;
+		}
+	}
+	return n;
+}
+
+/* Read such a number from `avail` bytes, which the caller has held to the
+ * form's longest. */
+static situ_walk_err own_form_read(const uint8_t *bytes, uint32_t avail,
+        uint32_t code, uint32_t *consumed, uint64_t *value)
+{
+	const uint32_t prefix = lebprefix_of(code);
+	uint64_t held = 0u;
+
+	if (avail == 0u) {
+		return SITU_WALK_BOUNDS;
+	}
+	if (code == VARINT_EBML || code == VARINT_EBML_ID) {
+		uint32_t size = 1u;
+
+		while (size <= 8u && (bytes[0] & (0x80u >> (size - 1u))) == 0u) {
+			size++;
+		}
+		if (size > 8u || size > avail) {
+			return SITU_WALK_BOUNDS;
+		}
+		held = code == VARINT_EBML ? bytes[0] & (0xFFu >> size) : bytes[0];
+		for (uint32_t i = 1u; i < size; i++) {
+			held = (held << 8) | bytes[i];
+		}
+		*consumed = size;
+		*value    = held;
+		return SITU_WALK_OK;
+	}
+	if (code == VARINT_UTF8) {
+		uint32_t size = 0u;
+
+		if (bytes[0] < 0x80u) {
+			*consumed = 1u;
+			*value    = bytes[0];
+			return SITU_WALK_OK;
+		}
+		while (size < 8u && (bytes[0] & (0x80u >> size)) != 0u) {
+			size++;
+		}
+		if (size < 2u || size > 7u || size > avail) {
+			return SITU_WALK_BOUNDS;
+		}
+		held = bytes[0] & (0x7Fu >> size);
+		for (uint32_t i = 1u; i < size; i++) {
+			if ((bytes[i] & 0xC0u) != 0x80u) {
+				return SITU_WALK_BOUNDS;
+			}
+			held = (held << 6) | (bytes[i] & 0x3Fu);
+		}
+		*consumed = size;
+		*value    = held;
+		return SITU_WALK_OK;
+	}
+	for (uint32_t i = 0u; i < avail; i++) {
+		const uint64_t group = bytes[i] & 0x7Fu;
+		const int last = (bytes[i] & 0x80u) == 0u;
+
+		if (code == VARINT_SLEB128) {
+			const uint32_t shift = 7u * i;
+
+			if (shift >= 64u
+			    || (shift == 63u && group != 0u && group != 0x7Fu)) {
+				return SITU_WALK_BOUNDS;
+			}
+			held |= group << shift;
+			if (last) {
+				if (shift + 7u < 64u && (bytes[i] & 0x40u) != 0u) {
+					held |= UINT64_MAX << (shift + 7u);
+				}
+				*consumed = i + 1u;
+				*value    = (held << 1) ^ ((held >> 63) != 0u
+				                           ? UINT64_MAX : 0u);
+				return SITU_WALK_OK;
+			}
+		} else if (code == VARINT_BIJECTIVE128) {
+			if (i != 0u) {
+				if (held == UINT64_MAX || ((held + 1u) >> 57) != 0u) {
+					return SITU_WALK_BOUNDS;
+				}
+				held += 1u;
+			}
+			held = (held << 7) | group;
+		} else if (i == 0u) {
+			held = bytes[0] & ((1u << prefix) - 1u);
+		} else {
+			const uint32_t shift = prefix + 7u * (i - 1u);
+
+			if (shift < 64u && ((group << shift) >> shift) == group) {
+				held |= group << shift;
+			} else if (group != 0u) {
+				return SITU_WALK_BOUNDS;
+			}
+		}
+		if (last) {
+			*consumed = i + 1u;
+			*value    = held;
+			return SITU_WALK_OK;
+		}
+	}
+	return SITU_WALK_BOUNDS;
+}
+
 /* How many bits of its first byte a prefixed integer has, 0 if it is not one. */
 static uint32_t prefix_of(uint32_t code)
 {
@@ -1070,6 +1233,10 @@ static situ_walk_err varint_admissible(const uint8_t *rules,
 		least = raw < (1u << 6) ? 1u : raw < (1u << 14) ? 2u
 		      : raw < (1u << 30) ? 4u : 8u;
 		return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
+	}
+	if ((rules[10] & VARINT_BIG) != 0u && own_form_is(rules[9])) {
+		return consumed == own_form_length(raw, rules[9])
+		       ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
 	}
 	const uint32_t prefix = (rules[10] & VARINT_BIG) != 0u
 	                        ? prefix_of(rules[9]) : 0u;
@@ -1235,6 +1402,11 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
 	/* An integer in the low bits of a byte (26.922): all of them set says
 	 * groups follow, and HPACK's add to the prefix where a tag number's do
 	 * not. */
+	if (big && own_form_is(terminal_bits)) {
+		return own_form_read(message + at, avail, terminal_bits, consumed,
+		                     value);
+	}
+
 	const uint32_t prefix = big ? prefix_of(terminal_bits) : 0u;
 	if (prefix != 0u) {
 		if (avail == 0u) {
@@ -2871,6 +3043,7 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 	    && delimiter_rules(image, index) != NULL) {
 		uint32_t count = 0u;
 		uint32_t bytes = 0u;
+		uint32_t took = 0u;
 		err = record_run_walk(image, message, len, shape, index, depth,
 		                      &count, &bytes, &took);
 		if (err != SITU_WALK_OK) {
@@ -3043,7 +3216,6 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 				uint32_t extent = 0u;
 				err = struct_extent(&bound, message + at, len - at,
 				                    held.type_struct, depth + 1u, &extent);
-		uint32_t took = 0u;
 				if (err != SITU_WALK_OK) {
 					return err;
 				}
@@ -5105,6 +5277,31 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	 * which the variant's size above already did (26.785). */
 	if (arm.repeat_code != SITU_WALK_NONE
 	    || delimiter_rules(image, chosen) != NULL) {
+		/* And a frame that stops before its terminator cut it short
+		 * (26.926). */
+		uint32_t       rows   = 0u;
+		const uint8_t *checks = check_rows(image, chosen, &rows);
+
+		for (uint32_t c = 0u; c < rows; c++) {
+			if (checks[c * image->constraint_stride + 12]
+			                != CHECK_TERMINATED) {
+				continue;
+			}
+			uint32_t count = 0u;
+			uint32_t bytes = 0u;
+			uint32_t took  = 0u;
+			err = record_run_walk(image, message, len, shape, chosen, depth,
+			                      &count, &bytes, &took);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK || took == 0u) {
+				record(why, chosen, CHECK_TERMINATED);
+				*verdict = err != SITU_WALK_OK ? SITU_WALK_BOUNDS
+				                               : SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
 		return run_elements_validate(image, message, len, shape, chosen,
 		                             depth, at / 8u, index, verdict, why);
 	}
@@ -5277,31 +5474,6 @@ static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at);
  *
  * Every reader divided or walked and dropped what was left: `u16
  * v[remaining]` over three bytes was one element, and a string in mqtt's
-		/* And a frame that stops before its terminator cut it short
-		 * (26.926). */
-		uint32_t       rows   = 0u;
-		const uint8_t *checks = check_rows(image, chosen, &rows);
-
-		for (uint32_t c = 0u; c < rows; c++) {
-			if (checks[c * image->constraint_stride + 12]
-			                != CHECK_TERMINATED) {
-				continue;
-			}
-			uint32_t count = 0u;
-			uint32_t bytes = 0u;
-			uint32_t took  = 0u;
-			err = record_run_walk(image, message, len, shape, chosen, depth,
-			                      &count, &bytes, &took);
-			if (err == SITU_WALK_UNSUPPORTED) {
-				return err;
-			}
-			if (err != SITU_WALK_OK || took == 0u) {
-				record(why, chosen, CHECK_TERMINATED);
-				*verdict = err != SITU_WALK_OK ? SITU_WALK_BOUNDS
-				                               : SITU_WALK_CONSTRAINT;
-				return SITU_WALK_OK;
-			}
-		}
  * `filters[remaining]` claiming five bytes with two present was no element
  * at all -- both validated clean, here and in all four backends (26.736). A
  * record run walks to the end, which serves a fixed element as well as a

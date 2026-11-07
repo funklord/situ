@@ -189,7 +189,8 @@ def _varints(schema: ast.Schema) -> list[str]:
 		# a fact about the bytes and not about the values they carry.
 		if decl.minimal:
 			facts.append("minimal")
-		if decl.transform is not None:
+		if decl.transform is not None \
+				and decl.encoding is not ast.VarintEncoding.SLEB128:
 			facts.append(decl.transform.value)
 		lines.extend([
 			"",

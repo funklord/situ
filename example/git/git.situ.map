@@ -1,0 +1,39 @@
+# situ capability map v1
+# schema: git.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct entry size=1..30 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  entry.more                             offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  entry.type                             offset=AbsoluteStatic(0x00:1) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  entry.size                             offset=AbsoluteStatic(0x00) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  entry.base                             offset=Dynamic size=Bounded(0, 20) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  entry.base.commit                      offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  entry.base.tree                        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  entry.base.blob                        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  entry.base.tag                         offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  entry.base.by_offset                   offset=Dynamic size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  entry.base.by_offset.back              offset=FrameStatic(0x00) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  entry.base.by_name                     offset=Dynamic size=Fixed(20) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  entry.base.by_name.base                offset=FrameStatic(0x00) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+
+struct named_delta size=20 atomic=NonAtomic
+  named_delta.base                       offset=AbsoluteStatic(0x00) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
+struct nothing size=0
+
+struct offset_delta size=1..10 mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  offset_delta.back                      offset=AbsoluteStatic(0x00) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+
+struct pack_header size=12 repr=ValueConverted atomic=NonAtomic
+  pack_header.signature                  offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  pack_header.version                    offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  pack_header.objects                    offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

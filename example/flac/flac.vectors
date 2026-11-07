@@ -1,0 +1,16 @@
+# Golden vectors for the FLAC worked example.
+#
+# flac 1.5.0 over 150 seconds of a 440 Hz tone, eight kilohertz and mono, in
+# blocks of sixteen samples so the frame numbers reach four bytes. Each frame
+# stands at the offset `flac -a` gives for it, and is named for the number that
+# tool prints. metaflac reads the stream as 8000 Hz and 1200000 samples.
+
+stream_head opening 664c6143000000220010001000001f00002501f400f000124f800f021b45540e d635cf466d9255949e8d84000028200000007265666572656e6365206c696246 4c414320312e352e3020323032353032313100000000
+frame_header frame_0 fff86408000fce
+frame_header frame_127 fff864087f0faf
+frame_header frame_128 fff86408c2800f67
+frame_header frame_2047 fff86408dfbf0f6e
+frame_header frame_2048 fff86408e0a0800fcb
+frame_header frame_65535 fff86408efbfbf0fc6
+frame_header frame_65536 fff86408f09080800fbc
+frame_header frame_74999 fff86408f09293b70f1d

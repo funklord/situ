@@ -999,6 +999,234 @@ def zigzag_encode(value: int) -> int:
 	return (value << 1) ^ (value >> 63) if value < 0 else value << 1
 
 
+def varint_sleb_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""Signed LEB128, DWARF's and WebAssembly's: bit six of the last group is
+	the sign. A signed value reaches an accessor in the zigzag form, so this
+	hands that over. None where it is cut short, too long, or a tenth byte says
+	anything but the sign."""
+	acc = 0
+	for i in range(min(max_bytes, len(data) - at)):
+		byte  = data[at + i]
+		group = byte & 0x7F
+		shift = 7 * i
+		if shift >= 64 or (shift == 63 and group not in (0, 0x7F)):
+			return None
+		acc |= group << shift
+		if not byte & 0x80:
+			if byte & 0x40:
+				acc |= -1 << min(shift + 7, 64)
+			acc &= (1 << 64) - 1
+			return zigzag_encode(acc - (1 << 64) if acc >> 63 else acc), i + 1
+	return None
+
+
+def varint_sleb_len(raw: int) -> int:
+	"""The shortest encoding under `varint_sleb_get`, of the zigzag form."""
+	return 1 + (raw >> 1).bit_length() // 7
+
+
+def varint_sleb_put(out: bytearray, at: int, raw: int) -> int:
+	"""Encode signed LEB128 minimally: bytes written, 0 for want of room."""
+	total = varint_sleb_len(raw)
+	if at + total > len(out):
+		return 0
+	held = zigzag_decode(raw)
+	for i in range(total):
+		out[at + i] = (held & 0x7F) | (0x80 if i + 1 < total else 0)
+		held >>= 7
+	return total
+
+
+def _ebml_width(first: int) -> int:
+	"""How wide an EBML number is, from its first byte: 0 for a zero byte."""
+	return 9 - first.bit_length() if first else 0
+
+
+def varint_ebml_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""EBML's number, RFC 8794 section 4: the marker bit says the width, and
+	what follows it is the value, high byte first. All value bits set is the
+	reserved "unknown" of a size, and reads as that number."""
+	if at >= len(data):
+		return None
+	n = _ebml_width(data[at])
+	if n == 0 or n > max_bytes or at + n > len(data):
+		return None
+	return int.from_bytes(data[at:at + n], "big") & ((1 << (7 * n)) - 1), n
+
+
+def varint_ebml_len(value: int) -> int:
+	"""The shortest encoding: all ones at a width is the reserved value, so it
+	takes the next, and the widest holds the "unknown" a writer means."""
+	return next((n for n in range(1, 8) if value < (1 << (7 * n)) - 1), 8)
+
+
+def varint_ebml_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode an EBML number minimally: bytes written, 0 for want of room or a
+	value past fifty-six bits."""
+	n = varint_ebml_len(value)
+	if at + n > len(out) or value >= 1 << 56:
+		return 0
+	out[at:at + n] = value.to_bytes(n, "big")
+	out[at] |= 0x80 >> (n - 1)
+	return n
+
+
+def varint_ebml_id_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""An EBML element ID: the same bytes with the marker kept."""
+	if at >= len(data):
+		return None
+	n = _ebml_width(data[at])
+	if n == 0 or n > max_bytes or at + n > len(data):
+		return None
+	return int.from_bytes(data[at:at + n], "big"), n
+
+
+def varint_ebml_id_len(value: int) -> int:
+	"""How wide an ID is, or 0 where its top byte's marker does not stand where
+	the value's width puts it."""
+	n = max(1, (value.bit_length() + 7) // 8)
+	return n if n <= 8 and _ebml_width(value >> (8 * (n - 1))) == n else 0
+
+
+def varint_ebml_id_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode an EBML ID: bytes written, 0 for want of room or for no ID."""
+	n = varint_ebml_id_len(value)
+	if n == 0 or at + n > len(out):
+		return 0
+	out[at:at + n] = value.to_bytes(n, "big")
+	return n
+
+
+def varint_utf8_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""A number written as UTF-8 writes a code point, to FLAC's seven bytes and
+	thirty-six bits. None where it is cut short, says more than `max_bytes`, or
+	a byte is not what its place needs."""
+	if at >= len(data):
+		return None
+	first = data[at]
+	if first < 0x80:
+		return first, 1
+	n = 8 - (first ^ 0xFF).bit_length()
+	if not 2 <= n <= 7 or n > max_bytes or at + n > len(data):
+		return None
+	acc = first & (0x7F >> n)
+	for byte in data[at + 1:at + n]:
+		if byte & 0xC0 != 0x80:
+			return None
+		acc = (acc << 6) | (byte & 0x3F)
+	return acc, n
+
+
+def varint_utf8_len(value: int) -> int:
+	"""The shortest encoding, or 0 for a value past thirty-six bits."""
+	if value < 0x80:
+		return 1
+	return next((n for n in range(2, 8) if value < 1 << (5 * n + 1)), 0)
+
+
+def varint_utf8_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode one minimally: bytes written, 0 if it cannot be."""
+	n = varint_utf8_len(value)
+	if n == 0 or at + n > len(out):
+		return 0
+	if n == 1:
+		out[at] = value
+		return 1
+	for i in range(n - 1, 0, -1):
+		out[at + i] = 0x80 | (value & 0x3F)
+		value >>= 6
+	out[at] = ((0xFF00 >> n) & 0xFF) | value
+	return n
+
+
+def varint_bijective_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""Base-128 where a following group adds one first, so no number has two
+	spellings: git's offset of a delta's base, and Bitcoin Core's VARINT."""
+	acc = 0
+	for i in range(min(max_bytes, len(data) - at)):
+		byte = data[at + i]
+		if i:
+			acc += 1
+		acc = (acc << 7) | (byte & 0x7F)
+		if acc >> 64:
+			return None
+		if not byte & 0x80:
+			return acc, i + 1
+	return None
+
+
+def varint_bijective_len(value: int) -> int:
+	"""Its only encoding's length."""
+	n = 1
+	while value >= 0x80:
+		value = (value >> 7) - 1
+		n += 1
+	return n
+
+
+def varint_bijective_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode one: bytes written, 0 for want of room."""
+	total = varint_bijective_len(value)
+	if at + total > len(out):
+		return 0
+	i = at + total - 1
+	out[i] = value & 0x7F
+	while value >= 0x80:
+		value = (value >> 7) - 1
+		i -= 1
+		out[i] = 0x80 | (value & 0x7F)
+	return total
+
+
+def varint_lebprefix_get(data: Buffer, at: int, prefix: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""Base-128, low group first, whose first group is the low `prefix` bits of
+	a byte shared with fields: git's pack entry. The top bit is the continuation
+	as in any other, and only the bits between are the fields'."""
+	if at >= len(data) or max_bytes == 0:
+		return None
+	acc = data[at] & ((1 << prefix) - 1)
+	if not data[at] & 0x80:
+		return acc, 1
+	shift = prefix
+	for i in range(1, min(max_bytes, len(data) - at)):
+		byte = data[at + i]
+		acc |= (byte & 0x7F) << shift
+		shift += 7
+		if acc >> 64:
+			return None
+		if not byte & 0x80:
+			return acc, i + 1
+	return None
+
+
+def varint_lebprefix_len(value: int, prefix: int) -> int:
+	"""The shortest encoding under `varint_lebprefix_get`."""
+	return 1 + ((value >> prefix).bit_length() + 6) // 7
+
+
+def varint_lebprefix_put(out: bytearray, at: int, value: int,
+		prefix: int) -> int:
+	"""Encode one minimally, keeping the bits between the continuation and the
+	prefix: bytes written, 0 for want of room."""
+	total = varint_lebprefix_len(value, prefix)
+	if at + total > len(out):
+		return 0
+	mask = (1 << prefix) - 1
+	out[at] = (out[at] & 0x7F & ~mask) | (value & mask) \
+		| (0x80 if total > 1 else 0)
+	rest = value >> prefix
+	for i in range(1, total):
+		out[at + i] = (rest & 0x7F) | (0x80 if i + 1 < total else 0)
+		rest >>= 7
+	return total
+
+
 #: A marked integer's tables: `(direct, first, widths, big, mask)`. A first byte
 #: under `mask` below `direct` is the value, and marker `first + i` says
 #: `widths[i]` bytes hold it. Bits above `mask` are another field's.

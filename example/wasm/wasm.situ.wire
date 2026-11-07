@@ -1,0 +1,160 @@
+# situ wire signature v3
+# schema: wasm.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian little
+target buffer
+
+varint uleb : leb128 bits=32 bytes=5
+
+varint s32 : sleb128 bits=32 bytes=5
+
+varint s64 : sleb128 bits=64 bytes=10
+
+struct code_body size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size holds=code_section
+
+struct code_entry size=1..4294967300
+  @0x0000   1..5      uleb       size  varint=uleb
+  ~         0..4294967295 u8         body  sized-by=size holds=function_body
+
+struct code_section size=1..18446744086594453505
+  @0x0000   1..5      uleb       count  varint=uleb
+  ~         0..18446744086594453500 code_entry functions  sized-by=count
+
+struct custom_body size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size holds=custom_section
+
+struct custom_section size=1..
+  @0x0000   1..4294967300 name       title
+  ~         0..       u8         bytes  sized-by=remaining
+
+struct data_body size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size holds=data_section
+
+struct data_section size=1..18446744138134061045
+  @0x0000   1..5      uleb       count  varint=uleb
+  ~         0..18446744138134061040 data_segment segments  sized-by=count
+
+struct data_segment size=5..4294967312
+  @0x0000   1..5      uleb       flags  varint=uleb must_eq=0
+  ~         1         u8         op  must_eq=65
+  ~         1..5      s32        offset  varint=s32
+  ~         1         u8         end  must_eq=11
+  ~         1..5      uleb       length  varint=uleb
+  ~         0..4294967295 u8         bytes  sized-by=length
+
+struct function_body size=2..
+  @0x0000   1..5      uleb       groups  varint=uleb
+  ~         0..25769803770 locals     local  sized-by=groups
+  ~         until:0b  instruction code
+  immediate switch: op
+  immediate case 32: local_get
+  immediate case 65: as_i32
+  immediate case 66: as_i64
+  immediate case 106: i32_add
+  immediate case 108: i32_mul
+  immediate case 124: i64_add
+  immediate case 126: i64_mul
+  immediate case 172: i64_extend_i32_s
+  immediate case default: error
+
+struct function_list size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size holds=function_section
+
+struct function_section size=1..21474836480
+  @0x0000   1..5      uleb       count  varint=uleb
+  ~         0..21474836475 uleb       type_index  sized-by=count varint=uleb
+
+struct function_type size=3..8589934601
+  @0x0000   1         u8         form  must_eq=96
+  @0x0001   1..5      uleb       params  varint=uleb
+  ~         0..4294967295 u8         param_types  sized-by=params
+  ~         1..5      uleb       results  varint=uleb
+  ~         0..4294967295 u8         result_types  sized-by=results
+
+struct i32_const size=1..5
+  @0x0000   1..5      s32        value  varint=s32
+
+struct i64_const size=1..10
+  @0x0000   1..10     s64        value  varint=s64
+
+struct instruction size=1..11
+  @0x0000   1         u8         op
+  @0x0001   0..10     variant    immediate
+  immediate switch: op
+  immediate case 32: local_get local_index
+  immediate case 65: as_i32 i32_const
+  immediate case 66: as_i64 i64_const
+  immediate case 106: i32_add nothing
+  immediate case 108: i32_mul nothing
+  immediate case 124: i64_add nothing
+  immediate case 126: i64_mul nothing
+  immediate case 172: i64_extend_i32_s nothing
+  immediate case default: error
+
+struct local_index size=1..5
+  @0x0000   1..5      uleb       index  varint=uleb
+
+struct locals size=2..6
+  @0x0000   1..5      uleb       count  varint=uleb
+  ~         1         u8         type
+
+struct module size=8..
+  @0x0000   4         u8         magic  little must_eq="\0asm"
+  @0x0004   4         u32        version  little must_eq=1
+  @0x0008   0..       section    sections  sized-by=remaining
+  body switch: id
+  body case 0: custom
+  body case 1: types
+  body case 3: functions
+  body case 10: code
+  body case 11: data
+  body case default: other
+
+struct name size=1..4294967300
+  @0x0000   1..5      uleb       length  varint=uleb
+  ~         0..4294967295 u8         text  sized-by=length
+
+struct nothing size=0
+
+struct other_body size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size
+
+struct section size=2..4294967301
+  @0x0000   1         u8         id
+  @0x0001   1..5      uleb       size  varint=uleb
+  ~         0..4294967295 variant    body
+  body switch: id
+  body case 0: custom custom_body
+  body case 1: types type_body
+  body case 3: functions function_list
+  body case 10: code code_body
+  body case 11: data data_body
+  body case default: other other_body
+
+struct type_body size=0..4294967295
+  parameter -         u32        size [stream]
+  @0x0000   0..4294967295 u8         bytes  sized-by=size holds=type_section
+
+struct type_section size=1..36893488177483874300
+  @0x0000   1..5      uleb       count  varint=uleb
+  ~         0..36893488177483874295 function_type types  sized-by=count

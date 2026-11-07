@@ -1032,6 +1032,307 @@ pub fn zigzag_encode(value: i64) -> u64 {
 	((value << 1) ^ (value >> 63)) as u64
 }
 
+/// Signed LEB128, DWARF's and WebAssembly's: bit six of the last group is the
+/// sign. A signed value reaches an accessor in the zigzag form, so this hands
+/// that over. None where it is cut short, too long, or a tenth byte says
+/// anything but the sign.
+#[inline]
+pub fn varint_sleb_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let mut acc: u64 = 0;
+	for i in 0..max_bytes {
+		let byte = *bytes.get(at.checked_add(i)?)?;
+		let group = u64::from(byte & 0x7F);
+		let shift = 7 * i as u32;
+		if shift >= 64 || (shift == 63 && group != 0 && group != 0x7F) {
+			return None;
+		}
+		acc |= group << shift;
+		if byte & 0x80 == 0 {
+			if shift + 7 < 64 && byte & 0x40 != 0 {
+				acc |= u64::MAX << (shift + 7);
+			}
+			return Some((zigzag_encode(acc as i64), i + 1));
+		}
+	}
+	None
+}
+
+/// The shortest encoding under `varint_sleb_get`, of the zigzag form.
+#[inline]
+pub fn varint_sleb_len(raw: u64) -> usize {
+	let mut rest = raw >> 1;
+	let mut n = 1;
+	while rest >= 0x40 {
+		rest >>= 7;
+		n += 1;
+	}
+	n
+}
+
+/// Encode signed LEB128 minimally: bytes written, or 0 for want of room.
+#[inline]
+pub fn varint_sleb_put(out: &mut [u8], raw: u64) -> usize {
+	let total = varint_sleb_len(raw);
+	if total > out.len() {
+		return 0;
+	}
+	let mut held = zigzag_decode(raw);
+	for (i, slot) in out[..total].iter_mut().enumerate() {
+		*slot = (held & 0x7F) as u8 | if i + 1 < total { 0x80 } else { 0 };
+		held >>= 7;
+	}
+	total
+}
+
+/// How wide an EBML number is, from its first byte: 0 for a zero byte.
+#[inline]
+fn ebml_width(first: u8) -> usize {
+	if first == 0 { 0 } else { first.leading_zeros() as usize + 1 }
+}
+
+/// EBML's number, RFC 8794 section 4: the marker bit says the width, and what
+/// follows it is the value, high byte first. All value bits set is the
+/// reserved "unknown" of a size, and reads as that number.
+#[inline]
+pub fn varint_ebml_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let first = *bytes.get(at)?;
+	let n = ebml_width(first);
+	if n == 0 || n > max_bytes {
+		return None;
+	}
+	let held = bytes.get(at..at.checked_add(n)?)?;
+	let mut acc = u64::from(first) & (0xFF >> n);
+	for byte in &held[1..] {
+		acc = (acc << 8) | u64::from(*byte);
+	}
+	Some((acc, n))
+}
+
+/// The shortest encoding: all ones at a width is the reserved value, so it
+/// takes the next, and the widest holds the "unknown" a writer means.
+#[inline]
+pub fn varint_ebml_len(value: u64) -> usize {
+	let mut n: u32 = 1;
+	while n < 8 && value >= (1u64 << (7 * n)) - 1 {
+		n += 1;
+	}
+	n as usize
+}
+
+/// Encode an EBML number minimally: bytes written, or 0 for want of room or a
+/// value past fifty-six bits.
+#[inline]
+pub fn varint_ebml_put(out: &mut [u8], value: u64) -> usize {
+	let n = varint_ebml_len(value);
+	if n > out.len() || value >= 1u64 << 56 {
+		return 0;
+	}
+	out[..n].copy_from_slice(&value.to_be_bytes()[8 - n..]);
+	out[0] |= 0x80 >> (n - 1);
+	n
+}
+
+/// An EBML element ID: the same bytes with the marker kept.
+#[inline]
+pub fn varint_ebml_id_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let n = ebml_width(*bytes.get(at)?);
+	if n == 0 || n > max_bytes {
+		return None;
+	}
+	let held = bytes.get(at..at.checked_add(n)?)?;
+	Some((held.iter().fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte)), n))
+}
+
+/// How wide an ID is, or 0 where its top byte's marker does not stand where
+/// the value's width puts it.
+#[inline]
+pub fn varint_ebml_id_len(value: u64) -> usize {
+	let mut n: u32 = 1;
+	while n < 8 && value >> (8 * n) != 0 {
+		n += 1;
+	}
+	if ebml_width((value >> (8 * (n - 1))) as u8) == n as usize { n as usize } else { 0 }
+}
+
+/// Encode an EBML ID: bytes written, or 0 for want of room or for no ID.
+#[inline]
+pub fn varint_ebml_id_put(out: &mut [u8], value: u64) -> usize {
+	let n = varint_ebml_id_len(value);
+	if n == 0 || n > out.len() {
+		return 0;
+	}
+	out[..n].copy_from_slice(&value.to_be_bytes()[8 - n..]);
+	n
+}
+
+/// A number written as UTF-8 writes a code point, to FLAC's seven bytes and
+/// thirty-six bits. None where it is cut short, says more than `max_bytes`, or
+/// a byte is not what its place needs.
+#[inline]
+pub fn varint_utf8_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let first = *bytes.get(at)?;
+	if first < 0x80 {
+		return Some((u64::from(first), 1));
+	}
+	let n = first.leading_ones() as usize;
+	if !(2..=7).contains(&n) || n > max_bytes {
+		return None;
+	}
+	let held = bytes.get(at..at.checked_add(n)?)?;
+	let mut acc = u64::from(first) & (0x7F >> n);
+	for byte in &held[1..] {
+		if byte & 0xC0 != 0x80 {
+			return None;
+		}
+		acc = (acc << 6) | u64::from(byte & 0x3F);
+	}
+	Some((acc, n))
+}
+
+/// The shortest encoding, or 0 for a value past thirty-six bits.
+#[inline]
+pub fn varint_utf8_len(value: u64) -> usize {
+	if value < 0x80 {
+		return 1;
+	}
+	(2..=7u32).find(|n| value < 1u64 << (5 * n + 1)).map_or(0, |n| n as usize)
+}
+
+/// Encode one minimally: bytes written, or 0 if it cannot be.
+#[inline]
+pub fn varint_utf8_put(out: &mut [u8], value: u64) -> usize {
+	let n = varint_utf8_len(value);
+	if n == 0 || n > out.len() {
+		return 0;
+	}
+	if n == 1 {
+		out[0] = value as u8;
+		return 1;
+	}
+	let mut rest = value;
+	for slot in out[1..n].iter_mut().rev() {
+		*slot = 0x80 | (rest & 0x3F) as u8;
+		rest >>= 6;
+	}
+	out[0] = (0xFF00u32 >> n) as u8 | rest as u8;
+	n
+}
+
+/// Base-128 where a following group adds one first, so no number has two
+/// spellings: git's offset of a delta's base, and Bitcoin Core's VARINT.
+#[inline]
+pub fn varint_bijective_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	let mut acc: u64 = 0;
+	for i in 0..max_bytes {
+		let byte = *bytes.get(at.checked_add(i)?)?;
+		if i != 0 {
+			acc = acc.checked_add(1)?;
+			if acc >> 57 != 0 {
+				return None;
+			}
+		}
+		acc = (acc << 7) | u64::from(byte & 0x7F);
+		if byte & 0x80 == 0 {
+			return Some((acc, i + 1));
+		}
+	}
+	None
+}
+
+/// Its only encoding's length.
+#[inline]
+pub fn varint_bijective_len(value: u64) -> usize {
+	let mut rest = value;
+	let mut n = 1;
+	while rest >= 0x80 {
+		rest = (rest >> 7) - 1;
+		n += 1;
+	}
+	n
+}
+
+/// Encode one: bytes written, or 0 for want of room.
+#[inline]
+pub fn varint_bijective_put(out: &mut [u8], value: u64) -> usize {
+	let total = varint_bijective_len(value);
+	if total > out.len() {
+		return 0;
+	}
+	let mut rest = value;
+	let mut i = total - 1;
+	out[i] = (rest & 0x7F) as u8;
+	while rest >= 0x80 {
+		rest = (rest >> 7) - 1;
+		i -= 1;
+		out[i] = 0x80 | (rest & 0x7F) as u8;
+	}
+	total
+}
+
+/// Base-128, low group first, whose first group is the low `prefix` bits of a
+/// byte shared with fields: git's pack entry. The top bit is the continuation
+/// as in any other, and only the bits between are the fields'.
+#[inline]
+pub fn varint_lebprefix_get(bytes: &[u8], at: usize, prefix: u32, max_bytes: usize)
+		-> Option<(u64, usize)> {
+	let first = *bytes.get(at)?;
+	if max_bytes == 0 {
+		return None;
+	}
+	let mut acc = u64::from(first) & ((1u64 << prefix) - 1);
+	if first & 0x80 == 0 {
+		return Some((acc, 1));
+	}
+	let mut shift = prefix;
+	for i in 1..max_bytes {
+		let byte = *bytes.get(at.checked_add(i)?)?;
+		let group = u64::from(byte & 0x7F);
+		if shift >= 64 || (group << shift) >> shift != group {
+			if group != 0 {
+				return None;
+			}
+		} else {
+			acc |= group << shift;
+		}
+		shift += 7;
+		if byte & 0x80 == 0 {
+			return Some((acc, i + 1));
+		}
+	}
+	None
+}
+
+/// The shortest encoding under `varint_lebprefix_get`.
+#[inline]
+pub fn varint_lebprefix_len(value: u64, prefix: u32) -> usize {
+	let mut rest = value >> prefix;
+	let mut n = 1;
+	while rest != 0 {
+		rest >>= 7;
+		n += 1;
+	}
+	n
+}
+
+/// Encode one minimally, keeping the bits between the continuation and the
+/// prefix: bytes written, or 0 for want of room.
+#[inline]
+pub fn varint_lebprefix_put(out: &mut [u8], value: u64, prefix: u32) -> usize {
+	let total = varint_lebprefix_len(value, prefix);
+	if total > out.len() {
+		return 0;
+	}
+	let mask = (1u8 << prefix) - 1;
+	out[0] = (out[0] & 0x7F & !mask) | (value as u8 & mask)
+		| if total > 1 { 0x80 } else { 0 };
+	let mut rest = value >> prefix;
+	for (i, slot) in out[1..total].iter_mut().enumerate() {
+		*slot = (rest & 0x7F) as u8 | if i + 2 < total { 0x80 } else { 0 };
+		rest >>= 7;
+	}
+	total
+}
+
 /// A marked integer's table: a first byte below `direct` is the value, and
 /// marker `first + i` says `widths[i]` bytes hold it.
 struct Marked {

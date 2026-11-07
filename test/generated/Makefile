@@ -64,6 +64,10 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/bitcoin/bitcoin.situ \
 		   example/cbor/cbor.situ \
 		   example/hpack/hpack.situ \
+		   example/wasm/wasm.situ \
+		   example/matroska/matroska.situ \
+		   example/flac/flac.situ \
+		   example/git/git.situ \
 		   example/mqtt/mqtt.situ \
 		   example/quic/quic.situ \
 		   example/x509/x509.situ \

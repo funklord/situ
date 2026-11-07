@@ -1,0 +1,49 @@
+// Git's pack: its header, and the header of each entry.
+//
+// SOURCE. gitformat-pack(5). An entry opens with a byte shared three ways: a
+// continuation bit, a three-bit type, and the low four bits of the object's
+// size, whose higher groups follow low first. A delta names its base by how far
+// back it stands, in a base-128 number where each following group adds one, so
+// no offset has two spellings. Bitcoin Core's VARINT is the same form.
+//
+// WHY THIS ONE. `more` is the size's own continuation bit, which reads like a
+// field and is written by the number: `lebprefix` sets it. Between the two
+// stands `type`, which is the only reason the number shares its byte.
+//
+// WHICH SUBSET. The zlib stream after an entry's header has no length, so an
+// entry is read where `git verify-pack` or an index says one is.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+varint_type object_size  { encoding = lebprefix; prefix = 4; max_bits = 64; }
+varint_type delta_offset { encoding = bijective128; max_bits = 64; }
+
+struct pack_header {
+	u8  signature[4] [must_eq = "PACK"];
+	u32 version [must_eq = 2];
+	u32 objects;
+}
+
+struct nothing { }
+struct offset_delta { delta_offset back; }
+struct named_delta  { u8 base[20]; }
+
+struct entry {
+	u1 more;
+	u3 type;
+	object_size size;
+	variant base switch (type) {
+		case 1:  nothing      commit;
+		case 2:  nothing      tree;
+		case 3:  nothing      blob;
+		case 4:  nothing      tag;
+		case 6:  offset_delta by_offset;
+		case 7:  named_delta  by_name;
+		default: error;
+	}
+}
+
+// The count stands where an index reader checks it against its own.
+require absolute_static(pack_header.objects);

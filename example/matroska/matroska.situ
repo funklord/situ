@@ -1,0 +1,49 @@
+// Matroska, and so WebM: the EBML document ffmpeg writes.
+//
+// SOURCE. RFC 8794 for EBML, RFC 9559 for Matroska. Everything is an element:
+// an ID, a size and that many bytes, which are other elements or a value. Both
+// numbers say their own width by the first set bit of their first byte. The
+// ID keeps that bit, because IDs are written with it, 0x1A45DFA3, and the size
+// drops it.
+//
+// WHY THIS ONE. A size of all ones is the reserved "unknown", which a writer
+// that cannot seek back uses for the Segment. It reads as the number it spells,
+// so `document` says what it means: the Segment runs to the end. A file with a
+// known Segment reads the same way, with one Segment.
+//
+// WHICH SUBSET. One Segment, and elements of known size inside it. A Cluster of
+// unknown size ends at the next element of its own level, which is a question
+// about what an ID means rather than about its bytes.
+
+target buffer;
+endian big;
+
+varint_type element_id   { encoding = ebml_id; max_bits = 32; }
+varint_type element_size { encoding = ebml;    max_bits = 56; }
+
+struct element {
+	element_id   id;
+	element_size size;
+	u8           data[size];
+}
+
+// What a master element's data holds.
+struct elements {
+	element children[remaining];
+}
+
+struct ebml_header {
+	element_id   id [must_eq = 0x1A45DFA3];
+	element_size size;
+	u8           fields[size] [holds = elements];
+}
+
+struct document {
+	ebml_header  header;
+	element_id   segment [must_eq = 0x18538067];
+	element_size segment_size;
+	element      children[remaining];
+}
+
+// An element opens with its ID, which is how a reader knows it.
+require offset(element.id) == 0;

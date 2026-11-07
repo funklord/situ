@@ -43,7 +43,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.wellformed import _encoding_source
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 8
+FORMAT_VERSION	= 9
 
 #: The check a bound over a field makes: its row holds a program (26.902).
 BOUND_BY = {"must_eq": 19, "min": 20, "max": 21}

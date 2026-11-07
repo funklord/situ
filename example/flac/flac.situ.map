@@ -1,0 +1,156 @@
+# situ capability map v1
+# schema: flac.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec crc8_smbus derived expansion=+1 seekable=linear granularity=block systematic deterministic
+
+struct block_u16 size=2 repr=ValueConverted
+  block_u16.size_less_one                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct block_u8 size=1
+  block_u8.size_less_one                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+
+struct frame_fields size=5..15 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  frame_fields.sync                      offset=AbsoluteStatic(0x00) size=Fixed(14bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.reserved                  offset=AbsoluteStatic(0x01:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.variable_blocks           offset=AbsoluteStatic(0x01:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.block_code                offset=AbsoluteStatic(0x02) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.rate_code                 offset=AbsoluteStatic(0x02:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.channels                  offset=AbsoluteStatic(0x03) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.sample_size               offset=AbsoluteStatic(0x03:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.reserved_too              offset=AbsoluteStatic(0x03:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame_fields.number                    offset=AbsoluteStatic(0x04) size=Bounded(1, 7) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  frame_fields.block                     offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  frame_fields.block.as_u8               offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  frame_fields.block.as_u8.size_less_one offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  frame_fields.block.as_u16              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  frame_fields.block.as_u16.size_less_one offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  frame_fields.block.block_implied       offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  frame_fields.rate                      offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  frame_fields.rate.as_khz               offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  frame_fields.rate.as_khz.khz           offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  frame_fields.rate.as_hz                offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  frame_fields.rate.as_hz.hz             offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  frame_fields.rate.as_daz               offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  frame_fields.rate.as_daz.tens_of_hz    offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  frame_fields.rate.rate_implied         offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+
+struct frame_header size=6..16 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical auth=Covered(crc)
+  frame_header.summed                    offset=AbsoluteStatic(0x00) size=Bounded(5, 15) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(crc)
+  frame_header.fields                    offset=AbsoluteStatic(0x00) size=Bounded(5, 15) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical auth=Covered(crc)
+  frame_header.fields.sync               offset=AbsoluteStatic(0x00) size=Fixed(14bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.reserved           offset=AbsoluteStatic(0x01:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.variable_blocks    offset=AbsoluteStatic(0x01:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.block_code         offset=AbsoluteStatic(0x02) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.rate_code          offset=AbsoluteStatic(0x02:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.channels           offset=AbsoluteStatic(0x03) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.sample_size        offset=AbsoluteStatic(0x03:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.reserved_too       offset=AbsoluteStatic(0x03:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  frame_header.fields.number             offset=AbsoluteStatic(0x04) size=Bounded(1, 7) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical auth=Covered(crc)
+  frame_header.fields.block              offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(crc)
+  frame_header.fields.block.as_u8        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.fields.block.as_u8.size_less_one offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable auth=Covered(crc)
+  frame_header.fields.block.as_u16       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.fields.block.as_u16.size_less_one offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable auth=Covered(crc)
+  frame_header.fields.block.block_implied offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.fields.rate               offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(crc)
+  frame_header.fields.rate.as_khz        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.fields.rate.as_khz.khz    offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable auth=Covered(crc)
+  frame_header.fields.rate.as_hz         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.fields.rate.as_hz.hz      offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable auth=Covered(crc)
+  frame_header.fields.rate.as_daz        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.fields.rate.as_daz.tens_of_hz offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable auth=Covered(crc)
+  frame_header.fields.rate.rate_implied  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable auth=Covered(crc)
+  frame_header.crc                       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
+
+struct info_body size=34 repr=ValueConverted atomic=NonAtomic
+  info_body.info                         offset=AbsoluteStatic(0x00) size=Fixed(34) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  info_body.info.min_block               offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  info_body.info.max_block               offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  info_body.info.min_frame               offset=AbsoluteStatic(0x04) size=Fixed(3) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  info_body.info.max_frame               offset=AbsoluteStatic(0x07) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  info_body.info.sample_rate             offset=AbsoluteStatic(0x0A) size=Fixed(20bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  info_body.info.channels_less_one       offset=AbsoluteStatic(0x0C:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  info_body.info.bits_less_one           offset=AbsoluteStatic(0x0C:7) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  info_body.info.total_samples           offset=AbsoluteStatic(0x0D:4) size=Fixed(36bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  info_body.info.md5                     offset=AbsoluteStatic(0x12) size=Fixed(16) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+
+struct metadata_block size=4..4294967299 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  metadata_block.last                    offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  metadata_block.type                    offset=AbsoluteStatic(0x00:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  metadata_block.length                  offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  metadata_block.body                    offset=AbsoluteStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  metadata_block.body.as_info            offset=AbsoluteStatic(0x04) size=Fixed(34) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info       offset=AbsoluteStatic(0x04) size=Fixed(34) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.min_block offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  metadata_block.body.as_info.info.max_block offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  metadata_block.body.as_info.info.min_frame offset=AbsoluteStatic(0x08) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.max_frame offset=AbsoluteStatic(0x0B) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.sample_rate offset=AbsoluteStatic(0x0E) size=Fixed(20bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.channels_less_one offset=AbsoluteStatic(0x10:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.bits_less_one offset=AbsoluteStatic(0x10:7) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.total_samples offset=AbsoluteStatic(0x11:4) size=Fixed(36bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  metadata_block.body.as_info.info.md5   offset=AbsoluteStatic(0x16) size=Fixed(16) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  metadata_block.body.as_other           offset=AbsoluteStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  metadata_block.body.as_other.size      parameter
+  metadata_block.body.as_other.bytes     offset=AbsoluteStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct nothing size=0
+
+struct other_body size=0..4294967295 mutate=Shifting repr=ValueConverted
+  other_body.size                        parameter
+  other_body.bytes                       offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct rate_daz size=2 repr=ValueConverted
+  rate_daz.tens_of_hz                    offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct rate_hz size=2 repr=ValueConverted
+  rate_hz.hz                             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct rate_khz size=1
+  rate_khz.khz                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+
+struct stream_head size=8.. access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  stream_head.marker                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  stream_head.blocks                     offset=AbsoluteStatic(0x04) size=Unbounded align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  stream_head.blocks[]                   offset=FrameStatic(0x00) size=Bounded(4, 4294967299) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
+  stream_head.blocks[].last              offset=FrameStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].type              offset=FrameStatic(0x00:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].length            offset=FrameStatic(0x01) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body              offset=FrameStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  stream_head.blocks[].body.as_info      offset=FrameStatic(0x04) size=Fixed(34) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info offset=FrameStatic(0x04) size=Fixed(34) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.min_block offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  stream_head.blocks[].body.as_info.info.max_block offset=FrameStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  stream_head.blocks[].body.as_info.info.min_frame offset=FrameStatic(0x08) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.max_frame offset=FrameStatic(0x0B) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.sample_rate offset=FrameStatic(0x0E) size=Fixed(20bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.channels_less_one offset=FrameStatic(0x10:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.bits_less_one offset=FrameStatic(0x10:7) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.total_samples offset=FrameStatic(0x11:4) size=Fixed(36bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_head.blocks[].body.as_info.info.md5 offset=FrameStatic(0x16) size=Fixed(16) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  stream_head.blocks[].body.as_other     offset=FrameStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  stream_head.blocks[].body.as_other.size parameter
+  stream_head.blocks[].body.as_other.bytes offset=FrameStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct stream_info size=34 repr=ValueConverted atomic=NonAtomic
+  stream_info.min_block                  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  stream_info.max_block                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  stream_info.min_frame                  offset=AbsoluteStatic(0x04) size=Fixed(3) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  stream_info.max_frame                  offset=AbsoluteStatic(0x07) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  stream_info.sample_rate                offset=AbsoluteStatic(0x0A) size=Fixed(20bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_info.channels_less_one          offset=AbsoluteStatic(0x0C:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_info.bits_less_one              offset=AbsoluteStatic(0x0C:7) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_info.total_samples              offset=AbsoluteStatic(0x0D:4) size=Fixed(36bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream_info.md5                        offset=AbsoluteStatic(0x12) size=Fixed(16) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic

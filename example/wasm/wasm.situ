@@ -1,0 +1,138 @@
+// WebAssembly: a module, as the core specification's binary format has it.
+//
+// SOURCE. WebAssembly Core Specification, chapter 5. A module is a magic, a
+// version and a run of sections, each an id and a size. Sizes and indices are
+// unsigned LEB128, and the constants of `i32.const` and `i64.const` are signed
+// LEB128: the first format in this corpus that needs the sign in the last
+// group, and DWARF's number as well.
+//
+// WHY THIS ONE. The numbers are padded where a linker left room to patch them:
+// clang writes a section size as five bytes whatever it holds. So nothing here
+// is `minimal`, and a size is read by its value and not its length.
+//
+// WHICH SUBSET. Straight-line function bodies, in the instructions below. A
+// block nests, and each opens with a type that is a signed 33-bit number, and
+// an instruction this does not name is an error rather than a guess: no default
+// arm, as one that took no immediate would misread the next byte.
+
+target buffer;
+endian little;
+
+varint_type uleb { encoding = leb128;  max_bits = 32; }
+varint_type s32  { encoding = sleb128; max_bits = 32; }
+varint_type s64  { encoding = sleb128; max_bits = 64; }
+
+struct nothing { }
+
+struct name {
+	uleb length;
+	u8   text[length];
+}
+
+struct function_type {
+	u8   form [must_eq = 0x60];
+	uleb params;
+	u8   param_types[params];
+	uleb results;
+	u8   result_types[results];
+}
+
+struct type_section {
+	uleb          count;
+	function_type types[count];
+}
+
+struct function_section {
+	uleb count;
+	uleb type_index[count];
+}
+
+struct local_index { uleb index; }
+struct i32_const   { s32  value; }
+struct i64_const   { s64  value; }
+
+struct instruction {
+	u8 op;
+	variant immediate switch (op) {
+		case 0x20: local_index local_get;
+		case 0x41: i32_const   as_i32;
+		case 0x42: i64_const   as_i64;
+		case 0x6A: nothing     i32_add;
+		case 0x6C: nothing     i32_mul;
+		case 0x7C: nothing     i64_add;
+		case 0x7E: nothing     i64_mul;
+		case 0xAC: nothing     i64_extend_i32_s;
+		default:   error;
+	}
+}
+
+struct locals {
+	uleb count;
+	u8   type;
+}
+
+struct function_body {
+	uleb        groups;
+	locals      local[groups];
+	instruction code[] until "\x0b";
+}
+
+struct code_entry {
+	uleb size;
+	u8   body[size] [holds = function_body];
+}
+
+struct code_section {
+	uleb       count;
+	code_entry functions[count];
+}
+
+// An active segment of memory zero, placed by a constant expression.
+struct data_segment {
+	uleb flags [must_eq = 0];
+	u8   op [must_eq = 0x41];
+	s32  offset;
+	u8   end [must_eq = 0x0B];
+	uleb length;
+	u8   bytes[length];
+}
+
+struct data_section {
+	uleb         count;
+	data_segment segments[count];
+}
+
+struct custom_section {
+	name title;
+	u8   bytes[remaining];
+}
+
+// The size frames what the id chose, which an arm's own struct is handed.
+struct custom_body   { parameter u32 size [stream]; u8 bytes[size] [holds = custom_section]; }
+struct type_body     { parameter u32 size [stream]; u8 bytes[size] [holds = type_section]; }
+struct function_list { parameter u32 size [stream]; u8 bytes[size] [holds = function_section]; }
+struct code_body     { parameter u32 size [stream]; u8 bytes[size] [holds = code_section]; }
+struct data_body     { parameter u32 size [stream]; u8 bytes[size] [holds = data_section]; }
+struct other_body    { parameter u32 size [stream]; u8 bytes[size]; }
+
+struct section {
+	u8   id;
+	uleb size;
+	variant body switch (id) {
+		case 0:  custom_body(size = size)   custom;
+		case 1:  type_body(size = size)     types;
+		case 3:  function_list(size = size) functions;
+		case 10: code_body(size = size)     code;
+		case 11: data_body(size = size)     data;
+		default: other_body(size = size)    other;
+	}
+}
+
+struct module {
+	u8      magic[4] [must_eq = "\0asm"];
+	u32     version [must_eq = 1];
+	section sections[remaining];
+}
+
+// The version stands where a loader reads it first.
+require absolute_static(module.version);

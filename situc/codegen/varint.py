@@ -26,7 +26,13 @@ def varint_stem(declared: ast.VarintDecl | None) -> str:
 	        ast.VarintEncoding.LENENC: "varint_lenenc",
 	        ast.VarintEncoding.CBOR:   "varint_cbor",
 	        ast.VarintEncoding.HPACK:  "varint_hpack",
-	        ast.VarintEncoding.BERTAG: "varint_bertag"}[declared.encoding]
+	        ast.VarintEncoding.BERTAG: "varint_bertag",
+	        ast.VarintEncoding.SLEB128: "varint_sleb",
+	        ast.VarintEncoding.EBML:   "varint_ebml",
+	        ast.VarintEncoding.EBML_ID: "varint_ebml_id",
+	        ast.VarintEncoding.UTF8:   "varint_utf8",
+	        ast.VarintEncoding.BIJECTIVE128: "varint_bijective",
+	        ast.VarintEncoding.LEBPREFIX: "varint_lebprefix"}[declared.encoding]
 
 
 def varint_limits(declared: ast.VarintDecl | None, suffix: str = "") -> str:
@@ -37,7 +43,7 @@ def varint_limits(declared: ast.VarintDecl | None, suffix: str = "") -> str:
 	if declared.encoding is ast.VarintEncoding.BE128:
 		return (f"{declared.max_bytes}{suffix},"
 		        f" {declared.terminal_bits}{suffix}")
-	if declared.encoding is ast.VarintEncoding.HPACK:
+	if declared.encoding in ast.PREFIXED:
 		return f"{declared.prefix}{suffix}, {declared.max_bytes}{suffix}"
 	return f"{declared.max_bytes}{suffix}"
 
@@ -47,7 +53,7 @@ def varint_measure(declared: ast.VarintDecl | None, value: str,
 	"""The arguments of `_len`, which only `be128` needs more of."""
 	if declared is not None and declared.encoding is ast.VarintEncoding.BE128:
 		return f"{value}, {varint_limits(declared, suffix)}"
-	if declared is not None and declared.encoding is ast.VarintEncoding.HPACK:
+	if declared is not None and declared.encoding in ast.PREFIXED:
 		return f"{value}, {declared.prefix}{suffix}"
 	return value
 
@@ -56,6 +62,6 @@ def varint_put_tail(declared: ast.VarintDecl, suffix: str = "") -> str:
 	"""What `_put` takes after the value."""
 	if declared.encoding is ast.VarintEncoding.BE128:
 		return f", {varint_limits(declared, suffix)}"
-	if declared.encoding is ast.VarintEncoding.HPACK:
+	if declared.encoding in ast.PREFIXED:
 		return f", {declared.prefix}{suffix}"
 	return ""

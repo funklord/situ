@@ -902,6 +902,12 @@ above it a marker for how many bytes hold it (26.921).
 `bertag` take the low bits of a byte whose top bits are bit fields stated just before
 them, and the number counts that byte (26.922).
 
+**And the rest say their own form (26.925).** `sleb128` is DWARF's and WebAssembly's
+signed number, `ebml` and `ebml_id` Matroska's size and element ID, `utf8` a number
+spelled as a code point, as FLAC's frame number is, `bijective128` git's delta offset
+and Bitcoin Core's VARINT, and `lebprefix` with `prefix = N` the size that shares its
+first byte in a git pack.
+
 **Two encodings, and what a declared `max_bytes` means.** `be128` is the same
 shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
 SQLite's record varints. A format may also cap the encoded length below what
@@ -1328,15 +1334,15 @@ that CRLF and stopped there, reporting one field where there were three.
 The terminator belongs to the run's extent, as a delimiter belongs to the
 member it ends, so `body` starts past the blank line rather than on it.
 
+**A frame that stops first cut the run short**, as it cuts a delimited member, and
+`until "D" | end` is how a schema says the frame may end it instead (26.926). The walk
+answers, and not the last bytes: an element may end in the terminator's byte.
+
 **Walked, not indexed.** A view is a value and situ never allocates, so there
 is nowhere to keep a table of offsets; `access = Sequential` says so and
 `indexed` is the construct for a caller who needs O(1). The element type gets
 a generated `_extent`, because the next element starts where this one ends and
 for a struct whose own members are delimited that is not a constant.
-
-**A frame that stops first cut the run short**, as it cuts a delimited member, and
-`until "D" | end` is how a schema says the frame may end it instead (26.926). The walk
-answers, and not the last bytes: an element may end in the terminator's byte.
 
 **Every walk is bounded twice.** By the view's limit, and by refusing to
 advance on a zero-extent element -- which is not theoretical, since a record
@@ -8312,6 +8318,14 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.926 A run a terminator ends has one
+
+Moved to `doc/decision/26.926-a-run-a-terminator-ends-has-one.md`.
+
+### 26.925 A number can say its own form
+
+Moved to `doc/decision/26.925-a-number-can-say-its-own-form.md`.
 
 ### 26.924 A field can count a text number's digits
 

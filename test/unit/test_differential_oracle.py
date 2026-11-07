@@ -1346,6 +1346,14 @@ UNORACLED = {
 	             "test_an_integer_can_start_inside_a_byte",
 	"hpack":     "no HPACK library here; RFC 7541's appendix is read in "
 	             "test_an_integer_can_start_inside_a_byte",
+	"wasm":      "llvm-objdump's reading is pinned in "
+	             "test_a_number_can_say_its_own_form",
+	"matroska":  "ffprobe's reading is pinned in "
+	             "test_a_number_can_say_its_own_form",
+	"flac":      "flac -a's reading is pinned in "
+	             "test_a_number_can_say_its_own_form",
+	"git":       "git verify-pack's reading is pinned in "
+	             "test_a_number_can_say_its_own_form",
 	"bitcoin":   "no node here; the genesis coinbase's hash is recomputed in "
 	             "test_a_marked_integer_says_its_own_width",
 	# As edges, and for a construct rather than a format: `import` had no

@@ -1579,12 +1579,109 @@ MARKED = {
 BERTAG = 204
 HPACK  = 210
 
+#: The rest of the image's codes (26.925). `LEBPREFIX` is a base like HPACK's.
+SLEB128      = 205
+EBML         = 206
+EBML_ID      = 207
+UTF8         = 208
+BIJECTIVE128 = 209
+LEBPREFIX    = 220
+
 
 def prefix_of(terminal: int) -> int | None:
 	"""How many bits of its first byte a prefixed integer has, if it is one."""
 	if terminal == BERTAG:
 		return 5
 	return terminal - HPACK if HPACK < terminal <= HPACK + 8 else None
+
+
+def lebprefix_of(terminal: int) -> int | None:
+	"""How many bits of a shared first byte a `lebprefix` number has."""
+	return terminal - LEBPREFIX if LEBPREFIX < terminal <= LEBPREFIX + 6 \
+		else None
+
+
+def own_form(data: bytes, terminal: int) -> tuple[int, int] | None:
+	"""A number of a form whose first bytes say how it ends: its size and
+	value, `None` where this is no such form. A signed one is its zigzag form,
+	as every read of a signed varint is."""
+	prefix = lebprefix_of(terminal)
+	if terminal not in (SLEB128, EBML, EBML_ID, UTF8, BIJECTIVE128) \
+			and prefix is None:
+		return None
+	if not data:
+		raise Refused("the buffer ends mid-varint")
+
+	if terminal in (EBML, EBML_ID):
+		size = 9 - data[0].bit_length() if data[0] else 0
+		if not 0 < size <= len(data):
+			raise Refused("the buffer ends mid-varint")
+		held = int.from_bytes(data[:size], "big")
+		return size, held if terminal == EBML_ID \
+			else held & ((1 << (7 * size)) - 1)
+
+	if terminal == UTF8:
+		if data[0] < 0x80:
+			return 1, data[0]
+		size = 8 - (data[0] ^ 0xFF).bit_length()
+		if not 2 <= size <= min(7, len(data)) or any(
+				byte & 0xC0 != 0x80 for byte in data[1:size]):
+			raise Refused("the buffer ends mid-varint")
+		held = data[0] & (0x7F >> size)
+		for byte in data[1:size]:
+			held = (held << 6) | (byte & 0x3F)
+		return size, held
+
+	held = 0
+	for i, byte in enumerate(data):
+		group = byte & 0x7F
+		if terminal == SLEB128:
+			if i == 9 and group not in (0, 0x7F):
+				break
+			held |= group << (7 * i)
+			if not byte & 0x80:
+				if byte & 0x40:
+					held -= 1 << (7 * (i + 1))
+				return i + 1, held << 1 if held >= 0 else (~held << 1) | 1
+		elif terminal == BIJECTIVE128:
+			held = ((held + 1 if i else 0) << 7) | group
+			if held >> 64:
+				break
+			if not byte & 0x80:
+				return i + 1, held
+		else:
+			assert prefix is not None
+			held = data[0] & ((1 << prefix) - 1) if i == 0 \
+				else held | (group << (prefix + 7 * (i - 1)))
+			if held >> 64:
+				break
+			if not byte & 0x80:
+				return i + 1, held
+	raise Refused("the buffer ends mid-varint")
+
+
+def own_form_length(value: int, terminal: int) -> int | None:
+	"""The fewest bytes of `own_form`'s numbers, `None` for any other."""
+	prefix = lebprefix_of(terminal)
+	if prefix is not None:
+		return 1 + ((value >> prefix).bit_length() + 6) // 7
+	if terminal == SLEB128:
+		return 1 + (value >> 1).bit_length() // 7
+	if terminal == EBML:
+		return next((n for n in range(1, 8)
+		             if value < (1 << (7 * n)) - 1), 8)
+	if terminal == EBML_ID:
+		return (value.bit_length() + 7) // 8
+	if terminal == UTF8:
+		return next((n for n, bits in enumerate(
+			(7, 11, 16, 21, 26, 31, 36), 1) if value < 1 << bits), 7)
+	if terminal == BIJECTIVE128:
+		count = 1
+		while value >= 0x80:
+			value = (value >> 7) - 1
+			count += 1
+		return count
+	return None
 
 
 def varint(view: View, index: int) -> tuple[int, int]:
@@ -1683,6 +1780,9 @@ def _minimal_length(view: View, index: int, value: int) -> int:
 		direct, _, widths, _, _ = MARKED[terminal]
 		return 1 if value < direct else next(
 			(n + 1 for n in widths if value < 1 << (8 * n)), 0)
+	least = own_form_length(value, terminal) if big else None
+	if least is not None:
+		return least
 	prefix = prefix_of(terminal) if big else None
 	if prefix is not None:
 		mask = (1 << prefix) - 1
@@ -1762,6 +1862,10 @@ def decode_varint(view: View, start: int, max_bytes: int,
 		size = widths[lead - first]
 		return size + 1, int.from_bytes(data[1:size + 1],
 		                                "big" if order else "little")
+
+	found = own_form(bytes(data), terminal_bits) if big else None
+	if found is not None:
+		return found
 
 	# An integer in the low bits of a byte (26.922): all of them set says
 	# groups follow, and HPACK's add to the prefix where a tag number's do not.

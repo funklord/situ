@@ -1,0 +1,199 @@
+# situ capability map v1
+# schema: wasm.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct code_body size=0..4294967295 mutate=Shifting repr=ValueConverted
+  code_body.size                         parameter
+  code_body.bytes                        offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct code_entry size=1..4294967300 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  code_entry.size                        offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  code_entry.body                        offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct code_section size=1..18446744086594453505 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  code_section.count                     offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  code_section.functions                 offset=Dynamic size=Bounded(0, 18446744086594453500) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  code_section.functions[]               offset=FrameStatic(0x00) size=Bounded(1, 4294967300) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  code_section.functions[].size          offset=FrameStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  code_section.functions[].body          offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct custom_body size=0..4294967295 mutate=Shifting repr=ValueConverted
+  custom_body.size                       parameter
+  custom_body.bytes                      offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct custom_section size=1.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  custom_section.title                   offset=AbsoluteStatic(0x00) size=Bounded(1, 4294967300) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  custom_section.title.length            offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  custom_section.title.text              offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  custom_section.bytes                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct data_body size=0..4294967295 mutate=Shifting repr=ValueConverted
+  data_body.size                         parameter
+  data_body.bytes                        offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct data_section size=1..18446744138134061045 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  data_section.count                     offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  data_section.segments                  offset=Dynamic size=Bounded(0, 18446744138134061040) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  data_section.segments[]                offset=FrameStatic(0x00) size=Bounded(5, 4294967312) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  data_section.segments[].flags          offset=FrameStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  data_section.segments[].op             offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  data_section.segments[].offset         offset=Dynamic size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  data_section.segments[].end            offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  data_section.segments[].length         offset=Dynamic size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  data_section.segments[].bytes          offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct data_segment size=5..4294967312 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  data_segment.flags                     offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  data_segment.op                        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  data_segment.offset                    offset=Dynamic size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  data_segment.end                       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  data_segment.length                    offset=Dynamic size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  data_segment.bytes                     offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct function_body size=2.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  function_body.groups                   offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  function_body.local                    offset=Dynamic size=Bounded(0, 25769803770) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  function_body.local[]                  offset=FrameStatic(0x00) size=Bounded(2, 6) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  function_body.local[].count            offset=FrameStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  function_body.local[].type             offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  function_body.code                     offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  function_body.code[]                   offset=FrameStatic(0x00) size=Bounded(1, 11) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable canonical=NonCanonical
+  function_body.code[].op                offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  function_body.code[].immediate         offset=FrameStatic(0x01) size=Bounded(0, 10) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  function_body.code[].immediate.local_get offset=FrameStatic(0x01) size=Bounded(1, 5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=FrameStable canonical=NonCanonical
+  function_body.code[].immediate.local_get.index offset=FrameStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  function_body.code[].immediate.as_i32  offset=FrameStatic(0x01) size=Bounded(1, 5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=FrameStable canonical=NonCanonical
+  function_body.code[].immediate.as_i32.value offset=FrameStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  function_body.code[].immediate.as_i64  offset=FrameStatic(0x01) size=Bounded(1, 10) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=FrameStable canonical=NonCanonical
+  function_body.code[].immediate.as_i64.value offset=FrameStatic(0x01) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  function_body.code[].immediate.i32_add offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  function_body.code[].immediate.i32_mul offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  function_body.code[].immediate.i64_add offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  function_body.code[].immediate.i64_mul offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  function_body.code[].immediate.i64_extend_i32_s offset=FrameStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+
+struct function_list size=0..4294967295 mutate=Shifting repr=ValueConverted
+  function_list.size                     parameter
+  function_list.bytes                    offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct function_section size=1..21474836480 access=Sequential mutate=InPlaceSlack address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  function_section.count                 offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  function_section.type_index            offset=Dynamic size=Bounded(0, 21474836475) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+
+struct function_type size=3..8589934601 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  function_type.form                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  function_type.params                   offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  function_type.param_types              offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  function_type.results                  offset=Dynamic size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  function_type.result_types             offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct i32_const size=1..5 mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  i32_const.value                        offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+
+struct i64_const size=1..10 mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  i64_const.value                        offset=AbsoluteStatic(0x00) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+
+struct instruction size=1..11 mutate=Shifting repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  instruction.op                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  instruction.immediate                  offset=AbsoluteStatic(0x01) size=Bounded(0, 10) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  instruction.immediate.local_get        offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting canonical=NonCanonical
+  instruction.immediate.local_get.index  offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  instruction.immediate.as_i32           offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting canonical=NonCanonical
+  instruction.immediate.as_i32.value     offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  instruction.immediate.as_i64           offset=AbsoluteStatic(0x01) size=Bounded(1, 10) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting canonical=NonCanonical
+  instruction.immediate.as_i64.value     offset=AbsoluteStatic(0x01) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  instruction.immediate.i32_add          offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  instruction.immediate.i32_mul          offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  instruction.immediate.i64_add          offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  instruction.immediate.i64_mul          offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  instruction.immediate.i64_extend_i32_s offset=AbsoluteStatic(0x01) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
+struct local_index size=1..5 mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  local_index.index                      offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+
+struct locals size=2..6 mutate=InPlaceSlack address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  locals.count                           offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  locals.type                            offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
+struct module size=8.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  module.magic                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  module.version                         offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  module.sections                        offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  module.sections[]                      offset=FrameStatic(0x00) size=Bounded(2, 4294967301) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  module.sections[].id                   offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  module.sections[].size                 offset=FrameStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  module.sections[].body                 offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.custom          offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.custom.size     parameter
+  module.sections[].body.custom.bytes    offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  module.sections[].body.types           offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.types.size      parameter
+  module.sections[].body.types.bytes     offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  module.sections[].body.functions       offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.functions.size  parameter
+  module.sections[].body.functions.bytes offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  module.sections[].body.code            offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.code.size       parameter
+  module.sections[].body.code.bytes      offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  module.sections[].body.data            offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.data.size       parameter
+  module.sections[].body.data.bytes      offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  module.sections[].body.other           offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  module.sections[].body.other.size      parameter
+  module.sections[].body.other.bytes     offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+
+struct name size=1..4294967300 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  name.length                            offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  name.text                              offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct nothing size=0
+
+struct other_body size=0..4294967295 mutate=Shifting repr=ValueConverted
+  other_body.size                        parameter
+  other_body.bytes                       offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct section size=2..4294967301 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  section.id                             offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  section.size                           offset=AbsoluteStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  section.body                           offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.custom                    offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.custom.size               parameter
+  section.body.custom.bytes              offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  section.body.types                     offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.types.size                parameter
+  section.body.types.bytes               offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  section.body.functions                 offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.functions.size            parameter
+  section.body.functions.bytes           offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  section.body.code                      offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.code.size                 parameter
+  section.body.code.bytes                offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  section.body.data                      offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.data.size                 parameter
+  section.body.data.bytes                offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  section.body.other                     offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  section.body.other.size                parameter
+  section.body.other.bytes               offset=FrameStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+
+struct type_body size=0..4294967295 mutate=Shifting repr=ValueConverted
+  type_body.size                         parameter
+  type_body.bytes                        offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct type_section size=1..36893488177483874300 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  type_section.count                     offset=AbsoluteStatic(0x00) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  type_section.types                     offset=Dynamic size=Bounded(0, 36893488177483874295) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  type_section.types[]                   offset=FrameStatic(0x00) size=Bounded(3, 8589934601) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  type_section.types[].form              offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  type_section.types[].params            offset=FrameStatic(0x01) size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  type_section.types[].param_types       offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  type_section.types[].results           offset=Dynamic size=Bounded(1, 5) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  type_section.types[].result_types      offset=Dynamic size=Bounded(0, 4294967295) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
