@@ -2493,7 +2493,7 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
                                      const uint8_t *message, uint32_t len,
                                      uint32_t shape, uint32_t index,
                                      uint32_t depth, uint32_t *count,
-                                     uint32_t *bytes)
+                                     uint32_t *bytes, uint32_t *took)
 {
 	situ_walk_placement held;
 	const uint8_t      *rules = NULL;
@@ -2576,8 +2576,8 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 	}
 
 	*count = n;
-	*bytes = (at - start) + terminator_at(image, rules, alts, message, len,
-	                                      at);
+	*took  = terminator_at(image, rules, alts, message, len, at);
+	*bytes = (at - start) + *took;
 	return SITU_WALK_OK;
 }
 
@@ -2872,7 +2872,7 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		uint32_t count = 0u;
 		uint32_t bytes = 0u;
 		err = record_run_walk(image, message, len, shape, index, depth,
-		                      &count, &bytes);
+		                      &count, &bytes, &took);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -3043,6 +3043,7 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 				uint32_t extent = 0u;
 				err = struct_extent(&bound, message + at, len - at,
 				                    held.type_struct, depth + 1u, &extent);
+		uint32_t took = 0u;
 				if (err != SITU_WALK_OK) {
 					return err;
 				}
@@ -5276,6 +5277,31 @@ static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at);
  *
  * Every reader divided or walked and dropped what was left: `u16
  * v[remaining]` over three bytes was one element, and a string in mqtt's
+		/* And a frame that stops before its terminator cut it short
+		 * (26.926). */
+		uint32_t       rows   = 0u;
+		const uint8_t *checks = check_rows(image, chosen, &rows);
+
+		for (uint32_t c = 0u; c < rows; c++) {
+			if (checks[c * image->constraint_stride + 12]
+			                != CHECK_TERMINATED) {
+				continue;
+			}
+			uint32_t count = 0u;
+			uint32_t bytes = 0u;
+			uint32_t took  = 0u;
+			err = record_run_walk(image, message, len, shape, chosen, depth,
+			                      &count, &bytes, &took);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK || took == 0u) {
+				record(why, chosen, CHECK_TERMINATED);
+				*verdict = err != SITU_WALK_OK ? SITU_WALK_BOUNDS
+				                               : SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
  * `filters[remaining]` claiming five bytes with two present was no element
  * at all -- both validated clean, here and in all four backends (26.736). A
  * record run walks to the end, which serves a fixed element as well as a
@@ -6508,8 +6534,17 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			uint32_t content    = 0u;
 			uint32_t took       = 0u;
 			int      terminated = 0;
-			err = situ_walk_scan(image, message, len, index, at / 8u,
-			                     &content, &terminated, &took);
+			if (held.type_struct != SITU_WALK_NONE) {
+				/* A run: the walk says, and not the last bytes, as an
+				 * element may end in the terminator's byte (26.926). */
+				uint32_t count = 0u;
+				err = record_run_walk(image, message, len, shape, index,
+				                      depth, &count, &content, &took);
+				terminated = took != 0u;
+			} else {
+				err = situ_walk_scan(image, message, len, index, at / 8u,
+				                     &content, &terminated, &took);
+			}
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
 			}

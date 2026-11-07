@@ -1689,9 +1689,11 @@ class Emitter:
 			            if rule.kind == "prefixed"
 			            and rule.length_type in declared)
 
-		order   = ("varint", "varint_be", "varint_bertag", "varint_cbor",
-		           "varint_compactsize", "varint_der", "varint_hpack",
-		           "varint_lenenc", "varint_quic")
+		order   = ("varint", "varint_be", "varint_bertag", "varint_bijective",
+		           "varint_cbor", "varint_compactsize", "varint_der",
+		           "varint_ebml", "varint_ebml_id", "varint_hpack",
+		           "varint_lebprefix", "varint_lenenc", "varint_quic",
+		           "varint_sleb", "varint_utf8")
 		reads   = {varint_stem(decl) for decl in read}
 		lengths = {varint_stem(decl) for decl in members if decl.minimal}
 		needed  = [f"{stem}_get" for stem in order if stem in reads]
@@ -6075,9 +6077,30 @@ class Emitter:
 			f"\t\treturn self._{name}_walk_from_at(at, depth)[-1] - at",
 		]
 		marked = self._marked_copy(struct, walked)
+		ended = [
+			"",
+			f"\tdef _{name}_ended(self) -> bool:",
+			'\t\t"""Whether the terminator stands where the walk ends: a frame'
+			" that",
+			'\t\truns out first was cut short, as for any delimited member."""',
+			f"\t\tat = {start}",
+			f"\t\twhile at + {len(delim)} <= self._len:",
+			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
+			f"self._at + at + {len(delim)}]) == {delim!r}:",
+			"\t\t\t\treturn True",
+			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg,"
+			f" self._at + at, self._len - at{self._child(struct, placement)[1]})",
+			("\t\t\tsize    = _element._extent" if not deep else
+			 "\t\t\tsize    = _element._extent_at(0)"),
+			"\t\t\tif size == 0 or size > self._len - at:",
+			"\t\t\t\treturn False",
+			"\t\t\tat += size",
+			"\t\treturn False",
+		] if must_be_terminated(placement) else []
 		return [
 			*walked,
 			*marked,
+			*ended,
 			*spans,
 			*self._marked_copy(struct, spans),
 			"",
@@ -7774,7 +7797,11 @@ class Emitter:
 		(26.785).
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
-		if (not tail or element is None
+		# With no tail the walk is asked for the terminator alone (26.926).
+		ended = not tail
+		if ((ended and (member.repeat_while is not None
+		                or not must_be_terminated(member)))
+				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None
 				    and len(member.delimiters) != 1)
@@ -7805,12 +7832,14 @@ class Emitter:
 			scan  = [
 				f"\t\t\t\tif bytes(self._msg.buffer[self._at + {at}:"
 				f"self._at + {at} + {len(delim)}]) == {delim!r}:",
+				*([f"\t\t\t\t\t{at}_ended = True"] if ended else []),
 				"\t\t\t\t\tbreak",
 			]
 			after = []
 		return [
 			f"\t\t\t{at} = {base}",
 			f"\t\t\t{n} = 0",
+			*([f"\t\t\t{at}_ended = False"] if ended else []),
 			loop,
 			*scan,
 			f"\t\t\t\t_element = {self._child(struct, member)[0] if member.arguments else inner}(self._msg, self._at + {at},"
@@ -7821,12 +7850,17 @@ class Emitter:
 			f"\t\t\t\t{at} += size",
 			f"\t\t\t\t{n} += 1",
 			*after,
-			*([] if member.repeat_while is not None else [
-				f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
-				f"\t\t\t\t{at} += {len(member.delimiter)}",
+			*([f"\t\t\tif not {at}_ended:",
+			   "\t\t\t\traise ConstraintError(",
+			   f'\t\t\t\t\t"{member.path} has no terminator:'
+			   ' the frame stops first")'] if ended else [
+				*([] if member.repeat_while is not None else [
+					f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
+					f"\t\t\t\t{at} += {len(member.delimiter)}",
+				]),
+				f"\t\t\tif self._len - {at} < {tail}:",
+				f"\t\t\t\traise BoundsError({why})",
 			]),
-			f"\t\t\tif self._len - {at} < {tail}:",
-			f"\t\t\t\traise BoundsError({why})",
 		]
 
 	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
@@ -9584,6 +9618,22 @@ class Emitter:
 			"\t\t\tpass\t\t# another arm is the one present",
 		]
 
+	def _run_ended_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run a terminator ends has it, or the frame stopped early (26.926)."""
+		if classify(struct, placement, self.structs) is not Member.RECORD_RUN \
+				or not must_be_terminated(placement):
+			return []
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._no_element_extent(element) \
+				or self._offset_expression(struct, placement) is None:
+			return []
+		name = py_name(local_name(struct, placement))
+		return [f"\t\tif not self._{name}_ended():",
+		        "\t\t\traise ConstraintError(",
+		        f'\t\t\t\t"{placement.path} has no terminator:'
+		        ' the frame stops first")']
+
 	def _member_check(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
 		from situc.expr import evaluate
@@ -9606,7 +9656,8 @@ class Emitter:
 		if is_struct_run(self.resolved.structs, placement) \
 				and arm_of(struct, placement) is None \
 				and "." not in placement.path[len(struct.name) + 1:]:
-			return self._element_validation(struct, placement)
+			return [*self._run_ended_check(struct, placement),
+			        *self._element_validation(struct, placement)]
 		# An `indexed` region's elements, through the region's `_at`
 		# (26.792).
 		if placement.kind == "indexed" \

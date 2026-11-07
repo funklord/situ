@@ -95,7 +95,7 @@ struct id3_tag size=11..
   @0x0009   1bit      u1         <reserved4>  msb_first must_be_zero
   @0x0009:1 7bit      u7         size_3  msb_first
   @0x000a   0..15     variant    extended
-  ~         until:00  id3_frame  frames
+  ~         until:00|end id3_frame  frames
   extended switch: extended_header
   extended case 0: absent nothing
   extended case 1: present id3_extended_header

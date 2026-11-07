@@ -7600,6 +7600,24 @@ class Emitter:
 			"}",
 		]
 
+		ended = [
+			"/* Whether the terminator stands where the walk ends: a frame that",
+			" * runs out first was cut short, as for any delimited member. */",
+			f"static inline int {ident(self.prefix, struct.name, local, 'ended')}"
+			f"(situ_view_t view{reach})",
+			"{",
+			*[line.replace("break;", "return 1;", 1) if index == walk.index(
+				"\t\t\tbreak;") else line.replace("break;", "return 0;")
+			  for index, line in enumerate(walk)],
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\t(void)n;",
+			"\treturn 0;",
+			"}",
+			"",
+		] if must_be_terminated(placement) else []
+
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
 			f" * {render_delimiter(delim)} stands in for one. Walked rather than",
@@ -7608,6 +7626,7 @@ class Emitter:
 			" * `--materialize` and a `max` on the run for one the caller owns. */",
 			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
 			"",
+			*ended,
 			f"static inline uint32_t {count}(situ_view_t view{reach})",
 			"{",
 			*walk,
@@ -9364,7 +9383,11 @@ class Emitter:
 		reason in `walk._while_walk`), so the tail is all there is to hold.
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
-		if (not tail or element is None
+		# With no tail the walk is asked for the terminator alone (26.926).
+		ended = not tail
+		if ((ended and (member.repeat_while is not None
+		                or not must_be_terminated(member)))
+				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None and not member.delimiters)
 				or self._recursive(element.name)):
@@ -9389,23 +9412,32 @@ class Emitter:
 		else:
 			delim  = member.delimiter
 			bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+			prologue = self._record_prologue(base, delim, "terminator", extent)
 			body = [
 				f"\tstatic const uint8_t terminator[{len(delim)}] ="
 				f" {{{bytes_}}};",
-				*self._record_prologue(base, delim, "terminator", extent),
+				*(["\tint found = 0;"] if ended else []),
+				*[line.replace("break;", "found = 1;\n\t\t\tbreak;", 1)
+				  if ended and index == prologue.index("\t\t\tbreak;") else line
+				  for index, line in enumerate(prologue)],
 				"\t\tat = at + size;",
 				"\t\tn  = n + 1u;",
 				"\t}",
-				f"\tif (at + {len(delim)}u <= view.limit) {{",
-				f"\t\tat = at + {len(delim)}u;",
-				"\t}",
+				*(["\tif (!found) {",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if ended else [
+					f"\tif (at + {len(delim)}u <= view.limit) {{",
+					f"\t\tat = at + {len(delim)}u;",
+					"\t}",
+				]),
 			]
-		body.extend([
-			"\t(void)n;",
-			f"\tif (situ_remaining_u32(view.limit, at) < {tail}u) {{",
-			"\t\treturn SITU_ERR_BOUNDS;",
-			"\t}",
-		])
+		body.append("\t(void)n;")
+		if not ended:
+			body.extend([
+				f"\tif (situ_remaining_u32(view.limit, at) < {tail}u) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			])
 		return [f"\t{line}" if line else line for line in body]
 
 	def _region_fits(self, struct: ResolvedStruct,
@@ -11931,13 +11963,25 @@ class Emitter:
 		assert delim is not None
 
 		if self._is_record_run(placement):
-			# A run's terminator is checked by the walk that finds it, and a
-			# run that ran out of buffer has no elements to be wrong about --
-			# `_count` simply stops. Its elements are validated, as any run
-			# of structs' are (26.789).
+			# A run's own walk stops at the frame without a word, and a run
+			# the frame stops first was cut short, as `required` has always
+			# said (26.926). Its elements are validated, as any run of
+			# structs' are (26.789).
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
-			return self._element_validation(struct, placement)
+			element = self.resolved.structs[placement.type_name]
+			walked  = element.layout.is_fixed_size or (
+				self._struct_extent(element)
+				and has_element_extent(self.resolved.structs, element))
+			return [*([
+				f"\t/* `{placement.name}` runs to {render_delimiter(delim)}, and a",
+				"\t * frame that stops first was cut short. */",
+				f"\tif (!{ident(self.prefix, struct.name, local, 'ended')}"
+				f"(view{self._member_args(struct, placement)})) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			] if walked and must_be_terminated(placement) else []),
+				*self._element_validation(struct, placement)]
 
 		# `before` asks for nothing here: the delimiter belongs to what
 		# follows, so its absence means there is nothing after this member

@@ -1334,6 +1334,10 @@ is nowhere to keep a table of offsets; `access = Sequential` says so and
 a generated `_extent`, because the next element starts where this one ends and
 for a struct whose own members are delimited that is not a constant.
 
+**A frame that stops first cut the run short**, as it cuts a delimited member, and
+`until "D" | end` is how a schema says the frame may end it instead (26.926). The walk
+answers, and not the last bytes: an element may end in the terminator's byte.
+
 **Every walk is bounded twice.** By the view's limit, and by refusing to
 advance on a zero-extent element -- which is not theoretical, since a record
 whose members are all delimited and all empty occupies no bytes, and a walk

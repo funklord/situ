@@ -111,7 +111,8 @@ TAILED_CASES = {
 	"010105010601070108aabb": "0",	# the cap stops it, not the condition
 	"02010203040aaabb":       "0",
 	"02010203040aaa":         "1",
-	"0201020304aabb":         "1",	# no terminator: the run takes `after`
+	# No terminator, which is said first, as for a delimited member (26.926).
+	"0201020304aabb":         "2",
 	"03613a623b0aaabb":       "0",
 	"03613a623b0aaa":         "1",
 	# A `kv` whose value has no `;` is the run's one record, validated
@@ -146,12 +147,13 @@ def test_both_walkers_hold_the_tail(tmp_path: Path) -> None:
 
 #: No tail: each record the run holds is validated (26.790). `kv`'s value
 #: needs its `;` and a `kv` is two bytes at least, so the delimited run of
-#: `kv` refuses where a run of `piece` or `pt` holds nothing to refuse.
+#: `kv` refuses where a run of `piece` or `pt` holds nothing to refuse. None of
+#: these holds a newline, so a delimited run refuses them all for that (26.926).
 ALONE = {
 	"while":       {"01003a": "0", "0100013b": "0", "01000105": "0"},
 	"while_fixed": {"01003a": "0", "0100013b": "0", "01000105": "0"},
-	"until":       {"01003a": "1", "0100013b": "2", "01000105": "2"},
-	"until_fixed": {"01003a": "0", "0100013b": "0", "01000105": "0"},
+	"until":       {"01003a": "2", "0100013b": "2", "01000105": "2"},
+	"until_fixed": {"01003a": "2", "0100013b": "2", "01000105": "2"},
 }
 
 
@@ -177,8 +179,8 @@ struct tkv { u8 k; kv recs[] until "\\n"; u16 after; }
 """
 
 TOP_CASES = {
-	"tpt": {"0001020aaabb": "0", "0001020aaa": "1", "000102aabb": "1",
-	        "0001020304050aaabb": "1", "000aaabb": "0"},
+	"tpt": {"0001020aaabb": "0", "0001020aaa": "1", "000102aabb": "2",
+	        "0001020304050aaabb": "2", "000aaabb": "0"},
 	# A `kv` whose value has no `;` is the run's one record, and the run's
 	# elements are validated before `after` is placed (26.789).
 	"tkv": {"00613a623b0aaabb": "0", "00613a62aabb": "2",

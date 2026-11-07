@@ -2294,10 +2294,11 @@ def _varint_run_fits(view: View, index: int) -> bool:
 
 
 def _record_run_walk(view: View, index: int,
-		depth: int = 0) -> tuple[int, int]:
-	"""One walk of a delimited run of records, answering both questions.
+		depth: int = 0) -> tuple[int, int, int]:
+	"""One walk of a delimited run of records, answering all three questions.
 
-	`(count, span_bytes)`. Two callers and one loop, because the count and
+	`(count, span_bytes, terminator_bytes)`, the last zero where the frame
+	stopped first. Three callers and one loop, because the count and
 	the span must agree about where the run ends and two loops over one
 	rule drift apart -- which is exactly how 26.680 happened: this loop was
 	right and the span was computed somewhere else that had never heard of
@@ -2357,7 +2358,16 @@ def _record_run_walk(view: View, index: int,
 	# at its own emission site, in those words.
 	took = next((len(one) for one in delims
 	             if view.buffer[at:at + len(one)] == one), 0)
-	return count, (at - start) + took
+	return count, (at - start) + took, took
+
+
+def record_run_ended(view: View, index: int) -> bool:
+	"""Whether the terminator stands where a run's walk ended (26.926).
+
+	Asked of the walk and not of the last bytes: an element may end in the
+	terminator's byte, and that is the element's.
+	"""
+	return _record_run_walk(view, index)[2] > 0
 
 
 def record_run_count(view: View, index: int, depth: int = 0) -> int:

@@ -31,7 +31,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          read_bytes, read_scalar,
                          _ceiling, _evaluate, _read_at, _sizes_in_bytes,
                          counted_run_fits,
-                         offset_bits, record_run_count,
+                         offset_bits, record_run_count, record_run_ended,
                          chosen_arm, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
                          tlv_count, tlv_whole, varint, varint_run_at,
@@ -1423,7 +1423,9 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		# a scalar and called the refusal BOUNDS.
 		if any(check == TERMINATED for check, _ in held):
 			try:
-				if not scan(view, index)[1]:
+				if not (record_run_ended(view, index)
+				        if placement.type_struct != NONE
+				        else scan(view, index)[1]):
 					return fail(ERR_CONSTRAINT, index, TERMINATED)
 			except Refused:
 				return fail(ERR_BOUNDS, index, TERMINATED)
@@ -2085,6 +2087,10 @@ def _arm_validates(image: Image, view: View, index: int,
 	# which the variant's size above already did (26.785). Its elements are
 	# validated through the run's own walk now (26.790).
 	if run.repeat_code != NONE or chosen in image.delimiters:
+		# And a frame that stops before its terminator cut it short (26.926).
+		if any(check == TERMINATED for check, _ in image.constraints.get(chosen, ())) \
+				and not record_run_ended(view, chosen):
+			return ERR_CONSTRAINT
 		return _elements_validate(view, chosen,
 		                          _run_elements(view, chosen, at))
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit,

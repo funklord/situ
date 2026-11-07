@@ -1787,6 +1787,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# existed.
 			if at is None:
 				continue
+			# A run of records has no check of its own but the walk, and a
+			# frame that stops before its terminator cut it short (26.926).
+			if placement.delimiters and placement.type_name in resolved.structs \
+					and traverse.must_be_terminated(placement) \
+					and "." not in placement.path[len(rstruct.name) + 1:]:
+				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
 			if kind is traverse.Check.NOTHING and placement.kind != "variant":
 				continue
 			if kind is traverse.Check.RESERVED:
@@ -2321,6 +2327,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				continue
 			kind = traverse.classify_check(rstruct, placement,
 			                               set(resolved.structs))
+
+			# A run a terminator ends, as for one outside an arm (26.926).
+			if placement.delimiters and placement.type_name in resolved.structs \
+					and traverse.must_be_terminated(placement):
+				arm_checks.append((at, _struct.pack("<IqBxxx", at, 0, 7)))
 
 			# A byte-run enum arm: one row per alternative, keyed by the
 			# arm's placement, exactly as a member's pinned run is written.

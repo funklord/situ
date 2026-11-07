@@ -115,7 +115,7 @@ struct id3_tag {
 	// audio even in a tag with no padding at all. That is 3.1's own rule
 	// rather than a restatement of how situ works -- a reader that reads
 	// past the tag size has left the tag.
-	id3_frame  frames[] until "\0";
+	id3_frame  frames[] until "\0" | end;
 }
 
 struct nothing {

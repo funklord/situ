@@ -5708,7 +5708,25 @@ class Emitter:
 			"\t}",
 		]
 
+		plain = walk_from(start)
+		ended = [
+			"",
+			"\t/// Whether the terminator stands where the walk ends: a frame",
+			"\t/// that runs out first was cut short.",
+			f"\tfn {_ident(f'{base}_ended')}(&self) -> bool {{",
+			*[line.replace("break;", "return true;", 1) if index == plain.index(
+				"\t\t\t\tbreak;") else line.replace("break;", "return false;")
+			  for index, line in enumerate(plain)],
+			"\t\t\tat += size;",
+			"\t\t\tn  += 1;",
+			"\t\t}",
+			"\t\tlet _ = n;",
+			"\t\tfalse",
+			"\t}",
+		] if must_be_terminated(placement) else []
+
 		return [
+			*ended,
 			"",
 			f"\t/// `{placement.path}` is a run of `{placement.type_name}`,"
 			f" ending where",
@@ -7942,6 +7960,21 @@ class Emitter:
 			])
 		return lines
 
+	def _run_ended_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A run a terminator ends has it, or the frame stopped early (26.926)."""
+		if classify(struct, placement, self.structs) is not Member.RECORD_RUN \
+				or not must_be_terminated(placement):
+			return []
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._no_element_extent(element) \
+				or self._offset_expression(struct, placement) is None:
+			return []
+		base = c_name(local_name(struct, placement))
+		return [f"\t\tif !self.{_ident(f'{base}_ended')}() {{",
+		        "\t\t\treturn Err(Error::Constraint);",
+		        "\t\t}"]
+
 	def _indexed_elements(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Every element an `indexed` region's table reaches, validated.
@@ -8083,7 +8116,11 @@ class Emitter:
 		(26.785).
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
-		if (not tail or element is None
+		# With no tail the walk is asked for the terminator alone (26.926).
+		ended = not tail
+		if ((ended and (member.repeat_while is not None
+		                or not must_be_terminated(member)))
+				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None
 				    and len(member.delimiters) != 1)
@@ -8111,6 +8148,7 @@ class Emitter:
 			loop   = f"\t\t\twhile at + {len(delim)} <= self.bytes.len() {{"
 			scan   = [
 				f"\t\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+				*(["\t\t\t\t\tfound = true;"] if ended else []),
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 			]
@@ -8123,6 +8161,7 @@ class Emitter:
 		return [
 			f"\t\t\tlet mut at = {self._unparen(base)};",
 			"\t\t\tlet mut n  = 0usize;",
+			*(["\t\t\tlet mut found = false;"] if ended else []),
 			"",
 			loop,
 			*scan,
@@ -8136,9 +8175,13 @@ class Emitter:
 			"\t\t\t\tn  += 1;",
 			*after,
 			"\t\t\tlet _ = n;",
-			f"\t\t\tif situ_rt::remaining(self.bytes.len(), at) < {tail} {{",
-			"\t\t\t\treturn Err(Error::Bounds);",
-			"\t\t\t}",
+			*(["\t\t\tif !found {",
+			   "\t\t\t\treturn Err(Error::Constraint);",
+			   "\t\t\t}"] if ended else [
+				f"\t\t\tif situ_rt::remaining(self.bytes.len(), at) < {tail} {{",
+				"\t\t\t\treturn Err(Error::Bounds);",
+				"\t\t\t}",
+			]),
 		]
 
 	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
@@ -10888,6 +10931,7 @@ class Emitter:
 		if is_struct_run(self.resolved.structs, placement) \
 				and arm_of(struct, placement) is None \
 				and "." not in placement.path[len(struct.name) + 1:]:
+			out.extend(self._run_ended_check(struct, placement))
 			out.extend(self._element_validation(struct, placement))
 			return out
 		# An `indexed` region's elements, through the region's `_at`
