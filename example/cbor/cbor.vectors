@@ -29,3 +29,15 @@ item array_with_map 82 61 61 a1 61 62 61 63
 item date_string c0 74 32 30 31 33 2d 30 33 2d 32 31 54 32 30 3a 30 34 3a 30 30 5a
 item epoch c1 1a 51 4b 67 b0
 item bignum c2 49 01 00 00 00 00 00 00 00 00
+
+# The same appendix's indefinite items, each `(_ ...)` there.
+item chunked_bytes 5f 42 01 02 43 03 04 05 ff
+item chunked_text 7f 65 73 74 72 65 61 64 6d 69 6e 67 ff
+item open_empty 9f ff
+item open_nested 9f 01 82 02 03 9f 04 05 ff ff
+item open_definite 9f 01 82 02 03 82 04 05 ff
+item definite_open 83 01 82 02 03 9f 04 05 ff
+item definite_middle 83 01 9f 02 03 ff 82 04 05
+item open_map bf 61 61 01 61 62 9f 02 03 ff ff
+item array_open_map 82 61 61 bf 61 62 61 63 ff
+item fun_amt bf 63 46 75 6e f5 63 41 6d 74 21 ff

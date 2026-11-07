@@ -145,14 +145,26 @@ def _cbor(view: Any) -> Any:
 	if major == 1:
 		return -1 - view.body_as_negative.value_value
 	if major == 2:
-		return bytes(view.body_as_bytes.bytes)
+		held = view.body_as_bytes
+		if held.lead == 0x5F:
+			open_bytes = held.form_chunked
+			return b"".join(bytes(open_bytes.chunks(i).bytes)
+			                for i in range(open_bytes.chunks_count))
+		return bytes(held.form_counted.bytes)
 	if major == 3:
-		return bytes(view.body_as_text.text).decode("ascii")
+		held = view.body_as_text
+		if held.lead == 0x7F:
+			open_text = held.form_chunked
+			return "".join(bytes(open_text.chunks(i).text).decode("ascii")
+			               for i in range(open_text.chunks_count))
+		return bytes(held.form_counted.text).decode("ascii")
 	if major == 4:
 		held = view.body_as_array
+		held = held.form_open if held.lead == 0x9F else held.form_counted
 		return [_cbor(held.items(i)) for i in range(held.items_count)]
 	if major == 5:
 		held = view.body_as_map
+		held = held.form_open if held.lead == 0xBF else held.form_counted
 		pairs = [held.pairs(i) for i in range(held.pairs_count)]
 		return {_cbor(one.key): _cbor(one.value) for one in pairs}
 	if major == 6:
@@ -175,6 +187,13 @@ APPENDIX_A = {
 	"array_with_map": ["a", {"b": "c"}],
 	"date_string": (0, "2013-03-21T20:04:00Z"), "epoch": (1, 1363896240),
 	"bignum": (2, b"\x01" + bytes(8)),
+	"chunked_bytes": b"\x01\x02\x03\x04\x05", "chunked_text": "streaming",
+	"open_empty": [], "open_nested": [1, [2, 3], [4, 5]],
+	"open_definite": [1, [2, 3], [4, 5]],
+	"definite_open": [1, [2, 3], [4, 5]],
+	"definite_middle": [1, [2, 3], [4, 5]],
+	"open_map": {"a": 1, "b": [2, 3]}, "array_open_map": ["a", {"b": "c"}],
+	"fun_amt": {"Fun": ("simple", 21), "Amt": -2},
 }
 
 

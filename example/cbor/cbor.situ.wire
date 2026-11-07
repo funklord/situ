@@ -21,6 +21,34 @@ target buffer
 
 varint head : cbor bits=64 bytes=9
 
+struct any_array size=1..
+  @0x0000   1         u8         lead  peek
+  @0x0000   0..       variant    form
+  form switch: lead
+  form case 159: open open_array
+  form case default: counted array
+
+struct any_bytes size=1..
+  @0x0000   1         u8         lead  peek
+  @0x0000   1..       variant    form
+  form switch: lead
+  form case 95: chunked chunked_bytes
+  form case default: counted byte_string
+
+struct any_map size=1..
+  @0x0000   1         u8         lead  peek
+  @0x0000   1..       variant    form
+  form switch: lead
+  form case 191: open open_map
+  form case default: counted map
+
+struct any_text size=1..
+  @0x0000   1         u8         lead  peek
+  @0x0000   1..       variant    form
+  form switch: lead
+  form case 127: chunked chunked_text
+  form case default: counted text_string
+
 struct array size=1..
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=4
   @0x0000   1..9      head       count  varint=head
@@ -35,25 +63,57 @@ struct array size=1..
   body case 6: as_tagged
   body case 7: as_simple
   body case default: error
+  form switch: lead
+  form case 95: chunked
+  form case default: counted
+  form switch: lead
+  form case 127: chunked
+  form case default: counted
+  form switch: lead
+  form case 159: open
+  form case default: counted
+  form switch: lead
+  form case 191: open
+  form case default: counted
 
 struct byte_string size=1..18446744073709551624
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=2
   @0x0000   1..9      head       length  varint=head
   ~         0..18446744073709551615 u8         bytes  sized-by=length
 
+struct chunked_bytes size=2..
+  @0x0000   1         u8         open  must_eq=95
+  @0x0001   until:ff  byte_string chunks
+
+struct chunked_text size=2..
+  @0x0000   1         u8         open  must_eq=127
+  @0x0001   until:ff  text_string chunks
+
 struct item size=1..
   @0x0000   3bit      u3         major  msb_first peek
-  @0x0000   0..       variant    body
+  @0x0000   1..       variant    body
   body switch: major
   body case 0: as_unsigned unsigned_integer
   body case 1: as_negative negative_integer
-  body case 2: as_bytes byte_string
-  body case 3: as_text text_string
-  body case 4: as_array array
-  body case 5: as_map map
+  body case 2: as_bytes any_bytes
+  body case 3: as_text any_text
+  body case 4: as_array any_array
+  body case 5: as_map any_map
   body case 6: as_tagged tagged
   body case 7: as_simple simple
   body case default: error
+  form switch: lead
+  form case 95: chunked
+  form case default: counted
+  form switch: lead
+  form case 127: chunked
+  form case default: counted
+  form switch: lead
+  form case 159: open
+  form case default: counted
+  form switch: lead
+  form case 191: open
+  form case default: counted
 
 struct map size=1..
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=5
@@ -63,6 +123,14 @@ struct map size=1..
 struct negative_integer size=1..9
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=1
   @0x0000   1..9      head       value  varint=head
+
+struct open_array size=2..
+  @0x0000   1         u8         open  must_eq=159
+  @0x0001   until:ff  item       items
+
+struct open_map size=2..
+  @0x0000   1         u8         open  must_eq=191
+  @0x0001   until:ff  pair       pairs
 
 struct pair size=0..
   @0x0000   0..       item       key

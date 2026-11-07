@@ -12,10 +12,12 @@
 // items in turn, which is the recursion: `item` peeks the major type, so each
 // arm owns the byte it was chosen by.
 //
-// WHICH SUBSET. Definite lengths only. An additional value of 31 opens an
-// indefinite item, ended by a break byte, and no reader here takes it as a
-// number; COSE, CTAP2 and deterministic encoding (4.2) leave it out too. A
-// float is the bits of its head, and `simple.value` says them as an integer.
+// AND WITHOUT A LENGTH. An additional value of 31 opens an indefinite item (3.2),
+// which a break byte ends. That is no number, so `item` chooses by it as well,
+// and `until` looks for the break where an element would start, so a 0xFF inside
+// an element is the element's.
+//
+// A float is the bits of its head, and `simple.value` says them as an integer.
 
 target buffer;
 endian big;
@@ -77,6 +79,60 @@ struct simple {
 	head value;
 }
 
+// Chunks of a string are definite strings of its own major type (3.2.3).
+struct chunked_bytes {
+	u8          open [must_eq = 0x5F];
+	byte_string chunks[] until "\xff";
+}
+
+struct chunked_text {
+	u8          open [must_eq = 0x7F];
+	text_string chunks[] until "\xff";
+}
+
+struct open_array [depth = 64] {
+	u8   open [must_eq = 0x9F];
+	item items[] until "\xff";
+}
+
+struct open_map [depth = 64] {
+	u8   open [must_eq = 0xBF];
+	pair pairs[] until "\xff";
+}
+
+// Each of the four that may go without a length looks at its first byte again.
+struct any_bytes {
+	peek u8 lead;
+	variant form switch (lead) {
+		case 0x5F: chunked_bytes chunked;
+		default:   byte_string   counted;
+	}
+}
+
+struct any_text {
+	peek u8 lead;
+	variant form switch (lead) {
+		case 0x7F: chunked_text chunked;
+		default:   text_string  counted;
+	}
+}
+
+struct any_array [depth = 64] {
+	peek u8 lead;
+	variant form switch (lead) {
+		case 0x9F: open_array open;
+		default:   array      counted;
+	}
+}
+
+struct any_map [depth = 64] {
+	peek u8 lead;
+	variant form switch (lead) {
+		case 0xBF: open_map open;
+		default:   map      counted;
+	}
+}
+
 // `[depth]` is the bound situ asks of a cycle, in structs: item to array and
 // back is two a level.
 struct item [depth = 64] {
@@ -84,10 +140,10 @@ struct item [depth = 64] {
 	variant body switch (major) {
 		case 0:  unsigned_integer as_unsigned;
 		case 1:  negative_integer as_negative;
-		case 2:  byte_string      as_bytes;
-		case 3:  text_string      as_text;
-		case 4:  array            as_array;
-		case 5:  map              as_map;
+		case 2:  any_bytes        as_bytes;
+		case 3:  any_text         as_text;
+		case 4:  any_array        as_array;
+		case 5:  any_map          as_map;
 		case 6:  tagged           as_tagged;
 		case 7:  simple           as_simple;
 		default: error;
