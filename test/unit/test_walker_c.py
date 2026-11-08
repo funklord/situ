@@ -2440,12 +2440,13 @@ def test_a_message_past_the_ceiling_is_unanswerable_in_both(
 	blob    = _recursive_image(shape, 8)
 	message = _nest(levels)
 
-	# A `while` run is never empty, so a node of this shape is two bytes at
-	# least, and the leaf here -- `00`, its run cut off by the frame -- is
-	# one. Validated as an element of its parent's run, it is shorter than
-	# its own minimum and refused (26.791), inside the ceiling as anywhere.
+	# A `while` run is never empty, so the leaf here -- `00`, its run cut
+	# off by the frame -- never reads the element that ends it. That was
+	# BOUNDS, the leaf being shorter than its own minimum (26.791); a run
+	# the frame cuts is asked first now and is CONSTRAINT, in the four
+	# backends as in both walkers (26.927).
 	if shape == "while" and expected == "0":
-		expected = "1"
+		expected = "2"
 
 	assert c_verdict(tmp_path, blob, message) == python_verdict(blob, message)
 	assert c_verdict(tmp_path, blob, message) == expected
