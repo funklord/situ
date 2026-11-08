@@ -5952,7 +5952,7 @@ class Emitter:
 			"\t\tat = starts[-1]",
 			f"\t\t_element = {self._made(struct, placement, inner)}(self._msg,"
 			" self._at + starts[-2],",
-			f"\t\t\tself._len - starts[-2]{self._child(struct, placement)[1]})",
+			"\t\t\tself._len - starts[-2])",
 			f"\t\treturn not ({plain})",
 		] if must_end(placement) else []
 		return [
@@ -6109,7 +6109,7 @@ class Emitter:
 			f"self._at + at + {len(delim)}]) == {delim!r}:",
 			"\t\t\t\treturn True",
 			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg,"
-			f" self._at + at, self._len - at{self._child(struct, placement)[1]})",
+			" self._at + at, self._len - at)",
 			("\t\t\tsize    = _element._extent" if not deep else
 			 "\t\t\tsize    = _element._extent_at(0)"),
 			"\t\t\tif size == 0 or size > self._len - at:",
