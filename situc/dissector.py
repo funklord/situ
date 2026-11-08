@@ -145,6 +145,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines.extend(READ_HELPER)
 	lines.extend(_varint_functions(schema, resolved))
+	# After the varints, which an extent reads: an answer cached before them
+	# would be one that could not read a varint.
+	_TERMS.clear()
+	_MEASURING.clear()
+	_DEPTHS.clear()
+	_DEPTHS.update({name: traverse.depth_limit(schema, name)
+	                for name in resolved.structs
+	                if is_recursive(resolved.structs, name)})
 	_message_setup(schema, resolved)
 	lines.extend(_conversation_setup(schema, resolved))
 
@@ -703,17 +711,14 @@ def _varint_run_span(struct: ResolvedStruct,
 	if decl is None or placement.sized_by == "remaining" \
 			or placement.delimiters or placement.repeat_while is not None:
 		return []
-	count = _varint_run_count(struct, placement, "at_struct")
-	if count is None:
-		return []
 	return [
 		"",
 		f"-- How far `{placement.path}` reaches from `at`:"
 		f" `{placement.size_shown or placement.size_expr or placement.sized_by or placement.array_count}`",
 		"-- varints, each as wide as its own bytes say.",
-		f"local function {_span_name(struct, placement)}(tvb, at, at_struct)",
+		f"local function {_span_name(struct, placement)}(tvb, at, count)",
 		"	local start = at",
-		f"	for _ = 1, {count} do",
+		"	for _ = 1, count do",
 		f"		local w = ({_varint_name(decl)}(tvb, at))",
 		"		if w == 0 then break end",
 		"		at = at + w",
@@ -2344,6 +2349,18 @@ def _extent_functions(resolved: ResolvedSchema) -> list[str]:
 	lines: list[str] = []
 	done: set[str] = set()
 
+	cycle = [struct for name, struct in pending.items()
+	         if is_recursive(resolved.structs, name)
+	         and _extent_terms(resolved, struct) is not None]
+	if cycle:
+		lines.extend([
+			"",
+			"-- A struct that can contain itself, declared ahead so that its",
+			"-- cycle's extents can call each other, and how deep each is now.",
+			"local " + ", ".join(_extent_name(one) for one in cycle),
+			*(f"local {_nesting_name(one)} = 0" for one in cycle),
+		])
+
 	while pending:
 		ready = [name for name, struct in pending.items()
 		         if all(held.placement.type_name in done
@@ -2478,6 +2495,24 @@ def _element_stride(resolved: ResolvedSchema,
 	return f"{_extent_name(element)}(tvb, at)"
 
 
+def _counted_count(struct: ResolvedStruct, placement: Placement,
+		base: str) -> str | None:
+	"""How many records a counted run holds, as Lua over `base`.
+
+	A count the SCHEMA gives as well: neither `size_expr` nor `sized_by`
+	holds one, so `_over_fields` was handed "" and answered "" -- not None,
+	so the guard let it through and the walk came out `while n < () and
+	...`, which is not Lua (26.267).
+	"""
+	if placement.array_count is not None:
+		return str(placement.array_count)
+	source = placement.size_expr or placement.sized_by
+	if not source:
+		return None
+	count = _over_fields(struct, source, base)
+	return f"({count})" if count else None
+
+
 def _counted_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement, element: ResolvedStruct) -> list[str]:
 	"""How far a counted run of variable records reaches, as a Lua function.
@@ -2486,30 +2521,21 @@ def _counted_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	and stop early on a zero-length element or one the frame does not hold --
 	the two bounds every generated walk carries (invariant 24).
 	"""
-	# A count the SCHEMA gives. Neither `size_expr` nor `sized_by` holds one,
-	# so `_over_fields` was handed "" and answered "" -- not None, so the
-	# guard let it through and the walk came out `while n < () and ...`,
-	# which is not Lua. The fifth description to spell this question one way
-	# short (26.267).
-	if placement.array_count is not None:
-		count: str | None = str(placement.array_count)
-	elif placement.size_expr is not None:
-		count = _over_fields(struct, placement.size_expr, "at_struct")
-	else:
-		count = _over_fields(struct, placement.sized_by or "", "at_struct")
-	if not count:
-		return []
-
+	# The count is the caller's, rendered where it is readable: a count
+	# standing past a variable member is readable only as a value the
+	# caller's walk captured, which this function, emitted once for every
+	# caller, cannot name. Reading it from `at_struct` here named a span
+	# that was then never written when the count was such a one (26.936).
 	name = _span_name(struct, placement)
 	return [
 		"",
 		f"-- How far `{placement.path}` reaches from `at`.",
 		"-- The count says how many, and each element says how long it is, so",
 		"-- the run is walked rather than multiplied.",
-		f"local function {name}(tvb, at, at_struct)",
+		f"local function {name}(tvb, at, count)",
 		"	local start = at",
 		"	local n = 0",
-		f"	while n < ({count}) and at < tvb:len() do",
+		"	while n < count and at < tvb:len() do",
 		f"		local size = {_extent_name(element)}(tvb, at)",
 		"		if size == 0 or at + size > tvb:len() then break end",
 		"		at = at + size",
@@ -2549,6 +2575,25 @@ def _extent_function(resolved: ResolvedSchema,
 	# nested struct after the first, from the start of the frame. It read as
 	# one expression and was M answers about one offset.
 	body = ["	local n = at", *_extent_steps(resolved, struct)]
+	if struct.name in _DEPTHS:
+		# Declared ahead of every extent, so the cycle's functions can name
+		# each other, and bounded the way a walker is: past the struct's
+		# depth it measures nothing, and a run or a nested member asked
+		# about a zero-length element stops there.
+		depth = _DEPTHS[struct.name]
+		count = _nesting_name(struct)
+		return [
+			"",
+			f"-- How many bytes one `{struct.name}` occupies at `at`, to"
+			f" {depth} deep.",
+			f"{_extent_name(struct)} = function(tvb, at)",
+			f"	if {count} >= {depth} then return 0 end",
+			f"	{count} = {count} + 1",
+			*body,
+			f"	{count} = {count} - 1",
+			"	return n - at",
+			"end",
+		]
 	return [
 		"",
 		f"-- How many bytes one `{struct.name}` occupies at `at`.",
@@ -2560,6 +2605,11 @@ def _extent_function(resolved: ResolvedSchema,
 		"	return n - at",
 		"end",
 	]
+
+
+def _nesting_name(struct: ResolvedStruct) -> str:
+	"""How deep the walk is inside `struct` right now, a Lua local."""
+	return f"{_lua(struct.name)}_nesting"
 
 
 def _extent_steps(resolved: ResolvedSchema,
@@ -2678,13 +2728,42 @@ def _version_term(tail: tuple[Placement, int,
 
 def _extent_terms(resolved: ResolvedSchema,
 		struct: ResolvedStruct) -> tuple[int, list[str]] | None:
-	# A struct that can contain itself has no extent here: `_extent_functions`
-	# emits a struct after everything it names, which a cycle never is, and
-	# this file carries no depth. Asked anyway it did not terminate through an
-	# arm that is the recursion, so `gen-dissector` died on the stack, and
-	# through a run it named a function nothing defines (26.904).
-	if is_recursive(resolved.structs, struct.name):
-		return None
+	# A struct that can contain itself is measured on the assumption that
+	# its own cycle measures, which is `traverse.has_computable_extent`'s
+	# `seen`: asked without it, the question did not terminate through an
+	# arm that is the recursion, and `gen-dissector` died on the stack
+	# (26.904). Its function is declared ahead of every extent and bounded
+	# by the struct's `[depth]` or `[limit]` (26.936).
+	if struct.name in _MEASURING:
+		return 0, []
+	if not _MEASURING and struct.name in _TERMS:
+		return _TERMS[struct.name]
+	_MEASURING.add(struct.name)
+	try:
+		answer = _measured_terms(resolved, struct)
+	finally:
+		_MEASURING.discard(struct.name)
+	if not _MEASURING:
+		_TERMS[struct.name] = answer
+	return answer
+
+
+#: Structs whose extent is being asked for, outermost first, so a cycle is
+#: assumed to measure rather than asked again forever.
+_MEASURING: set[str] = set()
+
+#: Each struct's extent terms, asked once per schema: a recursive struct's
+#: question reaches every struct in its cycle, every time it is asked.
+_TERMS: dict[str, tuple[int, list[str]] | None] = {}
+
+#: How deep the dissector follows each recursive struct (`[limit]`, else
+#: `[depth]`), filled once per schema.
+_DEPTHS: dict[str, int] = {}
+
+
+def _measured_terms(resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> tuple[int, list[str]] | None:
+	"""`_extent_terms`, asked afresh."""
 	parts = extent_parts(resolved.structs, struct)
 	if parts is None:
 		return None
@@ -2757,9 +2836,10 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return f"(({unit} - {into} % {unit}) % {unit})"
 
 	if placement.varint is not None and _one_varint(placement) is None:
-		if not _varint_run_span(struct, placement):
+		count = _varint_run_count(struct, placement, base)
+		if count is None or not _varint_run_span(struct, placement):
 			return None
-		return f"{_span_name(struct, placement)}(tvb, {where}, {base})"
+		return f"{_span_name(struct, placement)}(tvb, {where}, {count})"
 
 	decl = _one_varint(placement)
 	if decl is not None:
@@ -2774,6 +2854,12 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# extent and so measured a run of labels as one label.
 		if not _run_span(resolved, struct, placement):
 			return None
+		if is_counted_run(resolved.structs, placement):
+			count = _counted_count(struct, placement, base)
+			if count is None:
+				return None
+			return (f"{_span_name(struct, placement)}(tvb, {where},"
+			        f" {count})")
 		# From where the *run* starts, not where the struct does. Every run in
 		# this repository is its struct's first member, so the two coincided
 		# and the walk was handed the struct's base -- which for a run at any

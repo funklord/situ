@@ -8347,6 +8347,10 @@ Moved to `doc/decision/26.934-a-dissector-extent-reads-what-it-passed.md`.
 
 Moved to `doc/decision/26.935-the-dissector-walks-a-run-of-varints.md`.
 
+### 26.936 The dissector follows a recursion to its depth
+
+Moved to `doc/decision/26.936-the-dissector-follows-a-recursion.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

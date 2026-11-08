@@ -530,19 +530,20 @@ def _lua_text() -> str:
 	return generate(schema, resolve(schema, solve(schema)), "unit")
 
 
-def test_the_dissector_declines_what_it_cannot_measure() -> None:
-	"""It carries no depth, so a member of a cycle stops the walk and says so.
+def test_the_dissector_follows_the_cycle_to_its_depth() -> None:
+	"""A member of a cycle is measured, to the struct's own depth (26.936).
 
-	`payload` recursing through an arm ran `gen-dissector` out of stack, with
-	an argument or without one.
+	It declined -- "one `payload` has no extent this dissector can compute"
+	-- because the file carried no depth, after `payload` recursing through
+	an arm had run `gen-dissector` out of stack. Asking the question with
+	the cycle assumed to measure terminates, and the functions are declared
+	ahead of each other and counted down by depth.
 	"""
 	lua = _lua_text()
-	assert "ike.p: one `payload` has no extent this dissector can compute" \
-		in lua
-	assert "payload.rest: one arm has no length this dissector can compute" \
-		in lua
-	# Nothing names an extent no function defines.
-	assert "payload_extent" not in lua and "node_extent" not in lua
+	assert "ike.p: one `payload` has no extent" not in lua
+	assert "payload.rest: one arm has no length" not in lua
+	assert "payload_extent = function(tvb, at)" in lua
+	assert "if payload_nesting >= 4 then return 0 end" in lua
 
 
 @pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
