@@ -1228,6 +1228,18 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		if not counted_run_fits(view, index):
 			return fail(ERR_BOUNDS, index, FITS_FRAME)
 
+		# A run of records ends by its own rule before its elements are
+		# asked: an element the frame cut is how the run went unended, and
+		# C, like each backend, answers the missing end (26.926).
+		if image.placements[index].type_struct != NONE and any(
+				check == TERMINATED
+				for check, _ in image.constraints.get(index, ())):
+			try:
+				if not record_run_ended(view, index):
+					return fail(ERR_CONSTRAINT, index, TERMINATED)
+			except Refused:
+				return fail(ERR_BOUNDS, index, TERMINATED)
+
 		# And every element of a run of structs, through its own validator,
 		# as the four backends now ask -- a refusal names the run (26.789).
 		verdict = _elements_validate(view, index, _run_elements(view, index))
@@ -1420,12 +1432,12 @@ def _validate_here(image: Image, view: View, struct_index: int,
 
 		# `fits_frame` is about a run and the rest are about a value, so
 		# reading one out of the other is how this asked a byte array for
-		# a scalar and called the refusal BOUNDS.
-		if any(check == TERMINATED for check, _ in held):
+		# a scalar and called the refusal BOUNDS. A run of records asked
+		# its terminator before its elements, above.
+		if placement.type_struct == NONE \
+				and any(check == TERMINATED for check, _ in held):
 			try:
-				if not (record_run_ended(view, index)
-				        if placement.type_struct != NONE
-				        else scan(view, index)[1]):
+				if not scan(view, index)[1]:
 					return fail(ERR_CONSTRAINT, index, TERMINATED)
 			except Refused:
 				return fail(ERR_BOUNDS, index, TERMINATED)
