@@ -67,7 +67,7 @@ struct id3_frame size=10..268435465 mutate=Shifting repr=ValueConverted atomic=N
   id3_frame.data_length_indicator        offset=AbsoluteStatic(0x09:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   id3_frame.content                      offset=AbsoluteStatic(0x0A) size=Bounded(0, 268435455) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
-struct id3_tag size=11.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
+struct id3_tag size=10.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
   id3_tag.magic                          offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   id3_tag.major                          offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   id3_tag.revision                       offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord

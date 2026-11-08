@@ -35,7 +35,7 @@ struct no size=5 atomic=NonAtomic
 struct nothing size=4 atomic=NonAtomic
   nothing.word                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 
-struct number size=1.. mutate=Shifting repr=TextConverted canonical=NonCanonical effect=EffectOnRead
+struct number size=0.. mutate=Shifting repr=TextConverted canonical=NonCanonical effect=EffectOnRead
   number.value                           offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
 
 struct object size=5.. access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
@@ -52,7 +52,7 @@ struct text size=2.. mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   text.open                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   text.chars                             offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
 
-struct value size=1.. access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+struct value size=0.. access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
   value.kind                             offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
   value.body                             offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
   value.body.as_object                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead

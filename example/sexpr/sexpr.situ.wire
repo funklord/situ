@@ -22,15 +22,15 @@ struct list size=2..
   @0x0000   1         u8         open
   @0x0001   until:29  sexpr      items
 
-struct sexpr size=1..
+struct sexpr size=0..
   ~         1         u8         kind  peek skip=20090d0a
-  ~         1..       variant    body
+  ~         0..       variant    body
   body switch: kind
   body case 34: as_text text
   body case 40: as_list list
   body case default: as_symbol symbol
 
-struct symbol size=1..
+struct symbol size=0..
   @0x0000   before:20|28|29 u8         name  trim=20090d0a
 
 struct text size=2..

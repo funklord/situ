@@ -2803,12 +2803,17 @@ class Solver:
 		members partition their struct's bytes exactly, and a delimiter nobody
 		owned would be a hole between two members.
 
-		The minimum is an empty content plus the delimiter. The maximum is the
-		cap where one is given, and unbounded otherwise -- which is the honest
+		The minimum is an empty content plus the shortest delimiter -- and no
+		delimiter where the member does not own one: `before` leaves it to the
+		next member and `| end` lets the frame stand in for it, so counting
+		it refused a frame that ends there (26.930). The maximum is the cap
+		where one is given, and unbounded otherwise -- which is the honest
 		answer, and the reason `until D max N` exists for callers who need a
 		smaller promise than "as far as the buffer goes".
 		"""
-		floor = len(until.delimiter) * BITS_PER_BYTE
+		owned = until.consumed and not until.or_end
+		floor = (min(len(one) for one in until.delimiters) * BITS_PER_BYTE
+		         if owned else 0)
 
 		if until.cap is None:
 			return Interval(floor, None)

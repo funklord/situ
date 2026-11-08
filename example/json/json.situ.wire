@@ -39,7 +39,7 @@ struct no size=5
 struct nothing size=4
   @0x0000   4         u8         word  big must_eq="null"
 
-struct number size=1..
+struct number size=0..
   @0x0000   before:2c|5d|7d i64        value  radix=10 scaled trim=20090d0a
 
 struct object size=5..
@@ -50,9 +50,9 @@ struct text size=2..
   @0x0000   1         u8         open
   @0x0001   until:22  u8         chars  escape=0x5c
 
-struct value size=1..
+struct value size=0..
   ~         1         u8         kind  peek skip=20090d0a
-  ~         1..       variant    body
+  ~         0..       variant    body
   body switch: kind
   body case 34: as_string text
   body case 91: as_array array

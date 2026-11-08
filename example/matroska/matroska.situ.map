@@ -85,7 +85,7 @@ struct elements size=0.. access=Sequential mutate=Shifting address=Unstable repr
   elements.children[].size               offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
   elements.children[].data               offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
 
-struct open_cluster size=5.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+struct open_cluster size=1.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
   open_cluster.size                      offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   open_cluster.children                  offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
   open_cluster.children[]                offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical

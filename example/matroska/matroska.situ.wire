@@ -61,9 +61,9 @@ struct element size=2..72057594037927947
 struct elements size=0..
   @0x0000   0..       element    children  sized-by=remaining
 
-struct open_cluster size=5..
+struct open_cluster size=1..
   @0x0000   1..8      element_size size  varint=element_size must_eq=72057594037927935
-  ~         before:1f43b675|1c53bb6b|1254c367|1941a469|1043a770|114d9b74|1549a966|1654ae6b|1a45dfa3|end element    children  big
+  ~         before:1f43b675|1c53bb6b|1254c367|1941a469|1043a770|114d9b74|1549a966|1654ae6b|1a45dfa3|end element    children
 
 struct segment_child size=2..
   @0x0000   1         u8         lead  peek

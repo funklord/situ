@@ -32,7 +32,9 @@ FOUND = [
 	# The C walker framed an arm by the rest of the frame, so the array's
 	# floor passed on bytes past the arm: `["` was accepted.
 	("json", "value", "5b22", "1"),
-	("json", "value", "2c", "1"),
+	# A comma is no value: CONSTRAINT in all six once a value's minimum
+	# stopped counting the `before` terminator it does not own (26.930).
+	("json", "value", "2c", "2"),
 	# The Python walker clamped the arm to the frame and read on, so a member
 	# of an arm the frame cuts answered CONSTRAINT.
 	("mqtt", "packet", "1010000c4d5154540402003c0004", "1"),
