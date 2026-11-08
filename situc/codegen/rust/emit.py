@@ -3478,7 +3478,11 @@ class Emitter:
 				"\t\t// something to measure, and once at the size it says.",
 				f"\t\tlet whole = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 				"\t\tlet size  = whole.extent();",
-				"\t\tif whole.bytes.len() < size {",
+				# Its own minimum as well, which `new` asks and this built
+				# around: an `r` arm of one byte was walked where C, C++ and
+				# Python refused it as BOUNDS, and a run cut inside answered
+				# CONSTRAINT here alone.
+				f"\t\tif whole.bytes.len() < size || size < {inner}::SIZE_MIN {{",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
 				f"\t\tOk({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})",
