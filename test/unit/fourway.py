@@ -212,7 +212,16 @@ def magics(parsed: object, resolved: object,
 				held = getattr(attr.value, "value", None)
 				if isinstance(held, str):
 					planted.append((at, held.encode("latin-1")))
-				elif isinstance(held, int) and width:
+				# Not a varint's: its `size_bits` is the narrowest it can
+				# be and its bytes are an encoding, not the value in some
+				# order, so matroska's EBML magic did not fit one byte. And
+				# whole bytes only, as for a discriminant below: flac's
+				# `u14 sync` is not one, and writing two would clobber the
+				# two bits beside it.
+				elif isinstance(held, int) and width \
+						and placement.varint is None \
+						and placement.size_bits % 8 == 0 \
+						and placement.offset_bits % 8 == 0:
 					order = (placement.endian.value
 					         if placement.endian is not None
 					         else chosen.get(placement.marker or "", "big"))
