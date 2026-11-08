@@ -77,6 +77,10 @@ struct s_hp    { u3 flags; hp n; u8 data[n]; u8 last; }
 struct s_size  { u8 first; size n; u8 data[n]; u8 last; }
 struct s_utf   { utf n; u8 data[n]; u8 last; }
 struct s_lp    { u1 more; u3 kind; lp n; u8 data[n]; u8 last; }
+struct r_leb   { u8 count [max = 4]; leb v[count]; u8 last; }
+struct r_head  { u8 count [max = 4]; cs v[count]; u8 last; }
+struct r_outer { u8 n [max = 3]; r_leb runs[n]; u8 tail; }
+struct r_rest  { u8 first; quic v[remaining]; }
 struct head_pair { u3 major; head v; }
 """
 

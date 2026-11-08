@@ -8343,6 +8343,10 @@ Moved to `doc/decision/26.933-a-dissector-arm-is-read-as-its-member.md`.
 
 Moved to `doc/decision/26.934-a-dissector-extent-reads-what-it-passed.md`.
 
+### 26.935 The dissector walks a run of varints
+
+Moved to `doc/decision/26.935-the-dissector-walks-a-run-of-varints.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

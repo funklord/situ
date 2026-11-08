@@ -651,6 +651,78 @@ def _varint_value(placement: Placement) -> ast.VarintDecl | None:
 _VARINTS: dict[str, ast.VarintDecl] = {}
 
 
+def _varint_run_count(struct: ResolvedStruct,
+		placement: Placement, base: str) -> str | None:
+	"""How many varints a counted run holds, as Lua over `base`."""
+	if placement.array_count is not None:
+		return str(placement.array_count)
+	source = placement.size_expr or placement.sized_by
+	if source is None or source == "remaining":
+		return None
+	return _over_fields(struct, source, base)
+
+
+def _varint_run(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, field: str, seek: list[str]) -> list[str]:
+	"""A run of varints, each as wide as its own bytes say (26.935).
+
+	Counted, or to the end of the frame, as wasm's type indices and QUIC's
+	HTTP/3 settings are. Each element is a row, and where the bytes are no
+	number the dissector returns there, as it does for one varint.
+	"""
+	decl = _VARINTS.get(placement.varint or "")
+	name = _lua(_local(struct, placement))
+	if decl is None or placement.delimiters \
+			or placement.repeat_while is not None:
+		return _uncomputable(placement.path, "a run of varints this"
+		                     " dissector does not walk")
+	if placement.sized_by == "remaining":
+		head = ["\twhile at < tvb:len() do"]
+	else:
+		count = _varint_run_count(struct, placement, "0")
+		if count is None:
+			return _uncomputable(placement.path, "a run of varints whose"
+			                     " count this dissector cannot read")
+		head = [f"\tfor _ = 1, {count} do"]
+	return [
+		f"\t-- {placement.path}: varints, each as wide as its own bytes say",
+		*seek,
+		*head,
+		f"\t\tlocal {name}_w = {_varint_name(decl)}(tvb, at)",
+		f"\t\tif {name}_w == 0 then return at end",
+		f"\t\tsubtree:add({field}, tvb(at, {name}_w))",
+		f"\t\tat = at + {name}_w",
+		"\tend",
+	]
+
+
+def _varint_run_span(struct: ResolvedStruct,
+		placement: Placement) -> list[str]:
+	"""How far a counted run of varints reaches, as a Lua function."""
+	decl = _VARINTS.get(placement.varint or "")
+	if decl is None or placement.sized_by == "remaining" \
+			or placement.delimiters or placement.repeat_while is not None:
+		return []
+	count = _varint_run_count(struct, placement, "at_struct")
+	if count is None:
+		return []
+	return [
+		"",
+		f"-- How far `{placement.path}` reaches from `at`:"
+		f" `{placement.size_shown or placement.size_expr or placement.sized_by or placement.array_count}`",
+		"-- varints, each as wide as its own bytes say.",
+		f"local function {_span_name(struct, placement)}(tvb, at, at_struct)",
+		"	local start = at",
+		f"	for _ = 1, {count} do",
+		f"		local w = ({_varint_name(decl)}(tvb, at))",
+		"		if w == 0 then break end",
+		"		at = at + w",
+		"	end",
+		"	return at - start",
+		"end",
+	]
+
+
 def _one_varint(placement: Placement) -> ast.VarintDecl | None:
 	"""The varint type of a member that is ONE varint, not a run of them."""
 	if placement.varint is None or placement.array_count is not None \
@@ -1716,10 +1788,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tat = at + {name}_w",
 		]
 	if placement.varint is not None:
-		return _uncomputable(
-			placement.path,
-			"a run of varints, whose widths are in their own bytes and"
-			" which this dissector does not walk")
+		return _varint_run(resolved, struct, placement, field, seek)
 
 	if placement.kind == "variant":
 		return _variant(resolved, struct, placement, seek)
@@ -2310,6 +2379,8 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	ways -- by the buffer, and by refusing to advance on a zero-extent
 	element.
 	"""
+	if placement.varint is not None and _one_varint(placement) is None:
+		return _varint_run_span(struct, placement)
 	counted = is_counted_run(resolved.structs, placement)
 	record  = bool(placement.delimiters) \
 		and placement.type_name in resolved.structs
@@ -2684,6 +2755,11 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		unit = placement.pad_to
 		into = where if base == "0" else f"({where} - {base})"
 		return f"(({unit} - {into} % {unit}) % {unit})"
+
+	if placement.varint is not None and _one_varint(placement) is None:
+		if not _varint_run_span(struct, placement):
+			return None
+		return f"{_span_name(struct, placement)}(tvb, {where}, {base})"
 
 	decl = _one_varint(placement)
 	if decl is not None:

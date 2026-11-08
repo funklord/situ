@@ -943,13 +943,14 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 
 	Four branches declined a member by returning a comment and leaving `at`
 	where it was, and the walk carried on placing every member after it at a
-	cursor that was now wrong. `varint_run` is a run of varints, whose
-	widths this does not walk, and `coded_run`'s body has a length this
-	cannot render: both still decline, and nothing after them is placed.
+	cursor that was now wrong. `stuffed_opaque_tail`'s body is byte-stuffed
+	and `coded_run`'s is a coded region, and neither has a length this can
+	render: both still decline, and nothing after them is placed.
 
 	`segments` was the first of those until 26.932: `segment parts[count];
 	u16 after;` over records each saying its own length is walked now, and
-	is the second control.
+	is the second control. `varint_run`, a run of varints, followed it in
+	26.935.
 
 	`beats` was the third and is now the control, which is the half worth
 	keeping. `beat pulse[] while (kind == 0x33) max 6; u16 after;` was
@@ -967,11 +968,12 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
 	lua = generate(parse(source), resolved, "edges")
 
-	assert "varint_run.tail: not shown" in lua
+	assert "stuffed_opaque_tail.after: not shown" in lua
 	assert "coded_run.trailer: not shown" in lua
 
-	body = lua[lua.index("function varint_run.dissector"):]
-	assert "subtree:add(varint_run.fields.tail" not in body[:body.index("\nend")]
+	body = lua[lua.index("function stuffed_opaque_tail.dissector"):]
+	assert "subtree:add(stuffed_opaque_tail.fields.after" \
+		not in body[:body.index("\nend")]
 
 	body = lua[lua.index("function segments.dissector"):]
 	assert "subtree:add(segments.fields.after" in body[:body.index("\nend")]
@@ -1107,11 +1109,23 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 	total  = 0
 	values: dict[str, int] = {}
 	seen:   set[str] = set()
-	for abbrev, _, length, value in rows:
+	# A run shown element by element, each a row of one member: the sum of
+	# its rows is the run's span, which the walker lists as `span=`. Only
+	# where the rows abut -- one member's rows apart from each other are
+	# two runs, or one member shown twice, and neither has one span.
+	spans: dict[str, tuple[int, int]] = {}
+	broken: set[str] = set()
+	for abbrev, offset, length, value in rows:
 		if not abbrev.startswith(proto + "."):
 			continue
-		total += 1
 		kind, base = kinds.get(abbrev, ("", ""))
+		# A run's elements after its first are one answer with it, as the
+		# walker gives one line for the run: counted per row, a run of
+		# varints diluted the share below by every element it held.
+		local = abbrev.split(".")[-1]
+		if not (kind in ("bytes", "string") and local in spans
+		        and spans[local][1] == offset):
+			total += 1
 		# A byte run's LENGTH, under a key of its own. The exclusion below
 		# was right about the value and was applied to the whole row: "the
 		# walker answers `len=` and a first byte about the same member,
@@ -1132,6 +1146,10 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 			else:
 				seen.add(f"{local}#len")
 				values[f"{local}#len"] = length
+			start, end = spans.get(local, (offset, offset))
+			if end != offset:
+				broken.add(local)
+			spans[local] = (start, offset + length)
 			continue
 		if not kind.startswith(("uint", "int")):
 			continue
@@ -1165,6 +1183,9 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		path = abbrev[len(proto) + 1:]
 		if "." in path:
 			values[f"{path.replace('.', '_')}@arm"] = int(value) % (1 << 64)
+	for local, (start, end) in spans.items():
+		if local not in broken:
+			values[f"{local}#span"] = end - start
 	return total, values
 
 
@@ -1208,6 +1229,10 @@ def _walked(image: Image, proto: str,
 		for part in parts[1:]:
 			if part.startswith("len="):
 				values[f"{parts[0]}#len"] = int(part[4:])
+			# A run's whole span, `v count=3 span=4`, against the rows
+			# its elements were shown as (26.935).
+			if part.startswith("span="):
+				values[f"{parts[0]}#span"] = int(part[5:])
 		# A selected arm's member, `name ok=1 value=N`, which was dropped
 		# whole: no member of any variant arm was ever compared, and
 		# radiotap's arms read byte-reversed with this test green (26.933).
@@ -1388,13 +1413,14 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	# moves the two sides by different amounts, which is the reason there
 	# are three floors and not one.
 	#
-	# RE-MEASURED 2026-11-08 over the same 60: 6648 compared of 8093 shown,
-	# 10129 walked, 82%. The dissector walks record runs, varints and
-	# counts of records now (26.931, 26.932), and an arm's members are
-	# compared at all, which none had been (26.933).
-	assert compared >= 6580, (
+	# RE-MEASURED 2026-11-08 over the same 60: 6693 compared of 8181 shown,
+	# 10129 walked, 82%. The dissector walks record runs, varints, runs of
+	# them and counts of records now (26.931, 26.932, 26.935), an arm's
+	# members are compared at all, which none had been (26.933), and a run
+	# shown element by element is one answer, compared by its span.
+	assert compared >= 6630, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 6648; the dissector shows {shown} rows and the walker "
+		f"down from 6693; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
 	assert compared * 100 >= shown * 80, (
 		f"{compared} of the dissector's {shown} rows are compared against "
