@@ -20,6 +20,7 @@ import re
 from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeVar, cast
 
 from situc import ast
 from situc import kernels
@@ -2000,6 +2001,31 @@ def must_be_terminated(placement: "Placement") -> bool:
 	        and not placement.delimiter_or_end)
 
 
+#: Answers about one resolved schema, for the questions below that recurse
+#: through every struct a member reaches. Asked again for each member of each
+#: struct, they enumerated every path: cbor's items reach each other through
+#: four arms, and its C header took 114 s, nearly all of it here. Only the
+#: top-level question is kept -- `seen` empty -- since an inner one's answer
+#: depends on the path that reached it, and only for the table last asked
+#: about, so a language server re-resolving on every edit holds one.
+_Answer = TypeVar("_Answer")
+_answers: dict[str, object] = {"structs": None, "count": -1}
+_answered: dict[tuple[str, str, bool], object] = {}
+
+
+def _remembered(structs: dict[str, ResolvedStruct], question: str,
+		name: str, always: bool, ask: "Callable[[], _Answer]") -> _Answer:
+	"""`ask()`, once per struct and question while `structs` is unchanged."""
+	if _answers["structs"] is not structs or _answers["count"] != len(structs):
+		_answers["structs"] = structs
+		_answers["count"]   = len(structs)
+		_answered.clear()
+	key = (question, name, always)
+	if key not in _answered:
+		_answered[key] = ask()
+	return cast("_Answer", _answered[key])
+
+
 def ends_in_the_frame(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct, seen: frozenset[str] = frozenset(),
 		always: bool = False) -> bool:
@@ -2014,6 +2040,16 @@ def ends_in_the_frame(structs: dict[str, ResolvedStruct],
 	`always` asks it of every arm and not of any: then the view IS the extent,
 	and a walked sum would stop short at a cut element and hide it.
 	"""
+	if not seen and structs.get(struct.name) is struct:
+		return _remembered(structs, "ends", struct.name, always,
+		                   lambda: _ends_in_the_frame(structs, struct,
+		                                              frozenset(), always))
+	return _ends_in_the_frame(structs, struct, seen, always)
+
+
+def _ends_in_the_frame(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct, seen: frozenset[str], always: bool) -> bool:
+	"""`ends_in_the_frame`, asked afresh."""
 	if struct.name in seen:
 		return False
 	seen = seen | {struct.name}
@@ -2093,6 +2129,16 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 	one `[depth]` licenses: the recursion has to be able to stop in the data,
 	so an element of the cycle measures whatever the cycle measures.
 	"""
+	if not seen and structs.get(struct.name) is struct:
+		return _remembered(structs, "extent", struct.name, False,
+		                   lambda: _has_computable_extent(structs, struct,
+		                                                  frozenset()))
+	return _has_computable_extent(structs, struct, seen)
+
+
+def _has_computable_extent(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct, seen: frozenset[str]) -> bool:
+	"""`has_computable_extent`, asked afresh."""
 	for placement in own_members(struct):
 		if placement.is_fixed_size:
 			continue
@@ -3528,6 +3574,13 @@ def recursion_cycle(structs: dict[str, "ResolvedStruct"],
 
 
 def _reaches(structs: dict[str, "ResolvedStruct"],
+		name: str) -> frozenset[str]:
+	"""Every struct reachable from `name`, once per resolved schema."""
+	return _remembered(structs, "reaches", name, False,
+	                   lambda: _reaches_afresh(structs, name))
+
+
+def _reaches_afresh(structs: dict[str, "ResolvedStruct"],
 		name: str) -> frozenset[str]:
 	"""Every struct reachable from `name` through struct-typed members.
 
