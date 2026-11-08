@@ -187,3 +187,27 @@ def test_wireshark_reads_a_whole_transaction(tmp_path: Path) -> None:
 		check=True, capture_output=True, text=True, timeout=60)
 	assert ran.stdout.split() == ["1", "4294967295", "4294967295",
 	                              "5000000000", "0"]
+
+
+@pytest.mark.skipif(shutil.which("tshark") is None, reason="no tshark")
+def test_wireshark_shows_the_number_a_varint_spells(tmp_path: Path) -> None:
+	"""The number, to 2^64 - 1, and not the bytes (26.941). Wireshark
+	refuses a Lua number for a `uint64` field, so the dissector builds its
+	64-bit value from two words; CBOR's `largest`, `trillion` and
+	`thousand` from `cbor.vectors` come back as written."""
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector",
+	                str(ROOT / "example/cbor/cbor.situ"), "--out",
+	                str(tmp_path)], check=True, cwd=ROOT, capture_output=True)
+	frames = [bytes.fromhex("1bffffffffffffffff"),
+	          bytes.fromhex("1b000000e8d4a51000"), bytes.fromhex("1903e8")]
+	(tmp_path / "big.pcap").write_bytes(
+		pack_bytes("<IHHiIII", 0xa1b2c3d4, 2, 4, 0, 0, 65535, 147)
+		+ b"".join(pack_bytes("<IIII", 0, 0, len(one), len(one)) + one
+		           for one in frames))
+	ran = subprocess.run(
+		["tshark", "-X", f"lua_script:{tmp_path / 'cbor.lua'}", "-o",
+		 'uat:user_dlts:"User 0 (DLT=147)","situ_cbor_item","0","","0",""',
+		 "-r", str(tmp_path / "big.pcap"), "-T", "fields",
+		 "-e", "situ.unsigned_integer.value"],
+		check=True, capture_output=True, text=True, timeout=60)
+	assert ran.stdout.split() == [str(2 ** 64 - 1), "1000000000000", "1000"]

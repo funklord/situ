@@ -199,12 +199,17 @@ local function tree()
 	return setmetatable({}, Tree)
 end
 
-function Tree:add(field, item)
+function Tree:add(field, item, value)
 	-- `tree:add(proto, tvb())` opens the protocol's own subtree and shows no
 	-- field of its own. Only a ProtoField is a row.
+	--
+	-- A value handed with the range is what Wireshark shows instead of the
+	-- range's bytes: a varint's decoded number (26.941), which the bytes
+	-- are not. The real API checks its type, as `UInt64` below says.
 	if field.abbr ~= nil and item ~= nil then
+		local text = value ~= nil and tostring(value) or shown(field, item)
 		rows[#rows + 1] = ("%s\t%d\t%d\t%s"):format(
-			field.abbr, item.base + item.offset, item.length, shown(field, item))
+			field.abbr, item.base + item.offset, item.length, text)
 	end
 	return tree()
 end
@@ -287,6 +292,26 @@ ProtoExpert = {
 for _, width in ipairs({ 8, 16, 24, 32, 64 }) do
 	ProtoField["uint" .. width] = field("uint")
 	ProtoField["int"  .. width] = field("int")
+end
+
+--- Wireshark's 64-bit value, from its low and high words. Wireshark refuses
+--- a plain number for a `uint64` field -- "userdata expected, got number" --
+--- so the generated code builds one, and this stands in for it with the
+--- integer the two words spell, printed unsigned as Wireshark prints it.
+function UInt64(low, high)
+	local value = math.tointeger(low) + math.tointeger(high or 0) * 4294967296
+	return setmetatable({ value = value }, {
+		__tostring = function (self)
+			local held = self.value
+			if held >= 0 then
+				return tostring(held)
+			end
+			-- Unsigned past 2^63: halve, take the tens, and put the last
+			-- digit back, as Lua has no unsigned format of its own.
+			local tens = (held >> 1) // 5
+			return tostring(tens) .. tostring(held - tens * 10)
+		end,
+	})
 end
 
 Dissector = {

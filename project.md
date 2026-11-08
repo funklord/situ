@@ -8367,6 +8367,10 @@ Moved to `doc/decision/26.939-the-dissector-reads-a-wide-unsigned-field.md`.
 
 Moved to `doc/decision/26.940-the-dissector-renders-bits-from-the-tree.md`.
 
+### 26.941 The dissector shows the number a varint spells
+
+Moved to `doc/decision/26.941-the-dissector-shows-a-varint-s-number.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

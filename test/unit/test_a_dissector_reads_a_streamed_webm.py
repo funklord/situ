@@ -41,7 +41,8 @@ def test_every_simple_block_is_a_packet_ffprobe_reads(tmp_path: Path) -> None:
 	for field, at, length, value in rows:
 		if field == "element.id":
 			held = value
-		elif field == "element.data" and held == "a3":
+		# 0xA3, SimpleBlock's ID, which is shown as the number it is.
+		elif field == "element.data" and held == str(0xA3):
 			blocks.append((at, length - 4))
 
 	(tmp_path / "streamed.webm").write_bytes(data)

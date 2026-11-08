@@ -153,6 +153,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	       for entry in struct.entries):
 		lines.extend(FIXED_NUMBER_HELPER)
 	lines.extend(_varint_functions(schema, resolved))
+	if any(_shows_value(entry.placement)
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(U64_HELPER)
 	# After the varints, which an extent reads: an answer cached before them
 	# would be one that could not read a varint.
 	_TERMS.clear()
@@ -415,6 +419,20 @@ SKIP_HELPER = [
 	"\t\tn = n + 1",
 	"\tend",
 	"\treturn n",
+	"end",
+	"",
+]
+
+
+U64_HELPER = [
+	"-- A varint's value as Wireshark's 64-bit number, which a `uint64` field",
+	"-- requires: a Lua number is refused. Split into its two words, each",
+	"-- exact whatever the value, as a multiple of 2^32 is exact as a float.",
+	"local function situ_u64(v)",
+	"\tlocal low = v % 4294967296",
+	"\tlocal high = (v - low) / 4294967296",
+	"\tif high < 0 then high = high + 4294967296 end",
+	"\treturn UInt64(low, high)",
 	"end",
 	"",
 ]
@@ -692,6 +710,13 @@ def _varint_functions(schema: ast.Schema,
 		if decl.name in named:
 			lines.extend(_varint_function(decl))
 	return lines
+
+
+def _shows_value(placement: Placement) -> bool:
+	"""Whether a member is one unsigned varint, shown as its number."""
+	decl = _one_varint(placement)
+	return (decl is not None and decl.transform is None
+	        and decl.encoding is not ast.VarintEncoding.SLEB128)
 
 
 def _varint_value(placement: Placement) -> ast.VarintDecl | None:
@@ -1347,6 +1372,14 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `bytes` rather than a number: a varint's bytes are not the value it
 	# spells, and a region's are the transform's output. Showing them as an
 	# integer would be a number nobody wrote.
+	#
+	# A varint's bytes are not its value, but the dissector READS the value
+	# now, so an unsigned one is declared a number and shown as the one it
+	# spells (26.941). A signed one stays bytes: its zigzag form is not the
+	# number it means.
+	if _shows_value(placement):
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
+		        f"ProtoField.uint64(\"{abbrev}\", \"{name}\", base.DEC)")
 	#
 	# A tlv region too, whose items are each a row of it (26.937).
 	if placement.varint is not None \
@@ -2066,7 +2099,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return [
 			f"\t-- {placement.path}: a varint, as wide as its own bytes say",
 			*seek,
-			f"\tlocal {name}_w = {_varint_name(decl)}(tvb, at)",
+			f"\tlocal {name}_w, _, {name}_v = {_varint_name(decl)}(tvb, at)",
 			# Where the bytes are no number, nothing after is placed: the
 			# walker refuses the message there, and a cursor guessed past
 			# it is the confident wrong line `_uncomputable` exists for.
@@ -2075,7 +2108,9 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tif {name}_w == 0 then",
 			"\t\treturn at",
 			"\tend",
-			f"\tsubtree:add({field}, tvb(at, {name}_w))",
+			(f"\tsubtree:add({field}, tvb(at, {name}_w), situ_u64({name}_v))"
+			 if _shows_value(placement) else
+			 f"\tsubtree:add({field}, tvb(at, {name}_w))"),
 			f"\tat = at + {name}_w",
 		]
 	if placement.varint is not None:
