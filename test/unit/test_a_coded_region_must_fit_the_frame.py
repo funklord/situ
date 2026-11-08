@@ -18,6 +18,7 @@ import fourway
 
 SCHEMA = """target buffer;
 endian big;
+bit_order msb_first;
 codec doubling {
 	expansion = ratio_exact(2, 1);
 	granularity = byte;
@@ -31,6 +32,15 @@ struct codedw {
 	coded body(doubling) {
 		u8 content[n];
 	}
+}
+struct codedb {
+	u8  n;
+	coded body(doubling) {
+		u4 a;
+		u4 b;
+		u8 content[n];
+	}
+	u8  after;
 }
 struct codedv [version = ver] {
 	u8  ver;
@@ -50,12 +60,29 @@ CASES = {
 	("codedv", "0200aabb"):   "1",	# version 2 carries `x`: four bytes
 	("codedv", "0101aa"):     "1",
 	("codedv", "0101aabb"):   "0",
+	# Two nibbles and one byte, doubled: four. Summed in bytes the nibbles
+	# were none, so the region measured two and `after` was its third byte
+	# (26.929's fault, inside a region).
+	("codedb", "01aabbccddee77"): "0",
+	("codedb", "01aabbccdd"):     "1",
 }
 
 
 def _section(output: str, struct: str) -> list[str]:
 	return output.split(f"-- {struct}\n", 1)[1].split("\n-- ", 1)[0] \
 		.splitlines()
+
+
+def test_after_a_region_of_nibbles_is_its_fifth_byte(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(SCHEMA, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	given = {name: _section(fourway.answers(
+	             argv, bytes.fromhex("01aabbccddee77"), tmp_path), "codedb")
+	         for name, argv in command.items()}
+	for name, lines in given.items():
+		assert "after 238" in lines and "body len=4 first=170" in lines, \
+			(name, lines)
 
 
 def test_all_four_refuse_a_region_the_frame_cannot_hold(tmp_path: Path) -> None:

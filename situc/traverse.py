@@ -853,17 +853,23 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 			for since in sorted({member.since or 0 for member in versioned}))
 		interior = interior[:first]
 
-	constant = 0
+	# In bits, as the offset cache counts (26.929): `u4 a; u4 b;` inside a
+	# region summed as no bytes, so a doubled region of two measured two and
+	# the member after it was read from inside it, in all four.
+	fixed    = 0
 	variable = []
 	for member in interior:
 		if member.is_fixed_size:
-			constant += member.size_bits // BITS_PER_BYTE
+			fixed += member.size_bits
 			continue
 		if unmeasurable_inside(structs or {}, member):
 			return None		# a walk over the codec's output
 		if length_read_inside(struct, region, member, structs or {}):
 			return None		# a length the plain view cannot read
 		variable.append(member)
+	if fixed % BITS_PER_BYTE:
+		return None		# an interior no whole bytes hold
+	constant = fixed // BITS_PER_BYTE
 
 	expansion = getattr(codec, "expansion", None)
 	name      = getattr(expansion, "value", None)
