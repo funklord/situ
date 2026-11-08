@@ -6749,7 +6749,24 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					return SITU_WALK_OK;
 				}
 			}
-			err = validate_deep(&bound, message + at / 8u, len - at / 8u,
+			/* Over the member's own extent, as every backend's
+			 * `situ_view_sub(view, base, extent, out)` and `report`
+			 * hand it: the rest of the frame let a json value with no
+			 * bytes of its own read the `}` after it and answer
+			 * CONSTRAINT where the six said BOUNDS. Its minimum hid that
+			 * until a `before` terminator stopped counting (26.930). */
+			/* Over the member's own extent, as every backend's
+			 * `situ_view_sub(view, base, extent, out)` and `report`
+			 * hand it: the rest of the frame let a json value with no
+			 * bytes of its own read the `}` after it and answer
+			 * CONSTRAINT where the six said BOUNDS. Its minimum hid that
+			 * until a `before` terminator stopped counting (26.930).
+			 * Not an indexed region, whose `wide` is the region's and
+			 * whose `type_struct` is its element's. */
+			err = validate_deep(&bound, message + at / 8u,
+			                    table_row(image->indexes, image->index_count,
+			                              image->index_stride, index) == NULL
+			                    ? (wide + 7u) / 8u : len - at / 8u,
 			                    held.type_struct, depth + 1u, &inner, why);
 			if (err != SITU_WALK_OK) {
 				return err;
