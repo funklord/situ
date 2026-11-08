@@ -2354,6 +2354,14 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			if extent < 0 or sub.at + extent > view.limit:
 				raise Refused("the frame does not hold the nested struct")
 			lines.append(f"{local} ok=1 extent={extent}")
+		except TooDeep:
+			# This walker's ceiling, not the message's: no line, which is
+			# `cannot-say`, as `_validate` answers the same bytes. cbor's
+			# items cost three or four edges a level since c48decfe's
+			# indefinite forms, so eight are two levels and the four
+			# backends, at the schema's sixty-four, placed what this said
+			# was not there.
+			continue
 		except Refused:
 			# Every backend can refuse a sub-view now, and says so the same
 			# way: the answer is `ok=0`, not an absent line.
