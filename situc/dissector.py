@@ -29,7 +29,9 @@ bytes with a note rather than guessed at.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+from typing import Iterator
 
 from situc import traverse
 from situc.diagnostics import not_yet_implemented
@@ -1280,21 +1282,8 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 	capturable = {held.path for held in _capturable(struct, members)}
 	_captured.clear()
 	for placement in members:
-		decl = _varint_value(placement)
-		if placement.path in capturable and not lost and decl is not None:
-			name = f"{_lua(placement.name)}_value"
-			lines.append(f"\tlocal {name} = select(2,"
-			             f" {_varint_name(decl)}(tvb, at))")
-			_captured[placement.path] = name
-		elif placement.path in capturable and not lost:
-			name   = f"{_lua(placement.name)}_value"
-			little = ("true" if placement.endian is ast.Endian.LITTLE
-			          else "false")
-			spot   = ("at" if placement.from_end is None
-			          else f"tvb:len() - {placement.from_end}")
-			lines.append(f"\tlocal {name} = situ_uint(tvb, {spot}, "
-			             f"{placement.size_bits // BITS_PER_BYTE}, {little})")
-			_captured[placement.path] = name
+		if placement.path in capturable and not lost:
+			lines.append(f"\t{_capture_line(placement, 'at')}")
 		if lost:
 			lines.append(f"\t-- {placement.path}: not shown, because the"
 			             " member above it has no extent this")
@@ -2017,8 +2006,13 @@ def _capturable(struct: ResolvedStruct,
 	# And what a variant switches on: `cluster` peeks a byte after a
 	# varint ID, at an offset only the walk knows, and its variant was
 	# declined as reading what this cannot (26.932).
-	named = " ".join(held.sized_by or held.size_expr or held.discriminant
-	                 or "" for held in members)
+	# And what a member hands its child (0068): DNS hands every `rdata`
+	# arm `size = rdlength`, past an owner name only the walk measures, and
+	# the variant was declined as having an arm of no length.
+	named = " ".join([*(held.sized_by or held.size_expr or held.discriminant
+	                    or "" for held in members),
+	                  *(source for entry in struct.entries
+	                    for _, source in entry.placement.arguments)])
 	return [held for held in members
 	        if _varint_value(held) is not None and held.offset_bits is None
 	        and re.search(rf"\b{re.escape(held.name)}\b", named)
@@ -2029,6 +2023,25 @@ def _capturable(struct: ResolvedStruct,
 	        and held.size_bits in (8, 16, 24, 32)
 	        and not _host_order(held)
 	        and re.search(rf"\b{re.escape(held.name)}\b", named)]
+
+
+def _capture_line(placement: Placement, spot: str) -> str:
+	"""`local <name>_value = ...`, a length's driver read where it stands.
+
+	Shared by a dissector's body, where it stands at `at`, and an extent
+	function, where it stands at the running `n`, and recorded in
+	`_captured` so that `_read` names the local rather than an offset.
+	"""
+	name = f"{_lua(placement.name)}_value"
+	_captured[placement.path] = name
+	decl = _varint_value(placement)
+	if decl is not None:
+		return f"local {name} = select(2, {_varint_name(decl)}(tvb, {spot}))"
+	little = "true" if placement.endian is ast.Endian.LITTLE else "false"
+	if placement.from_end is not None:
+		spot = f"tvb:len() - {placement.from_end}"
+	return (f"local {name} = situ_uint(tvb, {spot}, "
+	        f"{placement.size_bits // BITS_PER_BYTE}, {little})")
 
 
 def _read(placement: Placement, base: str) -> str | None:
@@ -2464,9 +2477,7 @@ def _extent_function(resolved: ResolvedSchema,
 	# it -- so a flat sum measured the second variable member, and every
 	# nested struct after the first, from the start of the frame. It read as
 	# one expression and was M answers about one offset.
-	body = ["	local n = at"]
-	for step in _extent_steps(resolved, struct):
-		body.append(f"	n = n + {step}")
+	body = ["	local n = at", *_extent_steps(resolved, struct)]
 	return [
 		"",
 		f"-- How many bytes one `{struct.name}` occupies at `at`.",
@@ -2493,26 +2504,52 @@ def _extent_steps(resolved: ResolvedSchema,
 	tail  = versioned_tail(resolved.structs, struct)
 	added = _version_term(tail) if tail is not None else None
 
-	for placement in own_members(struct):
-		if added is not None and placement.since:
-			continue		# by version, below (26.768)
-		# The SPAN, as every other function that adds members up asks it
-		# (`traverse.fixed_span_bits`): a `parameter` and a `peek` occupy
-		# nothing. This added `size_bits`, so `entry`'s extent counted its
-		# `parameter u16 block` as two bytes of the message (26.808).
-		if occupies_fixed_bytes(placement):
-			bits += fixed_span_bits(placement)
-			continue
-		if bits:
-			steps.append(str(bits // BITS_PER_BYTE))
-			bits = 0
-		one = _length(resolved, struct, placement, "at", "n")
-		steps.append("0" if one is None else one)
+	with _capturing():
+		capturable = {held.path
+		              for held in _capturable(struct, own_members(struct))}
+		for placement in own_members(struct):
+			if added is not None and placement.since:
+				continue		# by version, below (26.768)
+			# A field a later length reads, at an offset only this walk
+			# knows: read where it stands, as the body reads it at `at`.
+			if placement.path in capturable \
+					and bits % BITS_PER_BYTE == 0:
+				spot = "n" if not bits else f"n + {bits // BITS_PER_BYTE}"
+				steps.append(f"\t{_capture_line(placement, spot)}")
+			# The SPAN, as every other function that adds members up asks
+			# it (`traverse.fixed_span_bits`): a `parameter` and a `peek`
+			# occupy nothing. This added `size_bits`, so `entry`'s extent
+			# counted its `parameter u16 block` as two bytes (26.808).
+			if occupies_fixed_bytes(placement):
+				bits += fixed_span_bits(placement)
+				continue
+			if bits:
+				steps.append(f"\tn = n + {bits // BITS_PER_BYTE}")
+				bits = 0
+			one = _length(resolved, struct, placement, "at", "n")
+			steps.append(f"\tn = n + {'0' if one is None else one}")
 	if bits:
-		steps.append(str(bits // BITS_PER_BYTE))
+		steps.append(f"\tn = n + {bits // BITS_PER_BYTE}")
 	if added is not None:
-		steps.append(added)
+		steps.append(f"\tn = n + {added}")
 	return steps
+
+
+@contextlib.contextmanager
+def _capturing() -> Iterator[None]:
+	"""A fresh `_captured` for one walk, and the caller's back after it.
+
+	An extent is asked for in the middle of a dissector's body -- a run's
+	stride, a nested member's size -- whose own captures name locals of
+	that body, which mean nothing inside the extent function.
+	"""
+	saved = dict(_captured)
+	_captured.clear()
+	try:
+		yield
+	finally:
+		_captured.clear()
+		_captured.update(saved)
 
 
 def _read_version(field: Placement) -> str | None:
@@ -2583,11 +2620,21 @@ def _extent_terms(resolved: ResolvedSchema,
 
 	constant, variable = parts
 	terms: list[str] = []
-	for placement in variable:
-		one = _length(resolved, struct, placement)
-		if one is None:
-			return None
-		terms.append(one)
+	# In order, capturing as `_extent_steps` will, so a length reading a
+	# field past a variable member renders: DNS's `rdata` arms read
+	# `rdlength`, which stands after the owner name (26.934).
+	with _capturing():
+		capturable = {held.path
+		              for held in _capturable(struct, own_members(struct))}
+		for placement in own_members(struct):
+			if placement.path in capturable:
+				_capture_line(placement, "n")
+			if not any(one is placement for one in variable):
+				continue
+			one = _length(resolved, struct, placement)
+			if one is None:
+				return None
+			terms.append(one)
 	return constant, terms
 
 
@@ -2626,7 +2673,7 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return (f"handing({_lua(placement.type_name or '')}_arg, {values},"
 		        f" function() return {plain} end)")
 	if placement.kind == "variant":
-		return _variant_length(resolved, struct, placement, base)
+		return _variant_length(resolved, struct, placement, base, where)
 
 	# A pad, to the next multiple of its unit from where the struct starts,
 	# as the body's own pad counts from the start of the struct's tvb. An
@@ -2698,7 +2745,8 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 
 def _variant_length(resolved: ResolvedSchema, struct: ResolvedStruct,
-		placement: Placement, base: str = "at") -> str | None:
+		placement: Placement, base: str = "at",
+		where: str | None = None) -> str | None:
 	"""The selected arm's length, as nested Lua `and`/`or`.
 
 	Lua has no conditional expression, and `a and b or c` is the idiom -- safe
@@ -2716,7 +2764,9 @@ def _variant_length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	for arm, member in reversed(arm_members(struct, placement)):
 		if member is None:
 			continue		# `default: error`; falls to the zero above
-		one = _length(resolved, struct, member, base)
+		# Where the variant starts, as `_length` measures any member: an arm
+		# after a variable member was measured from the struct's start.
+		one = _length(resolved, struct, member, base, where)
 		if one is None:
 			return None
 		chain = one if arm.value is None \
@@ -2776,8 +2826,16 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		         and member.endian is ast.Endian.LITTLE else "add")
 		# One struct goes to its own dissector, as a nested member does;
 		# it was stepped over, so radiotap's channel was never shown.
-		nested = (not shown and not member.arguments
+		nested = (not shown
 		          and nests_one_struct(resolved.structs, member))
+		call   = (f"Dissector.get(\"{member.type_name}\"):call("
+		          "tvb(at, n):tvb(), pinfo, subtree)")
+		if nested and member.arguments:
+			# Inside `handing`, as a nested member with arguments is: the
+			# child reads `<type>_arg` and finds what this arm hands it.
+			call = _handing_call(struct, member, "0",
+			                     f"function() return {call} end") or ""
+			nested = bool(call)
 		lines.extend([
 			f"\t{test}" if arm.value is None else f"\t{test}",
 			f"\t\tlocal n = {length}",
@@ -2787,8 +2845,7 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 				"\t\tend",
 			] if shown else [
 				"\t\tif n > 0 and tvb:len() >= at + n then",
-				f"\t\t\tDissector.get(\"{member.type_name}\"):call("
-				"tvb(at, n):tvb(), pinfo, subtree)",
+				f"\t\t\t{call}",
 				"\t\tend",
 			] if nested else [
 				f"\t\t-- `{member.name}` has no field of its own to add",
@@ -3100,8 +3157,9 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# dissector. It declined, so a Bitcoin transaction showed its
 		# version and nothing after its inputs (26.932).
 		return [
-			f"\t-- {placement.path}: {count} records, each as long as it"
-			" says", *seek,
+			f"\t-- {placement.path}: "
+			f"{placement.size_shown or placement.size_expr or placement.sized_by or placement.array_count}"
+			" records, each as long as it says", *seek,
 			f"\tlocal {name}_n = {count}",
 			f"\tlocal {name}_k = 0",
 			f"\twhile {name}_k < {name}_n and at < tvb:len() do",
