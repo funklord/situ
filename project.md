@@ -8355,6 +8355,10 @@ Moved to `doc/decision/26.936-the-dissector-follows-a-recursion.md`.
 
 Moved to `doc/decision/26.937-the-dissector-walks-tlv-items.md`.
 
+### 26.938 The dissector reads JSON
+
+Moved to `doc/decision/26.938-the-dissector-reads-json.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

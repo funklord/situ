@@ -1729,17 +1729,20 @@ def test_a_peeked_discriminant_is_shown_and_not_spent(tmp_path: Path) -> None:
 	byte and looked correct; json's discriminant is one the dissector cannot
 	read, so the step was all that remained.
 
-	`consumed` and not a row, because the fault is in what the struct says
-	it spanned rather than in where any field was drawn. Three bytes of
-	whitespace and then `{`: the lead is the member's own and IS spent, so
-	3 is the answer and 4 was the bug.
+	Three bytes of whitespace and then `{`: the lead is the member's own and
+	IS spent, so the peek leaves the cursor at 3 and 4 was the bug. That was
+	asserted through `consumed` while the discriminant could not be read and
+	the dissector stopped there; it is read now and the whole value walked
+	(26.938), so the object's own `{` opening at 3 is what says it.
 	"""
 	consumed, rows = dissect(
 		tmp_path, ROOT / "example/json/json.situ", "value", b'   {"a":1}')
 
-	assert ("value.kind", 3, 1, "123") in [
-		(field, at, length, value) for field, at, length, value in rows]
-	assert consumed == 3
+	shown = [(field, at, length, value)
+	         for field, at, length, value in rows]
+	assert ("value.kind", 3, 1, "123") in shown
+	assert ("object.open", 3, 1, "123") in shown
+	assert consumed == 10
 
 
 PEEKED_FIXED = """target buffer;

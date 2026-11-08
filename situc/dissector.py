@@ -144,6 +144,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend(TRIM_HELPER)
 
 	lines.extend(READ_HELPER)
+	if any(entry.placement.skip
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(SKIP_HELPER)
 	if any(entry.placement.kind == "tlv"
 	       for struct in resolved.structs.values()
 	       for entry in struct.entries):
@@ -389,6 +393,26 @@ SCAN_HELPER = [
 	"local function situ_footprint(consumed, n, found, took)",
 	"\tif found and consumed then",
 	"\t\treturn n + took",
+	"\tend",
+	"\treturn n",
+	"end",
+	"",
+]
+
+
+SKIP_HELPER = [
+	"-- How many bytes of a member's lead stand at `at`: the run of bytes",
+	"-- from `set` a `skip` member owns in front of its value (26.938).",
+	"local function situ_skip(tvb, at, set)",
+	"\tlocal n = 0",
+	"\twhile at + n < tvb:len() do",
+	"\t\tlocal byte = tvb(at + n, 1):uint()",
+	"\t\tlocal hit = false",
+	"\t\tfor i = 1, #set do",
+	"\t\t\tif set[i] == byte then hit = true; break end",
+	"\t\tend",
+	"\t\tif not hit then break end",
+	"\t\tn = n + 1",
 	"\tend",
 	"\treturn n",
 	"end",
@@ -2326,6 +2350,12 @@ def _capture_line(placement: Placement, spot: str) -> str:
 	"""
 	name = f"{_lua(placement.name)}_value"
 	_captured[placement.path] = name
+	# Where its lead ends, for a member that skips one: read at the cursor,
+	# JSON's `kind` read the space in front of `[` and chose the number arm
+	# for an array (26.938).
+	if placement.skip:
+		lead = "{" + ", ".join(str(one) for one in placement.skip) + "}"
+		spot = f"{spot} + situ_skip(tvb, {spot}, {lead})"
 	decl = _varint_value(placement)
 	if decl is not None:
 		return f"local {name} = select(2, {_varint_name(decl)}(tvb, {spot}))"
@@ -2654,7 +2684,7 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `wellformed` refuses a member that says twice where its run ends.
 	assert placement.repeat_while is not None
 	if _over_fields(element, placement.repeat_while, "last",
-			RUN_EXTRA) is None:
+			_condition_reads(element)) is None:
 		return []
 	condition = _run_condition(resolved, struct, placement)
 
@@ -3040,6 +3070,27 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 			return None
 		return (f"handing({_lua(placement.type_name or '')}_arg, {values},"
 		        f" function() return {plain} end)")
+	# A member's lead, and then the member where the lead ends. It had no
+	# length, so a JSON member -- `u8 open skip`, whitespace and a quote --
+	# left `member`, `object`, `array` and every value holding one without
+	# an extent (26.938). The member itself by its SPAN: a peek that skips
+	# owns its lead and occupies nothing after it.
+	if placement.skip:
+		lead  = ("situ_skip(tvb, {at}, {{"
+		         + ", ".join(str(one) for one in placement.skip) + "}})")
+		after = f"({where} + {lead.format(at=where)})"
+		inner = dataclasses.replace(placement, skip=())
+		if occupies_fixed_bytes(inner):
+			span = fixed_span_bits(inner)
+			if span % BITS_PER_BYTE:
+				return None
+			rest: str | None = str(span // BITS_PER_BYTE)
+		else:
+			rest = _length(resolved, struct, inner, base, after)
+		if rest is None:
+			return None
+		return f"({lead.format(at=where)} + {rest})"
+
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base, where)
 
@@ -3308,7 +3359,8 @@ def _run_declined(resolved: ResolvedSchema, placement: Placement,
 	if _element_stride(resolved, element) is None:
 		return "elements of no size this dissector can compute"
 	if placement.repeat_while is not None and _over_fields(
-			element, placement.repeat_while, "last", RUN_EXTRA) is None:
+			element, placement.repeat_while, "last",
+			_condition_reads(element)) is None:
 		return "a condition this dissector cannot render"
 	return "elements of no size this dissector can compute"
 
@@ -3364,11 +3416,55 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 RUN_EXTRA = {"remaining": "(tvb:len() - at)"}
 
 
+def _condition_reads(element: ResolvedStruct) -> dict[str, str]:
+	"""What a `while` condition may read of the element just walked.
+
+	`RUN_EXTRA`, and every field at an offset the walk decides that stands
+	a fixed distance from the element's END: the condition is asked once
+	the cursor has passed the element, so `at` is its end. JSON's
+	`member entries[] while (sep == ',')` reads `sep`, the member's last
+	byte, behind a key and a value of any length; with no constant offset
+	it could not be read, and objects, arrays and every value holding one
+	had no extent here (26.938).
+	"""
+	reads = dict(RUN_EXTRA)
+	behind = 0
+	for held in reversed(own_members(element)):
+		# A member that skips a lead is its value's width from wherever the
+		# lead ends, so its value stands that far from the end -- and
+		# nothing before it does, the lead being any length. JSON's `sep`
+		# is `u8 sep skip`.
+		lead = bool(held.skip)
+		inner = dataclasses.replace(held, skip=()) if lead else held
+		if not occupies_fixed_bytes(inner):
+			break
+		span = fixed_span_bits(inner)
+		if span % BITS_PER_BYTE:
+			break
+		behind += span // BITS_PER_BYTE
+		if held.offset_bits is not None or held.scalar is None \
+				or held.scalar.signed or held.size_bits not in (8, 16, 24, 32) \
+				or _host_order(held) or held.radix is not None:
+			if lead:
+				break
+			continue
+		little = "true" if held.endian is ast.Endian.LITTLE else "false"
+		# `behind` counts this field and everything after it, so the
+		# field starts that far back from the element's end.
+		reads.setdefault(
+			held.name,
+			f"situ_uint(tvb, at - {behind}, "
+			f"{held.size_bits // BITS_PER_BYTE}, {little})")
+		if lead:
+			break
+	return reads
+
+
 def _run_condition(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> str:
 	element = resolved.structs[placement.type_name or ""]
 	source  = _over_fields(element, placement.repeat_while or "", "last",
-	                       RUN_EXTRA)
+	                       _condition_reads(element))
 	assert source is not None, "_run_span checks this first"
 	return translate_operators(source, conj=" and ", disj=" or ",
 	                           ne=" ~= ", neg="not ")
