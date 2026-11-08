@@ -1159,6 +1159,12 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		# negative here is the stand-in's and not the dissector's.
 		values[local] = int(value) % (1 << 64) if kind == "uint64" \
 			else int(value)
+		# An arm's member, under the name the walker lists it by:
+		# `tsft_field.mactime` is `tsft_field_mactime ok=1 value=N`. Modulo
+		# 2^64 on both sides, the listing printing a signed arm unsigned.
+		path = abbrev[len(proto) + 1:]
+		if "." in path:
+			values[f"{path.replace('.', '_')}@arm"] = int(value) % (1 << 64)
 	return total, values
 
 
@@ -1202,6 +1208,12 @@ def _walked(image: Image, proto: str,
 		for part in parts[1:]:
 			if part.startswith("len="):
 				values[f"{parts[0]}#len"] = int(part[4:])
+		# A selected arm's member, `name ok=1 value=N`, which was dropped
+		# whole: no member of any variant arm was ever compared, and
+		# radiotap's arms read byte-reversed with this test green (26.933).
+		if parts[1:] and parts[1] == "ok=1" and len(parts) == 3 \
+				and parts[2].startswith("value="):
+			values[f"{parts[0]}@arm"] = int(parts[2][6:]) % (1 << 64)
 	return total, values
 
 
@@ -1375,15 +1387,20 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	# whose options the walker counts and the dissector shows row by row
 	# moves the two sides by different amounts, which is the reason there
 	# are three floors and not one.
-	assert compared >= 5980, (
+	#
+	# RE-MEASURED 2026-11-08 over the same 60: 6648 compared of 8093 shown,
+	# 10129 walked, 82%. The dissector walks record runs, varints and
+	# counts of records now (26.931, 26.932), and an arm's members are
+	# compared at all, which none had been (26.933).
+	assert compared >= 6580, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 6036; the dissector shows {shown} rows and the walker "
+		f"down from 6648; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
 	assert compared * 100 >= shown * 80, (
 		f"{compared} of the dissector's {shown} rows are compared against "
-		f"the walker, down from 81%")
-	assert walked >= 9960, (
-		f"the walker renders {walked} member lines, down from 10062; the "
+		f"the walker, down from 82%")
+	assert walked >= 10070, (
+		f"the walker renders {walked} member lines, down from 10129; the "
 		"share above can be met by the dissector showing less")
 
 
