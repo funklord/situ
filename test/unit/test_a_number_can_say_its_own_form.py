@@ -13,6 +13,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -431,8 +432,40 @@ def test_ffmpeg_s_piped_document_reads_as_ffprobe_says(tmp_path: Path) -> None:
 	          for i in range(fields.children_count)}
 	assert held[0x4282] == b"matroska"
 	tops = [view.children(i) for i in range(view.children_count)]
-	assert [one.id_value for one in tops] == [
+	assert [_top_id(one) for one in tops] == [
 		0x114D9B74, 0xEC, 0x1549A966, 0x1654AE6B, 0x1254C367, 0x1F43B675]
+
+
+def _top_id(child: object) -> int:
+	"""A Segment child's ID: a Cluster's, or any other element's."""
+	held: Any = child
+	if held.lead == 0x1F:
+		return int(held.body_cluster.id_value)
+	return int(held.body_other.id_value)
+
+
+def test_gstreamer_s_streamed_clusters_end_before_the_next(
+		tmp_path: Path) -> None:
+	"""Four Clusters of unknown size, each before the next one's ID (26.930).
+
+	The children are what ffprobe's four packets come from: a Timestamp and
+	a SimpleBlock, then three with the previous Cluster's size (PrevSize,
+	0xAB) between them, the last block in a BlockGroup.
+	"""
+	module  = _module("matroska", tmp_path)
+	message = _vectors("matroska")["streamed"]
+	view    = module.document.at(module.Message(message), 0, len(message))
+	view.validate()
+	tops = [view.children(i) for i in range(view.children_count)]
+	assert [_top_id(one) for one in tops] == [
+		0x1254C367, 0x1549A966, 0x1654AE6B] + [0x1F43B675] * 4
+	kids = []
+	for one in tops[3:]:
+		run = one.body_cluster.body_eight.body_open
+		kids.append([run.children(i).id_value
+		             for i in range(run.children_count)])
+	assert kids == [[0xE7, 0xA3], [0xE7, 0xAB, 0xA3], [0xE7, 0xAB, 0xA3],
+	                [0xE7, 0xAB, 0xA0]]
 
 
 def _element(module: object, data: bytes, wanted: int) -> bytes:
@@ -447,9 +480,9 @@ def test_the_track_is_the_one_ffprobe_names(tmp_path: Path) -> None:
 	module  = _module("matroska", tmp_path)
 	message = _vectors("matroska")["piped"]
 	view    = module.document.at(module.Message(message), 0, len(message))
-	tracks  = next(bytes(view.children(i).data)
+	tracks  = next(bytes(view.children(i).body_other.data)
 	               for i in range(view.children_count)
-	               if view.children(i).id_value == 0x1654AE6B)
+	               if _top_id(view.children(i)) == 0x1654AE6B)
 	entry   = _element(module, tracks, 0xAE)
 	# ffmpeg files FFV1 under a Windows codec ID, the FourCC in its private data.
 	assert _element(module, entry, 0x86) == b"V_MS/VFW/FOURCC"

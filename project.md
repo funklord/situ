@@ -601,7 +601,7 @@ field         = [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
 arguments     = "(" argument { "," argument } ")" ;   (* decision 0068 *)
 argument      = ident "=" expr ;
 located       = "at" expr ;                  (* decision 0042 *)
-repeat        = "while" "(" expr ")" [ "max" expr ] ;   (* section 8.6.6 *)
+repeat        = "while" "(" expr ")" [ "|" "end" ] [ "max" expr ] ;   (* section 8.6.6, 26.927 *)
 radix         = "decimal" | "hex" | "octal" | "scaled" ;   (* section 8.6.2, 0056 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 preamble      = "preamble" "u8" [ array_spec ] "=" string   (* 0052 *)

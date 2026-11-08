@@ -45,11 +45,15 @@ from walker.walk import View, chosen_arm		# noqa: E402
 
 ERR_BOUNDS = 1
 
-#: The buffer a planted draw produced for `sexpr`. It opens with `)`, so
-#: the discriminant selects the `symbol` arm.
-SEXPR = bytes.fromhex(
-	"293e2b47512e416a762b5b27224e2524794c426d4e7d0d785d2d743d49647a38"
-	"4a09392552733d5578246e312e420d4f52740956275e5b793c26336d2b")
+ERR_CONSTRAINT = 2
+
+#: `(a`: the discriminant selects the recursive `list` arm, whose own run
+#: never meets its `)`, so only a walk that descends into the arm refuses
+#: it. It was a planted draw opening with `)`, refused as BOUNDS for an
+#: empty symbol shorter than a minimum that counted the `)` it does not
+#: own; the schema admits an empty symbol and all six read it as whole
+#: since 26.930.
+SEXPR = b"(a"
 
 #: And one for `mqtt`, whose selected arm is `publish` -- a struct no
 #: backend can measure, so no backend validates it and neither may this.
@@ -77,7 +81,7 @@ def _verdict(image, struct: str, buffer: bytes):  # type: ignore[no-untyped-def]
 def test_a_recursive_arm_is_validated() -> None:
 	"""`sexpr` over a buffer C refuses, which the walker read as OK."""
 	verdict, _ = _verdict(_image("sexpr"), "sexpr", SEXPR)
-	assert verdict == ERR_BOUNDS, (
+	assert verdict == ERR_CONSTRAINT, (
 		f"a buffer every backend refuses read {verdict}")
 
 

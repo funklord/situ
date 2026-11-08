@@ -749,10 +749,12 @@ def test_a_delimited_run_of_structs_qualifies_the_verdict(tmp_path: Path,
 	reported as conforming with no qualification. `http`'s two header-field
 	runs were in the same state, so this was never one example's problem.
 
-	The vectors here are hull's own, and the point is NOT that they are
-	refused -- they are not, and `validate` descending into a run is a
-	different decision (traverse.Check). The point is that the sentence says
-	so.
+	The vectors here are hull's own. The point was not that they are
+	refused, and they were not, until 26.926 made a run its terminator
+	never ended a refusal: the two unterminated lists are refused by name
+	now, which is what hull was owed. The point still is that the sentence
+	says what was not read -- the elements, which `validate` does not
+	descend into here (traverse.Check).
 	"""
 	schema = ROOT / "example" / "sexpr" / "sexpr.situ"
 	vectors = tmp_path / "sexpr.vectors"
@@ -763,8 +765,12 @@ def test_a_delimited_run_of_structs_qualifies_the_verdict(tmp_path: Path,
 		"list escaped_quote    28 61 20 22 78 5C 22 79 22 29\n",
 		encoding="ascii")
 
-	assert main(["verify", str(schema), str(vectors)]) == 0
-	said = capsys.readouterr().out
-	assert "except inside arrays" in said, said
+	assert main(["verify", str(schema), str(vectors)]) == 1
+	captured = capsys.readouterr()
+	said = captured.out + captured.err
+	assert "`unterminated` does not conform" in said, said
+	assert "`nested_unterm` does not conform" in said, said
+	assert "`escaped_quote`" not in said, said
+	assert "2 of 3 vectors do not conform" in said, said
 	assert "`list.items`" in said, said
 	assert "none was read" in said, said

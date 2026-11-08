@@ -201,10 +201,14 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: `gen-checks` emitted a check for bytes nobody had selected, this census
 #: counted the arm nowhere, and a refusal message named a member the
 #: struct does not have. 31 -> 32 is the third of them closing.
+#: And 80 -> 86 when `example/matroska` read Clusters of unknown size
+#: (26.930): `segment_child`, `cluster` and `wide_cluster` choose between
+#: two structs each, by a peeked byte or eight, and none of the six arms has
+#: a size of its own. A moved count in an existing cell.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                80,
 	("no-scalar", "struct", "fixed"):            123,
-	("no-scalar", "struct", "unmeasurable"):     80,
+	("no-scalar", "struct", "unmeasurable"):     86,
 	("no-scalar", "not-struct", ""):              1,
 }
 

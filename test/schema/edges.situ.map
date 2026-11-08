@@ -512,8 +512,8 @@ struct labelled size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanoni
   labelled.code                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   labelled.sequence                      offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
-struct last_line size=2.. access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
-  last_line.head_line                    offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+struct last_line size=0.. access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  last_line.head_line                    offset=AbsoluteStatic(0x00) size=Bounded(0, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   last_line.rest_line                    offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
 
 struct length_table size=2.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
@@ -827,7 +827,7 @@ struct segments size=3..65283 access=Sequential mutate=Shifting address=Unstable
   segments.parts[].body                  offset=FrameStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   segments.after                         offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
-struct separated_arm size=3.. mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
+struct separated_arm size=2.. mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
   separated_arm.pick                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   separated_arm.held                     offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   separated_arm.held.line                offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead

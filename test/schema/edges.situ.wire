@@ -450,7 +450,7 @@ struct labelled size=22
   @0x0010   4         u8         code  big encoding=ascii
   @0x0014   2         u16        sequence  big
 
-struct last_line size=2..
+struct last_line size=0..
   @0x0000   until:0a|end u8         head_line  cap=16
   ~         until:0a|end u8         rest_line
 
@@ -723,9 +723,9 @@ struct segments size=3..65283
   @0x0001   0..65280  segment    parts  sized-by=count
   ~         2         u16        after  big
 
-struct separated_arm size=3..
+struct separated_arm size=2..
   @0x0000   1         u8         pick
-  @0x0001   1..       variant    held
+  @0x0001   0..       variant    held
   ~         1         u8         after
   held switch: pick
   held case 1: line u8
