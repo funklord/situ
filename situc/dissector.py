@@ -1706,9 +1706,8 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# three-byte SQLite varint as one, with the confidence of a decode, and
 	# then declined every member after it. The decline was right and the row
 	# was not: a wrong line is worse than a missing one, which is what
-	# `_uncomputable` exists to say. Walking the continuation bits in Lua
-	# would let the members after it be placed too, and is a capability this
-	# dissector does not have yet rather than a line it should guess.
+	# `_uncomputable` exists to say. The bytes are walked now, by the form's
+	# own rules, so the members after it are placed too (26.932).
 	decl = _one_varint(placement)
 	if decl is not None:
 		name = _lua(_local(struct, placement))
@@ -2629,6 +2628,16 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
 
+	# A pad, to the next multiple of its unit from where the struct starts,
+	# as the body's own pad counts from the start of the struct's tvb. An
+	# arm that is only a pad -- radiotap's `[align = 8]` before `mactime`
+	# -- had no length, so the variant holding it stopped the cursor and no
+	# field after the presence words was shown (26.932).
+	if placement.pad_to:
+		unit = placement.pad_to
+		into = where if base == "0" else f"({where} - {base})"
+		return f"(({unit} - {into} % {unit}) % {unit})"
+
 	decl = _one_varint(placement)
 	if decl is not None:
 		# The parentheses keep the width and drop the value.
@@ -2760,18 +2769,32 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		test  = ("else" if arm.value is None
 		         else f"{'if' if first else 'elseif'} arm == {arm.value} then")
 		shown = bool(_field(resolved, struct, member))
+		# Little-endian as a member outside an arm is: this said `add`
+		# for every arm, so radiotap's `mactime` read byte-reversed in
+		# Wireshark once its arms were reached (26.932).
+		add   = ("add_le" if member.scalar is not None
+		         and member.endian is ast.Endian.LITTLE else "add")
+		# One struct goes to its own dissector, as a nested member does;
+		# it was stepped over, so radiotap's channel was never shown.
+		nested = (not shown and not member.arguments
+		          and nests_one_struct(resolved.structs, member))
 		lines.extend([
 			f"\t{test}" if arm.value is None else f"\t{test}",
 			f"\t\tlocal n = {length}",
 			*([
 				"\t\tif n > 0 and tvb:len() >= at + n then",
-				f"\t\t\tsubtree:add({field}, tvb(at, n))",
+				f"\t\t\tsubtree:{add}({field}, tvb(at, n))",
 				"\t\tend",
 			] if shown else [
-				f"\t\t-- `{member.name}` is a struct: its own Proto shows it,",
-				"\t\t-- so there is no field here to add. The bytes are",
-				"\t\t-- still stepped over, or every member after this one",
-				"\t\t-- would be placed on the wrong ones.",
+				"\t\tif n > 0 and tvb:len() >= at + n then",
+				f"\t\t\tDissector.get(\"{member.type_name}\"):call("
+				"tvb(at, n):tvb(), pinfo, subtree)",
+				"\t\tend",
+			] if nested else [
+				f"\t\t-- `{member.name}` has no field of its own to add",
+				"\t\t-- here. The bytes are still stepped over, or every",
+				"\t\t-- member after this one would be placed on the wrong",
+				"\t\t-- ones.",
 			]),
 			"\t\tat = at + n",
 		])
