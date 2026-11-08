@@ -2035,6 +2035,36 @@ def test_the_dissector_steps_over_what_a_table_sums(tmp_path: Path) -> None:
 	assert ran.stdout.replace(":", "").split() == ["aabbcc", "eeff"]
 
 
+@pytest.mark.skipif(shutil.which("tshark") is None, reason="no tshark")
+def test_wireshark_masks_a_wide_field_over_its_own_bytes(
+		tmp_path: Path) -> None:
+	"""A 36-bit field four bits in is a `uint64` added over five bytes.
+
+	Wireshark masks the forty-bit value those bytes hold, and the mask was
+	shifted for sixty-four, so flac's `total_samples` showed a fragment.
+	`19 ab cd ef 01` holds 1 and then 0x9abcdef01, worked by hand.
+	"""
+	root   = Path(__file__).resolve().parents[2]
+	schema = tmp_path / "wide.situ"
+	schema.write_text("target buffer;\nendian big;\nbit_order msb_first;\n"
+	                  "struct wide [allow_straddle] { u4 a; u36 b; }\n",
+	                  encoding="ascii")
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector",
+	                str(schema), "--out", str(tmp_path)],
+	               check=True, cwd=root, capture_output=True)
+	packet  = bytes.fromhex("19abcdef01")
+	capture = pack_bytes("<IHHiIII", 0xa1b2c3d4, 2, 4, 0, 0, 65535, 147) \
+		+ pack_bytes("<IIII", 0, 0, len(packet), len(packet)) + packet
+	(tmp_path / "wide.pcap").write_bytes(capture)
+	ran = subprocess.run(
+		["tshark", "-X", f"lua_script:{tmp_path / 'wide.lua'}", "-o",
+		 'uat:user_dlts:"User 0 (DLT=147)","situ_wide_wide","0","","0",""',
+		 "-r", str(tmp_path / "wide.pcap"), "-T", "fields",
+		 "-e", "situ.wide.a", "-e", "situ.wide.b"],
+		check=True, capture_output=True, text=True, timeout=60)
+	assert ran.stdout.split() == ["1", str(0x9ABCDEF01)]
+
+
 #: A run held directly in an arm, each way a run ends, and an arm whose struct
 #: sorts after its parent. Reading own members only, the first two called a
 #: span nothing defined and the third an extent not yet bound (26.913).

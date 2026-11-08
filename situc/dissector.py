@@ -52,6 +52,7 @@ from situc.traverse import (
 	extent_parts, fixed_span_bits, is_counted_run, is_recursive, local_name,
 	nest_of,
 	nests_one_struct, occupies_fixed_bytes, own_members, pinned_bytes,
+	span_bits,
 	version_steps, versioned_tail,
 )
 from situc.traverse import messages as messages_of
@@ -820,7 +821,11 @@ def _bitmask(placement: Placement, width: int) -> int | None:
 		return None
 	first = placement.offset_bits // BITS_PER_BYTE
 	skip  = placement.offset_bits - first * BITS_PER_BYTE
-	span  = width
+	# The bytes the field is added over, which is narrower than its type
+	# where no type is that wide: flac's `u36 total_samples` at bit 108 is a
+	# `uint64` added over five bytes, and Wireshark masks the forty-bit
+	# value those hold. Shifting for sixty-four put the mask past it.
+	span  = span_bits(placement) or width
 
 	if placement.bit_order is ast.BitOrder.LSB_FIRST:
 		shift = skip
