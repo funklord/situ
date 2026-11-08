@@ -8323,6 +8323,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.929 The offset cache counts bits
+
+Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
+
 ### 26.928 A pad is part of an element
 
 Moved to `doc/decision/26.928-a-pad-is-part-of-an-element.md`.

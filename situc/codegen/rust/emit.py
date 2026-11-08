@@ -30,6 +30,7 @@ from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import (
+	arm_offset,
 	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.c.names import c_name
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
@@ -8834,13 +8835,10 @@ class Emitter:
 			return None
 
 		if placement.kind == "variant":
-			# The offset in hand reaches the arms only from an extent measured
-			# by cursor, whose depth says so, and only where it is not a
-			# constant: the offset chains hand one too, and an arm has a
-			# `_from` only where that extent calls it.
+			# Where the arms are measured from: `arm_offset` says when.
 			return self._variant_length(struct, placement, depth,
-			                            (running if depth and placement.offset_bits is None
-			                             else None))
+			                            arm_offset(struct, placement,
+			                                       running, depth))
 
 		# A run inside a variant arm has no length here, because the arm
 		# emitter has no walk: an arm is emitted by a family of its own, and

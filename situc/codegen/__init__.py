@@ -633,6 +633,32 @@ def zero_is_no_message(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return False
 
 
+def arm_offset(struct: ResolvedStruct, placement: Placement,
+		running: str | None, depth: str | None) -> str | None:
+	"""The offset a variant's arms are measured from, where one is in hand.
+
+	From an extent measured by cursor, whose depth says so, and only where
+	the variant's offset is not a constant: the offset chains hand one too,
+	and an arm has a `_from` only where that extent calls it.
+
+	And to an arm that is only an `[align]` pad, which starts where the
+	variant does and calls no `_from`. Without it the pad named an offset
+	accessor C never emits for it, and the materialized offsets summed it
+	as nothing before 26.928, placing radiotap's `channel` a byte early.
+	"""
+	if depth and placement.offset_bits is None:
+		return running
+	if running is None:
+		return None
+	members = [member for _arm, member in traverse.arm_members(struct, placement)
+	           if member is not None]
+	if any(member.pad_to is not None for member in members) and all(
+			member.pad_to is not None or member.is_fixed_size
+			for member in members):
+		return running
+	return None
+
+
 def no_baseline_stands(resolved: ResolvedSchema, struct: ResolvedStruct,
 		carried: set[str]) -> bool:
 	"""Whether no zeroed buffer can be made to satisfy this struct.

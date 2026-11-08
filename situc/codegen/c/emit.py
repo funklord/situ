@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis, Value
+from situc.codegen import arm_offset
 from situc.codegen import reserved_policy as reserved_stated
 from situc.codegen import reserved_want
 from situc.codegen.doc import extractable
@@ -10035,13 +10036,10 @@ class Emitter:
 			        f"{self._reaching_call(struct, placement)})")
 
 		if placement.kind == "variant":
-			# The offset in hand reaches the arms only from an extent measured
-			# by cursor, whose depth says so, and only where it is not a
-			# constant: the offset chains hand one too, and an arm has a
-			# `_from` only where that extent calls it.
+			# Where the arms are measured from: `arm_offset` says when.
 			chain = self._variant_length(struct, placement, held, depth,
-			                             (running if depth and placement.offset_bits is None
-			                              else None))
+			                             arm_offset(struct, placement,
+			                                        running, depth))
 			assert chain is not None, "callers check _has_length first"
 			return chain
 

@@ -1201,12 +1201,16 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 		return []		# every offset is already a constant
 
 	steps: list[OffsetStep] = []
+	# In bits, flushed as bytes: a run of `bit` members is fixed and each
+	# is under a byte, so a total kept in bytes summed radiotap's 32 present
+	# bits as nothing and placed every member after them 4 bytes early.
 	pending = 0
 
 	def flush() -> None:
 		nonlocal pending
 		if pending:
-			steps.append(OffsetStep("advance", size=pending))
+			steps.append(OffsetStep("advance",
+			                        size=-(-pending // BITS_PER_BYTE)))
 			pending = 0
 
 	for held in members:
@@ -1219,13 +1223,13 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 			# fixed size (0043). A *static* pad has a fixed `size_bits` and
 			# takes the constant path below; only a dynamic one aligns.
 			if held.offset_bits is not None:
-				pending += held.size_bits // BITS_PER_BYTE
+				pending += held.size_bits
 				continue
 			flush()
 			steps.append(OffsetStep("align", held, size=pad))
 			continue
 		if occupies_fixed_bytes(held):
-			pending += fixed_span_bits(held) // BITS_PER_BYTE
+			pending += fixed_span_bits(held)
 			continue
 		if not has_length(held):
 			return None
