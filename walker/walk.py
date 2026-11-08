@@ -1895,15 +1895,19 @@ def decode_varint(view: View, start: int, max_bytes: int,
 				break
 		raise Refused("the buffer ends mid-varint")
 
+	# Held to 64 bits, as the generated readers' `uint64_t` and `u64` hold
+	# it: a tenth leb128 group lands at bit 63 and keeps one bit there, and
+	# a Python integer kept all seven, so a malformed number read past 2^64
+	# here and in the Python backend and nowhere else (26.942).
 	acc = 0
 	for i, byte in enumerate(data):
 		if big:
 			if terminal_bits == 8 and i + 1 == max_bytes:
-				return i + 1, (acc << 8) | byte
-			acc = (acc << 7) | (byte & 0x7F)
+				return i + 1, ((acc << 8) | byte) & 0xFFFFFFFFFFFFFFFF
+			acc = ((acc << 7) | (byte & 0x7F)) & 0xFFFFFFFFFFFFFFFF
 		else:
 			if i * 7 < 64:
-				acc |= (byte & 0x7F) << (i * 7)
+				acc = (acc | ((byte & 0x7F) << (i * 7))) & 0xFFFFFFFFFFFFFFFF
 		if not byte & 0x80:
 			return i + 1, acc
 	raise Refused("the buffer ends mid-varint")

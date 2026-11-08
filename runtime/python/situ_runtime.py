@@ -927,8 +927,12 @@ def varint_get(data: Buffer, at: int, max_bytes: int) -> tuple[int, int] | None:
 		if at + i >= len(data):
 			return None
 		byte = data[at + i]
+		# Held to 64 bits as the other three hold it: C's `uint64_t` and
+		# Rust's `u64` keep the low bits of a tenth group shifted to 63, and
+		# Python's integer kept all seven, so a malformed ten-byte number
+		# read past 2^64 here and nowhere else (26.942).
 		if shift < 64:
-			acc |= (byte & 0x7F) << shift
+			acc = (acc | ((byte & 0x7F) << shift)) & 0xFFFFFFFFFFFFFFFF
 		shift += 7
 		if not byte & 0x80:
 			return acc, i + 1
@@ -1484,9 +1488,10 @@ def varint_be_get(data: Buffer, at: int, max_bytes: int,
 		byte = data[at + i]
 
 		if terminal_bits == 8 and i + 1 == max_bytes:
-			return (acc << 8) | byte, i + 1
+			return ((acc << 8) | byte) & 0xFFFFFFFFFFFFFFFF, i + 1
 
-		acc = (acc << 7) | (byte & 0x7F)
+		# 64 bits, as `varint_get` above and for its reason.
+		acc = ((acc << 7) | (byte & 0x7F)) & 0xFFFFFFFFFFFFFFFF
 		if not byte & 0x80:
 			return acc, i + 1
 

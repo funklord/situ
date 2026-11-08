@@ -8371,6 +8371,10 @@ Moved to `doc/decision/26.940-the-dissector-renders-bits-from-the-tree.md`.
 
 Moved to `doc/decision/26.941-the-dissector-shows-a-varint-s-number.md`.
 
+### 26.942 A varint's value is held to 64 bits by every reader
+
+Moved to `doc/decision/26.942-a-varint-is-held-to-64-bits.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
