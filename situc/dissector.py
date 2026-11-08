@@ -2422,12 +2422,26 @@ def _read(placement: Placement, base: str) -> str | None:
 			return (f"situ_digits(tvb, {_at(base, first)}, {count},"
 			        f" {placement.radix})")
 
-		if count > 4:
-			return None		# `uint` tops out at four bytes; `uint64` is a
-					# different type and no length field needs it
 		if _host_order(placement):
 			return None		# no answer a capture can give
 		little = "true" if placement.endian is ast.Endian.LITTLE else "false"
+		if count > 4:
+			# `uint` tops out at four bytes, so a wider one is two reads
+			# and arithmetic: exact as a Lua 5.4 integer, and as near as a
+			# float is in 5.2. Matroska's `wide_cluster` switches on a
+			# peeked u64 -- the unknown size, 0x01FFFFFFFFFFFFFF -- and was
+			# declined as reading what this cannot (26.939).
+			if count > 8 or placement.scalar is None \
+					or placement.scalar.signed:
+				return None
+			rest = count - 4
+			if little == "true":
+				return (f"(situ_uint(tvb, {_at(base, first + 4)}, {rest},"
+				        f" true) * 4294967296 + situ_uint(tvb,"
+				        f" {_at(base, first)}, 4, true))")
+			return (f"(situ_uint(tvb, {_at(base, first)}, 4, false) *"
+			        f" {1 << (8 * rest)} + situ_uint(tvb,"
+			        f" {_at(base, first + 4)}, {rest}, false))")
 		return f"situ_uint(tvb, {_at(base, first)}, {count}, {little})"
 
 	# A bit field, and only one that sits inside a single byte: a straddling

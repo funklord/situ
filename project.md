@@ -8359,6 +8359,10 @@ Moved to `doc/decision/26.937-the-dissector-walks-tlv-items.md`.
 
 Moved to `doc/decision/26.938-the-dissector-reads-json.md`.
 
+### 26.939 The dissector reads an unsigned field of up to eight bytes
+
+Moved to `doc/decision/26.939-the-dissector-reads-a-wide-unsigned-field.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
