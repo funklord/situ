@@ -29,7 +29,7 @@ import tempfile
 from functools import lru_cache
 from pathlib import Path
 from struct import pack as pack_bytes
-from typing import NamedTuple
+from typing import AbstractSet, NamedTuple
 
 import pytest
 
@@ -1075,7 +1075,8 @@ class Comparison(NamedTuple):
 
 def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		kinds: dict[str, tuple[str, str]],
-		declined: set[str] | None = None) -> tuple[int, dict[str, int]]:
+		declined: set[str] | None = None,
+		itemized: AbstractSet[str] = frozenset()) -> tuple[int, dict[str, int]]:
 	"""What the dissector showed about `proto` itself: how much, and which of
 	it is an integer a walker's reading can be held against.
 
@@ -1115,6 +1116,7 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 	# two runs, or one member shown twice, and neither has one span.
 	spans: dict[str, tuple[int, int]] = {}
 	broken: set[str] = set()
+	counts: dict[str, int] = {}
 	for abbrev, offset, length, value in rows:
 		if not abbrev.startswith(proto + "."):
 			continue
@@ -1150,6 +1152,8 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 			if end != offset:
 				broken.add(local)
 			spans[local] = (start, offset + length)
+			if abbrev in itemized:
+				counts[local] = counts.get(local, 0) + 1
 			continue
 		if not kind.startswith(("uint", "int")):
 			continue
@@ -1186,6 +1190,13 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 	for local, (start, end) in spans.items():
 		if local not in broken:
 			values[f"{local}#span"] = end - start
+			# And how many, where it was shown item by item: a tlv
+			# region's items or a run of varints, which the walker lists
+			# as `count=`. Only those: a run of records to the frame's end
+			# shows what is left over raw under its own name, and two such
+			# rows can abut, which counted as two items (26.937).
+			if local in counts:
+				values[f"{local}#count"] = counts[local]
 	return total, values
 
 
@@ -1233,6 +1244,12 @@ def _walked(image: Image, proto: str,
 			# its elements were shown as (26.935).
 			if part.startswith("span="):
 				values[f"{parts[0]}#span"] = int(part[5:])
+			# Not beside `span=`: there the count is the run's DECLARED
+			# one, which the frame may not hold, and the span is what was
+			# walked. Alone, it is a tlv region's items found.
+			if part.startswith("count=") \
+					and not any(one.startswith("span=") for one in parts):
+				values[f"{parts[0]}#count"] = int(part[6:])
 		# A selected arm's member, `name ok=1 value=N`, which was dropped
 		# whole: no member of any variant arm was ever compared, and
 		# radiotap's arms read byte-reversed with this test green (26.933).
@@ -1278,6 +1295,16 @@ def compare(schema: Path) -> Comparison:
 	             if traverse.holds_of(entry.placement)
 	             in traverse.recursion_cycle(resolved.structs, struct.name)}
 
+	# Members shown item by item, whose rows are counted (26.937).
+	itemized = {f"{struct.name}.{entry.placement.name}"
+	            for struct in resolved.structs.values()
+	            for entry in struct.entries
+	            if entry.placement.kind == "tlv"
+	            or (entry.placement.varint is not None
+	                and (entry.placement.array_count is not None
+	                     or entry.placement.sized_by is not None
+	                     or entry.placement.size_expr is not None))}
+
 	shown = walked = compared = 0
 	differ: list[str] = []
 
@@ -1297,7 +1324,8 @@ def compare(schema: Path) -> Comparison:
 				packet = dissect_bytes(rng)
 				_, rows = read_back(lua, name, packet)
 
-				rows_total, said = _shown(rows, name, kinds, declined)
+				rows_total, said = _shown(rows, name, kinds, declined,
+				                          itemized)
 				line_total, read = _walked(image, name, packet)
 				shown  += rows_total
 				walked += line_total

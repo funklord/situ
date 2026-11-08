@@ -40,7 +40,7 @@ from situc import __version__
 import re
 
 from situc import ast
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Placement, ValueRule
 from situc.relation import conversation_key
 from situc.names import (
 	UnknownName, expand_calls, lua_spelling, over_fields, render_delimiter,
@@ -144,6 +144,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend(TRIM_HELPER)
 
 	lines.extend(READ_HELPER)
+	if any(entry.placement.kind == "tlv"
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(FIXED_NUMBER_HELPER)
 	lines.extend(_varint_functions(schema, resolved))
 	# After the varints, which an extent reads: an answer cached before them
 	# would be one that could not read a varint.
@@ -392,6 +396,18 @@ SCAN_HELPER = [
 ]
 
 
+FIXED_NUMBER_HELPER = [
+	"-- A tag or a length a tlv region states in whole bytes: its width, and",
+	"-- its value, or 0 where the frame does not hold it.",
+	"local function situ_fixed_number(tvb, at, width, little)",
+	"\tif at + width > tvb:len() then return 0, 0, 0 end",
+	"\tlocal v = situ_uint(tvb, at, width, little)",
+	"\treturn width, v, v",
+	"end",
+	"",
+]
+
+
 STANDS_HELPER = [
 	"-- The longest of a run's terminators standing at `at`, or 0 (26.930).",
 	"--",
@@ -443,14 +459,17 @@ def _varint_function(decl: ast.VarintDecl) -> list[str]:
 	`Refused`, which the caller answers by showing nothing more.
 
 	Arithmetic rather than bit operators, which decision 0021 does not let
-	this file assume. The value is accumulated as a float, so the tests
-	against 2^64 that four forms make are a float compare, and handed back
-	as an integer saturated at `VARINT_SATURATION`.
+	this file assume. Three answers: the width; the value saturated at
+	`VARINT_SATURATION`, for a length; and the value itself, which in Lua
+	5.4 is exact modulo 2^64, for a tag whose low bits are read. Saturated
+	alone, an eight-byte protobuf tag read wire type 0 where its bits say
+	4, and an item was found where the walker stops (26.937). The four
+	forms that refuse a number past 2^64 check that on a float beside it.
 	"""
 	enc  = decl.encoding
 	most = decl.max_bytes
-	sat  = f"{VARINT_SATURATION}.0"
-	done = f"math.floor(math.min(f, {sat}))"
+	sat  = str(VARINT_SATURATION)
+	done = f"(v < 0 or v > {sat}) and {sat} or v, v"
 	body: list[str] = []
 
 	def byte(at: str) -> str:
@@ -459,27 +478,25 @@ def _varint_function(decl: ast.VarintDecl) -> list[str]:
 	if enc is ast.VarintEncoding.QUIC:
 		body = [
 			"\tlocal size = ({1, 2, 4, 8})[math.floor(b0 / 64) + 1]",
-			"\tif size > room then return 0, 0 end",
-			"\tlocal f = (b0 % 64) * 1.0",
+			"\tif size > room then return 0, 0, 0 end",
+			"\tlocal v = b0 % 64",
 			"\tfor i = 1, size - 1 do",
-			f"\t\tf = f * 256 + {byte('at + i')}",
+			f"\t\tv = v * 256 + {byte('at + i')}",
 			"\tend",
 			f"\treturn size, {done}",
 		]
 	elif enc in ast.MARKED:
 		form   = ast.MARKED[enc]
 		widths = ", ".join(str(one) for one in form.widths)
-		order  = ("for i = 1, w do", f"f = f * 256 + {byte('at + i')}") \
-			if form.big else \
-			("for i = w, 1, -1 do", f"f = f * 256 + {byte('at + i')}")
+		loop   = "for i = 1, w do" if form.big else "for i = w, 1, -1 do"
 		body = [
 			f"\tlocal lead = b0 % {form.mask + 1}",
-			f"\tif lead < {form.direct} then return 1, lead end",
+			f"\tif lead < {form.direct} then return 1, lead, lead end",
 			f"\tlocal w = ({{{widths}}})[lead - {form.first} + 1]",
-			"\tif w == nil or w + 1 > room then return 0, 0 end",
-			"\tlocal f = 0.0",
-			f"\t{order[0]}",
-			f"\t\t{order[1]}",
+			"\tif w == nil or w + 1 > room then return 0, 0, 0 end",
+			"\tlocal v = 0",
+			f"\t{loop}",
+			f"\t\tv = v * 256 + {byte('at + i')}",
 			"\tend",
 			f"\treturn w + 1, {done}",
 		]
@@ -495,11 +512,11 @@ def _varint_function(decl: ast.VarintDecl) -> list[str]:
 		body = [
 			"\tlocal size, keep",
 			*chain,
-			"\telse return 0, 0 end",
-			"\tif size > room then return 0, 0 end",
-			f"\tlocal f = ({keep}) * 1.0",
+			"\telse return 0, 0, 0 end",
+			"\tif size > room then return 0, 0, 0 end",
+			f"\tlocal v = {keep}",
 			"\tfor i = 1, size - 1 do",
-			f"\t\tf = f * 256 + {byte('at + i')}",
+			f"\t\tv = v * 256 + {byte('at + i')}",
 			"\tend",
 			f"\treturn size, {done}",
 		]
@@ -510,17 +527,17 @@ def _varint_function(decl: ast.VarintDecl) -> list[str]:
 			chain.append(f"\t{'if' if size == 7 else 'elseif'} b0 >= {low}"
 			             f" then size = {size}")
 		body = [
-			"\tif b0 < 128 then return 1, b0 end",
-			"\tif b0 == 255 then return 0, 0 end",
+			"\tif b0 < 128 then return 1, b0, b0 end",
+			"\tif b0 == 255 then return 0, 0, 0 end",
 			"\tlocal size",
 			*chain,
-			"\telse return 0, 0 end",
-			"\tif size > room then return 0, 0 end",
-			"\tlocal f = (b0 % ({32, 16, 8, 4, 2, 1})[size - 1]) * 1.0",
+			"\telse return 0, 0, 0 end",
+			"\tif size > room then return 0, 0, 0 end",
+			"\tlocal v = b0 % ({32, 16, 8, 4, 2, 1})[size - 1]",
 			"\tfor i = 1, size - 1 do",
 			f"\t\tlocal b = {byte('at + i')}",
-			"\t\tif b < 128 or b >= 192 then return 0, 0 end",
-			"\t\tf = f * 64 + b % 64",
+			"\t\tif b < 128 or b >= 192 then return 0, 0, 0 end",
+			"\t\tv = v * 64 + b % 64",
 			"\tend",
 			f"\treturn size, {done}",
 		]
@@ -528,95 +545,103 @@ def _varint_function(decl: ast.VarintDecl) -> list[str]:
 		prefix = 5 if enc is ast.VarintEncoding.BERTAG else decl.prefix
 		assert prefix is not None
 		mask = (1 << prefix) - 1
-		grow = ("f = f * 128 + b % 128" if enc is ast.VarintEncoding.BERTAG
-		        else "f = f + (b % 128) * scale")
-		add  = "" if enc is ast.VarintEncoding.BERTAG else f"f = f + {mask}; "
+		grow = (["v = v * 128 + b % 128", "f = f * 128 + b % 128"]
+		        if enc is ast.VarintEncoding.BERTAG else
+		        ["v = v + (b % 128) * scale", "f = f + (b % 128) * fscale"])
+		add  = ("" if enc is ast.VarintEncoding.BERTAG
+		        else f"v = v + {mask}; f = f + {mask}; ")
 		body = [
-			f"\tif b0 % {mask + 1} ~= {mask} then return 1, b0 % {mask + 1} end",
-			"\tlocal f, scale = 0.0, 1.0",
+			f"\tif b0 % {mask + 1} ~= {mask} then"
+			f" return 1, b0 % {mask + 1}, b0 % {mask + 1} end",
+			"\tlocal v, scale, f, fscale = 0, 1, 0.0, 1.0",
 			"\tfor i = 1, room - 1 do",
 			f"\t\tlocal b = {byte('at + i')}",
-			f"\t\t{grow}",
-			"\t\tscale = scale * 128",
+			*(f"\t\t{line}" for line in grow),
+			"\t\tscale, fscale = scale * 128, fscale * 128",
 			"\t\tif b < 128 then",
-			f"\t\t\t{add}if f >= {VARINT_CEILING} then return 0, 0 end",
+			f"\t\t\t{add}if f >= {VARINT_CEILING} then return 0, 0, 0 end",
 			f"\t\t\treturn i + 1, {done}",
 			"\t\tend",
-			f"\t\tif f >= {VARINT_CEILING} then return 0, 0 end",
+			f"\t\tif f >= {VARINT_CEILING} then return 0, 0, 0 end",
 			"\tend",
-			"\treturn 0, 0",
+			"\treturn 0, 0, 0",
 		]
 	elif enc is ast.VarintEncoding.LEBPREFIX:
 		prefix = decl.prefix
 		assert prefix is not None
 		body = [
-			f"\tlocal f, scale = (b0 % {1 << prefix}) * 1.0, {1 << prefix}.0",
-			"\tif b0 < 128 then return 1, math.floor(f) end",
+			f"\tlocal v, scale = b0 % {1 << prefix}, {1 << prefix}",
+			f"\tlocal f, fscale = v * 1.0, {1 << prefix}.0",
+			"\tif b0 < 128 then return 1, v, v end",
 			"\tfor i = 1, room - 1 do",
 			f"\t\tlocal b = {byte('at + i')}",
-			"\t\tf = f + (b % 128) * scale",
-			"\t\tscale = scale * 128",
-			f"\t\tif f >= {VARINT_CEILING} then return 0, 0 end",
+			"\t\tv, f = v + (b % 128) * scale, f + (b % 128) * fscale",
+			"\t\tscale, fscale = scale * 128, fscale * 128",
+			f"\t\tif f >= {VARINT_CEILING} then return 0, 0, 0 end",
 			f"\t\tif b < 128 then return i + 1, {done} end",
 			"\tend",
-			"\treturn 0, 0",
+			"\treturn 0, 0, 0",
 		]
 	elif enc is ast.VarintEncoding.SLEB128:
 		# The zigzag form, as every read of a signed varint hands it on.
 		body = [
-			"\tlocal f, scale = 0.0, 1.0",
+			"\tlocal v, scale = 0, 1",
 			"\tfor i = 0, room - 1 do",
 			f"\t\tlocal b = {byte('at + i')}",
 			"\t\tlocal g = b % 128",
-			"\t\tif i == 9 and g ~= 0 and g ~= 127 then return 0, 0 end",
-			"\t\tf = f + g * scale",
+			"\t\tif i == 9 and g ~= 0 and g ~= 127 then return 0, 0, 0 end",
+			"\t\tv = v + g * scale",
 			"\t\tscale = scale * 128",
 			"\t\tif b < 128 then",
-			"\t\t\tif g >= 64 then f = f - scale end",
-			"\t\t\tif f >= 0 then f = f * 2 else f = -f * 2 - 1 end",
+			"\t\t\tif g >= 64 then v = v - scale end",
+			"\t\t\tif v >= 0 then v = v * 2 else v = -v * 2 - 1 end",
 			f"\t\t\treturn i + 1, {done}",
 			"\t\tend",
 			"\tend",
-			"\treturn 0, 0",
+			"\treturn 0, 0, 0",
 		]
 	elif enc is ast.VarintEncoding.BIJECTIVE128:
 		body = [
-			"\tlocal f = 0.0",
+			"\tlocal v, f = 0, 0.0",
 			"\tfor i = 0, room - 1 do",
 			f"\t\tlocal b = {byte('at + i')}",
-			"\t\tif i > 0 then f = (f + 1) * 128 + b % 128 else f = b % 128 * 1.0 end",
-			f"\t\tif f >= {VARINT_CEILING} then return 0, 0 end",
+			"\t\tif i > 0 then",
+			"\t\t\tv, f = (v + 1) * 128 + b % 128, (f + 1) * 128 + b % 128",
+			"\t\telse",
+			"\t\t\tv, f = b % 128, (b % 128) * 1.0",
+			"\t\tend",
+			f"\t\tif f >= {VARINT_CEILING} then return 0, 0, 0 end",
 			f"\t\tif b < 128 then return i + 1, {done} end",
 			"\tend",
-			"\treturn 0, 0",
+			"\treturn 0, 0, 0",
 		]
 	else:
 		big   = enc is ast.VarintEncoding.BE128
 		whole = big and decl.terminal_bits == 8
 		body = [
-			"\tlocal f, scale = 0.0, 1.0",
+			"\tlocal v, scale = 0, 1",
 			"\tfor i = 0, room - 1 do",
 			f"\t\tlocal b = {byte('at + i')}",
-			*([f"\t\tif i + 1 == {most} then return i + 1,"
-			   f" math.floor(math.min(f * 256 + b, {sat})) end"]
+			*([f"\t\tif i + 1 == {most} then v = v * 256 + b;"
+			   f" return i + 1, {done} end"]
 			  if whole else []),
-			("\t\tf = f * 128 + b % 128" if big else
-			 "\t\tf = f + (b % 128) * scale"),
+			("\t\tv = v * 128 + b % 128" if big else
+			 "\t\tv = v + (b % 128) * scale"),
 			*([] if big else ["\t\tscale = scale * 128"]),
 			f"\t\tif b < 128 then return i + 1, {done} end",
 			"\tend",
-			"\treturn 0, 0",
+			"\treturn 0, 0, 0",
 		]
 
 	return [
 		"",
 		f"-- `{decl.name}`, a `{enc.value}` varint: how many bytes it occupies"
 		" at `at`,",
-		"-- and the number they spell. 0 where the frame ends inside it or the",
-		"-- bytes are no number in this form.",
+		"-- the number they spell held to a length, and that number itself.",
+		"-- 0 where the frame ends inside it or the bytes are no number here.",
 		f"local function {_varint_name(decl)}(tvb, at)",
 		f"\tlocal room = math.min(tvb:len() - at, {most})",
-		"\tif room < 1 then return 0, 0 end",
+		"\tif room < 1 then return 0, 0, 0 end",
 		f"\tlocal b0 = {byte('at')}",
 		*body,
 		"end",
@@ -626,9 +651,16 @@ def _varint_function(decl: ast.VarintDecl) -> list[str]:
 def _varint_functions(schema: ast.Schema,
 		resolved: ResolvedSchema) -> list[str]:
 	"""Every varint type a member reads, as Lua."""
-	named = {entry.placement.varint
+	named = {name
 	         for struct in resolved.structs.values()
-	         for entry in struct.entries}
+	         for entry in struct.entries
+	         for name in (entry.placement.varint,
+	                      entry.placement.tlv_tag_varint,
+	                      *(rule.length_type for rule in
+	                        (entry.placement.tlv_grammar.rules
+	                         if entry.placement.tlv_grammar else ())),
+	                      (entry.placement.tlv_grammar.length_type
+	                       if entry.placement.tlv_grammar else None))}
 	_VARINTS.clear()
 	lines: list[str] = []
 	for decl in schema.varints():
@@ -725,6 +757,181 @@ def _varint_run_span(struct: ResolvedStruct,
 		"	end",
 		"	return at - start",
 		"end",
+	]
+
+
+def _lua_expr(node: "ast.Expr | None", names: dict[str, str]) -> str | None:
+	"""A schema expression over `names` as Lua arithmetic, or None.
+
+	For the integer expressions a tlv region decodes its tag with, which
+	read bits: `tag >> 4`, `tag & 0x0F`. Decision 0021 keeps bit operators
+	out of this file, so a shift by a constant is a division or a product,
+	and a mask of contiguous bits is a difference of remainders. Anything
+	else -- a shift by a variable, a mask with holes, `|`, a call -- is
+	None, and the caller declines as it would any length it cannot read.
+	Every operation is parenthesised, so Lua's precedence never decides.
+	"""
+	if isinstance(node, ast.IntLiteral):
+		return str(node.value)
+	if isinstance(node, ast.CharLiteral):
+		return str(node.code)
+	if isinstance(node, ast.NameRef):
+		return names.get(node.name)
+	if isinstance(node, ast.Unary) and node.op == "-":
+		inner = _lua_expr(node.operand, names)
+		return None if inner is None else f"(-{inner})"
+	if not isinstance(node, ast.Binary):
+		return None
+	left = _lua_expr(node.left, names)
+	if left is None:
+		return None
+	right_literal = node.right.value \
+		if isinstance(node.right, ast.IntLiteral) else None
+	if node.op in (">>", "<<"):
+		if right_literal is None or not 0 <= right_literal < 48:
+			return None
+		scale = 1 << right_literal
+		return (f"math.floor({left} / {scale})" if node.op == ">>"
+		        else f"({left} * {scale})")
+	if node.op == "&":
+		if right_literal is None or right_literal < 0:
+			return None
+		low  = (right_literal & -right_literal).bit_length() - 1 \
+			if right_literal else 0
+		high = right_literal.bit_length()
+		if right_literal != ((1 << high) - 1) ^ ((1 << low) - 1):
+			return None		# holes in the mask: not two remainders
+		top = f"({left} % {1 << high})"
+		return top if low == 0 else f"({top} - ({left} % {1 << low}))"
+	right = _lua_expr(node.right, names)
+	if right is None:
+		return None
+	if node.op in ("+", "-", "*", "%"):
+		return f"({left} {node.op} {right})"
+	if node.op == "/":
+		return f"math.floor({left} / {right})"
+	return None
+
+
+def _tlv_number(type_name: str | None, placement: Placement,
+		at: str) -> str | None:
+	"""Reading a tag or a length a tlv region states, as `width, value`.
+
+	A varint type through its own function, and a fixed unsigned scalar of
+	whole bytes in the region's byte order. None where the order is the
+	message's own (an `endian_marker`), which this does not follow.
+	"""
+	if type_name in _VARINTS:
+		return f"{_varint_name(_VARINTS[type_name])}(tvb, {at})"
+	bits = {"u8": 8, "u16": 16, "u24": 24, "u32": 32}.get(type_name or "")
+	if bits is None or placement.marker is not None or _host_order(placement):
+		return None
+	little = "true" if placement.endian is ast.Endian.LITTLE else "false"
+	width  = bits // BITS_PER_BYTE
+	return (f"situ_fixed_number(tvb, {at}, {width}, {little})")
+
+
+def _tlv(struct: ResolvedStruct, placement: Placement, field: str,
+		seek: list[str]) -> list[str] | None:
+	"""A tlv region's items, walked to the end of the frame (26.937).
+
+	`walk._tlv_walk` in Lua: read an item's tag, decode the parts, take the
+	rule the selector names, and the rule says how far the value reaches.
+	Each item is a row. Where the walker stops -- a tag or a length the
+	frame cuts, a value past the frame, a selector no rule answers -- so
+	does this, and nothing of that item is shown. None where the grammar
+	says something this file cannot render, and the caller declines.
+	"""
+	grammar = placement.tlv_grammar
+	if grammar is None or not grammar.walkable:
+		return None
+	tag_type = placement.tlv_tag_varint or (
+		f"u{placement.tlv_tag_bits}" if placement.tlv_tag_bits else None)
+	tag = _tlv_number(tag_type, placement, "at")
+	if tag is None:
+		return None
+
+	names = {"tag": "tag"}
+	parts: list[str] = []
+	for part in grammar.tag_decode:
+		value = _lua_expr(part.value, names)
+		if value is None:
+			return None
+		names[part.name] = f"{_lua(part.name)}_part"
+		parts.append(f"\t\tlocal {_lua(part.name)}_part = {value}")
+
+	def rule_lines(rule: "ValueRule | None") -> list[str] | None:
+		if rule is None or rule.kind == "error":
+			return ["at = start", "break"]
+		if rule.kind == "fixed":
+			return [f"size = {rule.size or 0}"]
+		if rule.kind == "computed":
+			value = _lua_expr(rule.value, names)
+			if value is None:
+				return None
+			# Clamped at both ends, as the four backends clamp (14.2b).
+			return [f"size = math.max(0, {value})"]
+		if rule.kind == "self_delimiting":
+			# A value that is a varint, read with the TAG's parameters as
+			# the walker and C read it; one the frame cuts is no item.
+			return [f"size = ({tag})",
+			        "if size == 0 then at = start; break end"]
+		if rule.kind == "prefixed":
+			length = _tlv_number(rule.length_type, placement, "at")
+			if length is None:
+				return None
+			return [f"local length_w, length = {length}",
+			        "if length_w == 0 then at = start; break end",
+			        "at = at + length_w",
+			        "size = length"]
+		return None
+
+	if grammar.rules:
+		selector = names.get(grammar.selector or "")
+		if selector is None:
+			return None
+		chain: list[str] = []
+		labelled = [rule for rule in grammar.rules if rule.label is not None]
+		default  = next((rule for rule in grammar.rules if rule.label is None),
+		                None)
+		for index, rule in enumerate(labelled):
+			body = rule_lines(rule)
+			if body is None:
+				return None
+			chain.append(f"\t\t{'if' if index == 0 else 'elseif'}"
+			             f" {selector} == {rule.label} then")
+			chain.extend(f"\t\t\t{line}" for line in body)
+		body = rule_lines(default)
+		if body is None:
+			return None
+		if chain:
+			chain.append("\t\telse")
+			chain.extend(f"\t\t\t{line}" for line in body)
+			chain.append("\t\tend")
+		else:
+			chain.extend(f"\t\t{line}" for line in body)
+	else:
+		body = rule_lines(ValueRule(None, "prefixed",
+		                            length_type=grammar.length_type))
+		if body is None:
+			return None
+		chain = [f"\t\t{line}" for line in body]
+
+	return [
+		f"\t-- {placement.path}: tag-length-value items, to the end of the"
+		" frame", *seek,
+		"\twhile at < tvb:len() do",
+		"\t\tlocal start = at",
+		f"\t\tlocal tag_w, _, tag = {tag}",
+		"\t\tif tag_w == 0 then break end",
+		"\t\tat = at + tag_w",
+		*parts,
+		"\t\tlocal size = 0",
+		*chain,
+		"\t\tif size > tvb:len() - at then at = start; break end",
+		"\t\tat = at + size",
+		f"\t\tsubtree:add({field}, tvb(start, at - start))",
+		"\tend",
 	]
 
 
@@ -1064,7 +1271,10 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `bytes` rather than a number: a varint's bytes are not the value it
 	# spells, and a region's are the transform's output. Showing them as an
 	# integer would be a number nobody wrote.
-	if placement.varint is not None or placement.kind in ("coded", "sealed"):
+	#
+	# A tlv region too, whose items are each a row of it (26.937).
+	if placement.varint is not None \
+			or placement.kind in ("coded", "sealed", "tlv"):
 		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
@@ -1794,6 +2004,14 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		]
 	if placement.varint is not None:
 		return _varint_run(resolved, struct, placement, field, seek)
+
+	if placement.kind == "tlv":
+		walked = _tlv(struct, placement, field, seek)
+		if walked is None:
+			return _uncomputable(placement.path, "tag-length-value items"
+			                     " whose grammar this dissector cannot"
+			                     " render")
+		return walked
 
 	if placement.kind == "variant":
 		return _variant(resolved, struct, placement, seek)

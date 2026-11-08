@@ -8351,6 +8351,10 @@ Moved to `doc/decision/26.935-the-dissector-walks-a-run-of-varints.md`.
 
 Moved to `doc/decision/26.936-the-dissector-follows-a-recursion.md`.
 
+### 26.937 The dissector walks a tlv region's items
+
+Moved to `doc/decision/26.937-the-dissector-walks-tlv-items.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
