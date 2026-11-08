@@ -48,7 +48,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [quic](quic/) | An Initial packet and HTTP/3's frames: an integer with no continuation bit, whose first byte is all that decides its length, sizing nearly everything. |
 | [x509](x509/) | A certificate OpenSSL wrote: DER's length, a number whose width its first byte chooses, in a header of its own that sizes the body. |
 | [wasm](wasm/) | A module clang wrote: sizes padded to five bytes for a linker, and signed LEB128 in its constants, where the sign is bit six of the last group. |
-| [matroska](matroska/) | What ffmpeg writes down a pipe: an ID that keeps the bit saying its width, a size that drops it, and a Segment of unknown size. |
+| [matroska](matroska/) | What ffmpeg writes down a pipe and GStreamer streams: an ID that keeps the bit saying its width, a size that drops it, a Segment of unknown size, and Clusters of unknown size that end before the next one. |
 | [flac](flac/) | Frame numbers spelled as code points, read at the offsets `flac -a` gives, in a header of bit fields under a CRC-8. |
 | [git](git/) | A pack's entries as `git verify-pack` lists them: a size sharing its first byte with a type, and a delta offset no number spells twice. |
 | [riff](riff/) | A WAV ffmpeg wrote, with a chunk of odd size: padding the data decides, in an element of a run, which the next chunk has to start past. |

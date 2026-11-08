@@ -544,31 +544,11 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved,
 	name = getattr(member, "name", "a reserved member")
 
 	if member.until is not None and len(member.until.delimiters) > 1:
-		# Alternation is built for the construct that needed it: a scalar
-		# whose end is whichever of a set comes first, which is a byte run
-		# or a text number. The other two delimited constructs ask a
-		# different question of the delimiter and are refused rather than
-		# emitted half-converted.
-		#
-		# A RECORD RUN checks the terminator only where an element would
-		# start (8.6.3), so "any of these" has to mean "any of these, at an
-		# element boundary" -- describable, and a different walk from the
-		# one this built. A CODED region's delimiter frames the codec's
-		# output, and which alternative ended it decides how many bytes the
-		# decoder is given.
-		if member.array is not None and member.array.size is None \
-				and not is_scalar_name(member.type_ref.name):
-			raise error(
-				f"`{name}` is a run of records with several delimiters",
-				member.until.span,
-				label = "more than one alternative",
-				notes = ["a run of records checks its terminator only where "
-				         "an element would start, so alternation there is a "
-				         "different walk from the one a byte run does",
-				         "alternation is for a member that ends at whichever "
-				         "of a set of bytes comes first -- a scalar, not a "
-				         "run of them"],
-			)
+		# A RUN OF RECORDS checks its terminators only where an element would
+		# start (8.6.3), so "any of these" means any of these at an element
+		# boundary: a Matroska Cluster of unknown size ends before whichever
+		# of the Segment's own IDs comes next. Refused until 26.930 as a
+		# different walk from a byte run's, which it is, and now built.
 		# The member's ATTRIBUTES, not `until.is_relaxed`: the escaping forms
 		# are written `[quoted = ...]` beside the member and `layout` reads
 		# them from there, so the AST node's own fields are never set and a

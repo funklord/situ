@@ -31,7 +31,7 @@ from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import (
-	arm_offset,
+	arm_offset, record_open, record_simple,
 	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.c.names import (
 	KEYWORDS, RUNTIME_GUARD, bare_name, c_name)
@@ -2146,6 +2146,68 @@ class Emitter:
 		]
 		return "\n".join(lines)
 
+	def _record_names(self, placement: Placement) -> list[str]:
+		"""What `_delimiter_decl` calls each terminator of a run of records."""
+		array = self._delimiter_array(placement)
+		if len(placement.delimiters) == 1:
+			return [array]
+		return [f"{array}_{i}" for i in range(len(placement.delimiters))]
+
+	def _record_decl(self, placement: Placement, indent: str) -> str:
+		"""The terminators a run of records compares, one array each.
+
+		Not `_delimiter_decl`'s table and lengths, which `situ_scan_any`
+		takes and a record walk does not: unused, `-Werror` refuses them.
+		"""
+		if len(placement.delimiters) == 1:
+			return self._delimiter_decl(placement, indent)
+		array = self._delimiter_array(placement)
+		return "\n".join(
+			f"{indent}static constexpr std::uint8_t {array}_{i}[] = {{"
+			+ ", ".join(f"0x{byte:02X}" for byte in one) + "};"
+			for i, one in enumerate(placement.delimiters))
+
+	def _record_guard(self, placement: Placement, at: str = "at") -> str:
+		"""How far a record run's walk may go: see C's `_record_prologue`."""
+		delims = tuple(placement.delimiters)
+		if record_simple(delims, record_open(placement)):
+			return f"{at} + {len(delims[0])}u <= raw_.limit"
+		return f"{at} < raw_.limit"
+
+	def _record_match(self, placement: Placement, at: str = "at",
+			only: int | None = None) -> str:
+		"""Whether one of the terminators stands at `at`, or the `only`th."""
+		delims = tuple(placement.delimiters)
+		names  = self._record_names(placement)
+		simple = record_simple(delims, record_open(placement))
+		if simple and only is None:
+			width = len(delims[0])
+			return (f"situ_scan(situ_base(raw_) + {at}, {width}u, {names[0]},"
+			        f" {width}u) == 0u")
+		chosen = range(len(delims)) if only is None else [only]
+		return "\n\t\t\t    || ".join(
+			f"({at} + {len(delims[i])}u <= raw_.limit && situ_scan("
+			f"situ_base(raw_) + {at}, {len(delims[i])}u, {names[i]},"
+			f" {len(delims[i])}u) == 0u)" for i in chosen)
+
+	def _record_took(self, placement: Placement, indent: str,
+			at: str = "at") -> list[str]:
+		"""Step past the terminator the walk stopped at: see C's."""
+		if not placement.delimiter_consumed:
+			return []
+		delims = tuple(placement.delimiters)
+		if record_simple(delims, record_open(placement)):
+			width = len(delims[0])
+			return [f"{indent}if ({at} + {width}u <= raw_.limit) {{",
+			        f"{indent}\t{at} += {width}u;",
+			        f"{indent}}}"]
+		lines: list[str] = []
+		for i, one in enumerate(delims):
+			lines += [f"{indent}{'} else ' if i else ''}if "
+			          f"({self._record_match(placement, at, i)}) {{",
+			          f"{indent}\t{at} += {len(one)}u;"]
+		return [*lines, f"{indent}}}"]
+
 	def _scan_expression(self, placement: Placement, data: str,
 			limit: str, took: str | None = None) -> str:
 		delim = placement.delimiter
@@ -2801,14 +2863,13 @@ class Emitter:
 			        " walked. */"]
 
 		name  = bare_name(local_name(struct, placement))
-		delim = placement.delimiter
+		delims = tuple(placement.delimiters)
 		inner = self._struct_class(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t/* {placement.path}: this backend cannot resolve"
 			        " where the run starts. */"]
 
-		array = self._delimiter_array(placement)
 
 		# A run of a RECURSIVE record needs the depth counter the other two
 		# run emitters already carry (26.428). `_repeat_while` and
@@ -2820,13 +2881,12 @@ class Emitter:
 
 		def walk_from(base: str, depth: str | None = None) -> list[str]:
 			return [
-			self._delimiter_decl(placement, "\t\t"),
+			self._record_decl(placement, "\t\t"),
 			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
 			"",
-			f"\t\twhile (at + {len(delim)}u <= raw_.limit) {{",
-			f"\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u, {array},"
-			f" {len(delim)}u) == 0u) {{",
+			f"\t\twhile ({self._record_guard(placement)}) {{",
+			f"\t\t\tif ({self._record_match(placement)}) {{",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			"",
@@ -2862,11 +2922,11 @@ class Emitter:
 			"\t\t}",
 			"\t\t(void)n;",
 			"",
-			"\t\t/* The terminator belongs to this member. Where the run ran",
-			"\t\t * out of buffer instead there is none to count. */",
-			f"\t\tif (at + {len(delim)}u <= raw_.limit) {{",
-			f"\t\t\tat += {len(delim)}u;",
-			"\t\t}",
+			*(["\t\t/* The terminator belongs to this member. Where the run ran",
+			   "\t\t * out of buffer instead there is none to count. */"]
+			  if placement.delimiter_consumed else
+			  ["\t\t/* `before`: the terminator is the next member's. */"]),
+			*self._record_took(placement, "\t\t"),
 			"\t\treturn at - start;",
 			"\t}",
 		]
@@ -2892,7 +2952,7 @@ class Emitter:
 			*ended,
 			"",
 			f"\t/* {placement.path} is a run of `{placement.type_name}`, ending",
-			f"\t * where {render_delimiter(delim)} stands in for one. Walked, not",
+			f"\t * where {' or '.join(render_delimiter(one) for one in delims)} stands in for one. Walked, not",
 			"\t * indexed: there is nowhere to keep a table of offsets. */",
 			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
 			"\t{",
@@ -4633,8 +4693,7 @@ class Emitter:
 		if ((ended and not must_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
-				or (member.repeat_while is None
-				    and len(member.delimiters) != 1)
+				or (member.repeat_while is None and not member.delimiters)
 				or is_recursive(self.resolved.structs, element.name)
 				or self._no_element_extent(element)):
 			return None
@@ -4653,22 +4712,17 @@ class Emitter:
 				"\t\t\t}",
 			]
 		else:
-			delim = member.delimiter
-			array = self._delimiter_array(member)
-			head  = [self._delimiter_decl(member, "\t\t\t")]
-			loop  = f"\t\t\twhile (at + {len(delim)}u <= raw_.limit) {{"
+			head  = [self._record_decl(member, "\t\t\t")]
+			loop  = f"\t\t\twhile ({self._record_guard(member)}) {{"
 			scan  = [
-				f"\t\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u,"
-				f" {array}, {len(delim)}u) == 0u) {{",
+				f"\t\t\t\tif ({self._record_match(member)}) {{",
 				*(["\t\t\t\t\tfound = true;"] if ended else []),
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 			]
 			after = [
 				"\t\t\t}",
-				f"\t\t\tif (at + {len(delim)}u <= raw_.limit) {{",
-				f"\t\t\t\tat += {len(delim)}u;",
-				"\t\t\t}",
+				*self._record_took(member, "\t\t\t"),
 			]
 		return [
 			*head,
@@ -11535,7 +11589,6 @@ class Emitter:
 				# the run hands it (0068).
 				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
-				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
 				    and self._no_element_extent(element))):
 			return []
@@ -11551,13 +11604,10 @@ class Emitter:
 			        "\t\t\t\t\tbreak;",
 			        "\t\t\t\t}"]
 		elif placement.delimiters:
-			delim = placement.delimiter
-			array = self._delimiter_array(placement)
-			head  = [self._delimiter_decl(placement, "\t\t\t"),
-			         f"\t\t\twhile (at + {len(delim)}u <= raw_.limit) {{"]
+			head  = [self._record_decl(placement, "\t\t\t"),
+			         f"\t\t\twhile ({self._record_guard(placement)}) {{"]
 			scan  = [
-				f"\t\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u,"
-				f" {array}, {len(delim)}u) == 0u) {{",
+				f"\t\t\t\tif ({self._record_match(placement)}) {{",
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 			]

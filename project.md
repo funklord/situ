@@ -8323,6 +8323,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.930 A run ends before any of its terminators
+
+Moved to `doc/decision/26.930-a-run-ends-before-any-of-its-terminators.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

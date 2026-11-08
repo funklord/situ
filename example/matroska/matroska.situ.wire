@@ -22,11 +22,31 @@ varint element_id : ebml_id bits=32 bytes=4
 
 varint element_size : ebml bits=56 bytes=8
 
+struct cluster size=2..
+  @0x0000   1..4      element_id id  varint=element_id must_eq=524531317
+  ~         1         u8         width  peek
+  ~         1..       variant    body
+  body switch: width
+  body case 1: eight wide_cluster
+  body case default: sized sized_cluster
+  body switch: written
+  body case 144115188075855871: open
+  body case default: sized
+
 struct document size=4..
   @0x0000   2..72057594037927947 ebml_header header  big
   ~         1..4      element_id segment  varint=element_id must_eq=408125543
   ~         1..8      element_size segment_size  varint=element_size
-  ~         0..       element    children  sized-by=remaining
+  ~         0..       segment_child children  sized-by=remaining
+  body switch: lead
+  body case 31: cluster
+  body case default: other
+  body switch: width
+  body case 1: eight
+  body case default: sized
+  body switch: written
+  body case 144115188075855871: open
+  body case default: sized
 
 struct ebml_header size=2..72057594037927947
   @0x0000   1..4      element_id id  varint=element_id must_eq=440786851
@@ -40,3 +60,31 @@ struct element size=2..72057594037927947
 
 struct elements size=0..
   @0x0000   0..       element    children  sized-by=remaining
+
+struct open_cluster size=5..
+  @0x0000   1..8      element_size size  varint=element_size must_eq=72057594037927935
+  ~         before:1f43b675|1c53bb6b|1254c367|1941a469|1043a770|114d9b74|1549a966|1654ae6b|1a45dfa3|end element    children  big
+
+struct segment_child size=2..
+  @0x0000   1         u8         lead  peek
+  @0x0000   2..       variant    body
+  body switch: lead
+  body case 31: cluster cluster
+  body case default: other element
+  body switch: width
+  body case 1: eight
+  body case default: sized
+  body switch: written
+  body case 144115188075855871: open
+  body case default: sized
+
+struct sized_cluster size=1..72057594037927943
+  @0x0000   1..8      element_size size  varint=element_size
+  ~         0..72057594037927935 u8         data  sized-by=size holds=elements
+
+struct wide_cluster size=8..
+  @0x0000   8         u64        written  big peek
+  @0x0000   1..       variant    body
+  body switch: written
+  body case 144115188075855871: open open_cluster
+  body case default: sized sized_cluster

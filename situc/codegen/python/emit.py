@@ -30,7 +30,7 @@ from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import (
-	arm_offset,
+	arm_offset, record_open, record_simple,
 	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
 from situc.codegen.c.names import c_name
@@ -6033,6 +6033,45 @@ class Emitter:
 			"\t\t\tfor i in range(len(starts) - 1)]",
 		]
 
+	@staticmethod
+	def _record_guard(at: str, delims: tuple[bytes, ...],
+			simple: bool) -> str:
+		"""How far a record run's walk may go: see C's `_record_prologue`."""
+		return (f"{at} + {len(delims[0])} <= self._len" if simple
+		        else f"{at} < self._len")
+
+	@staticmethod
+	def _record_match(at: str, delims: tuple[bytes, ...],
+			simple: bool) -> str:
+		"""Whether one of the terminators stands at `at`."""
+		def one(delim: bytes, guarded: bool) -> str:
+			test = (f"bytes(self._msg.buffer[self._at + {at}:"
+			        f"self._at + {at} + {len(delim)}]) == {delim!r}")
+			return (f"({at} + {len(delim)} <= self._len and {test})"
+			        if guarded else test)
+		if simple:
+			return one(delims[0], False)
+		return " or ".join(one(delim, True) for delim in delims)
+
+	@staticmethod
+	def _record_took(at: str, delims: tuple[bytes, ...], consumed: bool,
+			simple: bool) -> str:
+		"""What the terminator the walk stopped at adds, as an expression.
+
+		Nothing for `before`, whose terminator is the next member's, and
+		the first alternative standing there otherwise, as the walkers take
+		it (26.930).
+		"""
+		if not consumed:
+			return "0"
+		if simple:
+			width = len(delims[0])
+			return f"({width} if {at} + {width} <= self._len else 0)"
+		return ("next((len(_one) for _one in " + repr(delims)
+		        + f" if {at} + len(_one) <= self._len and bytes("
+		        f"self._msg.buffer[self._at + {at}:self._at + {at}"
+		        " + len(_one)]) == _one), 0)")
+
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element."""
@@ -6048,9 +6087,10 @@ class Emitter:
 		# `_extent_at` called a `_span_at` nothing defined.
 		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 
-		name  = py_name(local_name(struct, placement))
-		delim = placement.delimiter
-		inner = py_name(placement.type_name or "")
+		name   = py_name(local_name(struct, placement))
+		delims = tuple(placement.delimiters)
+		simple = record_simple(delims, record_open(placement))
+		inner  = py_name(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
@@ -6075,9 +6115,8 @@ class Emitter:
 			"\t\tat     = start",
 			"\t\tstarts: _situ_list[int] = []",
 			"",
-			f"\t\twhile at + {len(delim)} <= self._len:",
-			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
-			f"self._at + at + {len(delim)}]) == {delim!r}:",
+			f"\t\twhile {self._record_guard('at', delims, simple)}:",
+			f"\t\t\tif {self._record_match('at', delims, simple)}:",
 			"\t\t\t\tbreak",
 			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg, self._at + at, self._len - at)",
 			("\t\t\tsize    = _element._extent" if not deep else
@@ -6087,8 +6126,12 @@ class Emitter:
 			"\t\t\tstarts.append(at)",
 			"\t\t\tat += size",
 			"",
-			f"\t\tstarts.append(at + ({len(delim)} if at + {len(delim)}"
-			" <= self._len else 0))",
+			(f"\t\tstarts.append(at + ({len(delims[0])} if at + {len(delims[0])}"
+			 " <= self._len else 0))"
+			 if simple and placement.delimiter_consumed else
+			 "\t\tstarts.append(at + "
+			 + self._record_took("at", delims, placement.delimiter_consumed,
+			                     simple) + ")"),
 			"\t\treturn starts",
 		]
 		spans = [] if not deep or self._cursor(struct) is None else [
@@ -6104,9 +6147,8 @@ class Emitter:
 			" that",
 			'\t\truns out first was cut short, as for any delimited member."""',
 			f"\t\tat = {start}",
-			f"\t\twhile at + {len(delim)} <= self._len:",
-			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
-			f"self._at + at + {len(delim)}]) == {delim!r}:",
+			f"\t\twhile {self._record_guard('at', delims, simple)}:",
+			f"\t\t\tif {self._record_match('at', delims, simple)}:",
 			"\t\t\t\treturn True",
 			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg,"
 			" self._at + at, self._len - at)",
@@ -7754,7 +7796,6 @@ class Emitter:
 				# the run hands it (0068).
 				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
-				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
 				    and self._no_element_extent(element))):
 			return []
@@ -7775,11 +7816,11 @@ class Emitter:
 			head = [f"\t\twhile {at} < self._len{cap}:"]
 			step = [*step, f"\t\t\tif not ({cond}):", "\t\t\t\tbreak"]
 		elif placement.delimiters:
-			delim = placement.delimiter
-			head  = [f"\t\twhile {at} + {len(delim)} <= self._len:"]
-			scan  = [
-				f"\t\t\tif bytes(self._msg.buffer[self._at + {at}:"
-				f"self._at + {at} + {len(delim)}]) == {delim!r}:",
+			delims = tuple(placement.delimiters)
+			simple = record_simple(delims, record_open(placement))
+			head   = [f"\t\twhile {self._record_guard(at, delims, simple)}:"]
+			scan   = [
+				f"\t\t\tif {self._record_match(at, delims, simple)}:",
 				"\t\t\t\tbreak",
 			]
 		elif placement.sized_by == "remaining":
@@ -7822,8 +7863,7 @@ class Emitter:
 		if ((ended and not must_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
-				or (member.repeat_while is None
-				    and len(member.delimiters) != 1)
+				or (member.repeat_while is None and not member.delimiters)
 				or is_recursive(self.resolved.structs, element.name)
 				or self._no_element_extent(element)):
 			return None
@@ -7847,11 +7887,11 @@ class Emitter:
 				"\t\t\t\t\tbreak",
 			]
 		else:
-			delim = member.delimiter
-			loop  = f"\t\t\twhile {at} + {len(delim)} <= self._len:"
-			scan  = [
-				f"\t\t\t\tif bytes(self._msg.buffer[self._at + {at}:"
-				f"self._at + {at} + {len(delim)}]) == {delim!r}:",
+			delims = tuple(member.delimiters)
+			simple = record_simple(delims, record_open(member))
+			loop   = f"\t\t\twhile {self._record_guard(at, delims, simple)}:"
+			scan   = [
+				f"\t\t\t\tif {self._record_match(at, delims, simple)}:",
 				*([f"\t\t\t\t\t{at}_ended = True"] if ended else []),
 				"\t\t\t\t\tbreak",
 			]
@@ -7876,10 +7916,15 @@ class Emitter:
 			   "\t\t\t\traise ConstraintError(",
 			   f'\t\t\t\t\t"{member.path} does not end:'
 			   ' the frame stops first")'] if ended else [
-				*([] if member.repeat_while is not None else [
-					f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
-					f"\t\t\t\t{at} += {len(member.delimiter)}",
-				]),
+				*([] if member.repeat_while is not None else
+				  [f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
+				   f"\t\t\t\t{at} += {len(member.delimiter)}"]
+				  if record_simple(tuple(member.delimiters),
+				                   record_open(member))
+				  and member.delimiter_consumed else
+				  [f"\t\t\t{at} += "
+				   + self._record_took(at, tuple(member.delimiters),
+				                       member.delimiter_consumed, False)]),
 				f"\t\t\tif self._len - {at} < {tail}:",
 				f"\t\t\t\traise BoundsError({why})",
 			]),

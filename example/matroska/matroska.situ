@@ -11,9 +11,10 @@
 // so `document` says what it means: the Segment runs to the end. A file with a
 // known Segment reads the same way, with one Segment.
 //
-// WHICH SUBSET. One Segment, and elements of known size inside it. A Cluster of
-// unknown size ends at the next element of its own level, which is a question
-// about what an ID means rather than about its bytes.
+// WHICH SUBSET. One Segment. A Cluster's size may be unknown too, as GStreamer's
+// `streamable` muxer and a browser's MediaRecorder write it, and then the
+// Cluster ends before the next element of the Segment's own level: before one of
+// their IDs, which are bytes. Every other element has a known size.
 
 target buffer;
 endian big;
@@ -38,11 +39,57 @@ struct ebml_header {
 	u8           fields[size] [holds = elements];
 }
 
+// A Cluster of unknown size: eight bytes of all ones, the only width a writer
+// that cannot seek back uses. Its children are elements, each of known size,
+// up to the ID of something at the Segment's level, which is the next member's
+// and not this one's -- or to the end of the file.
+struct open_cluster {
+	element_size size [must_eq = 0xFFFFFFFFFFFFFF];
+	element      children[] before "\x1F\x43\xB6\x75" | "\x1C\x53\xBB\x6B"
+	                      | "\x12\x54\xC3\x67" | "\x19\x41\xA4\x69"
+	                      | "\x10\x43\xA7\x70" | "\x11\x4D\x9B\x74"
+	                      | "\x15\x49\xA9\x66" | "\x16\x54\xAE\x6B"
+	                      | "\x1A\x45\xDF\xA3" | end;
+}
+
+struct sized_cluster {
+	element_size size;
+	u8           data[size] [holds = elements];
+}
+
+// A size whose first byte is 0x01 is eight bytes long, so all eight are there
+// to peek at once the first is.
+struct wide_cluster {
+	peek u64 written;
+	variant body switch (written) {
+		case 0x01FFFFFFFFFFFFFF: open_cluster  open;
+		default:                 sized_cluster sized;
+	}
+}
+
+struct cluster {
+	element_id id [must_eq = 0x1F43B675];
+	peek u8    width;
+	variant body switch (width) {
+		case 0x01: wide_cluster  eight;
+		default:   sized_cluster sized;
+	}
+}
+
+// Of the Segment's own elements only a Cluster's ID begins 0x1F.
+struct segment_child {
+	peek u8 lead;
+	variant body switch (lead) {
+		case 0x1F: cluster cluster;
+		default:   element other;
+	}
+}
+
 struct document {
-	ebml_header  header;
-	element_id   segment [must_eq = 0x18538067];
-	element_size segment_size;
-	element      children[remaining];
+	ebml_header   header;
+	element_id    segment [must_eq = 0x18538067];
+	element_size  segment_size;
+	segment_child children[remaining];
 }
 
 // An element opens with its ID, which is how a reader knows it.

@@ -2522,7 +2522,7 @@ def _delimited(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# confident wrong line `_uncomputable` exists to prevent.
 		return [
 			f"\t-- {placement.path}: a run of {placement.type_name} to "
-			f"{render_delimiter(delim)}.",
+			f"{' or '.join(render_delimiter(one) for one in placement.delimiters)}.",
 			"\t-- Not unrolled: the terminator ends the run rather than each",
 			"\t-- element, so where it stops is a walk this does not do.",
 			_LOST,

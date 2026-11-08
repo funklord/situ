@@ -30,7 +30,7 @@ from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import (
-	arm_offset,
+	arm_offset, record_open, record_simple,
 	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.c.names import c_name
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
@@ -5664,6 +5664,54 @@ class Emitter:
 			*self._run_index(struct, placement, walk, cond, inner),
 		]
 
+	@staticmethod
+	def _record_guard(placement: Placement, at: str = "at") -> str:
+		"""How far a record run's walk may go: see C's `_record_prologue`."""
+		delims = tuple(placement.delimiters)
+		if record_simple(delims, record_open(placement)):
+			return f"{at} + {len(delims[0])} <= self.bytes.len()"
+		return f"{at} < self.bytes.len()"
+
+	@staticmethod
+	def _record_match(placement: Placement, at: str = "at",
+			only: int | None = None) -> str:
+		"""Whether one of the terminators stands at `at`, or the `only`th.
+
+		Parenthesised only inside an `||`: rustc's `unused_parens` refuses a
+		condition wrapped whole, and the build denies warnings.
+		"""
+		delims = tuple(placement.delimiters)
+		def spelt(delim: bytes) -> str:
+			return "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
+		def test(delim: bytes) -> str:
+			return f"&self.bytes[{at}..{at} + {len(delim)}] == {spelt(delim)}"
+		if record_simple(delims, record_open(placement)) and only is None:
+			return test(delims[0])
+		chosen = range(len(delims)) if only is None else [only]
+		guarded = [f"{at} + {len(delims[i])} <= self.bytes.len() && "
+		           f"{test(delims[i])}" for i in chosen]
+		if len(guarded) == 1:
+			return guarded[0]
+		return "\n\t\t\t\t|| ".join(f"({one})" for one in guarded)
+
+	def _record_took(self, placement: Placement, indent: str,
+			at: str = "at") -> list[str]:
+		"""Step past the terminator the walk stopped at: see C's."""
+		if not placement.delimiter_consumed:
+			return []
+		delims = tuple(placement.delimiters)
+		if record_simple(delims, record_open(placement)):
+			width = len(delims[0])
+			return [f"{indent}if {at} + {width} <= self.bytes.len() {{",
+			        f"{indent}\t{at} += {width};",
+			        f"{indent}}}"]
+		lines: list[str] = []
+		for i, one in enumerate(delims):
+			lines += [f"{indent}{'} else ' if i else ''}if "
+			          f"{self._record_match(placement, at, i)} {{",
+			          f"{indent}\t{at} += {len(one)};"]
+		return [*lines, f"{indent}}}"]
+
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A run of records, ending where the terminator would be an element."""
@@ -5675,14 +5723,12 @@ class Emitter:
 			        "\t// this backend can compute, so the run cannot be walked."]
 
 		base  = c_name(local_name(struct, placement))
-		delim = placement.delimiter
+		delims = tuple(placement.delimiters)
 		inner = _pascal(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t// {placement.path}: this backend cannot resolve"
 			        " where the run starts."]
-
-		bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
 
 		# A run of a RECURSIVE record carries the depth counter the other
 		# two run emitters already carry (26.428). Without it `extent_at`
@@ -5696,8 +5742,8 @@ class Emitter:
 			f"\t\tlet mut at = {from_};",
 			"\t\tlet mut n  = 0usize;",
 			"",
-			f"\t\twhile at + {len(delim)} <= self.bytes.len() {{",
-			f"\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+			f"\t\twhile {self._record_guard(placement)} {{",
+			f"\t\t\tif {self._record_match(placement)} {{",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
@@ -5721,9 +5767,7 @@ class Emitter:
 			"\t\t\tn  += 1;",
 			"\t\t}",
 			"\t\tlet _ = n;",
-			f"\t\tif at + {len(delim)} <= self.bytes.len() {{",
-			f"\t\t\tat += {len(delim)};",
-			"\t\t}",
+			*self._record_took(placement, "\t\t"),
 			"\t\tat - start",
 			"\t}",
 		]
@@ -5750,7 +5794,7 @@ class Emitter:
 			"",
 			f"\t/// `{placement.path}` is a run of `{placement.type_name}`,"
 			f" ending where",
-			f"\t/// {render_delimiter(delim)} stands in for one. Walked, not"
+			f"\t/// {' or '.join(render_delimiter(one) for one in delims)} stands in for one. Walked, not"
 			" indexed: a view",
 			"\t/// borrows the caller's slice and nothing here allocates, so",
 			"\t/// there is nowhere to keep a table of offsets.",
@@ -8059,7 +8103,6 @@ class Emitter:
 				# the run hands it (0068).
 				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
-				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
 				    and self._no_element_extent(element))):
 			return []
@@ -8077,12 +8120,9 @@ class Emitter:
 			        "\t\t\t\tbreak;",
 			        "\t\t\t}"]
 		elif placement.delimiters:
-			delim  = placement.delimiter
-			bytes_ = ("b\"" + "".join(f"\\x{byte:02x}" for byte in delim)
-			          + "\"")
-			head = [f"\t\twhile at + {len(delim)} <= self.bytes.len() {{"]
+			head = [f"\t\twhile {self._record_guard(placement)} {{"]
 			scan = [
-				f"\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+				f"\t\t\tif {self._record_match(placement)} {{",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 			]
@@ -8142,8 +8182,7 @@ class Emitter:
 		if ((ended and not must_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
-				or (member.repeat_while is None
-				    and len(member.delimiters) != 1)
+				or (member.repeat_while is None and not member.delimiters)
 				or is_recursive(self.resolved.structs, element.name)
 				or self._no_element_extent(element)):
 			return None
@@ -8163,21 +8202,16 @@ class Emitter:
 				"\t\t\t}",
 			]
 		else:
-			delim  = member.delimiter
-			bytes_ = ("b\"" + "".join(f"\\x{byte:02x}" for byte in delim)
-			          + "\"")
-			loop   = f"\t\t\twhile at + {len(delim)} <= self.bytes.len() {{"
+			loop   = f"\t\t\twhile {self._record_guard(member)} {{"
 			scan   = [
-				f"\t\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+				f"\t\t\t\tif {self._record_match(member)} {{",
 				*(["\t\t\t\t\tfound = true;"] if ended else []),
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 			]
 			after  = [
 				"\t\t\t}",
-				f"\t\t\tif at + {len(delim)} <= self.bytes.len() {{",
-				f"\t\t\t\tat += {len(delim)};",
-				"\t\t\t}",
+				*self._record_took(member, "\t\t\t"),
 			]
 		return [
 			f"\t\t\tlet mut at = {self._unparen(base)};",

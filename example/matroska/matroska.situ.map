@@ -11,7 +11,28 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
-struct document size=4.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+struct cluster size=2.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  cluster.id                             offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  cluster.width                          offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  cluster.body                           offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  cluster.body.eight                     offset=Dynamic size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  cluster.body.eight.written             offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  cluster.body.eight.body                offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  cluster.body.eight.body.open           offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  cluster.body.eight.body.open.size      offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  cluster.body.eight.body.open.children  offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  cluster.body.eight.body.open.children[] offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  cluster.body.eight.body.open.children[].id offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  cluster.body.eight.body.open.children[].size offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  cluster.body.eight.body.open.children[].data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  cluster.body.eight.body.sized          offset=FrameStatic(0x00) size=Bounded(1, 72057594037927943) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  cluster.body.eight.body.sized.size     offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  cluster.body.eight.body.sized.data     offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  cluster.body.sized                     offset=Dynamic size=Bounded(1, 72057594037927943) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  cluster.body.sized.size                offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  cluster.body.sized.data                offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct document size=4.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
   document.header                        offset=AbsoluteStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
   document.header.id                     offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   document.header.size                   offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
@@ -19,10 +40,33 @@ struct document size=4.. access=Sequential mutate=Shifting address=Unstable repr
   document.segment                       offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
   document.segment_size                  offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
   document.children                      offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
-  document.children[]                    offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
-  document.children[].id                 offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
-  document.children[].size               offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
-  document.children[].data               offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  document.children[]                    offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  document.children[].lead               offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  document.children[].body               offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  document.children[].body.cluster       offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  document.children[].body.cluster.id    offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  document.children[].body.cluster.width offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  document.children[].body.cluster.body  offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  document.children[].body.cluster.body.eight offset=Dynamic size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  document.children[].body.cluster.body.eight.written offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  document.children[].body.cluster.body.eight.body offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  document.children[].body.cluster.body.eight.body.open offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  document.children[].body.cluster.body.eight.body.open.size offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  document.children[].body.cluster.body.eight.body.open.children offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  document.children[].body.cluster.body.eight.body.open.children[] offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  document.children[].body.cluster.body.eight.body.open.children[].id offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  document.children[].body.cluster.body.eight.body.open.children[].size offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  document.children[].body.cluster.body.eight.body.open.children[].data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  document.children[].body.cluster.body.eight.body.sized offset=FrameStatic(0x00) size=Bounded(1, 72057594037927943) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  document.children[].body.cluster.body.eight.body.sized.size offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  document.children[].body.cluster.body.eight.body.sized.data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  document.children[].body.cluster.body.sized offset=Dynamic size=Bounded(1, 72057594037927943) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  document.children[].body.cluster.body.sized.size offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  document.children[].body.cluster.body.sized.data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  document.children[].body.other         offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  document.children[].body.other.id      offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  document.children[].body.other.size    offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  document.children[].body.other.data    offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
 
 struct ebml_header size=2..72057594037927947 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   ebml_header.id                         offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
@@ -40,3 +84,57 @@ struct elements size=0.. access=Sequential mutate=Shifting address=Unstable repr
   elements.children[].id                 offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   elements.children[].size               offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
   elements.children[].data               offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct open_cluster size=5.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  open_cluster.size                      offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  open_cluster.children                  offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  open_cluster.children[]                offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  open_cluster.children[].id             offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  open_cluster.children[].size           offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  open_cluster.children[].data           offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct segment_child size=2.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  segment_child.lead                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  segment_child.body                     offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  segment_child.body.cluster             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  segment_child.body.cluster.id          offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  segment_child.body.cluster.width       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  segment_child.body.cluster.body        offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  segment_child.body.cluster.body.eight  offset=Dynamic size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  segment_child.body.cluster.body.eight.written offset=FrameStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  segment_child.body.cluster.body.eight.body offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+  segment_child.body.cluster.body.eight.body.open offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  segment_child.body.cluster.body.eight.body.open.size offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  segment_child.body.cluster.body.eight.body.open.children offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  segment_child.body.cluster.body.eight.body.open.children[] offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  segment_child.body.cluster.body.eight.body.open.children[].id offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  segment_child.body.cluster.body.eight.body.open.children[].size offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  segment_child.body.cluster.body.eight.body.open.children[].data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  segment_child.body.cluster.body.eight.body.sized offset=FrameStatic(0x00) size=Bounded(1, 72057594037927943) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  segment_child.body.cluster.body.eight.body.sized.size offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  segment_child.body.cluster.body.eight.body.sized.data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  segment_child.body.cluster.body.sized  offset=Dynamic size=Bounded(1, 72057594037927943) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  segment_child.body.cluster.body.sized.size offset=FrameStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  segment_child.body.cluster.body.sized.data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  segment_child.body.other               offset=AbsoluteStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  segment_child.body.other.id            offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  segment_child.body.other.size          offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  segment_child.body.other.data          offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct sized_cluster size=1..72057594037927943 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  sized_cluster.size                     offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  sized_cluster.data                     offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct wide_cluster size=8.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  wide_cluster.written                   offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  wide_cluster.body                      offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  wide_cluster.body.open                 offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  wide_cluster.body.open.size            offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  wide_cluster.body.open.children        offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  wide_cluster.body.open.children[]      offset=FrameStatic(0x00) size=Bounded(2, 72057594037927947) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+  wide_cluster.body.open.children[].id   offset=FrameStatic(0x00) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=FrameStable canonical=NonCanonical
+  wide_cluster.body.open.children[].size offset=Dynamic size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+  wide_cluster.body.open.children[].data offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  wide_cluster.body.sized                offset=AbsoluteStatic(0x00) size=Bounded(1, 72057594037927943) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical
+  wide_cluster.body.sized.size           offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  wide_cluster.body.sized.data           offset=Dynamic size=Bounded(0, 72057594037927935) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

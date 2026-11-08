@@ -628,6 +628,11 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 			# empty run is worth pinning in its own right -- "the terminator
 			# is at position zero, so there are no elements" is the first
 			# thing a walk gets wrong.
+			#
+			# Not for `before`: its terminator is the next member's first
+			# bytes, which this instance does not choose (26.930).
+			if not placement.delimiter_consumed:
+				return None
 			return len(placement.delimiter)
 
 		# Chosen rather than derived: a delimited member is as long as the

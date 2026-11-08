@@ -3255,6 +3255,30 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 				        and is_unmeasured_run(structs, member)
 				        for _arm, member in arm_members(struct, placement)):
 			return False
+		# And an arm that is one struct no prefix can frame: matroska's
+		# `wide_cluster` chose `open_cluster`, whose run ends before an ID
+		# that may not have arrived, and answered complete at 110 bytes of
+		# 191 (26.930). Not an arm that leads back here: that is the
+		# cycle's own question, and `seen` answers it no from one entry and
+		# yes from another, so sexpr framed `list` and not itself.
+		if placement.kind == "variant" and any(
+				member is not None and member.type_name in structs
+				and member.type_name not in seen | {struct.name}
+				and struct.name not in _reaches(structs, member.type_name)
+				and nests_one_struct(structs, member)
+				and not frameable(structs, structs[member.type_name],
+				                  seen | {struct.name})
+				for _arm, member in arm_members(struct, placement)):
+			return False
+		# A RUN OF RECORDS ENDING BEFORE ITS TERMINATOR, or at one of
+		# several: on a prefix, whether a run ended turns on bytes that may
+		# not have arrived -- the next member's opening, or the rest of a
+		# longer alternative -- and `required` asks the one terminator it
+		# consumes. Declined rather than answered for one of them (26.930).
+		if placement.delimiters and placement.type_name in structs \
+				and (not placement.delimiter_consumed
+				     or len(placement.delimiters) > 1):
+			return False
 		if not is_run(placement, structs):
 			continue
 		element = structs.get(placement.type_name or "")

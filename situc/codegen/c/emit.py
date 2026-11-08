@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis, Value
-from situc.codegen import arm_offset
+from situc.codegen import arm_offset, record_open, record_simple
 from situc.codegen import reserved_policy as reserved_stated
 from situc.codegen import reserved_want
 from situc.codegen.doc import extractable
@@ -6861,14 +6861,14 @@ class Emitter:
 			# A record run stops where the terminator stands rather than on a
 			# condition, so it shares that walk instead. The cap is the
 			# scan's, and it bounds the index for the same reason.
-			delim = placement.delimiter
-			assert delim is not None
 			cond = None
-			walk = self._record_prologue(
-				base, delim,
+			syms, _tables = self._record_symbols(
 				ident(self.prefix, struct.name,
 				      c_name(self._local(struct, placement)), "delim"),
-				extent)
+				tuple(placement.delimiters))
+			walk = self._record_prologue(
+				base, tuple(placement.delimiters), syms, extent,
+				record_open(placement))
 
 		local  = c_name(self._local(struct, placement))
 		kind   = ident(self.prefix, struct.name, local, "index_t")
@@ -7508,8 +7508,8 @@ class Emitter:
 			over_fields([*by_local, *consts, *(extra or {})], source, read),
 			c_spelling)
 
-	def _record_prologue(self, base: str, delim: bytes, sym: str,
-			extent: str) -> list[str]:
+	def _record_prologue(self, base: str, delims: tuple[bytes, ...],
+			syms: list[str], extent: str, open_end: bool) -> list[str]:
 		"""The head of a record run's loop, shared with its index.
 
 		The `while` run's equivalent is `_walk_prologue`; the difference is
@@ -7517,19 +7517,25 @@ class Emitter:
 		before measuring anything. Both are shared for the same reason: an
 		index built by a second copy of the walk would eventually disagree
 		with the walk about where an element starts.
+
+		`open_end` where the frame may end the run -- `before`, or `| end`
+		-- so an element in the frame's last bytes is walked: guarding the
+		loop by the terminator's own room dropped one shorter than it.
 		"""
+		simple = record_simple(delims, open_end)
+		guard  = f"at + {len(delims[0])}u <= view.limit" if simple \
+			else "at < view.limit"
 		return [
 			f"\tuint32_t at = {base};",
 			"\tuint32_t n  = 0u;",
 			"",
-			f"\twhile (at + {len(delim)}u <= view.limit) {{",
+			f"\twhile ({guard}) {{",
 			"\t\tsitu_view_t element;",
 			"\t\tuint32_t    size;",
 			"",
 			"\t\t/* The terminator only terminates where an element would",
 			"\t\t * start. Inside one it is that element's own byte. */",
-			f"\t\tif (situ_scan(situ_base(view) + at, {len(delim)}u, {sym}, "
-			f"{len(delim)}u) == 0u) {{",
+			f"\t\tif ({self._record_match(delims, syms, simple)}) {{",
 			"\t\t\tbreak;",
 			"\t\t}",
 			f"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
@@ -7543,6 +7549,51 @@ class Emitter:
 			"\t\t\tbreak;",
 			"\t\t}",
 		]
+
+	@staticmethod
+	def _record_match(delims: tuple[bytes, ...], syms: list[str],
+			simple: bool) -> str:
+		"""Whether one of the terminators stands at `at`."""
+		if simple:
+			width = len(delims[0])
+			return (f"situ_scan(situ_base(view) + at, {width}u, {syms[0]}, "
+			        f"{width}u) == 0u")
+		return "\n\t\t    || ".join(
+			f"(at + {len(one)}u <= view.limit && situ_scan(situ_base(view)"
+			f" + at, {len(one)}u, {sym}, {len(one)}u) == 0u)"
+			for one, sym in zip(delims, syms))
+
+	def _record_took(self, delims: tuple[bytes, ...], syms: list[str],
+			consumed: bool, open_end: bool) -> list[str]:
+		"""Step past the terminator the walk stopped at, where it is the run's.
+
+		`before` leaves it to whatever comes next, and with several the one
+		standing there is stepped over, the first that matches as the walkers
+		take it. Where the run ran out of buffer instead there is none.
+		"""
+		if not consumed:
+			return []
+		if record_simple(delims, open_end):
+			width = len(delims[0])
+			return [f"\tif (at + {width}u <= view.limit) {{",
+			        f"\t\tat = at + {width}u;",
+			        "\t}"]
+		lines: list[str] = []
+		for index, (one, sym) in enumerate(zip(delims, syms)):
+			test = self._record_match((one,), [sym], False)
+			lines += [f"\t{'} else ' if index else ''}if ({test}) {{",
+			          f"\t\tat = at + {len(one)}u;"]
+		return [*lines, "\t}"]
+
+	@staticmethod
+	def _record_symbols(sym: str, delims: tuple[bytes, ...]) -> tuple[
+			list[str], list[str]]:
+		"""The terminators as static arrays: their names, and the lines."""
+		names = [sym] + [f"{sym}_{index}" for index in range(1, len(delims))]
+		lines = [f"static const uint8_t {name}[{len(one)}] = "
+		         f"{{{', '.join(f'0x{byte:02X}u' for byte in one)}}};"
+		         for name, one in zip(names, delims)]
+		return names, lines
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -7577,8 +7628,8 @@ class Emitter:
 			return self._unwalkable_run(struct, placement)
 
 		local  = c_name(self._local(struct, placement))
-		delim  = placement.delimiter
-		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+		delims = tuple(placement.delimiters)
+		open_  = record_open(placement)
 		base   = self._base_expression(struct, placement, gated=False)
 		extent = (macro(self.prefix, element.name, "SIZE_FIXED") if fixed
 		          else f"{ident(self.prefix, element.name, 'extent')}"
@@ -7599,9 +7650,10 @@ class Emitter:
 		reach   = self._reaching_tail(struct, placement)
 		reached = self._reaching_call(struct, placement)
 
-		walk = self._record_prologue(base, delim, sym, extent)
-		from_ = self._record_prologue("start", delim, sym,
-		                              deeper if deep else extent)
+		syms, tables = self._record_symbols(sym, delims)
+		walk = self._record_prologue(base, delims, syms, extent, open_)
+		from_ = self._record_prologue("start", delims, syms,
+		                              deeper if deep else extent, open_)
 		spans = [
 			f"static inline uint32_t {span}_from"
 			+ (f"_at(situ_view_t view, uint32_t start, uint32_t depth{reach})"
@@ -7613,12 +7665,12 @@ class Emitter:
 			"\t}",
 			"\t(void)n;",
 			"",
-			"\t/* The terminator belongs to this member, as a delimiter does.",
-			"\t * Where the run ran out of buffer instead there is none to",
-			"\t * count. */",
-			f"\tif (at + {len(delim)}u <= view.limit) {{",
-			f"\t\tat = at + {len(delim)}u;",
-			"\t}",
+			*(["\t/* The terminator belongs to this member, as a delimiter does.",
+			   "\t * Where the run ran out of buffer instead there is none to",
+			   "\t * count. */"] if placement.delimiter_consumed else
+			  ["\t/* `before`: the terminator is the next member's. */"]),
+			*self._record_took(delims, syms, placement.delimiter_consumed,
+			                   open_),
 			"\treturn at - start;",
 			"}",
 		]
@@ -7643,11 +7695,11 @@ class Emitter:
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
-			f" * {render_delimiter(delim)} stands in for one. Walked rather than",
+			f" * {' or '.join(render_delimiter(one) for one in delims)} stands in for one. Walked rather than",
 			" * indexed: a view is a value and nothing here allocates, so there",
 			" * is nowhere in this header to keep a table of offsets. Build with",
 			" * `--materialize` and a `max` on the run for one the caller owns. */",
-			f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
+			*tables,
 			"",
 			*ended,
 			f"static inline uint32_t {count}(situ_view_t view{reach})",
@@ -9438,12 +9490,13 @@ class Emitter:
 				   "\t}"] if ended else []),
 			]
 		else:
-			delim  = member.delimiter
-			bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
-			prologue = self._record_prologue(base, delim, "terminator", extent)
+			delims = tuple(member.delimiters)
+			open_  = record_open(member)
+			syms, tables = self._record_symbols("terminator", delims)
+			prologue = self._record_prologue(base, delims, syms, extent,
+			                                 open_)
 			body = [
-				f"\tstatic const uint8_t terminator[{len(delim)}] ="
-				f" {{{bytes_}}};",
+				*[f"\t{line}" for line in tables],
 				*(["\tint found = 0;"] if ended else []),
 				*[line.replace("break;", "found = 1;\n\t\t\tbreak;", 1)
 				  if ended and index == prologue.index("\t\t\tbreak;") else line
@@ -9453,11 +9506,9 @@ class Emitter:
 				"\t}",
 				*(["\tif (!found) {",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
-				   "\t}"] if ended else [
-					f"\tif (at + {len(delim)}u <= view.limit) {{",
-					f"\t\tat = at + {len(delim)}u;",
-					"\t}",
-				]),
+				   "\t}"] if ended else
+				  self._record_took(delims, syms, member.delimiter_consumed,
+				                    open_)),
 			]
 		body.append("\t(void)n;")
 		if not ended:
@@ -14751,14 +14802,12 @@ class Emitter:
 			        "\t\t\tbreak;",
 			        "\t\t}"]
 		elif placement.delimiters:
-			if len(placement.delimiters) != 1:
-				return []
-			delim  = placement.delimiter
-			bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+			delims = tuple(placement.delimiters)
+			syms, tables = self._record_symbols("terminator", delims)
 			head = [
-				f"\tstatic const uint8_t terminator[{len(delim)}] ="
-				f" {{{bytes_}}};",
-				*self._record_prologue(base, delim, "terminator", extent),
+				*[f"\t{line}" for line in tables],
+				*self._record_prologue(base, delims, syms, extent,
+				                       record_open(placement)),
 			]
 		else:
 			to_end = placement.sized_by == "remaining"

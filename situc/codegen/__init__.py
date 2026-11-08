@@ -642,6 +642,27 @@ def zero_is_no_message(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return False
 
 
+def record_open(placement: Placement) -> bool:
+	"""Whether the frame may end a run of records rather than its terminator.
+
+	`before` leaves the terminator to whatever follows, and whether anything
+	follows is the enclosing structure's business; `| end` says so outright.
+	An element in the frame's last bytes is then one of the run's, however
+	short it is beside the terminator (26.930).
+	"""
+	return not placement.delimiter_consumed or placement.delimiter_or_end
+
+
+def record_simple(delims: tuple[bytes, ...], open_end: bool) -> bool:
+	"""Whether a record run's walk is the one-terminator walk it always was.
+
+	One terminator that has room wherever an element could start: one that
+	must be there, or one byte wide. Every other run guards each alternative
+	by its own room and loops to the frame's end.
+	"""
+	return len(delims) == 1 and (not open_end or len(delims[0]) == 1)
+
+
 def zero_ends_run(placement: Placement) -> bool:
 	"""Whether a run ends at an element that is all zeros.
 

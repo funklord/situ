@@ -37,6 +37,11 @@ Bytes = bytes | bytearray
 
 BITS_PER_BYTE = 8
 
+#: The check row saying a run must end at its terminator: `report.TERMINATED`,
+#: which imports this module and asserts the two agree. Its absence beside a
+#: consumed terminator is `| end`.
+TERMINATED_ROW = 7
+
 
 class Refused(Exception):
 	"""The buffer does not support the question.
@@ -2432,15 +2437,28 @@ def _record_run_walk(view: View, index: int,
 	if not delims:
 		raise Refused(f"placement {index} has no terminator in this image")
 
-	# C's loop guard is `at + delim_len <= view.limit`: below that there is
-	# no room for the terminator to stand, so there is nothing to ask.
-	room  = max(len(one) for one in delims)
+	# C's loop guard, `record_simple` in the generator: the terminator's own
+	# room where one terminator must stand there, and otherwise the frame's
+	# end, so an element shorter than a `before` or `| end` terminator in
+	# the frame's last bytes is still one of the run's (26.930).
+	consumed = view.image.delimiter_consumed.get(index, True)
+	open_end = not consumed or not any(
+		check == TERMINATED_ROW
+		for check, _ in view.image.constraints.get(index, ()))
+	room  = len(delims[0]) if len(delims) == 1 \
+		and (not open_end or len(delims[0]) == 1) else 1
 	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	start = at
 	count = 0
 
+	def stands(here: int) -> int:
+		"""The length of the first terminator standing at `here`, or 0."""
+		return next((len(one) for one in delims
+		             if here + len(one) <= view.limit
+		             and view.buffer[here:here + len(one)] == one), 0)
+
 	while at + room <= view.limit:
-		if any(view.buffer[at:at + len(one)] == one for one in delims):
+		if stands(at):
 			break			# the terminator stands here
 		sub = View(view.image, view.buffer, element, at, view.limit,
 		           child_args(view, index))
@@ -2459,10 +2477,10 @@ def _record_run_walk(view: View, index: int,
 		count += 1
 	# The terminator belongs to this member, as a delimiter does, and where
 	# the run ran out of buffer instead there is none to count -- C's rule
-	# at its own emission site, in those words.
-	took = next((len(one) for one in delims
-	             if view.buffer[at:at + len(one)] == one), 0)
-	return count, (at - start) + took, took
+	# at its own emission site, in those words. `before` leaves it to the
+	# next member: whether it stood there is still the run's answer.
+	took = stands(at)
+	return count, (at - start) + (took if consumed else 0), took
 
 
 def record_run_ended(view: View, index: int) -> bool:

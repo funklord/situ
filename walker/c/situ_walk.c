@@ -2654,6 +2654,11 @@ static uint32_t terminator_at(const situ_walk_image *image,
 	return 0u;
 }
 
+/* Whether a check row requires the terminator, which says, beside a
+ * consumed one, that the frame may not end the run: below, after the check
+ * kinds it reads. */
+static int must_be_terminated_at(const situ_walk_image *image, uint32_t index);
+
 /* A run of records that ENDS at a terminator, `T x[] until "D"` (8.6.3):
  * how many records it holds and how far it reaches.
  *
@@ -2677,6 +2682,7 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 	const uint8_t      *rules = NULL;
 	uint32_t            alts  = 0u;
 	uint32_t            room  = 0u;
+	int                 consumed_out = 1;
 	situ_walk_err       err   = situ_walk_placement_at(image, index, &held);
 
 	if (err != SITU_WALK_OK) {
@@ -2704,9 +2710,19 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 		if (wide == 0u || wide > DELIMITER_MAX) {
 			return SITU_WALK_MALFORMED;
 		}
-		if (wide > room) {
-			room = wide;
-		}
+	}
+	/* The generated C's guard, `record_simple`: the terminator's own room
+	 * where one terminator must stand there, and otherwise the frame's end,
+	 * so an element shorter than a `before` or `| end` terminator in the
+	 * frame's last bytes is still the run's (26.930). */
+	{
+		const int consumed = rules[17] != 0u;
+		const int open_end = !consumed
+		                     || !must_be_terminated_at(image, index);
+
+		room = (alts == 1u && (!open_end || rules[16] == 1u))
+		       ? rules[16] : 1u;
+		consumed_out = consumed;
 	}
 
 	uint32_t start = 0u;
@@ -2755,7 +2771,9 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 
 	*count = n;
 	*took  = terminator_at(image, rules, alts, message, len, at);
-	*bytes = (at - start) + *took;
+	/* `before` leaves the terminator to the next member; whether it stood
+	 * there is still the run's answer. */
+	*bytes = (at - start) + (consumed_out ? *took : 0u);
 	return SITU_WALK_OK;
 }
 
@@ -4524,6 +4542,19 @@ static const uint8_t *check_rows(const situ_walk_image *image, uint32_t index,
 	return found;
 }
 
+static int must_be_terminated_at(const situ_walk_image *image, uint32_t index)
+{
+	uint32_t       rows   = 0u;
+	const uint8_t *checks = check_rows(image, index, &rows);
+
+	for (uint32_t c = 0u; checks != NULL && c < rows; c++) {
+		if (checks[c * image->constraint_stride + 12] == CHECK_TERMINATED) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static int enum_admits(const situ_walk_image *image, uint32_t which,
                        int64_t value)
 {
@@ -5979,12 +6010,13 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 	}
-	for (uint32_t d = 0u; d < alts; d++) {
-		const uint32_t wide = rules[(size_t)d * image->delimiter_stride + 16];
+	/* `record_run_walk`'s guard, whose elements these are (26.930). */
+	if (rules != NULL) {
+		const int open_end = rules[17] == 0u
+		                     || !must_be_terminated_at(image, index);
 
-		if (wide > room) {
-			room = wide;
-		}
+		room = (alts == 1u && (!open_end || rules[16] == 1u))
+		       ? rules[16] : 1u;
 	}
 
 	uint32_t start = from;

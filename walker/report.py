@@ -32,6 +32,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          _ceiling, _evaluate, _read_at, _sizes_in_bytes,
                          counted_run_fits,
                          offset_bits, record_run_count, record_run_ended,
+                         TERMINATED_ROW,
                          chosen_arm, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
                          tlv_count, tlv_whole, varint, varint_run_at,
@@ -709,6 +710,9 @@ MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 #: `pack.BOUND_BY`, and the check each asks once its program has answered.
 BOUND_BY = {19: MUST_EQ, 20: MINIMUM, 21: MAXIMUM}
 FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
+# `walk` cannot import this module, which imports it, so it names the row
+# itself; one number, said twice and held together here.
+assert TERMINATED == TERMINATED_ROW
 DIGITS_VALID, DIGITS_MINIMAL = 9, 10
 NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
 PINNED_RUN = 14
@@ -2264,10 +2268,18 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 				if not while_holds(sub, placement.repeat_code, size):
 					break
 		elif index in image.delimiters:
-			delims = image.delimiters[index]
-			room   = max(len(one) for one in delims)
+			# The run's own walk's guard and match (26.930): see
+			# `walk._record_run_walk`, whose elements these must be.
+			delims   = image.delimiters[index]
+			consumed = image.delimiter_consumed.get(index, True)
+			open_end = not consumed or not any(
+				check == TERMINATED for check, _ in
+				image.constraints.get(index, ()))
+			room = len(delims[0]) if len(delims) == 1 \
+				and (not open_end or len(delims[0]) == 1) else 1
 			while at + room <= view.limit:
-				if any(view.buffer[at:at + len(one)] == one
+				if any(at + len(one) <= view.limit
+				       and view.buffer[at:at + len(one)] == one
 				       for one in delims):
 					break
 				size = measure(at)
