@@ -108,6 +108,11 @@ SUFFIXES = frozenset({
 	# and a framing function may never read a shrinking quantity (26.683).
 	"span_min",
 	"terminated", "terminated_from", "valid", "value",
+	# Whether a run ended by its own rule -- the terminator where an element
+	# would start, or an element its condition refuses -- rather than at the
+	# frame (26.926, 26.927). A member named `x_ended` beside a run `x`
+	# would collide with it.
+	"ended",
 	# A `tlv` region's verdict: whether its items fill it exactly, which
 	# `check` asks and the count cannot say (26.737). A member named
 	# x_whole beside a region named x would collide with it.
