@@ -119,6 +119,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	_CONSTS.clear()
 	_CONSTS.update(resolved.layout.env.consts)
+	_ENUMS.clear()
+	_ENUMS.update(resolved.layout.env.enums)
 	_STRUCTS.clear()
 	_STRUCTS.update(resolved.structs)
 
@@ -2573,6 +2575,9 @@ def _read(placement: Placement, base: str) -> str | None:
 #: sites would be nine parameters for one dictionary.
 _CONSTS: dict[str, int] = {}
 
+#: Each enum's members by name, for an expression that names one.
+_ENUMS: dict[str, dict[str, int]] = {}
+
 #: Every struct, for what a member hands its type, set beside `_CONSTS`.
 _STRUCTS: dict[str, ResolvedStruct] = {}
 
@@ -2658,6 +2663,12 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 
 	for name, value in _CONSTS.items():
 		reads.setdefault(name, str(value))
+	# And an enum's members, which every other description folds as the
+	# constants they are: `span_base.narrow + n` was "a size this
+	# dissector cannot read" for the enumerator, not for `n`.
+	for enum, members in _ENUMS.items():
+		for member, value in members.items():
+			reads.setdefault(f"{enum}.{member}", str(value))
 	if extra is not None:
 		reads.update(extra)
 

@@ -535,6 +535,19 @@ def test_an_operator_lua_spells_differently_is_declined() -> None:
 	assert "local sum_n = situ_uint(tvb, 0, 1, false) + 1" in text	# and the rest still walks
 
 
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_size_may_name_an_enum_member(tmp_path: Path) -> None:
+	"""`u8 body[span_base.narrow + n]`: every other description folds the
+	enumerator as the 4 it is, and the dissector declined the size as one it
+	could not read and showed the rest of the frame raw. Two and
+	four is six bytes of body, then the u16 tail."""
+	_, rows = dissect(tmp_path, ROOT / "test" / "schema" / "edges.situ",
+	                  "enum_sized", bytes([2]) + bytes(range(10, 16)) + b"\x01\x02")
+	assert rows == [("enum_sized.n", 0, 1, "2"),
+	                ("enum_sized.body", 1, 6, "0a0b0c0d0e0f"),
+	                ("enum_sized.tail", 7, 2, "258")]
+
 #: The first entry of the archive `example/cpio/cpio.vectors` records, which
 #: GNU cpio wrote. 110 bytes of header, a 13-byte name, one byte of padding,
 #: six bytes of file and two more of padding.
