@@ -6510,7 +6510,23 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (held.located_code != SITU_WALK_NONE) {
 				continue;
 			}
-			record(why, index, SITU_WALK_NO_CHECK);
+			/* Too wide to count in bits is past any frame, and where the
+			 * member is held to the frame that is the check that refuses
+			 * it, as `report` names it with integers that do not overflow:
+			 * riff's `data[size]` under a drawn `size` (26.928). */
+			{
+				uint32_t       rows   = 0u;
+				const uint8_t *checks = check_rows(image, index, &rows);
+				uint8_t        named  = SITU_WALK_NO_CHECK;
+
+				for (uint32_t c = 0u; checks != NULL && c < rows; c++) {
+					if (checks[c * image->constraint_stride + 12]
+					                == CHECK_FITS_FRAME) {
+						named = CHECK_FITS_FRAME;
+					}
+				}
+				record(why, index, named);
+			}
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
