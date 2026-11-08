@@ -1259,7 +1259,7 @@ def _walked(image: Image, proto: str,
 		# dissector shows now rather than its bytes (26.941).
 		if len(parts) == 3 and parts[1].startswith("len=") \
 				and parts[2].startswith("value="):
-			values[parts[0]] = int(parts[2][6:]) % (1 << 64)
+			values[parts[0]] = int(parts[2][6:])
 		# A selected arm's member, `name ok=1 value=N`, which was dropped
 		# whole: no member of any variant arm was ever compared, and
 		# radiotap's arms read byte-reversed with this test green (26.933).

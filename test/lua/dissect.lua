@@ -294,6 +294,15 @@ for _, width in ipairs({ 8, 16, 24, 32, 64 }) do
 	ProtoField["int"  .. width] = field("int")
 end
 
+--- Wireshark's signed 64-bit value, from its low and high words: the two's
+--- complement integer they spell.
+function Int64(low, high)
+	local value = math.tointeger(low) + math.tointeger(high or 0) * 4294967296
+	return setmetatable({ value = value }, {
+		__tostring = function (self) return tostring(self.value) end,
+	})
+end
+
 --- Wireshark's 64-bit value, from its low and high words. Wireshark refuses
 --- a plain number for a `uint64` field -- "userdata expected, got number" --
 --- so the generated code builds one, and this stands in for it with the

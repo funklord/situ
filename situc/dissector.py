@@ -435,6 +435,22 @@ U64_HELPER = [
 	"\treturn UInt64(low, high)",
 	"end",
 	"",
+	"-- A signed varint's value, from the zigzag form its read hands on: half",
+	"-- of it, complemented where it is odd, worked in the two words so it",
+	"-- stays exact, and Wireshark's signed 64-bit number of them.",
+	"local function situ_s64(z)",
+	"\tlocal low = z % 4294967296",
+	"\tlocal high = (z - low) / 4294967296",
+	"\tif high < 0 then high = high + 4294967296 end",
+	"\tlocal odd = low % 2",
+	"\tlow = (low - odd) / 2 + (high % 2) * 2147483648",
+	"\thigh = (high - high % 2) / 2",
+	"\tif odd == 1 then",
+	"\t\tlow, high = 4294967295 - low, 4294967295 - high",
+	"\tend",
+	"\treturn Int64(low, high)",
+	"end",
+	"",
 ]
 
 
@@ -713,10 +729,17 @@ def _varint_functions(schema: ast.Schema,
 
 
 def _shows_value(placement: Placement) -> bool:
-	"""Whether a member is one unsigned varint, shown as its number."""
+	"""Whether a member is one varint, shown as its number."""
+	return _one_varint(placement) is not None
+
+
+def _signed_varint(placement: Placement) -> bool:
+	"""Whether a varint's value is the zigzag form of a signed number:
+	`sleb128`, which the read hands on that way, or `transform = zigzag`."""
 	decl = _one_varint(placement)
-	return (decl is not None and decl.transform is None
-	        and decl.encoding is not ast.VarintEncoding.SLEB128)
+	return decl is not None and (
+		decl.transform is not None
+		or decl.encoding is ast.VarintEncoding.SLEB128)
 
 
 def _varint_value(placement: Placement) -> ast.VarintDecl | None:
@@ -1378,8 +1401,9 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# spells (26.941). A signed one stays bytes: its zigzag form is not the
 	# number it means.
 	if _shows_value(placement):
+		kind = "int64" if _signed_varint(placement) else "uint64"
 		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
-		        f"ProtoField.uint64(\"{abbrev}\", \"{name}\", base.DEC)")
+		        f"ProtoField.{kind}(\"{abbrev}\", \"{name}\", base.DEC)")
 	#
 	# A tlv region too, whose items are each a row of it (26.937).
 	if placement.varint is not None \
@@ -2108,9 +2132,9 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tif {name}_w == 0 then",
 			"\t\treturn at",
 			"\tend",
-			(f"\tsubtree:add({field}, tvb(at, {name}_w), situ_u64({name}_v))"
-			 if _shows_value(placement) else
-			 f"\tsubtree:add({field}, tvb(at, {name}_w))"),
+			(f"\tsubtree:add({field}, tvb(at, {name}_w),"
+			 f" {'situ_s64' if _signed_varint(placement) else 'situ_u64'}"
+			 f"({name}_v))"),
 			f"\tat = at + {name}_w",
 		]
 	if placement.varint is not None:
