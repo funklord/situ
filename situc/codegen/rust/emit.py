@@ -7119,10 +7119,15 @@ class Emitter:
 			              f"{held}.{_ident(name + '_from')}({marks}[{index}])",
 			              text)
 			# A count reads its field where it sits rather than through the
-			# accessor, so what it names is the offset.
-			if held == "self":
+			# accessor, so what it names is the offset -- and a run's
+			# condition reads it over `element`, which re-measured the arm
+			# at depth zero and read `g` past the ceiling C's mark stops at
+			# (26.927's `enum_while`).
+			offset = self._offset_expression(struct, member)
+			if offset is not None:
 				text = text.replace(
-					self._offset_expression(struct, member) or "\0",
+					offset if held == "self"
+					else re.sub(r"\bself\.", f"{held}.", offset),
 					f"{marks}[{index}]")
 		for helper in self._marked.get(struct.name, ()):
 			text = re.sub(rf"\b{held}\.{helper}\(\)",
