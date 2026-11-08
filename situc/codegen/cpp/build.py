@@ -214,8 +214,12 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 		*(["\tif ("
 		   + " || ".join(f"{part.local} == {v}u" for v in part.others)
 		   + ") {", CONSTRAINT, "\t}"] if part.others else []),
+		# Not where `held` is a run's 32-bit length and the varint holds at
+		# least that: matroska's 56-bit size made `data_len > ...u` a test
+		# that cannot fire, and `-Wtype-limits` refuses it.
 		*([f"\tif ({held} > {most}u) {{", CONSTRAINT, "\t}"]
-		  if part.value < 64 else []),
+		  if part.value < (32 if part.sizes is not None
+		                   and part.stated is None else 64) else []),
 		"\t{",
 		f"\t\tconst std::uint32_t situ_used = {call}(situ_out + situ_at,",
 		f"\t\t\t\tsitu_cap - situ_at, {value}{tail});",
