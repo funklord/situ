@@ -11,7 +11,8 @@ from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 from situc import ast, traverse
-from situc.diagnostics import not_yet_implemented
+from situc.diagnostics import SituError, not_yet_implemented
+from situc.expr import Env, evaluate
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_members, reserved_constraint
@@ -626,11 +627,48 @@ def zero_is_no_message(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement = entry.placement
 		if placement.varint_needs_a_mark:
 			return True
+		# A run of records that must end by its own rule, where a zeroed
+		# element does not end it: the zeros read as elements to the end of
+		# the frame, which cut the run short (26.926, 26.927). flac's
+		# `blocks[] while (last == 0)` and cbor's `chunks[] until "\xff"`.
+		if placement.type_name in resolved.structs \
+				and traverse.must_end(placement) \
+				and not zero_ends_run(placement):
+			return True
 		nested = resolved.structs.get(placement.type_name or "")
 		if nested is not None and zero_is_no_message(
 				resolved, nested, seen | {struct.name}):
 			return True
 	return False
+
+
+def zero_ends_run(placement: Placement) -> bool:
+	"""Whether a run ends at an element that is all zeros.
+
+	`until` where its terminator is zero bytes, which stand where the first
+	element would. `while` where its condition is false with every field it
+	names at zero. A condition naming anything else -- `remaining`, an enum
+	member -- is not answered here, and False declines rather than guesses.
+	"""
+	if placement.repeat_while is None:
+		return any(not any(delimiter) for delimiter in placement.delimiters)
+	tree = placement.repeat_ast
+	if tree is None:
+		return False
+	names: dict[str, int] = {}
+
+	def gather(node: object) -> None:
+		if isinstance(node, ast.NameRef):
+			names[node.name] = 0
+		elif isinstance(node, ast.Expr):
+			for value in vars(node).values():
+				gather(value)
+
+	gather(tree)
+	try:
+		return evaluate(tree, Env(consts=names)) == 0
+	except SituError:
+		return False
 
 
 def arm_offset(struct: ResolvedStruct, placement: Placement,
