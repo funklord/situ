@@ -8327,6 +8327,10 @@ Moved to
 
 Moved to `doc/decision/26.930-a-run-ends-before-any-of-its-terminators.md`.
 
+### 26.931 The dissector walks a run of records to its terminator
+
+Moved to `doc/decision/26.931-the-dissector-walks-a-run-of-records.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

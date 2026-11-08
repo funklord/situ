@@ -687,14 +687,53 @@ def test_a_capped_scan_stops_at_its_cap() -> None:
 	assert "math.min(at + 8, tvb:len())" in lua
 
 
-def test_a_run_of_records_says_it_is_not_unrolled() -> None:
-	"""The terminator ends the run rather than each element, so where it stops
-	is a walk this does not do. Saying so beats a wrong decode and beats
-	silence, which reads as the member not existing."""
-	lua = emit('struct kv { u8 k[] until ":"; u8 v[] until "\\r\\n"; }\n'
-	           'struct s { kv items[] until "\\r\\n"; u8 rest[remaining]; }')
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_run_of_records_is_walked_to_its_terminator(tmp_path: Path) -> None:
+	"""It said "Not unrolled" and stopped the cursor, so nothing after a
+	run of header lines was shown (26.931). Each element is dissected, the
+	blank line is stepped over, and `rest` lands where the walker reads it:
+	two headers of five and seven bytes, the two-byte terminator, then 14.
+	A colon inside a value is the element's own byte -- the terminator
+	only ends the run where an element would start."""
+	schema = tmp_path / "kv.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\n"
+		'struct kv { u8 k[] until ":"; u8 v[] until "\\r\\n"; }\n'
+		'struct s { kv items[] until "\\r\\n"; u8 rest[remaining]; }\n',
+		encoding="ascii")
 
-	assert "Not unrolled" in lua
+	consumed, rows = dissect(tmp_path, schema, "s",
+	                         b"a:1\r\nbb:2:\r\n\r\nREST")
+
+	assert consumed == 18
+	assert rows == [
+		("kv.k",   0, 1, "61"),
+		("kv.v",   2, 1, "31"),
+		("kv.k",   5, 2, "6262"),
+		("kv.v",   8, 2, "323a"),
+		("s.rest", 14, 4, "52455354"),
+	]
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+def test_a_run_ends_before_a_terminator_it_does_not_own(
+		tmp_path: Path) -> None:
+	"""`before` leaves the terminator to the member after the run, and with
+	several the longest standing there ends it, as a byte scan takes it."""
+	schema = tmp_path / "kv.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\n"
+		'struct kv { u8 k; u8 v; }\n'
+		'struct s { kv items[] before "\\xff" | "\\xff\\xfe";'
+		' u8 rest[remaining]; }\n', encoding="ascii")
+
+	consumed, rows = dissect(tmp_path, schema, "s",
+	                         bytes.fromhex("0102 0304 fffe 09"))
+
+	assert consumed == 7
+	assert rows[-1] == ("s.rest", 4, 3, "fffe09")
+	assert [row[:2] for row in rows[:-1]] == [
+		("kv.k", 0), ("kv.v", 1), ("kv.k", 2), ("kv.v", 3)]
 
 
 def test_a_versioned_member_is_guarded() -> None:
@@ -2063,6 +2102,37 @@ def test_wireshark_masks_a_wide_field_over_its_own_bytes(
 		 "-e", "situ.wide.a", "-e", "situ.wide.b"],
 		check=True, capture_output=True, text=True, timeout=60)
 	assert ran.stdout.split() == ["1", str(0x9ABCDEF01)]
+
+
+@pytest.mark.skipif(shutil.which("tshark") is None, reason="no tshark")
+def test_wireshark_shows_every_header_of_a_request(tmp_path: Path) -> None:
+	"""In Wireshark: the headers are a run of records to a blank line, and
+	the dissector said "Not unrolled" and showed none of them (26.931). The
+	request line is a struct of delimited members, which had no extent here
+	either, so it was not shown at all."""
+	root = Path(__file__).resolve().parents[2]
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector",
+	                str(root / "example/http/http.situ"), "--out",
+	                str(tmp_path)], check=True, cwd=root, capture_output=True)
+	packet  = b"GET /x HTTP/1.1\r\nHost: a.b\r\nAccept: */*\r\n\r\n"
+	capture = pack_bytes("<IHHiIII", 0xa1b2c3d4, 2, 4, 0, 0, 65535, 147) \
+		+ pack_bytes("<IIII", 0, 0, len(packet), len(packet)) + packet
+	(tmp_path / "get.pcap").write_bytes(capture)
+	ran = subprocess.run(
+		["tshark", "-X", f"lua_script:{tmp_path / 'http.lua'}", "-o",
+		 'uat:user_dlts:"User 0 (DLT=147)","situ_http_request_head","0",'
+		 '"","0",""',
+		 "-r", str(tmp_path / "get.pcap"), "-T", "fields",
+		 "-e", "situ.request_line.method", "-e", "situ.request_line.target",
+		 "-e", "situ.header_field.name", "-e", "situ.header_field.value"],
+		check=True, capture_output=True, text=True, timeout=60)
+	method, target, names, values = ran.stdout.strip().split("\t")
+	assert method == "GET"
+	assert bytes.fromhex(target) == b"/x"
+	assert [bytes.fromhex(one) for one in names.split(",")] \
+		== [b"Host", b"Accept"]
+	assert [bytes.fromhex(one) for one in values.split(",")] \
+		== [b"a.b", b"*/*"]
 
 
 #: A run held directly in an arm, each way a run ends, and an arm whose struct

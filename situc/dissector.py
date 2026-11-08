@@ -128,6 +128,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	       for struct in resolved.structs.values()
 	       for entry in struct.entries):
 		lines.extend(SCAN_HELPER)
+	if any(entry.placement.delimiters
+	       and entry.placement.type_name in resolved.structs
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(STANDS_HELPER)
 
 	# Same rule as the scan above: a helper nobody calls is dead Lua in a
 	# file a user is expected to read before trusting it.
@@ -361,6 +366,45 @@ SCAN_HELPER = [
 	"\t\tend",
 	"\tend",
 	"\treturn limit - at, false, 0",
+	"end",
+	"",
+	"-- How many bytes a delimited member occupies: its content, and the",
+	"-- delimiter too where it was found and the member owns it. An extent",
+	"-- adds this where the row above shows `situ_scan`'s first answer.",
+	"local function situ_footprint(consumed, n, found, took)",
+	"\tif found and consumed then",
+	"\t\treturn n + took",
+	"\tend",
+	"\treturn n",
+	"end",
+	"",
+]
+
+
+STANDS_HELPER = [
+	"-- The longest of a run's terminators standing at `at`, or 0 (26.930).",
+	"--",
+	"-- Asked only where an element would start: inside one, the same bytes",
+	"-- are that element's own. Each alternative needs its own room, so an",
+	"-- element in the frame's last bytes, shorter than a terminator, is",
+	"-- still the run's.",
+	"local function situ_stands(tvb, at, delims)",
+	"\tlocal best = 0",
+	"\tfor d = 1, #delims do",
+	"\t\tlocal one = delims[d]",
+	"\t\tlocal n = #one",
+	"\t\tif n > best and at + n <= tvb:len() then",
+	"\t\t\tlocal match = true",
+	"\t\t\tfor j = 1, n do",
+	"\t\t\t\tif tvb(at + j - 1, 1):uint() ~= one[j] then",
+	"\t\t\t\t\tmatch = false",
+	"\t\t\t\t\tbreak",
+	"\t\t\t\tend",
+	"\t\t\tend",
+	"\t\t\tif match then best = n end",
+	"\t\tend",
+	"\tend",
+	"\treturn best",
 	"end",
 	"",
 ]
@@ -1621,6 +1665,50 @@ def _scan_call(placement: Placement, at: str) -> str:
 	return f"situ_scan(tvb, {at}, {{{alts}}}, {cap}, {quote}, {escape})"
 
 
+def _footprint_call(placement: Placement, at: str) -> str:
+	"""How many bytes a delimited member occupies from `at`, in Lua.
+
+	`_scan_call`'s content length, and the delimiter where it was found and
+	the member owns it -- what `_delimited` advances by, as an expression.
+	Without it a struct holding a delimited member had no extent here, so
+	an HTTP header line could not be an element of anything this walks.
+	"""
+	consumed = "true" if placement.delimiter_consumed else "false"
+	return f"situ_footprint({consumed}, {_scan_call(placement, at)})"
+
+
+def _terminators(placement: Placement) -> str:
+	"""A run's terminators as a Lua table of byte tables."""
+	return "{" + ", ".join("{" + ", ".join(str(byte) for byte in one) + "}"
+	                       for one in placement.delimiters) + "}"
+
+
+def _record_walk(resolved: ResolvedSchema, placement: Placement,
+		element: ResolvedStruct, dissect: str | None) -> list[str]:
+	"""A run of records to its terminator, walked from `at` (26.930).
+
+	The walk every reader makes: where a terminator stands the run ends,
+	stepping past the longest one only where the run owns it; elsewhere an
+	element starts, is measured, and is dissected when `dissect` names the
+	call. An element of no extent or one the frame does not hold ends the
+	walk, the two bounds every generated walk carries (invariant 24).
+	"""
+	return [
+		"\twhile at < tvb:len() do",
+		f"\t\tlocal took = situ_stands(tvb, at, {_terminators(placement)})",
+		"\t\tif took > 0 then",
+		*(["\t\t\tat = at + took"] if placement.delimiter_consumed else
+		  ["\t\t\t-- `before`: the terminator is the next member's"]),
+		"\t\t\tbreak",
+		"\t\tend",
+		f"\t\tlocal size = {_element_stride(resolved, element)}",
+		"\t\tif size == 0 or at + size > tvb:len() then break end",
+		*([f"\t\t{dissect}"] if dissect else []),
+		"\t\tat = at + size",
+		"\tend",
+	]
+
+
 def _at(base: str, offset: int) -> str:
 	"""`base + offset`, without the halves that are zero."""
 	if base == "0":
@@ -1913,12 +2001,29 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 	element.
 	"""
 	counted = is_counted_run(resolved.structs, placement)
-	if placement.repeat_while is None and not counted:
+	record  = bool(placement.delimiters) \
+		and placement.type_name in resolved.structs
+	if placement.repeat_while is None and not counted and not record:
 		return []
 
 	element = resolved.structs.get(placement.type_name or "")
 	if element is None or _element_stride(resolved, element) is None:
 		return []
+
+	if record:
+		return [
+			"",
+			f"-- How far `{placement.path}` reaches from `at`: its records,"
+			" and the",
+			"-- terminator that ends them where the run owns it.",
+			f"local function {_span_name(struct, placement)}"
+			"(tvb, at, at_struct)",
+			"	local _ = at_struct",
+			"	local start = at",
+			*_record_walk(resolved, placement, element, None),
+			"	return at - start",
+			"end",
+		]
 
 	# A run the message *counts*, whose elements each say how long they are.
 	# There is no stride to multiply, so the only way to know where it ends is
@@ -2227,7 +2332,9 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return _variant_length(resolved, struct, placement, base)
 
 	if placement.repeat_while is not None \
-			or is_counted_run(resolved.structs, placement):
+			or is_counted_run(resolved.structs, placement) \
+			or (placement.delimiters
+			    and placement.type_name in resolved.structs):
 		# Before the nested-struct case below, which named the element's
 		# extent and so measured a run of labels as one label.
 		if not _run_span(resolved, struct, placement):
@@ -2238,6 +2345,10 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# other offset walks the members before it as though they were
 		# elements. A composed schema put one at offset 3 and said so.
 		return f"{_span_name(struct, placement)}(tvb, {where}, {base})"
+
+	# Measured where the member starts, as its row scans it.
+	if placement.delimiters:
+		return _footprint_call(placement, where)
 
 	if placement.size_expr is not None:
 		rendered = _over_fields(struct, placement.size_expr, base)
@@ -2506,26 +2617,35 @@ def _delimited(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	The scan is emitted rather than the length, because there is no length:
 	Wireshark has the same bytes situ does and has to look for the same thing
-	in them. A run of records is not unrolled here -- the terminator ends the
-	run and each element is dissected by its own dissector -- so this handles
-	the byte case and says so for the other.
+	in them. A run of records is walked instead: where a terminator stands
+	the run ends, and elsewhere an element starts and goes to its own
+	dissector. It said "Not unrolled" and stopped the cursor until 26.931,
+	so nothing after an HTTP request's headers was ever shown.
 	"""
 	name  = _lua(_local(struct, placement))
 	delim = placement.delimiter
 	assert delim is not None
 
-	if placement.type_name in resolved.structs:
-		# `_LOST` because this advances `at` by nothing: the scan that
-		# would find the terminator is the walk being declined. Without it
-		# `edges.kv_block.payload` was drawn from offset 0 -- over the
-		# `entries` run it follows rather than after it -- which is the
-		# confident wrong line `_uncomputable` exists to prevent.
+	element = resolved.structs.get(placement.type_name or "")
+	if element is not None:
+		shown = " or ".join(render_delimiter(one)
+		                    for one in placement.delimiters)
+		if _host_order_inside(element):
+			return _uncomputable(placement.path, "an element's length is"
+			                     " `endian native`, and the capture does"
+			                     " not record which machine wrote it")
+		# Declined with `_LOST`, which stops the cursor: advancing by
+		# nothing drew `edges.kv_block.payload` from offset 0, over the
+		# run it follows.
+		if _element_stride(resolved, element) is None:
+			return _uncomputable(placement.path,
+			                     _run_declined(resolved, placement, element))
 		return [
 			f"\t-- {placement.path}: a run of {placement.type_name} to "
-			f"{' or '.join(render_delimiter(one) for one in placement.delimiters)}.",
-			"\t-- Not unrolled: the terminator ends the run rather than each",
-			"\t-- element, so where it stops is a walk this does not do.",
-			_LOST,
+			f"{shown}, walked", *seek,
+			*_record_walk(resolved, placement, element,
+			              f"Dissector.get(\"{placement.type_name}\"):call("
+			              "tvb(at, size):tvb(), pinfo, subtree)"),
 		]
 
 	# EVERY alternative, not just the first. `placement.delimiter` is the
