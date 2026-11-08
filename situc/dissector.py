@@ -142,6 +142,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend(TRIM_HELPER)
 
 	lines.extend(READ_HELPER)
+	lines.extend(_varint_functions(schema, resolved))
 	_message_setup(schema, resolved)
 	lines.extend(_conversation_setup(schema, resolved))
 
@@ -408,6 +409,253 @@ STANDS_HELPER = [
 	"end",
 	"",
 ]
+
+
+#: Where a varint's VALUE stops growing here: 2^48, a length no frame holds.
+#: Saturating rather than wrapping keeps a lying varint from reading as a
+#: negative length, which `tvb:len() >= at + n` would let through.
+VARINT_SATURATION = 2 ** 48
+
+#: 2^64, which a varint of the four 64-bit-checked forms may not reach.
+VARINT_CEILING = "18446744073709551616.0"
+
+
+def _varint_name(decl: ast.VarintDecl) -> str:
+	return f"situ_varint_{_lua(decl.name)}"
+
+
+def _varint_function(decl: ast.VarintDecl) -> list[str]:
+	"""One varint type read in Lua: its width at `at`, and its value.
+
+	`walk.decode_varint` in Lua, one form per declaration, so the walk a
+	capture gets is the walker's to the byte. 0 where the frame ends inside
+	the number or the bytes are no number in this form -- the walker's
+	`Refused`, which the caller answers by showing nothing more.
+
+	Arithmetic rather than bit operators, which decision 0021 does not let
+	this file assume. The value is accumulated as a float, so the tests
+	against 2^64 that four forms make are a float compare, and handed back
+	as an integer saturated at `VARINT_SATURATION`.
+	"""
+	enc  = decl.encoding
+	most = decl.max_bytes
+	sat  = f"{VARINT_SATURATION}.0"
+	done = f"math.floor(math.min(f, {sat}))"
+	body: list[str] = []
+
+	def byte(at: str) -> str:
+		return f"tvb({at}, 1):uint()"
+
+	if enc is ast.VarintEncoding.QUIC:
+		body = [
+			"\tlocal size = ({1, 2, 4, 8})[math.floor(b0 / 64) + 1]",
+			"\tif size > room then return 0, 0 end",
+			"\tlocal f = (b0 % 64) * 1.0",
+			"\tfor i = 1, size - 1 do",
+			f"\t\tf = f * 256 + {byte('at + i')}",
+			"\tend",
+			f"\treturn size, {done}",
+		]
+	elif enc in ast.MARKED:
+		form   = ast.MARKED[enc]
+		widths = ", ".join(str(one) for one in form.widths)
+		order  = ("for i = 1, w do", f"f = f * 256 + {byte('at + i')}") \
+			if form.big else \
+			("for i = w, 1, -1 do", f"f = f * 256 + {byte('at + i')}")
+		body = [
+			f"\tlocal lead = b0 % {form.mask + 1}",
+			f"\tif lead < {form.direct} then return 1, lead end",
+			f"\tlocal w = ({{{widths}}})[lead - {form.first} + 1]",
+			"\tif w == nil or w + 1 > room then return 0, 0 end",
+			"\tlocal f = 0.0",
+			f"\t{order[0]}",
+			f"\t\t{order[1]}",
+			"\tend",
+			f"\treturn w + 1, {done}",
+		]
+	elif enc in (ast.VarintEncoding.EBML, ast.VarintEncoding.EBML_ID):
+		# The first set bit says the width: `9 - bit_length(b0)`. Spelled as
+		# a chain over constants, so no float enters a width.
+		chain = []
+		for size in range(1, 9):
+			top = 1 << (8 - size)
+			chain.append(f"\t{'if' if size == 1 else 'elseif'} b0 >= {top}"
+			             f" then size, keep = {size}, {top}")
+		keep = "b0" if enc is ast.VarintEncoding.EBML_ID else "b0 % keep"
+		body = [
+			"\tlocal size, keep",
+			*chain,
+			"\telse return 0, 0 end",
+			"\tif size > room then return 0, 0 end",
+			f"\tlocal f = ({keep}) * 1.0",
+			"\tfor i = 1, size - 1 do",
+			f"\t\tf = f * 256 + {byte('at + i')}",
+			"\tend",
+			f"\treturn size, {done}",
+		]
+	elif enc is ast.VarintEncoding.UTF8:
+		chain = []
+		for size, low in ((7, 0xFE), (6, 0xFC), (5, 0xF8), (4, 0xF0),
+		                  (3, 0xE0), (2, 0xC0)):
+			chain.append(f"\t{'if' if size == 7 else 'elseif'} b0 >= {low}"
+			             f" then size = {size}")
+		body = [
+			"\tif b0 < 128 then return 1, b0 end",
+			"\tif b0 == 255 then return 0, 0 end",
+			"\tlocal size",
+			*chain,
+			"\telse return 0, 0 end",
+			"\tif size > room then return 0, 0 end",
+			"\tlocal f = (b0 % ({32, 16, 8, 4, 2, 1})[size - 1]) * 1.0",
+			"\tfor i = 1, size - 1 do",
+			f"\t\tlocal b = {byte('at + i')}",
+			"\t\tif b < 128 or b >= 192 then return 0, 0 end",
+			"\t\tf = f * 64 + b % 64",
+			"\tend",
+			f"\treturn size, {done}",
+		]
+	elif enc in (ast.VarintEncoding.HPACK, ast.VarintEncoding.BERTAG):
+		prefix = 5 if enc is ast.VarintEncoding.BERTAG else decl.prefix
+		assert prefix is not None
+		mask = (1 << prefix) - 1
+		grow = ("f = f * 128 + b % 128" if enc is ast.VarintEncoding.BERTAG
+		        else "f = f + (b % 128) * scale")
+		add  = "" if enc is ast.VarintEncoding.BERTAG else f"f = f + {mask}; "
+		body = [
+			f"\tif b0 % {mask + 1} ~= {mask} then return 1, b0 % {mask + 1} end",
+			"\tlocal f, scale = 0.0, 1.0",
+			"\tfor i = 1, room - 1 do",
+			f"\t\tlocal b = {byte('at + i')}",
+			f"\t\t{grow}",
+			"\t\tscale = scale * 128",
+			"\t\tif b < 128 then",
+			f"\t\t\t{add}if f >= {VARINT_CEILING} then return 0, 0 end",
+			f"\t\t\treturn i + 1, {done}",
+			"\t\tend",
+			f"\t\tif f >= {VARINT_CEILING} then return 0, 0 end",
+			"\tend",
+			"\treturn 0, 0",
+		]
+	elif enc is ast.VarintEncoding.LEBPREFIX:
+		prefix = decl.prefix
+		assert prefix is not None
+		body = [
+			f"\tlocal f, scale = (b0 % {1 << prefix}) * 1.0, {1 << prefix}.0",
+			"\tif b0 < 128 then return 1, math.floor(f) end",
+			"\tfor i = 1, room - 1 do",
+			f"\t\tlocal b = {byte('at + i')}",
+			"\t\tf = f + (b % 128) * scale",
+			"\t\tscale = scale * 128",
+			f"\t\tif f >= {VARINT_CEILING} then return 0, 0 end",
+			f"\t\tif b < 128 then return i + 1, {done} end",
+			"\tend",
+			"\treturn 0, 0",
+		]
+	elif enc is ast.VarintEncoding.SLEB128:
+		# The zigzag form, as every read of a signed varint hands it on.
+		body = [
+			"\tlocal f, scale = 0.0, 1.0",
+			"\tfor i = 0, room - 1 do",
+			f"\t\tlocal b = {byte('at + i')}",
+			"\t\tlocal g = b % 128",
+			"\t\tif i == 9 and g ~= 0 and g ~= 127 then return 0, 0 end",
+			"\t\tf = f + g * scale",
+			"\t\tscale = scale * 128",
+			"\t\tif b < 128 then",
+			"\t\t\tif g >= 64 then f = f - scale end",
+			"\t\t\tif f >= 0 then f = f * 2 else f = -f * 2 - 1 end",
+			f"\t\t\treturn i + 1, {done}",
+			"\t\tend",
+			"\tend",
+			"\treturn 0, 0",
+		]
+	elif enc is ast.VarintEncoding.BIJECTIVE128:
+		body = [
+			"\tlocal f = 0.0",
+			"\tfor i = 0, room - 1 do",
+			f"\t\tlocal b = {byte('at + i')}",
+			"\t\tif i > 0 then f = (f + 1) * 128 + b % 128 else f = b % 128 * 1.0 end",
+			f"\t\tif f >= {VARINT_CEILING} then return 0, 0 end",
+			f"\t\tif b < 128 then return i + 1, {done} end",
+			"\tend",
+			"\treturn 0, 0",
+		]
+	else:
+		big   = enc is ast.VarintEncoding.BE128
+		whole = big and decl.terminal_bits == 8
+		body = [
+			"\tlocal f, scale = 0.0, 1.0",
+			"\tfor i = 0, room - 1 do",
+			f"\t\tlocal b = {byte('at + i')}",
+			*([f"\t\tif i + 1 == {most} then return i + 1,"
+			   f" math.floor(math.min(f * 256 + b, {sat})) end"]
+			  if whole else []),
+			("\t\tf = f * 128 + b % 128" if big else
+			 "\t\tf = f + (b % 128) * scale"),
+			*([] if big else ["\t\tscale = scale * 128"]),
+			f"\t\tif b < 128 then return i + 1, {done} end",
+			"\tend",
+			"\treturn 0, 0",
+		]
+
+	return [
+		"",
+		f"-- `{decl.name}`, a `{enc.value}` varint: how many bytes it occupies"
+		" at `at`,",
+		"-- and the number they spell. 0 where the frame ends inside it or the",
+		"-- bytes are no number in this form.",
+		f"local function {_varint_name(decl)}(tvb, at)",
+		f"\tlocal room = math.min(tvb:len() - at, {most})",
+		"\tif room < 1 then return 0, 0 end",
+		f"\tlocal b0 = {byte('at')}",
+		*body,
+		"end",
+	]
+
+
+def _varint_functions(schema: ast.Schema,
+		resolved: ResolvedSchema) -> list[str]:
+	"""Every varint type a member reads, as Lua."""
+	named = {entry.placement.varint
+	         for struct in resolved.structs.values()
+	         for entry in struct.entries}
+	_VARINTS.clear()
+	lines: list[str] = []
+	for decl in schema.varints():
+		_VARINTS[decl.name] = decl
+		if decl.name in named:
+			lines.extend(_varint_function(decl))
+	return lines
+
+
+def _varint_value(placement: Placement) -> ast.VarintDecl | None:
+	"""The varint type of a member whose VALUE this can hand a length.
+
+	Not a signed one, whose zigzag form is not the number it means, and
+	not one sharing a first byte with fields before it at an offset the
+	walk decides: where the cursor stands then is the shared byte only
+	if the fields before it say so, which this does not check.
+	"""
+	decl = _one_varint(placement)
+	if decl is None or decl.transform is not None \
+			or decl.encoding is ast.VarintEncoding.SLEB128:
+		return None
+	if decl.shared_bits and placement.offset_bits is None:
+		return None
+	return decl
+
+
+#: The schema's varint types by name, for the member that reads one.
+_VARINTS: dict[str, ast.VarintDecl] = {}
+
+
+def _one_varint(placement: Placement) -> ast.VarintDecl | None:
+	"""The varint type of a member that is ONE varint, not a run of them."""
+	if placement.varint is None or placement.array_count is not None \
+			or data_sized(placement) or placement.repeat_while is not None \
+			or placement.delimiters:
+		return None
+	return _VARINTS.get(placement.varint)
 
 
 #: (name, request struct, response struct, key pairs) per emittable relation.
@@ -1032,7 +1280,13 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 	capturable = {held.path for held in _capturable(struct, members)}
 	_captured.clear()
 	for placement in members:
-		if placement.path in capturable and not lost:
+		decl = _varint_value(placement)
+		if placement.path in capturable and not lost and decl is not None:
+			name = f"{_lua(placement.name)}_value"
+			lines.append(f"\tlocal {name} = select(2,"
+			             f" {_varint_name(decl)}(tvb, at))")
+			_captured[placement.path] = name
+		elif placement.path in capturable and not lost:
 			name   = f"{_lua(placement.name)}_value"
 			little = ("true" if placement.endian is ast.Endian.LITTLE
 			          else "false")
@@ -1455,11 +1709,29 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `_uncomputable` exists to say. Walking the continuation bits in Lua
 	# would let the members after it be placed too, and is a capability this
 	# dissector does not have yet rather than a line it should guess.
+	decl = _one_varint(placement)
+	if decl is not None:
+		name = _lua(_local(struct, placement))
+		return [
+			f"\t-- {placement.path}: a varint, as wide as its own bytes say",
+			*seek,
+			f"\tlocal {name}_w = {_varint_name(decl)}(tvb, at)",
+			# Where the bytes are no number, nothing after is placed: the
+			# walker refuses the message there, and a cursor guessed past
+			# it is the confident wrong line `_uncomputable` exists for.
+			# Returned from rather than run to the frame's end, which
+			# still drew a zero-length row for a run the number sized.
+			f"\tif {name}_w == 0 then",
+			"\t\treturn at",
+			"\tend",
+			f"\tsubtree:add({field}, tvb(at, {name}_w))",
+			f"\tat = at + {name}_w",
+		]
 	if placement.varint is not None:
 		return _uncomputable(
 			placement.path,
-			"a varint, whose width is in its own bytes and which this"
-			" dissector does not walk")
+			"a run of varints, whose widths are in their own bytes and"
+			" which this dissector does not walk")
 
 	if placement.kind == "variant":
 		return _variant(resolved, struct, placement, seek)
@@ -1520,6 +1792,20 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			return [
 				f"\tsubtree:add({field}, tvb({first}, {count}))",
 				f"\tat = {first + count}",
+			]
+		# At an offset the walk decides, the same width from `at`. It fell
+		# to `_repeated` and took `decimal u32 n[4]` for four u32s, sixteen
+		# bytes where the digits are four -- unseen while the varint in
+		# front of `edges.text_driver_moved` stopped the cursor (26.932).
+		if placement.is_fixed_size and not placement.delimiters \
+				and placement.size_bits % BITS_PER_BYTE == 0:
+			digits = placement.size_bits // BITS_PER_BYTE
+			return [
+				f"\t-- {placement.path}: {digits} digits", *seek,
+				f"\tif tvb:len() >= at + {digits} then",
+				f"\t\tsubtree:add({field}, tvb(at, {digits}))",
+				"\tend",
+				f"\tat = math.min(at + {digits}, tvb:len())",
 			]
 
 	# `data_sized` rather than `sized_by`, which holds a path and holds nothing
@@ -1729,10 +2015,15 @@ def _capturable(struct: ResolvedStruct,
 	no constant offset reads it. Everything after `t` then went unshown, and
 	that is most formats past their first variable member.
 	"""
-	named = " ".join(held.sized_by or held.size_expr or ""
-	                 for held in members)
+	# And what a variant switches on: `cluster` peeks a byte after a
+	# varint ID, at an offset only the walk knows, and its variant was
+	# declined as reading what this cannot (26.932).
+	named = " ".join(held.sized_by or held.size_expr or held.discriminant
+	                 or "" for held in members)
 	return [held for held in members
-	        if held.kind == "field" and held.scalar is not None
+	        if _varint_value(held) is not None and held.offset_bits is None
+	        and re.search(rf"\b{re.escape(held.name)}\b", named)
+	        or held.kind == "field" and held.scalar is not None
 	        and held.offset_bits is None and held.array_count is None
 	        and not held.scalar.signed and held.radix is None
 	        and held.located is None and held.since is None
@@ -1750,6 +2041,13 @@ def _read(placement: Placement, base: str) -> str | None:
 	"""
 	if placement.path in _captured:
 		return _captured[placement.path]
+	# A varint's value is what it spells, which only a walk of its bytes
+	# says. At a fixed offset, from the byte it starts in -- the one it
+	# shares with the fields before it, for the forms that share one.
+	decl = _varint_value(placement)
+	if decl is not None and placement.offset_bits is not None:
+		start = placement.offset_bits // BITS_PER_BYTE
+		return f"select(2, {_varint_name(decl)}(tvb, {_at(base, start)}))"
 	if placement.scalar is None or placement.offset_bits is None:
 		return None
 
@@ -1874,7 +2172,7 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 	reads: dict[str, str] = {}
 	for entry in struct.entries:
 		held = entry.placement
-		if held.scalar is None:
+		if held.scalar is None and _varint_value(held) is None:
 			continue
 		# Counted from a struct the message places, and `_read` takes the
 		# number as a place in the frame. Left out, so an expression naming
@@ -2331,6 +2629,11 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
 
+	decl = _one_varint(placement)
+	if decl is not None:
+		# The parentheses keep the width and drop the value.
+		return f"({_varint_name(decl)}(tvb, {where}))"
+
 	if placement.repeat_while is not None \
 			or is_counted_run(resolved.structs, placement) \
 			or (placement.delimiters
@@ -2766,6 +3069,27 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 		]
 
 	each = 1 if placement.kind == "opaque" else _element_bytes(resolved, placement)
+	stride = None if element is None else _element_stride(resolved, element)
+	if each is None and stride is not None and element is not None \
+			and not _host_order_inside(element):
+		# A count of records each saying how long it is: walked, as the
+		# extent's `_counted_span` walks it, each element to its own
+		# dissector. It declined, so a Bitcoin transaction showed its
+		# version and nothing after its inputs (26.932).
+		return [
+			f"\t-- {placement.path}: {count} records, each as long as it"
+			" says", *seek,
+			f"\tlocal {name}_n = {count}",
+			f"\tlocal {name}_k = 0",
+			f"\twhile {name}_k < {name}_n and at < tvb:len() do",
+			f"\t\tlocal size = {stride}",
+			"\t\tif size == 0 or at + size > tvb:len() then break end",
+			f"\t\tDissector.get(\"{placement.type_name}\"):call("
+			"tvb(at, size):tvb(), pinfo, subtree)",
+			"\t\tat = at + size",
+			f"\t\t{name}_k = {name}_k + 1",
+			"\tend",
+		]
 	if each is None:
 		return _uncomputable(placement.path, "elements of no fixed size")
 

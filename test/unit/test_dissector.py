@@ -943,10 +943,13 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 
 	Four branches declined a member by returning a comment and leaving `at`
 	where it was, and the walk carried on placing every member after it at a
-	cursor that was now wrong. `segments` is `segment parts[count]; u16
-	after;` over an element of no fixed size, and `coded_run`'s body has a
-	length this cannot render: both still decline, and nothing after them is
-	placed.
+	cursor that was now wrong. `varint_run` is a run of varints, whose
+	widths this does not walk, and `coded_run`'s body has a length this
+	cannot render: both still decline, and nothing after them is placed.
+
+	`segments` was the first of those until 26.932: `segment parts[count];
+	u16 after;` over records each saying its own length is walked now, and
+	is the second control.
 
 	`beats` was the third and is now the control, which is the half worth
 	keeping. `beat pulse[] while (kind == 0x33) max 6; u16 after;` was
@@ -964,11 +967,14 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
 	lua = generate(parse(source), resolved, "edges")
 
-	assert "segments.after: not shown" in lua
+	assert "varint_run.tail: not shown" in lua
 	assert "coded_run.trailer: not shown" in lua
 
+	body = lua[lua.index("function varint_run.dissector"):]
+	assert "subtree:add(varint_run.fields.tail" not in body[:body.index("\nend")]
+
 	body = lua[lua.index("function segments.dissector"):]
-	assert "subtree:add(segments.fields.after" not in body[:body.index("\nend")]
+	assert "subtree:add(segments.fields.after" in body[:body.index("\nend")]
 
 	beats = lua[lua.index("function beats.dissector"):]
 	beats = beats[:beats.index("\nend")]
