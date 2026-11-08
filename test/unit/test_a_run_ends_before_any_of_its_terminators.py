@@ -29,6 +29,7 @@ struct upto   { item es[] before "\\xAA\\xBB"; u8 tail[remaining]; }
 struct alts   { item es[] until "\\xFF" | "\\xEE\\xEE"; u8 after; }
 struct opened { item es[] before "\\xAA\\xBB\\xCC" | "\\xDD" | end; }
 struct closed { item es[] until "\\xAA\\xBB\\xCC"; u8 after; }
+struct crlf   { item es[] until "\\r" | "\\r\\n"; u8 after; }
 """
 
 #: struct, message -> the lines all four print, and `validate`'s verdict.
@@ -52,6 +53,9 @@ CASES = {
 	("opened", "0100dd"):     ("es count=1", None, "0"),
 	("opened", "0100aabbcc"): ("es count=1", None, "0"),
 	("closed", "0100aabbcc07"): ("es count=1", "after 7", "0"),
+	# `\r` and `\r\n` both stand at a CRLF, and the longest is the run's,
+	# as a byte scan takes it: `after` is the 07 and not the newline.
+	("crlf", "01000d0a07"):   ("es count=1", "after 7", "0"),
 }
 
 

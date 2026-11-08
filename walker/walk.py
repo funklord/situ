@@ -2452,10 +2452,11 @@ def _record_run_walk(view: View, index: int,
 	count = 0
 
 	def stands(here: int) -> int:
-		"""The length of the first terminator standing at `here`, or 0."""
-		return next((len(one) for one in delims
-		             if here + len(one) <= view.limit
-		             and view.buffer[here:here + len(one)] == one), 0)
+		"""The length of the longest terminator standing at `here`, or 0:
+		a byte scan's rule, so `\r\n` is the run's where `\r` matches too."""
+		return max((len(one) for one in delims
+		            if here + len(one) <= view.limit
+		            and view.buffer[here:here + len(one)] == one), default=0)
 
 	while at + room <= view.limit:
 		if stands(at):

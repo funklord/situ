@@ -6059,18 +6059,20 @@ class Emitter:
 		"""What the terminator the walk stopped at adds, as an expression.
 
 		Nothing for `before`, whose terminator is the next member's, and
-		the first alternative standing there otherwise, as the walkers take
-		it (26.930).
+		the longest alternative standing there otherwise, as a byte scan
+		takes it (26.930).
 		"""
 		if not consumed:
 			return "0"
 		if simple:
+			# Where it stands, not merely where there is room: see C's.
 			width = len(delims[0])
-			return f"({width} if {at} + {width} <= self._len else 0)"
-		return ("next((len(_one) for _one in " + repr(delims)
+			return (f"({width} if {at} + {width} <= self._len and "
+			        f"{Emitter._record_match(at, delims, True)} else 0)")
+		return ("max((len(_one) for _one in " + repr(delims)
 		        + f" if {at} + len(_one) <= self._len and bytes("
 		        f"self._msg.buffer[self._at + {at}:self._at + {at}"
-		        " + len(_one)]) == _one), 0)")
+		        " + len(_one)]) == _one), default=0)")
 
 	def _record_run(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -6126,10 +6128,7 @@ class Emitter:
 			"\t\t\tstarts.append(at)",
 			"\t\t\tat += size",
 			"",
-			(f"\t\tstarts.append(at + ({len(delims[0])} if at + {len(delims[0])}"
-			 " <= self._len else 0))"
-			 if simple and placement.delimiter_consumed else
-			 "\t\tstarts.append(at + "
+			("\t\tstarts.append(at + "
 			 + self._record_took("at", delims, placement.delimiter_consumed,
 			                     simple) + ")"),
 			"\t\treturn starts",
@@ -7917,14 +7916,11 @@ class Emitter:
 			   f'\t\t\t\t\t"{member.path} does not end:'
 			   ' the frame stops first")'] if ended else [
 				*([] if member.repeat_while is not None else
-				  [f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
-				   f"\t\t\t\t{at} += {len(member.delimiter)}"]
-				  if record_simple(tuple(member.delimiters),
-				                   record_open(member))
-				  and member.delimiter_consumed else
 				  [f"\t\t\t{at} += "
 				   + self._record_took(at, tuple(member.delimiters),
-				                       member.delimiter_consumed, False)]),
+				                       member.delimiter_consumed,
+				                       record_simple(tuple(member.delimiters),
+				                                     record_open(member)))]),
 				f"\t\t\tif self._len - {at} < {tail}:",
 				f"\t\t\t\traise BoundsError({why})",
 			]),

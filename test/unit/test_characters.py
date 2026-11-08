@@ -207,10 +207,6 @@ def test_the_same_alternative_twice_is_refused() -> None:
 
 
 @pytest.mark.parametrize(("body", "why"), [
-	# A record run checks its terminator only where an element would start,
-	# so alternation there is a different walk from the one a byte run does.
-	("struct r { u8 a; u8 b; }\n"
-	 "struct s { r runs[] until \"\\x00\" | \"\\xFF\"; }\n", "run of records"),
 	# `quoted`/`escape` carry state past the delimiter, and with several the
 	# scan would have to carry it past each.
 	("struct s { u8 v[] until ',' | ']' [quoted = \"\\\"\"]; u8 a; }\n",
@@ -220,7 +216,8 @@ def test_the_constructs_it_does_not_reach_are_refused(body: str,
 		why: str) -> None:
 	"""Named refusals rather than a half-converted emitter.
 
-	Both are describable and neither is built: a schema that got silently
+	Describable and not built (a run of records with several terminators
+	was here too, and is built since 26.930): a schema that got silently
 	wrong framing from one of them would be the failure this repository
 	rates worst, and a schema that is refused by name is a reader's cue to
 	ask for the construct.

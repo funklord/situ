@@ -7568,18 +7568,26 @@ class Emitter:
 		"""Step past the terminator the walk stopped at, where it is the run's.
 
 		`before` leaves it to whatever comes next, and with several the one
-		standing there is stepped over, the first that matches as the walkers
-		take it. Where the run ran out of buffer instead there is none.
+		longest standing there is stepped over, as a byte scan takes it. Where
+		the run ran out of buffer instead there is none.
 		"""
 		if not consumed:
 			return []
 		if record_simple(delims, open_end):
+			# Where it stands, and not merely where there is room for it:
+			# a walk stopped by a cut element added the terminator's width
+			# anyway, so cbor's chunked string with no `0xff` measured two
+			# where the walkers say one.
 			width = len(delims[0])
-			return [f"\tif (at + {width}u <= view.limit) {{",
+			return [f"\tif (at + {width}u <= view.limit"
+			        f" && {self._record_match(delims, syms, True)}) {{",
 			        f"\t\tat = at + {width}u;",
 			        "\t}"]
+		# The longest standing there, as a byte scan takes it: `\r\n` and
+		# `\r` both match at a CRLF, and the newline is the run's.
+		ranked = sorted(zip(delims, syms), key=lambda pair: -len(pair[0]))
 		lines: list[str] = []
-		for index, (one, sym) in enumerate(zip(delims, syms)):
+		for index, (one, sym) in enumerate(ranked):
 			test = self._record_match((one,), [sym], False)
 			lines += [f"\t{'} else ' if index else ''}if ({test}) {{",
 			          f"\t\tat = at + {len(one)}u;"]

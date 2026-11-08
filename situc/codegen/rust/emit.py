@@ -5705,15 +5705,18 @@ class Emitter:
 			return []
 		delims = tuple(placement.delimiters)
 		if record_simple(delims, record_open(placement)):
+			# Where it stands, not merely where there is room: see C's.
 			width = len(delims[0])
-			return [f"{indent}if {at} + {width} <= self.bytes.len() {{",
+			return [f"{indent}if {at} + {width} <= self.bytes.len()"
+			        f" && {self._record_match(placement, at)} {{",
 			        f"{indent}\t{at} += {width};",
 			        f"{indent}}}"]
+		ranked = sorted(range(len(delims)), key=lambda i: -len(delims[i]))
 		lines: list[str] = []
-		for i, one in enumerate(delims):
-			lines += [f"{indent}{'} else ' if i else ''}if "
+		for n, i in enumerate(ranked):
+			lines += [f"{indent}{'} else ' if n else ''}if "
 			          f"{self._record_match(placement, at, i)} {{",
-			          f"{indent}\t{at} += {len(one)};"]
+			          f"{indent}\t{at} += {len(delims[i])};"]
 		return [*lines, f"{indent}}}"]
 
 	def _record_run(self, struct: ResolvedStruct,

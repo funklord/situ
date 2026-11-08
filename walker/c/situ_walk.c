@@ -2642,16 +2642,19 @@ static uint32_t terminator_at(const situ_walk_image *image,
                               uint32_t at)
 {
 	const uint32_t stride = image->delimiter_stride;
+	uint32_t       found  = 0u;
 
+	/* The longest standing here, as a byte scan takes it (26.930). */
 	for (uint32_t d = 0u; d < alts; d++) {
 		const uint8_t *row  = rules + (size_t)d * stride;
 		const uint32_t wide = row[16];
 
-		if (wide <= len - at && delimiter_at(message + at, row + 18, wide)) {
-			return wide;
+		if (wide <= len - at && wide > found
+		    && delimiter_at(message + at, row + 18, wide)) {
+			found = wide;
 		}
 	}
-	return 0u;
+	return found;
 }
 
 /* Whether a check row requires the terminator, which says, beside a
