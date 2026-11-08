@@ -52,8 +52,10 @@ CASES = {
 	"s_var":   {"0201aa00": "0", "0205aaaaaaaaaa00": "2",
 	            "0201aa05": "1"},				# the frame first
 	"s_wh":    {"01aa00": "0", "05aaaaaaaaaa00": "2",
-	            "01aa0700": "0"},				# not held: not an element
-	"s_de":    {"01aa3b": "0", "05aaaaaaaaaa3b": "2", "01aa073b": "0",
+	            # Not held, so not an element -- and so the run never read
+	            # the `len` of 0 that ends it: the frame cut it (26.927).
+	            "01aa0700": "2"},
+	"s_de":    {"01aa3b": "0", "05aaaaaaaaaa3b": "2", "01aa073b": "2",	# `;` inside a cut element (26.926)
 	            "3b": "0"},
 	"s_rest":  {"0001aa00": "0", "0005aaaaaaaaaa": "2", "0001aa05": "1"},
 }
@@ -122,7 +124,8 @@ ARM_CASES = {
 	"040001aa00":           "0",
 	"040005aaaaaaaaaa00":   "2",
 	"050005aaaaaaaaaa3b":   "2",
-	"0500":                 "0",
+	"0500":                 "2",	# no `;` at all (26.926)
+	"05003b":               "0",
 	"ff00cc":               "0",
 }
 

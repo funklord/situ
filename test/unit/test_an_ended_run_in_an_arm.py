@@ -104,8 +104,11 @@ TAILED = HEAD + """struct arms {
 """
 
 TAILED_CASES = {
-	"0101050100aabb":         "0",
-	"0101050100aa":           "1",	# `after` is one byte short
+	"01010500aabb":           "0",	# one piece, then the `len` of 0
+	"01010500aa":             "1",	# `after` is one byte short
+	# A third piece claiming 0xaa bytes is no piece, so the run never read
+	# the `len` of 0 that ends it: the frame cut it (26.927).
+	"0101050100aabb":         "2",
 	"01010501060107aabb":     "0",	# three, the cap, condition still true
 	"01010501060107aa":       "1",
 	"010105010601070108aabb": "0",	# the cap stops it, not the condition
@@ -148,10 +151,13 @@ def test_both_walkers_hold_the_tail(tmp_path: Path) -> None:
 #: No tail: each record the run holds is validated (26.790). `kv`'s value
 #: needs its `;` and a `kv` is two bytes at least, so the delimited run of
 #: `kv` refuses where a run of `piece` or `pt` holds nothing to refuse. None of
-#: these holds a newline, so a delimited run refuses them all for that (26.926).
+#: these holds a newline, so a delimited run refuses them all for that (26.926),
+#: and a `while` run refuses those that never read its ending element (26.927).
 ALONE = {
-	"while":       {"01003a": "0", "0100013b": "0", "01000105": "0"},
-	"while_fixed": {"01003a": "0", "0100013b": "0", "01000105": "0"},
+	"while":       {"01003a": "2", "0100013b": "2", "01000105": "2",
+	                "0100010500": "0", "010000": "0"},
+	"while_fixed": {"01003a": "2", "0100013b": "2", "01000105": "2",
+	                "01000105003a": "0", "01000000": "0"},
 	"until":       {"01003a": "2", "0100013b": "2", "01000105": "2"},
 	"until_fixed": {"01003a": "2", "0100013b": "2", "01000105": "2"},
 }

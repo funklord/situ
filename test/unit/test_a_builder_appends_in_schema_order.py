@@ -2205,11 +2205,11 @@ def test_a_json_array_is_built_and_the_reader_agrees(tmp_path: Path) -> None:
 	the count comparison catches that; with it removed the build returns
 	SITU_OK and `_count` reports 1.
 
-	The trailing comma is in here as the case that is NOT a disagreement,
-	which is worth asserting so nobody tightens it by mistake: `1,2,`
-	gives `[1,2,` and the reader sees two elements, because the run ends
-	where the frame does. Whether a trailing comma should be legal is
-	json.situ's business and not the writer's.
+	The trailing comma was in here as the case that was NOT a
+	disagreement: `1,2,` gave `[1,2,` and the reader saw two elements,
+	because the run ended where the frame did. A `while` run no longer
+	ends there (26.927): `[1,2,` never reads the element whose separator
+	ends the array, so the reader refuses it and so does the build.
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "json" / "json.situ")
 	files = dict(build.generate(parsed, resolved, "json", "situ",
@@ -2269,9 +2269,9 @@ int main(void)
 
 	assert lines[0] == "0 [1,2] 2", lines[0]
 	assert lines[1] == "0 [1] 1", lines[1]
-	assert lines[2] == "0 [1,2, 2", (
-		"a trailing comma is not a disagreement: the run ends where the "
-		f"frame does and the reader sees two: {lines[2]}")
+	assert lines[2] == "2 ", (
+		"a trailing comma leaves the array unended, which the reader "
+		f"refuses (26.927): {lines[2]}")
 	assert lines[3] == "2 ", (
 		"the reader stops after the first element here, so the second is "
 		f"bytes nobody reads and the build must refuse: {lines[3]}")
