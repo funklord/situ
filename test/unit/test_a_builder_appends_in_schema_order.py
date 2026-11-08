@@ -2196,6 +2196,61 @@ def test_a_while_run_is_always_a_run_of_structs() -> None:
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_varint_counts_a_run_of_varints(tmp_path: Path) -> None:
+	"""`uleb count; uleb type_index[count]`, written and read back.
+
+	The size field named `type_index_len` where the run's parameter is
+	`type_index_count`, so wasm's builder did not compile. The bytes are
+	worked by hand: two, then 0, then 300 as `ac 02`.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "wasm" / "wasm.situ")
+	files = dict(build.generate(parsed, resolved, "wasm", "situ",
+	                            _header(parsed, resolved, "wasm")))
+	files.update(generate_c(parsed, resolved, "wasm").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "wasm_build.h"
+
+int main(void)
+{
+	const uint64_t values[2] = { 0u, 300u };
+	uint8_t        out[16];
+	uint32_t       n = 0, i;
+	uint64_t       got = 0;
+	situ_msg_t     msg;
+	situ_view_t    view;
+
+	if (situ_function_section_build(out, sizeof out, values, 2u, &n)
+	                != SITU_OK)
+		return 1;
+	for (i = 0; i < n; i++) printf("%02x", out[i]);
+	situ_msg_init(&msg, out, n);
+	if (situ_function_section_view(&msg, 0, n, &view) != SITU_OK
+	    || situ_function_section_validate(view) != SITU_OK
+	    || situ_function_section_type_index_at(view, 1u, &got) != SITU_OK)
+		return 2;
+	printf(" %u %u\\n", situ_function_section_type_index_count(view),
+	       (unsigned)got);
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "wasm.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, timeout=60)
+	assert (ran.returncode, ran.stdout) == (0, "0200ac02 2 300\n")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
 def test_a_json_array_is_built_and_the_reader_agrees(tmp_path: Path) -> None:
 	"""Real JSON, and the case the count check exists for.
 

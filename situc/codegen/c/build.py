@@ -2137,6 +2137,18 @@ def _write_needle(delim: bytes, what: str) -> list[str]:
 	        f"\t{AT} += {len(delim)}u;"]
 
 
+def _counts_elements(sized: Placement) -> bool:
+	"""Whether the caller hands this run's size over as a count of elements.
+
+	A run of wider scalars, and a run of varints, which has no stride to
+	divide a byte length by: its parameter is `_count`, so a size field
+	naming `_len` named nothing. `example/wasm`'s `uleb type_index[count]`
+	behind a `uleb count` is the case, a varint measuring varints.
+	"""
+	return (sized.element_bits or 0) in (16, 32, 64) \
+		or traverse.is_varint_run(sized)
+
+
 def _invert(part: Part, run: str, local: str, limit: int) -> list[str]:
 	"""Run a size expression backwards into `SOLVED`, or refuse.
 
@@ -2155,8 +2167,7 @@ def _invert(part: Part, run: str, local: str, limit: int) -> list[str]:
 	shift   = (f" + {-offset}" if offset < 0
 	           else f" - {offset}" if offset else "")
 	assert part.sizes is not None
-	many = (f"{run}_count" if (part.sizes.element_bits or 0) in (16, 32, 64)
-	        else f"{run}_len")
+	many = f"{run}_count" if _counts_elements(part.sizes) else f"{run}_len"
 	return [
 		f"\t/* {local}: what `{part.sizes.size_expr}` must hold for "
 		f"`{run}`",
@@ -2783,7 +2794,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				# the run either way; what differs is whether an
 				# expression stands between them.
 				run = _settled(parts, part.sizes, struct)
-				held_count = (part.sizes.element_bits or 0) in (16, 32, 64)
+				held_count = _counts_elements(part.sizes)
 				value = (SOLVED if part.solved is not None
 				         else f"{run}_count" if held_count
 				         else f"{run}_len")
@@ -2882,10 +2893,9 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				# otherwise, which is the measurement the size field's
 				# own branch makes.
 				run = _settled(parts, part.sizes, struct)
-				zig = ((SOLVED if part.solved is not None else
-				        f"{run}_count"
-				        if (part.sizes.element_bits or 0) in (16, 32, 64)
-				        else f"{run}_len"))
+				zig = (SOLVED if part.solved is not None else
+				       f"{run}_count" if _counts_elements(part.sizes)
+				       else f"{run}_len")
 				lines += _invert(part, run, local, most) \
 					if part.solved is not None else []
 				zig = f"(uint64_t){zig}"
