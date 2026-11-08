@@ -520,12 +520,17 @@ def test_an_operator_lua_spells_differently_is_declined() -> None:
 	the fixed version died on `tvb(at, 2.5)`.
 
 	`^` is the one that would not have died: `(units ^ 1) + 1` is a number Lua
-	computes happily and nobody meant."""
+	computes happily and nobody meant.
+
+	`/` is spelled since 26.940, from the expression's tree: floored, which
+	is the backends' truncation because both sides are unsigned bits. A
+	quotient that could be negative is still declined, and so is `^`."""
 	text = emit("struct s { u8 n [min = 1, max = 4];"
 	            " u8 half[n / 2 + 1]; u8 flip[(n ^ 1) + 1];"
 	            " u8 sum[n + 1]; u16 tail; }\n")
 
-	assert "sized by `n / 2 + 1`" in text
+	assert "math.floor(situ_uint(tvb, 0, 1, false) / 2)" in text
+	assert "sized by `n / 2 + 1`" not in text
 	assert "sized by `(n ^ 1) + 1`" in text
 	assert "local sum_n = situ_uint(tvb, 0, 1, false) + 1" in text	# and the rest still walks
 

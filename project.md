@@ -8363,6 +8363,10 @@ Moved to `doc/decision/26.938-the-dissector-reads-json.md`.
 
 Moved to `doc/decision/26.939-the-dissector-reads-a-wide-unsigned-field.md`.
 
+### 26.940 The dissector renders a size's bit operators from its tree
+
+Moved to `doc/decision/26.940-the-dissector-renders-bits-from-the-tree.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

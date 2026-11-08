@@ -784,7 +784,35 @@ def _varint_run_span(struct: ResolvedStruct,
 	]
 
 
-def _lua_expr(node: "ast.Expr | None", names: dict[str, str]) -> str | None:
+def _bit_range(node: "ast.Expr", widths: dict[str, int]) -> tuple[int, int] | None:
+	"""Which bits an unsigned expression can set: lowest, and one past the
+	highest. None where that is not known from the expression alone."""
+	if isinstance(node, ast.IntLiteral) and node.value >= 0:
+		value = node.value
+		return ((value & -value).bit_length() - 1 if value else 0,
+		        value.bit_length())
+	if isinstance(node, ast.NameRef) and node.name in widths:
+		return 0, widths[node.name]
+	if not isinstance(node, ast.Binary):
+		return None
+	left = _bit_range(node.left, widths)
+	if left is None:
+		return None
+	if node.op in ("<<", ">>") and isinstance(node.right, ast.IntLiteral):
+		shift = node.right.value if node.op == "<<" else -node.right.value
+		return max(left[0] + shift, 0), max(left[1] + shift, 0)
+	right = _bit_range(node.right, widths)
+	if right is None:
+		return None
+	if node.op == "&":
+		return max(left[0], right[0]), min(left[1], right[1])
+	if node.op == "|":
+		return min(left[0], right[0]), max(left[1], right[1])
+	return None
+
+
+def _lua_expr(node: "ast.Expr | None", names: dict[str, str],
+		widths: dict[str, int] | None = None) -> str | None:
 	"""A schema expression over `names` as Lua arithmetic, or None.
 
 	For the integer expressions a tlv region decodes its tag with, which
@@ -794,7 +822,12 @@ def _lua_expr(node: "ast.Expr | None", names: dict[str, str]) -> str | None:
 	else -- a shift by a variable, a mask with holes, `|`, a call -- is
 	None, and the caller declines as it would any length it cannot read.
 	Every operation is parenthesised, so Lua's precedence never decides.
+
+	`|` where the two sides cannot share a bit, which `widths` -- each
+	name's width -- shows: it is then `+`. ID3's synchsafe size is four
+	`u7`s shifted by sevens and or-ed, and was declined (26.940).
 	"""
+	widths = widths or {}
 	if isinstance(node, ast.IntLiteral):
 		return str(node.value)
 	if isinstance(node, ast.CharLiteral):
@@ -802,11 +835,11 @@ def _lua_expr(node: "ast.Expr | None", names: dict[str, str]) -> str | None:
 	if isinstance(node, ast.NameRef):
 		return names.get(node.name)
 	if isinstance(node, ast.Unary) and node.op == "-":
-		inner = _lua_expr(node.operand, names)
+		inner = _lua_expr(node.operand, names, widths)
 		return None if inner is None else f"(-{inner})"
 	if not isinstance(node, ast.Binary):
 		return None
-	left = _lua_expr(node.left, names)
+	left = _lua_expr(node.left, names, widths)
 	if left is None:
 		return None
 	right_literal = node.right.value \
@@ -827,12 +860,22 @@ def _lua_expr(node: "ast.Expr | None", names: dict[str, str]) -> str | None:
 			return None		# holes in the mask: not two remainders
 		top = f"({left} % {1 << high})"
 		return top if low == 0 else f"({top} - ({left} % {1 << low}))"
-	right = _lua_expr(node.right, names)
+	right = _lua_expr(node.right, names, widths)
 	if right is None:
 		return None
 	if node.op in ("+", "-", "*", "%"):
 		return f"({left} {node.op} {right})"
-	if node.op == "/":
+	if node.op == "|":
+		one, two = (_bit_range(node.left, widths),
+		            _bit_range(node.right, widths))
+		if one is not None and two is not None \
+				and (one[1] <= two[0] or two[1] <= one[0]):
+			return f"({left} + {right})"
+		return None
+	# Floored, which is the backends' truncation only where neither side
+	# can be negative: both are unsigned bits, as `_bit_range` knows them.
+	if node.op == "/" and _bit_range(node.left, widths) is not None \
+			and _bit_range(node.right, widths) is not None:
 		return f"math.floor({left} / {right})"
 	return None
 
@@ -876,12 +919,21 @@ def _tlv(struct: ResolvedStruct, placement: Placement, field: str,
 		return None
 
 	names = {"tag": "tag"}
+	# How wide each name can be, so a division over them is known to be
+	# unsigned: the tag is its type's width, and a part what its own
+	# expression can set.
+	widths = {"tag": placement.tlv_tag_bits or (
+		_VARINTS[placement.tlv_tag_varint].max_bits
+		if placement.tlv_tag_varint in _VARINTS else 64)}
 	parts: list[str] = []
 	for part in grammar.tag_decode:
-		value = _lua_expr(part.value, names)
+		value = _lua_expr(part.value, names, widths)
 		if value is None:
 			return None
 		names[part.name] = f"{_lua(part.name)}_part"
+		reach = _bit_range(part.value, widths) if part.value else None
+		if reach is not None:
+			widths[part.name] = reach[1]
 		parts.append(f"\t\tlocal {_lua(part.name)}_part = {value}")
 
 	def rule_lines(rule: "ValueRule | None") -> list[str] | None:
@@ -890,7 +942,7 @@ def _tlv(struct: ResolvedStruct, placement: Placement, field: str,
 		if rule.kind == "fixed":
 			return [f"size = {rule.size or 0}"]
 		if rule.kind == "computed":
-			value = _lua_expr(rule.value, names)
+			value = _lua_expr(rule.value, names, widths)
 			if value is None:
 				return None
 			# Clamped at both ends, as the four backends clamp (14.2b).
@@ -2491,7 +2543,8 @@ _UNSPELLABLE = re.compile(r"/|\^|<<|>>|(?<!&)&(?!&)|(?<!\|)\|(?!\|)")
 
 
 def _over_fields(struct: ResolvedStruct, source: str, base: str,
-		extra: dict[str, str] | None = None) -> str | None:
+		extra: dict[str, str] | None = None,
+		tree: "ast.Expr | None" = None) -> str | None:
 	"""A schema expression rewritten as Lua reads over `base`.
 
 	`extra` carries names that are not fields of `struct` -- `remaining` is
@@ -2567,7 +2620,17 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 			return None
 
 	if _UNSPELLABLE.search(source):
-		return None
+		# The tree, where the caller has it: shifts by constants, masks of
+		# contiguous bits and `|` over disjoint bits are arithmetic, and
+		# anything else is still declined (26.940).
+		if tree is None:
+			return None
+		widths = {entry.placement.path[len(struct.name) + 1:]:
+		          entry.placement.size_bits
+		          for entry in struct.entries
+		          if entry.placement.scalar is not None
+		          and not entry.placement.scalar.signed}
+		return _lua_expr(tree, reads, widths)
 	try:
 		return expand_calls(
 			over_fields(sorted(reads), source, lambda name: reads[name]),
@@ -2771,7 +2834,9 @@ def _counted_count(struct: ResolvedStruct, placement: Placement,
 	source = placement.size_expr or placement.sized_by
 	if not source:
 		return None
-	count = _over_fields(struct, source, base)
+	count = _over_fields(struct, source, base,
+	                     tree=placement.size_ast if placement.size_expr
+	                     else None)
 	return f"({count})" if count else None
 
 
@@ -3155,7 +3220,8 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return _footprint_call(placement, where)
 
 	if placement.size_expr is not None:
-		rendered = _over_fields(struct, placement.size_expr, base)
+		rendered = _over_fields(struct, placement.size_expr, base,
+		                        tree=placement.size_ast)
 		each     = element_bytes(placement)
 		return None if rendered is None else (
 			rendered if each == 1 else f"({rendered}) * {each}")
@@ -3729,7 +3795,8 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# length field precedes the member it sizes, so it is at a constant
 		# offset from the struct, and the struct a dissector dissects starts
 		# at the frame.
-		return _over_fields(struct, placement.size_expr, "0")
+		return _over_fields(struct, placement.size_expr, "0",
+		                    tree=placement.size_ast)
 
 	driver = resolved.find(f"{struct.name}.{placement.sized_by}")
 	if driver is None:
