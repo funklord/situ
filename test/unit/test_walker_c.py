@@ -2876,66 +2876,20 @@ def test_they_agree_about_the_corpus_being_well_formed(
 	VERDICTS_ASKED[schema.name] = (asked, declined)
 
 
-#: The one class where the two walkers refuse for the same reason and name a
-#: different check, and it is a divergence this tree already knew about.
+#: Structs whose refusals are not compared for their identity, because the
+#: two walkers name a different check. Named by schema and struct rather
+#: than by loosening the comparison, so an instance has to be added here.
 #:
-#: `size_bits` in the C walk REFUSES on an overflowing count where the Python
-#: walk clamps: its own comment says so -- "the overflow arm above is left
-#: refusing rather than saturating ... it stays a refusal and is recorded as
-#: the half still apart". Both answer BOUNDS for the same member; C stops at
-#: the size read and Python reaches `fits_frame`.
-#:
-#: Named rather than papered over, and named by SCHEMA AND STRUCT rather than
-#: by loosening the comparison: a fifth schema joining this class has to be
-#: added here, which is the difference between a known gap and a weakened
-#: test.
-IDENTITY_APART = frozenset({
-	("pickle.situ", "pickle_wstring"),
-	("png.situ", "chunk"),
-	# A third instance of the same shape, and the list is now long enough to
-	# be a finding rather than a footnote.
-	#
-	# All three are a run whose length a `u32` declares: `png.chunk`'s
-	# `u8 data[length]`, `pickle_wstring`'s `u16 data[length]` and
-	# `oob_inner`'s `u8 payload[len]`. A hostile length there exceeds the
-	# frame by a margin, C's placement guard refuses first with no check
-	# identity, and the Python walk reaches `fits_frame`. BOTH REFUSE and
-	# both say BOUNDS; only the name of the check differs, which is the
-	# narrow divergence this set exists for and which the docstring below
-	# describes in those words.
-	#
-	# `oob_inner` is new to the corpus rather than newly divergent: it
-	# arrived with the shape 26.675 needed, and is the first thing in
-	# `edges.situ` to reach this. Three of one shape says the guard widths
-	# should be reconciled rather than listed -- raised rather than done,
-	# because which walk is right is a question about both of them.
-	("edges.situ", "oob_inner"),
-	# A FOURTH, and it was divergent before anybody could see it.
-	#
-	# `varint_driver`'s `u16 d[n + 1]` is the same shape with the length
-	# declared by a VARINT rather than by a fixed-width field: a hostile `n`
-	# exceeds the frame by a margin, C's placement guard refuses first and
-	# records no check identity -- `c_why` renders an id outside
-	# `CHECK_NAMES` as "bounds", which is what that string means here -- and
-	# the Python walk reaches `fits_frame`. Measured on both sides:
-	# verdict 1 from each, `placement[156]` from each, on packet
-	# a685a8d4978dcc3f48024c8e8b59f0c49c9860082203798427d5291bc7.
-	#
-	# **It was exposed by the corpus moving, not by anything changing.**
-	# The draw is seeded and the packets are taken in struct order, so
-	# `edges.situ` gaining two structs ahead of this one handed it two
-	# different packets -- and these are the first that reach the hostile
-	# length. So this struct has very likely been divergent since it was
-	# written, and what found it was luck re-dealt.
-	#
-	# That is a finding about the detector rather than about the walks: two
-	# packets per struct from a fixed seed finds this class when the deal
-	# happens to be hostile, and the deal changes whenever somebody adds a
-	# struct. Four of one shape now, and the reconciliation raised at the
-	# third is still the answer -- which walk is right is a question about
-	# both of them (26.689).
-	("edges.situ", "varint_driver"),
-})
+#: Empty since 26.945. It held four of one shape (26.689) -- a run whose
+#: declared length overflows the C walk's `size_bits`, where C refused with
+#: no check named and the Python walk reached `fits_frame`: `pickle_wstring`,
+#: `png.chunk`, `edges.oob_inner` and `edges.varint_driver`. 2441fe89 made C
+#: name `fits_frame` there, for riff, and so closed all four; measured at
+#: its parent and at it, 40 packets per struct, 99 of 149 refusals named
+#: differently before and none after. Nothing emptied this set, so it went
+#: on holding out four structs that agreed.
+IDENTITY_APART: frozenset[tuple[str, str]] = frozenset()
+
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
@@ -2960,8 +2914,8 @@ def test_the_two_walkers_agree_about_which_check_refused(
 	terminator check, whose assignment is a TERNARY that the completeness
 	sweep's own regex could not see -- and one guard was wider than the
 	Python walk's, refusing a message-sized run at a placement check where
-	the other reaches `fits_frame`. Both are fixed; `IDENTITY_APART` names
-	what is left and why.
+	the other reaches `fits_frame`. Both are fixed, and so since 26.945 is
+	the class `IDENTITY_APART` held out after them.
 	"""
 	blob  = image_for(schema)
 	image = load(blob)
@@ -3053,7 +3007,7 @@ def test_the_identity_comparison_asked_something() -> None:
 	assert asked >= 120, (
 		f"only {asked} refusals were compared for their identity across "
 		f"{len(IDENTITY_ASKED)} schemas; it was 197 when written")
-	assert len(IDENTITY_APART) <= 4, (
+	assert not IDENTITY_APART, (
 		f"{len(IDENTITY_APART)} schemas are held out of the identity "
 		"comparison; each one is a divergence nobody is looking at")
 

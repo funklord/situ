@@ -5872,11 +5872,12 @@ backends and the Python walk, and 26.755 gave the C walker rung 3: it
 refused `arg_field` until it could hold the two messages of a relation.
 
 **What is open as of 2026-10-29**, with the record that carries each
-reproduction. **Two are decisions rather than work and are the copyright
+reproduction. **One is a decision rather than work and is the copyright
 holder's** -- whether `required` should read every readable length
-(26.693) and the walker guard-width reconciliation (26.689). A third,
-which walker is right about a nested struct's value (26.721), was the
-only one blocking anything; the holder settled it on 2026-11-09 (26.944).
+(26.693). Two more were listed here: which walker is right about a nested
+struct's value (26.721), settled by the holder on 2026-11-09 (26.944), and
+the walker guard-width reconciliation (26.689), whose four divergences
+2441fe89 closed without anybody noticing (26.945).
 
 **What a session picking this up should take first**: the open items
 below. The ladder this sentence named as first until 2026-10-30 was
@@ -6085,13 +6086,16 @@ nothing re-read the sentence when the records closed.
   is a language decision, and the measurement above is only the cost of
   not making it. hull's own tar readers are tested, so this is coverage
   of a format rather than a fault.
-- **Four walker identity divergences** of one shape (26.689), where the
-  guard widths want reconciling rather than listing. **The holder's**, and
-  the parking was re-measured and confirmed 2026-10-28 rather than
-  weakened: `fits_frame` is the packer's name for an image check, and the
-  only readers of the image's check table are the two walkers, so there is
-  no third witness for check identity the way a generated backend is one
-  for a value.
+- ~~**Four walker identity divergences** of one shape (26.689)~~, a run
+  whose declared length overflows the C walk's `size_bits`, where C
+  refused naming no check and the Python walk named `fits_frame`.
+  **Closed by 2441fe89, which nobody connected to this entry** (26.945):
+  it made C name `fits_frame` there, for riff, and the four agree from
+  that commit -- 99 of 149 refusals named differently at its parent, none
+  at it. `IDENTITY_APART` is empty and held empty. The internal
+  difference stays as C's own comment in `size_bits` records it -- C
+  refuses an overflowing count where the backends clamp -- and is now
+  invisible to every caller, which names the same check from both.
 - ~~**Which walker is right about a nested struct's value, and should
   either answer at all?** (26.721).~~ **Settled by the copyright holder
   2026-11-09: the C walker is right** (26.944). C's answer had already
@@ -8377,6 +8381,10 @@ Moved to `doc/decision/26.943-a-sealed-regions-nonce-and-key-are-in-the-map.md`.
 ### 26.944 A nested struct's value is the extent measured
 
 Moved to `doc/decision/26.944-a-nested-structs-value-is-the-extent-measured.md`.
+
+### 26.945 The walkers' identity divergences had closed
+
+Moved to `doc/decision/26.945-the-walkers-identity-divergences-had-closed.md`.
 
 ### 26.929 The offset cache counts bits
 
