@@ -22,6 +22,6 @@ struct record size=37..16421 mutate=Immutable address=Unstable repr=ValueConvert
   record.sequence                        offset=AbsoluteStatic(0x05) size=Fixed(6) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   record.length                          offset=AbsoluteStatic(0x0B) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   record.explicit                        offset=AbsoluteStatic(0x0D) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
-  record.sealed                          offset=AbsoluteStatic(0x15) size=Bounded(0, 16384) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  record.sealed                          offset=AbsoluteStatic(0x15) size=Bounded(0, 16384) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(tag) nonce=explicit key=epoch
   record.sealed.fragment                 offset=AbsoluteStatic(0x15) size=Bounded(0, 16384) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting stage=VerifyGated auth=Covered(tag)
   record.tag                             offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable

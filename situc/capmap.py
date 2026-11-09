@@ -239,7 +239,28 @@ def _entry(placement: Placement, vector: Vector) -> str:
 	if placement.parameter:
 		return f"  {placement.path.ljust(PATH_WIDTH)} parameter"
 
-	return f"  {placement.path.ljust(PATH_WIDTH)} {_axes(vector)}".rstrip()
+	return (f"  {placement.path.ljust(PATH_WIDTH)} {_axes(vector)}"
+	        f"{_sealed_by(placement)}").rstrip()
+
+
+def _sealed_by(placement: Placement) -> str:
+	"""Which field seeds a sealed region's nonce and which selects its key.
+
+	The wire signature has carried both since 0041; the map did not, so a
+	reader of the document the project commits as its protocol description
+	saw `auth=Covered(tag)` and nothing saying that a flipped epoch decrypts
+	under the wrong key. 26.117 left whether they belong here open, and the
+	copyright holder settled it (26.943): they do, superseding 0041's
+	clause that kept them out. Not axes -- neither weakens anything -- so
+	they follow the axes as names, the way a register's `access_width`
+	follows its size.
+	"""
+	shown = ""
+	if placement.sealed_nonce is not None:
+		shown += f" nonce={placement.sealed_nonce}"
+	if placement.sealed_key is not None:
+		shown += f" key={placement.sealed_key}"
+	return shown
 
 
 def _axes(vector: Vector, core: bool = True) -> str:

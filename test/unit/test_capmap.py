@@ -481,3 +481,27 @@ def test_a_bit_sized_struct_says_when_it_is_unbounded_too() -> None:
 	"""
 	assert "size=3bit " in struct_line(BIT_SIZED)
 	assert "size=1bit.. " in struct_line(BIT_SIZED_UNBOUNDED)
+
+
+def test_a_sealed_region_names_its_nonce_and_its_key() -> None:
+	"""26.943: the map says which field seeds the nonce and which selects
+	the key, as the wire signature has since 0041. Both silent where the
+	schema names neither, so a region without them reads as before."""
+	codec = ("codec gcm { tag_bytes = 16; length_preserving;"
+	         " seekable = linear; granularity = byte; authenticated;"
+	         " invertible; deterministic; }\n")
+	named = ("struct r { u16 epoch; u8 iv[8]; u8 n;"
+	         " sealed(gcm, nonce = iv, key = epoch) { u8 body[n]; }"
+	         " tag u8[16]; }\n")
+	schema, resolved = analysed(codec + named)
+	shown = capmap.render(schema, resolved, "r.situ")		# type: ignore[arg-type]
+	line = next(one for one in shown.splitlines()
+	            if one.lstrip().startswith("r.sealed "))
+	assert line.endswith(" nonce=iv key=epoch")
+
+	bare = named.replace("(gcm, nonce = iv, key = epoch)", "(gcm)")
+	schema, resolved = analysed(codec + bare)
+	shown = capmap.render(schema, resolved, "r.situ")		# type: ignore[arg-type]
+	line = next(one for one in shown.splitlines()
+	            if one.lstrip().startswith("r.sealed "))
+	assert "nonce=" not in line and "key=" not in line

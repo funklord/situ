@@ -2703,12 +2703,14 @@ codec deflate extern {
 | `nonce_bytes` | byte count | the nonce the primitive requires |
 | `key_bytes` | byte count | the key the primitive requires, held against a `key =` naming key material (26.887) |
 
-The last three are sizes rather than shape, and they are the only three: decision
-0038 adds them because a schema declares a tag and a nonce as *fields*, so
-there is something concrete to check a stated size against. A key width is
-deliberately absent for the mirror reason -- no construct here names a key, so
-the setting would be read by nothing, which is the shape 26.60 and 26.117 spent
-two passes removing. Both are optional, and silence claims nothing.
+The last four are sizes rather than shape, and they are the only four: decision
+0038 added the first three because a schema declares a tag and a nonce as
+*fields*, so there is something concrete to check a stated size against. A key
+width was left out for the mirror reason -- no construct named a key, so the
+setting would have been read by nothing, which is the shape 26.60 and 26.117
+spent two passes removing -- until 26.887 let `key =` name key material held as
+a parameter, and `key_bytes` arrived with something to hold it against. All
+are optional, and silence claims nothing.
 
 **They are not derivable from `expansion`**, which answers a different
 question: how the region's own extent changes. Where a codec appends its
@@ -3777,9 +3779,10 @@ times and survive all three.
   `sealed(codec, nonce = n, key = epoch)` names the field whose value
   selects the region's key, with the nonce's ordering rule for the nonce's
   reason, and `example/dtls` is the worked case. Like the nonce argument
-  it reaches no backend yet: its value is its checks and its sayability,
-  and whether both belong in the capability map and wire signature stays
-  with 26.117's open question.
+  it reaches no backend yet: its value is its checks and its sayability.
+  Both are in the wire signature (0041) and in the capability map, on the
+  sealed region's line, since 26.943 -- the copyright holder's answer to
+  26.117's open question.
 - **Out-of-band material -- expressible now (26.470, 26.887).** 0050's
   `parameter` is "supplied by the caller", and `parameter u8 iv[12];` is that
   for bytes: `sealed body (ae, nonce = iv)` says the nonce is held outside
@@ -8374,6 +8377,10 @@ Moved to `doc/decision/26.941-the-dissector-shows-a-varint-s-number.md`.
 ### 26.942 A varint's value is held to 64 bits by every reader
 
 Moved to `doc/decision/26.942-a-varint-is-held-to-64-bits.md`.
+
+### 26.943 A sealed region's nonce and key are in the capability map
+
+Moved to `doc/decision/26.943-a-sealed-regions-nonce-and-key-are-in-the-map.md`.
 
 ### 26.929 The offset cache counts bits
 
