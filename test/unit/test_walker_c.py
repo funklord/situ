@@ -3826,7 +3826,7 @@ def test_the_two_walkers_agree_about_every_value(
 	for which in range(len(image.structs)):
 		if which < len(named) and (schema.name, named[which]) in VALUES_APART:
 			continue
-		for packet in (draw(rng), draw(rng)):
+		for packet in [draw(rng) for _ in range(8)]:
 			try:
 				theirs = c_answers(tmp_path, blob, packet, which, drive)
 				mine   = python_answers(blob, packet, which)
