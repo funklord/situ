@@ -1166,10 +1166,19 @@ def nested_floor(structs: dict[str, ResolvedStruct],
 	`required` answers for an empty buffer -- so the answer after the
 	guard, which adds that, cannot fall below this one.
 
-	Zero for anything but one nested struct: a run, a variant and a
-	sized member have their own branches, and a plain run's floor is
-	zero anyway.
+	A `while` run of records owes one element's floor the same way: its
+	condition is asked of an element already read, so the run holds at
+	least one, and its walk asks for that element's floor the moment the
+	run's base arrives. netlink's `attrs` was told 16 at fifteen bytes and
+	20 at sixteen whatever the sixteenth byte held.
+
+	Zero for everything else: a counted run is credited by its walk, a
+	terminated run may hold no element at all, a variant and a sized
+	member have their own branches, and a plain run's floor is zero.
 	"""
+	if placement.repeat_while is not None \
+			and placement.type_name in structs:
+		return framing_floor(structs, structs[placement.type_name])
 	if placement.kind == "variant" or placement.array_count is not None \
 			or placement.size_expr or placement.sized_by \
 			or placement.type_name not in structs \

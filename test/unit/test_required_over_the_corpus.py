@@ -550,11 +550,14 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# base: its first element's length is readable sooner. A COUNTED run
 	# reads its count early and credits each element owed (26.946).
 	("flac.situ", "situ_stream_head_required"): "run of records",
+	# A guard that owes only its own member: before nlmsg_type arrives the
+	# variant's guard answers 16, though the `while` run after it owes an
+	# element whatever the arm -- see test_a_while_run_owes_an_element.
+	("netlink.situ", "situ_nl_message_required"): "a later member's floor",
 	# A variant whose arm the data sizes, framed by `_variant_framing`,
 	# which reads early once every field measuring it has arrived
 	# (`discriminant_readable_from`); these still learn something late.
 	("flac.situ", "situ_metadata_block_required"): "variant sized by a field",
-	("netlink.situ", "situ_nl_message_required"): "variant, then a run",
 	# A length named by a varint, or placed after one, is at no static
 	# offset, so `length_readable_from` declines it.
 	("sqlite.situ", "situ_table_leaf_cell_required"): "length from a varint",
@@ -731,3 +734,49 @@ def test_the_readability_sweep_asked_something() -> None:
 	if not READABLE_ASKED:
 		pytest.skip("the per-schema sweeps did not run")
 	assert sum(READABLE_ASKED.values()) >= 10000, READABLE_ASKED
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_while_run_owes_an_element(tmp_path: Path) -> None:
+	"""26.946: a `while` run holds at least one element, since its condition
+	is asked of one already read, so the guard before it owes that element's
+	floor. netlink's `attrs` was told 16 at fifteen bytes and 20 at sixteen.
+
+	Asked directly because the readability sweep cannot see it: netlink is
+	still late at five bytes, where the variant's guard answers, so the
+	struct stays in READS_LATE either way.
+	"""
+	schema   = ROOT / "example" / "netlink" / "netlink.situ"
+	source   = Source(str(schema), schema.read_text(encoding="ascii"))
+	parsed   = parse(source)
+	resolved = resolve(parsed, solve(parsed))
+	built    = generate_c(parsed, resolved, "unit")
+	(tmp_path / "unit.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(built.source, encoding="ascii")
+	(tmp_path / "w.c").write_text("""#include "unit.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(void)
+{
+	for (uint32_t n = 6u; n <= 16u; n++) {
+		uint8_t *p = calloc(n, 1u);
+		uint32_t need = 0u;
+		(void)situ_nl_message_required(p, n, &need);
+		printf("%u:%u ", n, need);
+		free(p);
+	}
+	return 0;
+}
+""", encoding="ascii")
+	compiled = subprocess.run(
+		[HOST_CC or "cc", *C_WARNINGS, f"-I{RUNTIME / 'c'}",
+		 f"-I{tmp_path}", str(tmp_path / "w.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(tmp_path / "w")],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+	run = subprocess.run([str(tmp_path / "w")], capture_output=True,
+	                     text=True, timeout=60)
+	# Zero bytes: nlmsg_type 0 takes the default arm, sized nlmsg_len - 16
+	# and so empty, then one four-byte attribute is owed.
+	assert run.stdout.split() == [f"{n}:20" for n in range(6, 17)], run.stdout
