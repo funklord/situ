@@ -6385,14 +6385,15 @@ class Emitter:
 			# take.
 			# A length is read as soon as the bytes it names have
 			# arrived, not once everything before the member has: the
-			# copyright holder's answer to 26.693 (26.946). A run walked
-			# element by element keeps the old guard, since the walk
-			# reads from the member's own base.
-			early = traverse.length_readable_from(struct, placement,
-			                                       self.structs)
+			# copyright holder's answer to 26.693 (26.946). A counted run
+			# reads its count early too, and its walk credits each
+			# element not yet here with its floor; a run that ends where
+			# the bytes say keeps the old guard.
+			early = traverse.length_readable_from(
+				struct, placement, self.structs,
+				counted=is_counted_run(self.resolved.structs, placement))
 			ready = (f"{early}" if early is not None
-			         and not (is_run(placement, self.structs)
-			                  or is_counted_run(self.resolved.structs, placement))
+			         and not is_run(placement, self.structs)
 			         else cursor or "at")
 			# And before a nested struct's bytes arrive, its own floor
 			# is owed already: it needs no reading (26.946).
@@ -6776,8 +6777,12 @@ class Emitter:
 				f"\t\t\tif seen >= {count}:",
 				"\t\t\t\tbreak",
 				"\t\t\tif have < pos:",
-				'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
-					'f"{have} here", at)',
+				"\t\t\t\t# Each element still owed is at least its floor",
+				"\t\t\t\t# once the count is read (26.946).",
+				f"\t\t\t\towed = min(at + ({count} - seen) * {floor},"
+				" 0xFFFFFFFF)",
+				'\t\t\t\traise TruncatedError(f"{owed} bytes needed, "'
+					'f"{have} here", owed)',
 				"\t\t\ttry:",
 				f"\t\t\t\tpart = {inner}.required(data[pos:]{self._child(struct, placement, 'probe')[1]})",
 				"\t\t\texcept TruncatedError as short:",

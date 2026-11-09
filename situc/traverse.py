@@ -1065,7 +1065,7 @@ _PURE_CALLS = frozenset({"min", "max", "align_up"})
 
 
 def length_readable_from(struct: ResolvedStruct, placement: Placement,
-		structs: Container[str]) -> int | None:
+		structs: Container[str], counted: bool = False) -> int | None:
 	"""How many bytes `required` needs before it can read this member's
 	length, where that is fewer than the bytes before the member.
 
@@ -1082,13 +1082,18 @@ def length_readable_from(struct: ResolvedStruct, placement: Placement,
 	variant, a run walked element by element, a field placed by the data,
 	a constant or an argument this cannot see the bytes of -- answers
 	None, and the backend keeps the guard it had.
+
+	`counted` asks the same of a counted run of records, whose COUNT is
+	the expression: the walk then credits each element it has not reached
+	with its floor, from the moment the count is readable rather than from
+	the run's base (dnsname's four counts sit in its twelve-byte header).
 	"""
 	# `sized_by` alone where the length is a bare field: `u8 d[n]` carries
 	# no `size_expr`, and missed arp's four address runs until it was read.
 	source = placement.size_expr or placement.sized_by
 	if not source or placement.varint is not None or placement.delimiters \
 			or placement.kind == "variant" \
-			or placement.type_name in structs:
+			or (placement.type_name in structs and not counted):
 		return None
 	named = fields_named(struct, str(source))
 	if not named:

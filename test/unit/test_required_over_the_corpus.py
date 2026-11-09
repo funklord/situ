@@ -546,9 +546,9 @@ def test_the_corpus_sweep_asked_something() -> None:
 #: entry to still showing the defect, so this cannot go stale the way
 #: `VALUES_APART` did (26.944).
 READS_LATE: dict[tuple[str, str], str] = {
-	# A run walked element by element, which reads from the member's own
-	# base: its count or its first element's length is readable sooner.
-	("dnsname.situ", "situ_message_required"): "counted run of records",
+	# A run that ends where the bytes say, walked from the member's own
+	# base: its first element's length is readable sooner. A COUNTED run
+	# reads its count early and credits each element owed (26.946).
 	("flac.situ", "situ_stream_head_required"): "run of records",
 	# A variant whose arm the data sizes, framed by `_variant_framing`.
 	("flac.situ", "situ_metadata_block_required"): "variant sized by a field",

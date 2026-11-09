@@ -5939,14 +5939,15 @@ class Emitter:
 
 			# A length is read as soon as the bytes it names have
 			# arrived, not once everything before the member has: the
-			# copyright holder's answer to 26.693 (26.946). A run walked
-			# element by element keeps the old guard, since the walk
-			# reads from the member's own base.
-			early = traverse.length_readable_from(struct, placement,
-			                                       self.structs)
+			# copyright holder's answer to 26.693 (26.946). A counted run
+			# reads its count early too, and its walk credits each
+			# element not yet here with its floor; a run that ends where
+			# the bytes say keeps the old guard.
+			early = traverse.length_readable_from(
+				struct, placement, self.structs,
+				counted=self._is_counted_run(placement))
 			ready = (f"{early}u" if early is not None
-			         and not (is_run(placement, self.structs)
-			                  or self._is_counted_run(placement))
+			         and not is_run(placement, self.structs)
 			         else cursor or "at")
 			# And before a nested struct's bytes arrive, its own floor
 			# is owed already: it needs no reading (26.946).
@@ -6563,7 +6564,11 @@ class Emitter:
 				# varint reader walked from outside the buffer (26.678).
 				# Saturating as well, so the two defences are independent.
 				"\t\tif (have < pos) {",
-				"\t\t\t*need = at;",
+				"\t\t\t/* Not one byte of this element yet, and the count",
+				"\t\t\t * is read: each element still owed is at least its",
+				"\t\t\t * floor (26.946). */",
+				"\t\t\t*need = situ_need_u32(at,",
+				f"\t\t\t        situ_need_mul_u32({count} - n, {minimum}));",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
 				f"\t\te = {required}(data + pos,"
