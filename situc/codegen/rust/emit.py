@@ -8695,6 +8695,12 @@ class Emitter:
 			# wrapped once at the end: each round puts the previous chain in
 			# an `else` block, and a parenthesised block value is the error
 			# `_unparen` exists for.
+			# An arm the message's version predates is ABSENT, and frames
+			# as no bytes: the holder's answer to the versioned arm
+			# (26.947). The accessor already treats it so (26.424).
+			if member.since is not None and member.version_field:
+				version = self._rule_text(struct, member.version_field)
+				length = f"if {version} >= {member.since} {{ {length} }} else {{ 0 }}"
 			chain = (length if arm.value is None
 			         else f"if {held} == {arm.value} {{ {length} }}"
 			              f" else {{ {chain} }}")

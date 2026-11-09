@@ -464,7 +464,8 @@ struct constrained [version = rev] {
 // generated comment says why: a field that is not there is not a field that
 // is wrong. All four backends now fold the version into the same condition
 // the discriminant test uses, because an arm the message's version predates
-// is ABSENT in exactly that sense.
+// is ABSENT in exactly that sense -- and frames as absent too, since the
+// copyright holder settled it (26.947): `rev = 1, pick = 2` is two bytes.
 //
 // NO MEMBER AFTER THE VARIANT, and the compiler is why: `[since]` is
 // append-only because position carries identity, so a member arriving in

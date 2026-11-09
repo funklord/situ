@@ -6029,37 +6029,15 @@ nothing re-read the sentence when the records closed.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **Does a variant arm a message's version predates occupy bytes?**
-  `edges.versioned_arm`: `variant held switch (pick) { case 1: u8 always
-  [max = 7]; case 2: u8 later [since = 2, must_eq = 9]; }` under
-  `[version = rev]`, with `pick = 2` in a `rev = 1` message. All four
-  backends and both walkers frame the arm's byte as present.
-
-  **Re-measured 2026-11-03, and the entry's premise was wrong twice.**
-  It said `u32 later` and "the arm's four bytes"; the construct is a
-  `u8` and one byte. And it said the code and `edges.situ`'s comment
-  disagree, which they do not: the comment calls such an arm ABSENT "in
-  the sense of a field that is not there", and that sense is
-  ACCESSIBILITY, which is exactly what is implemented --
-  `situ_versioned_arm_held_later_get` refuses with `SITU_ERR_VERSION`,
-  and `check` treats that refusal as nothing to check and passes the
-  message. So the comment describes the getter and says nothing about
-  the frame.
-
-  **What is left open is narrower and is only about framing.**
-  `situ_versioned_arm_required` returns a constant 3 -- `rev`, `pick`,
-  the arm -- so a two-byte `rev = 1` message with `pick = 2` is reported
-  TRUNCATED rather than accepted at two bytes. Nothing observable
-  depends on which is right: no member may follow the variant (`[since]`
-  is append-only because position carries identity, and `situc` refuses
-  a trailing member here, which that comment also records), so no later
-  offset can be wrong; the arm is unreadable either way; and a `rev = 1`
-  sender never selects the arm, so only a buggy or hostile writer
-  produces the message at all. The choice is between two refusals of a
-  message that contradicts itself, which is a diagnosis question rather
-  than a correctness one. **Still the holder's**, and now with the cost
-  measured: it is a message nobody can produce honestly, and either
-  answer is safe.
+- ~~**Does a variant arm a message's version predates occupy bytes?**~~
+  **Settled by the copyright holder 2026-11-09: it frames as absent**
+  (26.947). `edges.versioned_arm` with `rev = 1` and `pick = 2` was told
+  3 by `required` and measured 3 by both walkers, while `view` and
+  `validate` accepted the two bytes and the accessor refused the arm with
+  VERSION. The variant's length gates the arm on the version in all four
+  backends' `_variant_length` (C's and Python's `required` measured at 2,
+  C++ and Rust sharing the change), both walkers end the message at 2,
+  and the walker's listing reads the arm as absent, as the accessors do.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
@@ -8396,6 +8374,10 @@ Moved to `doc/decision/26.945-the-walkers-identity-divergences-had-closed.md`.
 ### 26.946 `required` reads every length that is readable
 
 Moved to `doc/decision/26.946-required-reads-every-length-that-is-readable.md`.
+
+### 26.947 A versioned arm frames as absent
+
+Moved to `doc/decision/26.947-a-versioned-arm-frames-as-absent.md`.
 
 ### 26.929 The offset cache counts bits
 

@@ -1218,6 +1218,23 @@ def occupies_fixed_bytes(placement: Placement) -> bool:
 	return placement.is_fixed_size and not placement.skip
 
 
+def has_a_versioned_arm(struct: "ResolvedStruct", placement: Placement
+		) -> bool:
+	"""Whether a variant has an arm a message's version can predate.
+
+	Such an arm is ABSENT in a message whose version predates it, and
+	frames as no bytes (26.947) -- the copyright holder's answer to the
+	versioned arm, which every reader framed as present: `versioned_arm`
+	with `rev = 1` and `pick = 2` was told 3 bytes by `required` while
+	`view` and `validate` both accepted 2. So the variant is not a fixed
+	span however equal its arms are, and is measured through
+	`_variant_length`, which gates the arm on the version.
+	"""
+	return placement.kind == "variant" and any(
+		member is not None and member.since is not None
+		for _, member in arm_members(struct, placement))
+
+
 def peek_floor(struct: "ResolvedStruct") -> int:
 	"""The bytes this struct's own peeks read, which framing has to see first.
 
@@ -2427,7 +2444,8 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	variable: list[Placement] = []
 
 	for placement in own_members(struct):
-		if occupies_fixed_bytes(placement):
+		if occupies_fixed_bytes(placement) \
+				and not has_a_versioned_arm(struct, placement):
 			constant_bits += fixed_span_bits(placement)
 		else:
 			variable.append(placement)
@@ -2720,7 +2738,8 @@ def framing_gaps(structs: dict[str, ResolvedStruct],
 	gaps: list[int] = []
 	run_bits = 0
 	for placement in own_members(struct):
-		if occupies_fixed_bytes(placement):
+		if occupies_fixed_bytes(placement) \
+				and not has_a_versioned_arm(struct, placement):
 			run_bits += fixed_span_bits(placement)
 			continue
 		if run_bits % BITS_PER_BYTE:

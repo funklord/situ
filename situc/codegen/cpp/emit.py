@@ -5110,6 +5110,12 @@ class Emitter:
 					return None
 				length = f"({rendered})"
 
+			# An arm the message's version predates is ABSENT, and frames
+			# as no bytes: the holder's answer to the versioned arm
+			# (26.947). The accessor already treats it so (26.424).
+			if member.since is not None and member.version_field:
+				version = self._over_fields(struct, member.version_field)
+				length = f"({version} >= {member.since}u ? {length} : 0u)"
 			chain = (length if arm.value is None
 			         else f"({held} == {arm.value}u ? {length} : {chain})")
 		return chain

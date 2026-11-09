@@ -685,13 +685,34 @@ def _variant_bits(view: View, index: int, depth: int = 0) -> int:
 	# half a dozen other reasons that are all real.
 	chosen = chosen_arm(view, index)
 	if chosen is not None:
-		return 0 if chosen == NONE else _arm_bits(view, index, chosen, depth)
+		if chosen == NONE or _arm_predates(view, chosen):
+			return 0
+		return _arm_bits(view, index, chosen, depth)
 	# No arm matches and the default selects nothing. The extent is zero
 	# rather than a refusal: a discriminant naming no arm is a malformed
 	# message, and saying so is `validate`'s job, not the extent's. C's
 	# generated extent has the same `: 0u`, and refusing here counted zero
 	# dnsname labels where every backend counted one.
 	return 0
+
+
+def _arm_predates(view: View, chosen: int) -> bool:
+	"""Whether the chosen arm carries `[since]` and this message's version
+	predates it. Such an arm is ABSENT and frames as no bytes -- the
+	copyright holder's answer to the versioned arm (26.947); `validate`
+	already treated it as nothing to check (26.424). A version that cannot
+	be read yet leaves it counted, the longer answer, as `_absent_tail`
+	does for a member. `situ_walk.c`'s `arm_predates`."""
+	since = view.image.placements[chosen].since
+	if not since:
+		return False
+	carries = view.image.versions.get(view.struct)
+	if carries is None:
+		return False
+	try:
+		return read_scalar(view, carries) < since
+	except Refused:
+		return False
 
 
 def _arm_bits(view: View, variant: int, chosen: int, depth: int) -> int:

@@ -2303,6 +2303,38 @@ static situ_walk_err variant_arm(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
+/* Whether the arm a variant chose carries `[since]` and this message's
+ * version predates it. Such an arm is ABSENT and frames as no bytes, the
+ * copyright holder's answer to the versioned arm (26.947); `validate`
+ * already treated it as nothing to check (26.424). A version that cannot
+ * be read yet leaves the arm counted, the longer answer, as `absent_tail`
+ * does for a member. `walk._arm_predates`. */
+static int arm_predates(const situ_walk_image *image, const uint8_t *message,
+                        uint32_t len, uint32_t shape, uint32_t chosen)
+{
+	const uint16_t since = u16_at(image->placements
+	                              + chosen * image->placement_stride + 44u);
+	uint32_t       carries = SITU_WALK_NONE;
+	uint64_t       version = 0u;
+
+	if (since == 0u) {
+		return 0;
+	}
+	for (uint32_t v = 0u; v < image->version_count; v++) {
+		const uint8_t *row = image->versions + v * image->version_stride;
+		if (u32_at(row) == shape) {
+			carries = u32_at(row + 4);
+			break;
+		}
+	}
+	if (carries == SITU_WALK_NONE
+	    || situ_walk_read(image, message, len, shape, carries, &version)
+	       != SITU_WALK_OK) {
+		return 0;
+	}
+	return version < (uint64_t)since;
+}
+
 static situ_walk_err variant_bits(const situ_walk_image *image,
                                   const uint8_t *message, uint32_t len,
                                   uint32_t shape, uint32_t index,
@@ -2315,7 +2347,8 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	if (chosen != SITU_WALK_NONE) {
+	if (chosen != SITU_WALK_NONE
+	    && !arm_predates(image, message, len, shape, chosen)) {
 		return arm_bits(image, message, len, shape, index, chosen, depth,
 		                out);
 	}

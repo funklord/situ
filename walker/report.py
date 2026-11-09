@@ -29,7 +29,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
-                         _ceiling, _evaluate, _read_at, _sizes_in_bytes,
+                         _arm_predates, _ceiling, _evaluate, _read_at,
+                         _sizes_in_bytes,
                          counted_run_fits,
                          offset_bits, record_run_count, record_run_ended,
                          TERMINATED_ROW,
@@ -2497,7 +2498,11 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 	for arm, selects, case in _arm_values(image, struct_index):
 		local = _local(image, arm)
 		try:
-			chosen = read_scalar(view, selects) == case
+			# And the message's version reaches it: an arm `[since]` gates
+			# is absent from an older message, as every backend's accessor
+			# answers VERSION for it (26.424, 26.947).
+			chosen = read_scalar(view, selects) == case \
+				and not _arm_predates(view, arm)
 			value  = read_scalar(view, arm) if chosen else 0
 		except Refused:
 			continue
@@ -2515,7 +2520,11 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# and `_run_bytes` would hand them over without complaint -- so
 			# a length taken first and discarded second is a length taken
 			# from somebody else's member.
-			chosen = read_scalar(view, selects) == case
+			# And the message's version reaches it: an arm `[since]` gates
+			# is absent from an older message, as every backend's accessor
+			# answers VERSION for it (26.424, 26.947).
+			chosen = read_scalar(view, selects) == case \
+				and not _arm_predates(view, arm)
 			if shape == "delimited":
 				# The same number `_delimited` renders for a plain member:
 				# the scan's content, without the delimiter and under
