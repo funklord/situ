@@ -5945,10 +5945,12 @@ class Emitter:
 			# the bytes say keeps the old guard.
 			early = traverse.length_readable_from(
 				struct, placement, self.structs,
-				counted=self._is_counted_run(placement))
+				counted=self._is_counted_run(placement),
+				constants=self.resolved.layout.env.named_constants)
 			if early is None:
-				early = traverse.discriminant_readable_from(struct,
-				                                            placement)
+				early = traverse.discriminant_readable_from(
+					struct, placement,
+					self.resolved.layout.env.named_constants)
 			ready = (f"{early}u" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
@@ -6384,7 +6386,8 @@ class Emitter:
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
-		chosen = traverse.discriminant_readable_from(struct, placement)
+		chosen = traverse.discriminant_readable_from(
+			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}u" if chosen is not None else cursor
 		lines = [
 			"",

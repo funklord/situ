@@ -1065,7 +1065,8 @@ _PURE_CALLS = frozenset({"min", "max", "align_up"})
 
 
 def length_readable_from(struct: ResolvedStruct, placement: Placement,
-		structs: Container[str], counted: bool = False) -> int | None:
+		structs: Container[str], counted: bool = False,
+		constants: Container[str] = ()) -> int | None:
 	"""How many bytes `required` needs before it can read this member's
 	length, where that is fewer than the bytes before the member.
 
@@ -1095,11 +1096,11 @@ def length_readable_from(struct: ResolvedStruct, placement: Placement,
 			or placement.kind == "variant" \
 			or (placement.type_name in structs and not counted):
 		return None
-	return _fields_end(struct, str(source))
+	return _fields_end(struct, str(source), constants)
 
 
-def discriminant_readable_from(struct: ResolvedStruct, placement: Placement
-		) -> int | None:
+def discriminant_readable_from(struct: ResolvedStruct, placement: Placement,
+		constants: Container[str] = ()) -> int | None:
 	"""How many bytes `required` needs before it can choose a variant's arm.
 
 	`length_readable_from` for what chooses and measures the arm (26.946):
@@ -1115,22 +1116,29 @@ def discriminant_readable_from(struct: ResolvedStruct, placement: Placement
 	# run of the sweep.
 	end = 0
 	for source in _sources_read(struct, placement):
-		reach = _fields_end(struct, source)
+		reach = _fields_end(struct, source, constants)
 		if reach is None:
 			return None
 		end = max(end, reach)
 	return end
 
 
-def _fields_end(struct: ResolvedStruct, source: str) -> int | None:
+def _fields_end(struct: ResolvedStruct, source: str,
+		constants: Container[str]) -> int | None:
 	"""Where the last byte an expression reads ends, if it reads only
-	scalars at static offsets and calls nothing that reads a run."""
+	scalars at static offsets and calls nothing that reads a run.
+
+	A named constant reads no bytes -- `kv.alpha + n` must guard where
+	`17 + n` does, or the generated code depends on how a constant was
+	spelled, which `test_an_enum_member_folds_like_the_literal_it_is`
+	refuses. A field of the same spelling still wins, as in the renderers.
+	"""
 	named = fields_named(struct, source)
 	if not named:
 		return None
 	allowed = {local_name(struct, field) for field in named} | _PURE_CALLS
 	for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", source):
-		if token not in allowed:
+		if token not in allowed and token not in constants:
 			return None
 	end = 0
 	for field in named:

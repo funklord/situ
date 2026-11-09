@@ -6328,10 +6328,12 @@ class Emitter:
 			# the bytes say keeps the old guard.
 			early = traverse.length_readable_from(
 				struct, placement, self.structs,
-				counted=is_counted_run(self.resolved.structs, placement))
+				counted=is_counted_run(self.resolved.structs, placement),
+				constants=self.resolved.layout.env.named_constants)
 			if early is None:
-				early = traverse.discriminant_readable_from(struct,
-				                                            placement)
+				early = traverse.discriminant_readable_from(
+					struct, placement,
+					self.resolved.layout.env.named_constants)
 			ready = (f"{early}" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
@@ -6482,6 +6484,13 @@ class Emitter:
 				f"{self._argument_fields(struct)} }};",
 			] if any("probe." in line for line in steps) else []),
 			*steps,
+			# Read once at the end: since 26.946 a guard may stand on where a
+			# length's fields end rather than on the cursor, so the cursor's
+			# last advance can go unread, and `unused_assignments` is an
+			# error under `-D warnings` (arp's four address runs).
+			*([f"\t\tlet _ = {cursor};"]
+			  if cursor and gaps
+			  and any(f"{cursor} =" in line for line in steps) else []),
 			"",
 			"\t\tif have < at {",
 			"\t\t\treturn situ_rt::Framing::Need(at);",
@@ -6596,7 +6605,8 @@ class Emitter:
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
-		chosen = traverse.discriminant_readable_from(struct, placement)
+		chosen = traverse.discriminant_readable_from(
+			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}" if chosen is not None else cursor
 		lines = [
 			"",
