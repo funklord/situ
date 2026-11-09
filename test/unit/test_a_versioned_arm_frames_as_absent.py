@@ -8,9 +8,8 @@ since 26.424, and `view` and `validate` accepted the two bytes -- but
 readers disagreed about where the message ends. The copyright holder's
 answer: frame it as absent.
 
-Held in the compiled C backend and the Python backend, whose `required`
-come from the same `_variant_length` the other two share, and in both
-walkers, which measure the variant themselves.
+Held in all four backends' `required` and in both walkers, which measure
+the variant themselves.
 """
 
 from __future__ import annotations
@@ -21,6 +20,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+import fourway
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -122,3 +123,25 @@ def test_both_walkers_measure_it_absent(tmp_path: Path) -> None:
 		held = str(end - 2)		# rev and pick are a byte each
 		assert python_widths(blob, data, shape)[2] == held, message
 		assert c_widths(tmp_path, blob, data, shape)[2] == held, message
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_all_four_backends_frame_it_absent(tmp_path: Path) -> None:
+	"""The differential drivers' `required()` line, in all four: an answer
+	per prefix, `*` marking complete. C++ and Rust take the change through
+	the same `_variant_length`, and this is what says they took it."""
+	command = fourway.build(tmp_path, EDGES)
+	for message, end in ENDS.items():
+		data = bytes.fromhex(message)
+		for backend, argv in command.items():
+			said = fourway.answers(argv, data, tmp_path)
+			held = said.split("-- versioned_arm\n")[1].split("\n-- ")[0]
+			line = next(one for one in held.splitlines()
+			            if one.startswith("required()"))
+			# One answer per prefix from the empty one: complete at the
+			# message's own end, never before it, and no shorter prefix
+			# asking for more than that end.
+			answers = line.split()[1:]
+			assert answers[end] == f"*{end}", (backend, message, line)
+			assert all(not one.startswith("*") and int(one) <= end
+			           for one in answers[:end]), (backend, message, line)

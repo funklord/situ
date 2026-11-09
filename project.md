@@ -6034,10 +6034,9 @@ nothing re-read the sentence when the records closed.
   (26.947). `edges.versioned_arm` with `rev = 1` and `pick = 2` was told
   3 by `required` and measured 3 by both walkers, while `view` and
   `validate` accepted the two bytes and the accessor refused the arm with
-  VERSION. The variant's length gates the arm on the version in all four
-  backends' `_variant_length` (C's and Python's `required` measured at 2,
-  C++ and Rust sharing the change), both walkers end the message at 2,
-  and the walker's listing reads the arm as absent, as the accessors do.
+  VERSION. All four backends' `required` and both walkers now end that
+  message at 2, and the walker's listing reads the arm as absent, as the
+  accessors do.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
