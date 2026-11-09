@@ -6331,12 +6331,16 @@ class Emitter:
 			         and not (is_run(placement, self.structs)
 			                  or is_counted_run(self.resolved.structs, placement))
 			         else cursor or "at")
+			# And before a nested struct's bytes arrive, its own floor
+			# is owed already: it needs no reading (26.946).
+			floor = traverse.nested_floor(self.resolved.structs, placement)
+			owed = f"situ_rt::need(at, {floor})" if floor else "at"
 			steps.extend([
 				"",
 				f"\t\t// {placement.path}: reading its length means reading",
 				"\t\t// bytes that have to be here first.",
 				f"\t\tif have < {ready} {{",
-				"\t\t\treturn situ_rt::Framing::Need(at);",
+				f"\t\t\treturn situ_rt::Framing::Need({owed});",
 				"\t\t}",
 			])
 			if (is_run(placement, self.structs)

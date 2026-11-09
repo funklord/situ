@@ -1109,6 +1109,33 @@ def length_readable_from(struct: ResolvedStruct, placement: Placement,
 	return end
 
 
+def nested_floor(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> int:
+	"""What a single nested struct member adds to `required`'s answer
+	before any of its bytes have arrived.
+
+	The guard before a variable member answered `at`, which counts the
+	fixed members and none of the variable ones, so `record { u8 kind;
+	stamp taken; str name; }` was told 7 for six bytes and 9 for seven:
+	`str`'s own two bytes were knowable without reading anything, and
+	26.946's sweep found that in six structs. The figure is
+	`framing_floor`, which is never above what the nested struct's own
+	`required` answers for an empty buffer -- so the answer after the
+	guard, which adds that, cannot fall below this one.
+
+	Zero for anything but one nested struct: a run, a variant and a
+	sized member have their own branches, and a plain run's floor is
+	zero anyway.
+	"""
+	if placement.kind == "variant" or placement.array_count is not None \
+			or placement.size_expr or placement.sized_by \
+			or placement.type_name not in structs \
+			or is_run(placement, structs) \
+			or is_counted_run(structs, placement):
+		return 0
+	return framing_floor(structs, structs[placement.type_name])
+
+
 def _names_a_field(source: str, local: str) -> bool:
 	"""Whether an expression's source reads the field called `local`.
 

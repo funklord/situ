@@ -550,26 +550,21 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# base: its count or its first element's length is readable sooner.
 	("dnsname.situ", "situ_message_required"): "counted run of records",
 	("flac.situ", "situ_stream_head_required"): "run of records",
-	("edges.situ", "situ_oob_run_required"): "run of records",
 	# A variant whose arm the data sizes, framed by `_variant_framing`.
 	("flac.situ", "situ_metadata_block_required"): "variant sized by a field",
 	("id3.situ", "situ_id3_tag_required"): "variant, then a run",
 	("netlink.situ", "situ_nl_message_required"): "variant, then a run",
-	("mqtt.situ", "situ_connect_body_required"): "nested struct, variants",
 	# A length named by a varint, or placed after one, is at no static
 	# offset, so `length_readable_from` declines it.
 	("sqlite.situ", "situ_table_leaf_cell_required"): "length from a varint",
 	("edges.situ", "situ_text_driver_moved_required"): "field after a varint",
 	# `[since]` members, framed by `_required_versioned`.
 	("edges.situ", "situ_versioned_required"): "versioned members",
-	# A NESTED struct: the early answer leaves out the struct's own
-	# minimum, which needs no bytes to know -- a loose lower bound rather
-	# than a length read late, found by the same sweep (26.946).
-	("importer.situ", "situ_record_required"): "nested struct's minimum",
+	# A NESTED struct whose answer still moves on a byte that tells it
+	# nothing, after `nested_floor` credited a single nested member's own
+	# minimum and took five such structs off this list (26.946).
 	("edges.situ", "situ_chains_required"): "nested struct's minimum",
-	("edges.situ", "situ_holds_arg_only_required"): "nested struct's minimum",
 	("edges.situ", "situ_hands_on_required"): "nested struct's minimum",
-	("edges.situ", "situ_oob_element_required"): "nested struct's minimum",
 	("edges.situ", "situ_blocked_arg_required"): "nested struct in a region",
 }
 

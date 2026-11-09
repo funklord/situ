@@ -5934,10 +5934,11 @@ nothing re-read the sentence when the records closed.
     it names end, not where the member begins, so `udp_header` is told 10
     at six bytes where it was told 8 and then 10.
     `test_required_reads_a_length_once_it_arrives` holds it over the
-    corpus, and `READS_LATE` names the sixteen structs framed by branches
+    corpus, and `READS_LATE` names the eleven structs framed by branches
     it has not reached yet -- runs of records, variants, varint-placed
-    lengths, `[since]` members, and nested structs whose own minimum the
-    early answer leaves out. Each entry must still read late, so the list
+    lengths, `[since]` members, and three nested structs. A single nested
+    member is credited its own floor before its bytes arrive, which took
+    five off the list. Each entry must still read late, so the list
     shrinks as they are taken.
 - **The population story was wrong for one of them, and the correction
   is worth more than the fault** (26.725). 26.693 closed with "the
