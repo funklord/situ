@@ -5768,15 +5768,18 @@ class Emitter:
 
 		`at` starts at the sum of *every* fixed member, including the ones
 		after the variable member being measured, and grows by each variable
-		length as it is resolved. So the check before a read is against a
-		number no smaller than that member's base -- conservative, and that is
-		what makes it sufficient. A length field always precedes the member it
+		length as it is resolved. A length field always precedes the member it
 		sizes (section 10), so everything the next expression reads lies below
-		the base, and therefore below `at`.
+		the member's base, and a check against the base is sufficient.
 
-		The cost of the conservatism is that a message can be declared
-		incomplete one round earlier than strictly necessary, which costs a
-		caller one more read of a socket they were reading anyway.
+		It was also the check made, and that cost a caller a round trip: a
+		length ending at offset 6 was read only once offset 8 had arrived, so
+		a six-byte prefix was told 8 and the next ask learned the total. The
+		copyright holder settled 26.693 the other way -- `required` reads
+		every length that is readable (26.946) -- so where the expression
+		names only fields at static offsets the check is against where those
+		fields end, `traverse.length_readable_from`, and elsewhere it is
+		still the base.
 		"""
 		if struct.layout.register is not None:
 			return []
@@ -5934,12 +5937,23 @@ class Emitter:
 				steps.extend(self._gap_step(cursor, gaps, index))
 				continue
 
+			# A length is read as soon as the bytes it names have
+			# arrived, not once everything before the member has: the
+			# copyright holder's answer to 26.693 (26.946). A run walked
+			# element by element keeps the old guard, since the walk
+			# reads from the member's own base.
+			early = traverse.length_readable_from(struct, placement,
+			                                       self.structs)
+			ready = (f"{early}u" if early is not None
+			         and not (is_run(placement, self.structs)
+			                  or self._is_counted_run(placement))
+			         else cursor or "at")
 			steps.extend([
 				"",
 				f"\t/* {placement.path}: reading its length means reading bytes"
 				" that",
 				"\t * have to be here first. */",
-				f"\tif (have < {cursor or 'at'}) {{",
+				f"\tif (have < {ready}) {{",
 				"\t\t*need = at;",
 				"\t\treturn SITU_ERR_TRUNCATED;",
 				"\t}",

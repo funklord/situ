@@ -6383,11 +6383,22 @@ class Emitter:
 			# back -- as the STRUCTURAL minimum the cursor already carries,
 			# which is the form 26.693's own record said it would have to
 			# take.
+			# A length is read as soon as the bytes it names have
+			# arrived, not once everything before the member has: the
+			# copyright holder's answer to 26.693 (26.946). A run walked
+			# element by element keeps the old guard, since the walk
+			# reads from the member's own base.
+			early = traverse.length_readable_from(struct, placement,
+			                                       self.structs)
+			ready = (f"{early}" if early is not None
+			         and not (is_run(placement, self.structs)
+			                  or is_counted_run(self.resolved.structs, placement))
+			         else cursor or "at")
 			steps.extend([
 				"",
 				f"\t\t# {placement.path}: reading its length means reading",
 				"\t\t# bytes that have to be here first.",
-				f"\t\tif have < {cursor or 'at'}:",
+				f"\t\tif have < {ready}:",
 				f'\t\t\traise TruncatedError("{placement.path}: '
 				'incomplete", at)',
 			])

@@ -536,3 +536,202 @@ def test_the_corpus_sweep_asked_something() -> None:
 		f"only {comp} of {short} truncated answers were compared with "
 		f"the one before, where 18,091 of 18,959 were measured; the "
 		f"monotonicity half of this sweep has stopped asking")
+
+
+#: Structs whose `required` still learns a length a round trip late, with
+#: the branch each is framed by. 26.946 made the plain sized member read
+#: its length the moment the bytes holding it arrive; these are framed by
+#: branches that change did not reach, and each is named so a new one has
+#: to be argued in. `test_the_late_readers_still_read_late` holds every
+#: entry to still showing the defect, so this cannot go stale the way
+#: `VALUES_APART` did (26.944).
+READS_LATE: dict[tuple[str, str], str] = {
+	# A run walked element by element, which reads from the member's own
+	# base: its count or its first element's length is readable sooner.
+	("dnsname.situ", "situ_message_required"): "counted run of records",
+	("flac.situ", "situ_stream_head_required"): "run of records",
+	("edges.situ", "situ_oob_run_required"): "run of records",
+	# A variant whose arm the data sizes, framed by `_variant_framing`.
+	("flac.situ", "situ_metadata_block_required"): "variant sized by a field",
+	("id3.situ", "situ_id3_tag_required"): "variant, then a run",
+	("netlink.situ", "situ_nl_message_required"): "variant, then a run",
+	("mqtt.situ", "situ_connect_body_required"): "nested struct, variants",
+	# A length named by a varint, or placed after one, is at no static
+	# offset, so `length_readable_from` declines it.
+	("sqlite.situ", "situ_table_leaf_cell_required"): "length from a varint",
+	("edges.situ", "situ_text_driver_moved_required"): "field after a varint",
+	# `[since]` members, framed by `_required_versioned`.
+	("edges.situ", "situ_versioned_required"): "versioned members",
+	# A NESTED struct: the early answer leaves out the struct's own
+	# minimum, which needs no bytes to know -- a loose lower bound rather
+	# than a length read late, found by the same sweep (26.946).
+	("importer.situ", "situ_record_required"): "nested struct's minimum",
+	("edges.situ", "situ_chains_required"): "nested struct's minimum",
+	("edges.situ", "situ_holds_arg_only_required"): "nested struct's minimum",
+	("edges.situ", "situ_hands_on_required"): "nested struct's minimum",
+	("edges.situ", "situ_oob_element_required"): "nested struct's minimum",
+	("edges.situ", "situ_blocked_arg_required"): "nested struct in a region",
+}
+
+
+def readable_probe(names: list[str]) -> str:
+	"""For every truncated prefix, the next byte at all 256 values.
+
+	If every value answers the same, the byte told `required` nothing --
+	and if that answer differs from the one before it, by more than the one
+	byte a delimiter or a varint honestly asks for, the earlier answer had
+	left a readable length unread.
+	"""
+	calls = "\n".join(f'\tsweep("{name}", &{name});' for name in names)
+	return f'''#include "unit.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const uint8_t FILL[] = {{ 0x00u, 0xFFu, 0x5Au, 0x01u, 0x02u, 0x80u }};
+
+static unsigned long asked;
+static unsigned long late;
+
+typedef situ_err_t (*ask_t)(const uint8_t *, uint32_t, uint32_t *);
+
+static int answer(ask_t ask, const uint8_t *fill, uint32_t n, uint32_t *need)
+{{
+	/* Each call in an allocation of exactly its own length. */
+	uint8_t   *p = malloc(n != 0u ? n : 1u);
+	situ_err_t got;
+
+	if (p == NULL) {{
+		exit(1);
+	}}
+	memcpy(p, fill, n);
+	got = ask(p, n, need);
+	free(p);
+	return got == SITU_OK || got == SITU_ERR_TRUNCATED ? (int)got : -1;
+}}
+
+static void sweep(const char *who, ask_t ask)
+{{
+	uint8_t buf[{LONGEST + 1}];
+	int     told = 0;
+
+	for (unsigned f = 0; f < sizeof FILL; f++) {{
+		for (uint32_t n = 0; n < {LONGEST}u; n++) {{
+			uint32_t need = 0, first = 0;
+			int      same = 1;
+
+			memset(buf, FILL[f], sizeof buf);
+			const int got = answer(ask, buf, n, &need);
+			if (got == (int)SITU_OK) {{
+				break;
+			}}
+			if (got != (int)SITU_ERR_TRUNCATED) {{
+				continue;
+			}}
+			for (unsigned v = 0; v < 256u && same; v++) {{
+				uint32_t next = 0;
+				buf[n] = (uint8_t)v;
+				if (answer(ask, buf, n + 1u, &next) < 0) {{
+					same = 0;
+				}} else if (v == 0u) {{
+					first = next;
+				}} else if (next != first) {{
+					same = 0;
+				}}
+			}}
+			asked++;
+			/* A saturated answer says only that the length is past
+			 * what a u32 holds, so the byte may have mattered and the
+			 * other bytes already pushed it over; and `need + 1` would
+			 * wrap at the top. */
+			if (same && first != 0xFFFFFFFFu && first > need
+			    && first - need > 1u) {{
+				late++;
+				if (!told) {{
+					printf("LATE %s fill=%02x have=%u: need %u, "
+					       "then %u whatever byte %u is\\n", who,
+					       FILL[f], n, need, first, n);
+				}}
+				told = 1;
+			}}
+		}}
+	}}
+}}
+
+int main(void)
+{{
+{calls}
+	printf("asked=%lu late=%lu\\n", asked, late);
+	return 0;
+}}
+'''
+
+
+def _late_readers(schema: Path, tmp_path: Path) -> dict[str, str] | None:
+	"""Each `_required` in a schema that read a length late, and how."""
+	source   = Source(str(schema), schema.read_text(encoding="ascii"))
+	parsed   = parse(source)
+	resolved = resolve(parsed, solve(parsed))
+	built    = generate_c(parsed, resolved, "unit")
+
+	(tmp_path / "unit.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(built.source, encoding="ascii")
+	names = sorted(set(C_SIGNATURE.findall(built.header)))
+	if not names:
+		return None
+
+	(tmp_path / "r.c").write_text(readable_probe(names), encoding="ascii")
+	compiled = subprocess.run(
+		[HOST_CC or "cc", *C_WARNINGS, *SANITIZE,
+		 f"-I{RUNTIME / 'c'}", f"-I{tmp_path}", str(tmp_path / "r.c"),
+		 str(tmp_path / "unit.c"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(tmp_path / "readable")],
+		capture_output=True, text=True)
+	if compiled.returncode != 0 and "sanitize" in compiled.stderr:
+		pytest.skip("no address sanitizer")
+	assert compiled.returncode == 0, compiled.stderr
+
+	run = subprocess.run([str(tmp_path / "readable")],
+	                     capture_output=True, text=True, timeout=600)
+	assert run.returncode == 0, run.stdout + run.stderr
+	counts = re.search(r"asked=(\d+) late=(\d+)", run.stdout)
+	assert counts is not None, run.stdout
+	READABLE_ASKED[schema.name] = int(counts.group(1))
+	return {line.split()[1]: line for line in run.stdout.splitlines()
+	        if line.startswith("LATE ")}
+
+
+#: schema -> truncated prefixes asked about, for the companion below.
+READABLE_ASKED: dict[str, int] = {}
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_required_reads_a_length_once_it_arrives(schema: Path,
+		tmp_path: Path) -> None:
+	"""26.946: `required` reads every length that is readable.
+
+	The copyright holder's answer to 26.693. Asked of the backend with the
+	widest `required`, and the other three are held to it by
+	`test_four_backends_frame_alike.py`, which compares their answers
+	prefix by prefix.
+	"""
+	late = _late_readers(schema, tmp_path)
+	if late is None:
+		pytest.skip(f"{schema.name} emits no `_required` taking only bytes")
+	known = {name for held, name in READS_LATE if held == schema.name}
+	new = {name: line for name, line in late.items() if name not in known}
+	assert not new, "\n".join(sorted(new.values()))
+	gone = known - set(late)
+	assert not gone, (
+		f"held out as reading a length late and no longer doing so: "
+		f"{sorted(gone)} -- take them out of READS_LATE")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_the_readability_sweep_asked_something() -> None:
+	"""The companion: a sweep that reached no truncated prefix would pass
+	having asked nothing."""
+	if not READABLE_ASKED:
+		pytest.skip("the per-schema sweeps did not run")
+	assert sum(READABLE_ASKED.values()) >= 10000, READABLE_ASKED

@@ -5872,12 +5872,12 @@ backends and the Python walk, and 26.755 gave the C walker rung 3: it
 refused `arg_field` until it could hold the two messages of a relation.
 
 **What is open as of 2026-10-29**, with the record that carries each
-reproduction. **One is a decision rather than work and is the copyright
-holder's** -- whether `required` should read every readable length
-(26.693). Two more were listed here: which walker is right about a nested
-struct's value (26.721), settled by the holder on 2026-11-09 (26.944), and
-the walker guard-width reconciliation (26.689), whose four divergences
-2441fe89 closed without anybody noticing (26.945).
+reproduction. **None is now the copyright holder's.** Three were: whether
+`required` should read every readable length (26.693), settled yes on
+2026-11-09 and built for the plain sized member (26.946); which walker is
+right about a nested struct's value (26.721), settled the same day
+(26.944); and the walker guard-width reconciliation (26.689), whose four
+divergences 2441fe89 closed without anybody noticing (26.945).
 
 **What a session picking this up should take first**: the open items
 below. The ladder this sentence named as first until 2026-10-30 was
@@ -5928,13 +5928,17 @@ nothing re-read the sentence when the records closed.
     larger `have` can make the total smaller. The answer was that the
     clamp was never the mechanism: all three later faults are a figure
     quoted from the wrong authority, and none involves a clamp.
-  - **What remains is the holder's**, unchanged from 26.693: whether
-    `required` should read every length that is readable, so that the
-    first answer is the last. Today it reports a lower bound that rises
-    as bytes arrive, which is every variable-length shape in this tree
-    rather than a defect in one, and a caller makes several round trips
-    for one message. Taking it would turn two round trips into one and
-    would make a tighter tail term worth writing; leaving it is sound.
+  - **Settled by the copyright holder 2026-11-09: `required` reads every
+    length that is readable** (26.946). Built for the plain sized member
+    in all four backends: the guard before a length is where the fields
+    it names end, not where the member begins, so `udp_header` is told 10
+    at six bytes where it was told 8 and then 10.
+    `test_required_reads_a_length_once_it_arrives` holds it over the
+    corpus, and `READS_LATE` names the sixteen structs framed by branches
+    it has not reached yet -- runs of records, variants, varint-placed
+    lengths, `[since]` members, and nested structs whose own minimum the
+    early answer leaves out. Each entry must still read late, so the list
+    shrinks as they are taken.
 - **The population story was wrong for one of them, and the correction
   is worth more than the fault** (26.725). 26.693 closed with "the
   property was right and the population was not", and 26.723's record
@@ -8385,6 +8389,10 @@ Moved to `doc/decision/26.944-a-nested-structs-value-is-the-extent-measured.md`.
 ### 26.945 The walkers' identity divergences had closed
 
 Moved to `doc/decision/26.945-the-walkers-identity-divergences-had-closed.md`.
+
+### 26.946 `required` reads every length that is readable
+
+Moved to `doc/decision/26.946-required-reads-every-length-that-is-readable.md`.
 
 ### 26.929 The offset cache counts bits
 

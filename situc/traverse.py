@@ -1058,6 +1058,57 @@ def fields_named(struct: ResolvedStruct, source: str) -> list[Placement]:
 	        if _names_a_field(source, local_name(struct, placement))]
 
 
+#: Functions a size expression may call that read nothing but their
+#: arguments, so a length built from them is readable once its fields are.
+#: `sum` and `popcount` are absent on purpose: each reads a run.
+_PURE_CALLS = frozenset({"min", "max", "align_up"})
+
+
+def length_readable_from(struct: ResolvedStruct, placement: Placement,
+		structs: Container[str]) -> int | None:
+	"""How many bytes `required` needs before it can read this member's
+	length, where that is fewer than the bytes before the member.
+
+	26.693 asked whether `required` should read every length that is
+	readable, so that the first answer is the last; the copyright holder
+	answered yes (26.946). Before, each backend read a length only once
+	every byte before the member had arrived -- `udp_header.payload`'s
+	length ends at offset 6 and was read from 8, so a six-byte prefix was
+	told 8 and the next ask learned 65535.
+
+	Answered only where the answer is certain: a plain sized member, whose
+	expression names fields at static offsets and calls nothing that reads
+	a run. Anything else -- a varint, a delimiter, a nested struct, a
+	variant, a run walked element by element, a field placed by the data,
+	a constant or an argument this cannot see the bytes of -- answers
+	None, and the backend keeps the guard it had.
+	"""
+	# `sized_by` alone where the length is a bare field: `u8 d[n]` carries
+	# no `size_expr`, and missed arp's four address runs until it was read.
+	source = placement.size_expr or placement.sized_by
+	if not source or placement.varint is not None or placement.delimiters \
+			or placement.kind == "variant" \
+			or placement.type_name in structs:
+		return None
+	named = fields_named(struct, str(source))
+	if not named:
+		return None
+	allowed = {local_name(struct, field) for field in named} | _PURE_CALLS
+	for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", str(source)):
+		if token not in allowed:
+			return None
+	end = 0
+	for field in named:
+		if field.offset_bits is None or field.frame_relative \
+				or field.scalar is None or field.varint is not None \
+				or field.located is not None or field.since is not None \
+				or field.parameter or field.radix:
+			return None
+		bits = field.offset_bits + field.size_bits
+		end = max(end, -(-bits // BITS_PER_BYTE))
+	return end
+
+
 def _names_a_field(source: str, local: str) -> bool:
 	"""Whether an expression's source reads the field called `local`.
 
