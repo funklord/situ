@@ -503,9 +503,13 @@ situ_walk_err situ_walk_offset_bits(const situ_walk_image *image,
                                         uint32_t shape, uint32_t index,
                                         uint32_t *out);
 
-/* A member's value, from a message. Fixed offsets and widths up to 64 bits;
- * anything else answers SITU_WALK_UNSUPPORTED rather than a number, because
- * a wrong length is indistinguishable from a right one once it leaves. */
+/* A member's value, from a message: its bits where the message places and
+ * sizes them, read as an integer of at most 64 bits. A nested struct whose
+ * extent the data decides is read at the extent measured, as the Python
+ * walk reads it (26.944). A member with no single value -- a run, a
+ * delimited byte member -- and anything wider answers SITU_WALK_UNSUPPORTED
+ * rather than a number, because a wrong length is indistinguishable from a
+ * right one once it leaves. */
 situ_walk_err situ_walk_read(const situ_walk_image *image,
                                  const uint8_t *message, uint32_t len,
                                  uint32_t shape, uint32_t index,

@@ -5872,11 +5872,11 @@ backends and the Python walk, and 26.755 gave the C walker rung 3: it
 refused `arg_field` until it could hold the two messages of a relation.
 
 **What is open as of 2026-10-29**, with the record that carries each
-reproduction. **Three are decisions rather than work and are the copyright
+reproduction. **Two are decisions rather than work and are the copyright
 holder's** -- whether `required` should read every readable length
-(26.693), which walker is right about a nested struct's value (26.721),
-and the walker guard-width reconciliation (26.689). Only the second
-blocks anything.
+(26.693) and the walker guard-width reconciliation (26.689). A third,
+which walker is right about a nested struct's value (26.721), was the
+only one blocking anything; the holder settled it on 2026-11-09 (26.944).
 
 **What a session picking this up should take first**: the open items
 below. The ladder this sentence named as first until 2026-10-30 was
@@ -6092,23 +6092,15 @@ nothing re-read the sentence when the records closed.
   only readers of the image's check table are the two walkers, so there is
   no third witness for check identity the way a generated backend is one
   for a value.
-- **Which walker is right about a nested struct's value, and should either
-  answer at all?** (26.721). **The holder's**, and the one question on
-  this list that blocks work: it holds `VALUES_APART` open in
-  `test/unit/test_walker_c.py`, three `(schema, struct)` pairs, and holds
-  back dealing more packets per struct in the walker sweeps, which would
-  grow that set before the question is answered.
-
-  C reads the row's `size_bits` and the Python walk reads the measured
-  extent, and **both agree about the member's offset and its width** --
-  which is why the three older corpus sweeps cannot see it and the values
-  sweep found it on its first run. `situ_walk.h` states a contract C
-  violates while the Python walk answers a third thing. Best guess:
-  refuse in both, as the fifth of `read_scalar`'s recorded refusals. Not
-  taken, because it changes BOTH independent readers -- the only
-  independent witnesses this project has -- and fixing C alone would turn
-  a visible divergence into a silent decline, which is the vacuity 26.718
-  cost eleven weeks.
+- ~~**Which walker is right about a nested struct's value, and should
+  either answer at all?** (26.721).~~ **Settled by the copyright holder
+  2026-11-09: the C walker is right** (26.944). C's answer had already
+  changed by then: a6313f02 (26.837) moved it from the row's `size_bits`
+  to the extent measured, for a read past the member, and the two walkers
+  agreed from that day while this entry and `VALUES_APART` went on saying
+  they did not. So the settled value is the measured extent, read as an
+  integer of at most 64 bits and refused past that, in both walkers; no
+  reader changed. `VALUES_APART` is empty and held empty.
 
 **Four backends over one layout**, and the claim that matters is that they
 agree. Each is tested against the C output on the same buffer, field by field,
@@ -8381,6 +8373,10 @@ Moved to `doc/decision/26.942-a-varint-is-held-to-64-bits.md`.
 ### 26.943 A sealed region's nonce and key are in the capability map
 
 Moved to `doc/decision/26.943-a-sealed-regions-nonce-and-key-are-in-the-map.md`.
+
+### 26.944 A nested struct's value is the extent measured
+
+Moved to `doc/decision/26.944-a-nested-structs-value-is-the-extent-measured.md`.
 
 ### 26.929 The offset cache counts bits
 

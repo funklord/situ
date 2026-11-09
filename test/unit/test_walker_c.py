@@ -3770,51 +3770,19 @@ def test_the_two_walkers_agree_about_every_offset(
 VALUES_ASKED: dict[str, tuple[int, int]] = {}
 
 #: Structs whose VALUES are not compared, because the two walkers answer a
-#: member that has no single value and answer differently. Named by schema
-#: and struct rather than by loosening the comparison, so a fourth instance
-#: has to be added here (26.721).
+#: member differently. Named by schema and struct rather than by loosening
+#: the comparison, so an instance has to be added here (26.721).
 #:
-#: All three are a NESTED STRUCT whose extent the data decides, and the two
-#: readings are not two guesses at one number -- they are two different
-#: questions:
-#:
-#:     http.request_head.start   row 32 bits, measured 5 bytes
-#:                               C 2782332101 (0xa5d704c5, the row's four)
-#:                               python 712277017891 (0xa5d704c523, the five)
-#:     dnsname.question.qname    row 8 bits, measured 2 bytes
-#:                               C 209, python 53679
-#:     edges.kv_block.entries    row 16 bits, measured 3 bytes
-#:                               C 13344, python 3416192
-#:
-#: Both walkers agree about the member's OFFSET and its WIDTH -- measured on
-#: all three -- so the sweeps beside this one cannot see it. C reads the
-#: `size_bits` the row states, which for a variable member is its minimum,
-#: and the Python walk reads the extent it measured.
-#:
-#: `situ_walk.h` says what C should do and C does not do it: "Fixed offsets
-#: and widths up to 64 bits; anything else answers SITU_WALK_UNSUPPORTED
-#: rather than a number, because a wrong length is indistinguishable from a
-#: right one once it leaves." A nested struct whose extent the data decides
-#: is the `anything else`.
-#:
-#: And the Python walk has refused four constructs for exactly that reason,
-#: each recorded in `read_scalar` as it was settled -- a run, a delimited
-#: member, a variant, and a varint settled the other way because it does
-#: have a value. A nested struct is the fifth to arrive there as bits and
-#: the only one still answering.
-#:
-#: Raised rather than resolved, because the two available answers are a
-#: change to BOTH independent readers of the image and the question behind
-#: them is the one 26.356 records for `native`: whether a walker should
-#: answer for this at all is a question about what a walker IS. Holding the
-#: struct out costs the other members of these three -- `qtype` and
-#: `qclass`, `payload`, `fields` -- which is the same price `IDENTITY_APART`
-#: pays and is why the set is keyed this way.
-VALUES_APART = frozenset({
-	("http.situ", "request_head"),
-	("dnsname.situ", "question"),
-	("edges.situ", "kv_block"),
-})
+#: Empty since 26.944. It held three, all a NESTED STRUCT whose extent the
+#: data decides -- `http.request_head.start`, `dnsname.question.qname`,
+#: `edges.kv_block.entries` -- where C read the row's `size_bits` and the
+#: Python walk the extent it measured. a6313f02 (26.837) moved C to the
+#: measured extent for a reason of its own, a read past the member, and the
+#: three have agreed since; nothing emptied this set, so it went on holding
+#: out structs that no longer diverged. The copyright holder settled the
+#: question it was waiting on: C is right, and C's answer is the measured
+#: extent, read as an integer where it is at most 64 bits.
+VALUES_APART: frozenset[tuple[str, str]] = frozenset()
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
@@ -3912,7 +3880,7 @@ def test_the_value_comparison_asked_something() -> None:
 		f"only {asked} values were compared across "
 		f"{len(VALUES_ASKED)} schemas, with {declined} declined; it was "
 		f"1145 compared and 689 declined over 46 schemas when written")
-	assert len(VALUES_APART) <= 3, (
+	assert not VALUES_APART, (
 		f"{len(VALUES_APART)} structs are held out of the value "
 		"comparison; each one is a divergence nobody is looking at")
 
