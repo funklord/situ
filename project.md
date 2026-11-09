@@ -8667,10 +8667,13 @@ name in `VALUE_ATTRIBUTES` was asked for bare and refused; `[escape]` and the
 flags mean something bare and are left alone, so `u8 secret; u8 k [secret];`
 keeps its meaning. Nothing in the 46 corpus schemas reaches it.
 
-Open, and the holder's because it amends 0006: whether a lone value attribute
-should read as a size outright. It can be decided from the vocabulary alone, as
-0006's rule 3 was, so 0006's reason holds and no accepted schema changes meaning.
-The cost is `u8 x [max];` with no such member losing "needs a value".
+~~Open, and the holder's because it amends 0006: whether a lone value attribute
+should read as a size outright.~~ **Settled by the holder 2026-11-06 (26.886):
+it does.** And the cost this paragraph expected was not paid: `u8 x [max];`
+with no such member still says the attribute needs a value. This paragraph went
+on reading as open after the heading above was marked superseded, and was
+reported as an open holder question twice on 2026-11-09 before anybody re-read
+26.886; the holder answered it a second time the same day, the same way.
 
 ### 26.876 A size read was captured by a local, and a skip hid it
 
