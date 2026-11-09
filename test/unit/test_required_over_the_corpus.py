@@ -550,9 +550,10 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# base: its first element's length is readable sooner. A COUNTED run
 	# reads its count early and credits each element owed (26.946).
 	("flac.situ", "situ_stream_head_required"): "run of records",
-	# A variant whose arm the data sizes, framed by `_variant_framing`.
+	# A variant whose arm the data sizes, framed by `_variant_framing`,
+	# which reads early once every field measuring it has arrived
+	# (`discriminant_readable_from`); these still learn something late.
 	("flac.situ", "situ_metadata_block_required"): "variant sized by a field",
-	("id3.situ", "situ_id3_tag_required"): "variant, then a run",
 	("netlink.situ", "situ_nl_message_required"): "variant, then a run",
 	# A length named by a varint, or placed after one, is at no static
 	# offset, so `length_readable_from` declines it.

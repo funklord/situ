@@ -1095,11 +1095,41 @@ def length_readable_from(struct: ResolvedStruct, placement: Placement,
 			or placement.kind == "variant" \
 			or (placement.type_name in structs and not counted):
 		return None
-	named = fields_named(struct, str(source))
+	return _fields_end(struct, str(source))
+
+
+def discriminant_readable_from(struct: ResolvedStruct, placement: Placement
+		) -> int | None:
+	"""How many bytes `required` needs before it can choose a variant's arm.
+
+	`length_readable_from` for what chooses and measures the arm (26.946):
+	ID3's `id3_tag` chooses its extended header by a flag ending at byte 6,
+	and was told nothing about the arm until the header began at 10.
+	"""
+	if placement.kind != "variant" or not placement.discriminant:
+		return None
+	# Every expression measuring the variant, not the discriminant alone:
+	# flac's arms are sized by `length`, which ends three bytes past the
+	# type, and guarding on the type let the arm's framing read `length`
+	# from a one-byte buffer -- ASan's heap-buffer-overflow, on the first
+	# run of the sweep.
+	end = 0
+	for source in _sources_read(struct, placement):
+		reach = _fields_end(struct, source)
+		if reach is None:
+			return None
+		end = max(end, reach)
+	return end
+
+
+def _fields_end(struct: ResolvedStruct, source: str) -> int | None:
+	"""Where the last byte an expression reads ends, if it reads only
+	scalars at static offsets and calls nothing that reads a run."""
+	named = fields_named(struct, source)
 	if not named:
 		return None
 	allowed = {local_name(struct, field) for field in named} | _PURE_CALLS
-	for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", str(source)):
+	for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", source):
 		if token not in allowed:
 			return None
 	end = 0

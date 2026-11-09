@@ -6329,6 +6329,9 @@ class Emitter:
 			early = traverse.length_readable_from(
 				struct, placement, self.structs,
 				counted=is_counted_run(self.resolved.structs, placement))
+			if early is None:
+				early = traverse.discriminant_readable_from(struct,
+				                                            placement)
 			ready = (f"{early}" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
@@ -6590,12 +6593,17 @@ class Emitter:
 
 		disc = self._rule_text(struct, placement.discriminant)
 		disc = self._unparen(disc).replace("self.", "probe.")
+		# Guarded where the discriminant ends rather than where the
+		# variant begins: the arm is chosen from it, and an arm with no
+		# bytes yet answers its floor (26.946).
+		chosen = traverse.discriminant_readable_from(struct, placement)
+		opens = f"{chosen}" if chosen is not None else cursor
 		lines = [
 			"",
 			f"\t\t// {placement.path}: the arm the discriminant selects",
 			"\t\t// frames itself -- reported by bbq-predictor against a",
 			"\t\t// variant arm, whose extent shrank (26.684).",
-			f"\t\tif have < {cursor} {{",
+			f"\t\tif have < {opens} {{",
 			"\t\t\treturn situ_rt::Framing::Need(at);",
 			"\t\t}",
 			"\t\tlet len_;",
@@ -6615,7 +6623,7 @@ class Emitter:
 			else:
 				lines.extend([
 					f"\t\t\tlen_ = match {call}::required"
-					f"(&data[{cursor}..]{handed}) {{",
+					f"(&data[{cursor}.min(data.len())..]{handed}) {{",
 					"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 					"\t\t\t\tsitu_rt::Framing::Need(n) =>",
 					"\t\t\t\t\treturn situ_rt::Framing::Need("

@@ -3232,6 +3232,9 @@ class Emitter:
 			early = traverse.length_readable_from(
 				struct, placement, self.structs,
 				counted=is_counted_run(self.resolved.structs, placement))
+			if early is None:
+				early = traverse.discriminant_readable_from(struct,
+				                                            placement)
 			ready = (f"{early}u" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
@@ -3503,6 +3506,11 @@ class Emitter:
 			return None
 
 		disc  = self._over_fields(struct, placement.discriminant)
+		# Guarded where the discriminant ends rather than where the
+		# variant begins: the arm is chosen from it, and an arm with no
+		# bytes yet answers its floor (26.946).
+		chosen = traverse.discriminant_readable_from(struct, placement)
+		opens = f"{chosen}u" if chosen is not None else cursor
 		lines = [
 			"",
 			f"\t\t/* {placement.path}: the arm the discriminant selects",
@@ -3512,7 +3520,7 @@ class Emitter:
 			"\t\t\tstd::uint32_t part = 0;",
 			"\t\t\t::situ::rt::err e = ::situ::rt::err::ok;",
 			"",
-			f"\t\t\tif (have < {cursor}) {{",
+			f"\t\t\tif (have < {opens}) {{",
 			"\t\t\t\tneed = at;",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
 			"\t\t\t}",
