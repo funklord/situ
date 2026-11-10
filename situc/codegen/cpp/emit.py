@@ -4510,7 +4510,12 @@ class Emitter:
 				   "\t\t}",
 				   ""] if value_fits is not None else []),
 				f"\t\t(void)situ_parse_uint(situ_base(raw_) + ({at}),"
-				f" {placement.array_count}, {placement.radix}, {limit},"
+				# `u`, as every other parse site writes it: a `u64` text
+				# number's limit is 2^64 - 1, which without a suffix is a
+				# constant too large for any signed type and an error
+				# under -pedantic-errors. ustar's `size` is the first
+				# `u64` text number to frame a member (26.948).
+				f" {placement.array_count}u, {placement.radix}u, {limit}u,"
 				" &value);",
 				f"\t\treturn static_cast<{ctype}>(value);",
 				"\t}",
