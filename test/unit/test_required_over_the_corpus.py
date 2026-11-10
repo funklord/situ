@@ -562,8 +562,6 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# offset, so `length_readable_from` declines it.
 	("sqlite.situ", "situ_table_leaf_cell_required"): "length from a varint",
 	("edges.situ", "situ_text_driver_moved_required"): "field after a varint",
-	# `[since]` members, framed by `_required_versioned`.
-	("edges.situ", "situ_versioned_required"): "versioned members",
 	# A NESTED struct whose answer still moves on a byte that tells it
 	# nothing, after `nested_floor` credited a single nested member's own
 	# minimum and took five such structs off this list (26.946).

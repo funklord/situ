@@ -50,7 +50,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	summed_width,
+	summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -6747,7 +6747,7 @@ class Emitter:
 			*self._argument_unused(struct, self._argument_tail(struct)),
 			f"\tuint32_t at = {base}u;",
 			"",
-			f"\tif (have < {base}u) {{",
+			f"\tif (have < {version_readable_from(field)}u) {{",
 			"\t\t*need = at;",
 			"\t\treturn SITU_ERR_TRUNCATED;",
 			"\t}",

@@ -5959,9 +5959,10 @@ nothing re-read the sentence when the records closed.
     it names end, not where the member begins, so `udp_header` is told 10
     at six bytes where it was told 8 and then 10.
     `test_required_reads_a_length_once_it_arrives` holds it over the
-    corpus, and `READS_LATE` names the nine structs framed by branches it
+    corpus, and `READS_LATE` names the eight structs framed by branches it
     has not reached yet -- a terminated run of records, two variants,
-    varint-placed lengths, `[since]` members, and three nested structs. A
+    varint-placed lengths and three nested structs; `[since]` members
+    left it when the version came to be read at its own end (26.950). A
     single nested member is credited its own floor before its bytes
     arrive, a counted run reads its count early and credits each element
     owed, and a variant is chosen once the fields measuring it arrive,

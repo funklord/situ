@@ -49,7 +49,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
-	summed_width,
+	summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -6207,7 +6207,7 @@ class Emitter:
 		# rest, the version field being among the members every version
 		# carries and so inside `base`.
 			field, base, after = by_version
-			body = [f"\t\tif have < {base} {{",
+			body = [f"\t\tif have < {version_readable_from(field)} {{",
 			        f"\t\t\treturn situ_rt::Framing::Need({base});", "\t\t}",
 			        f"\t\tlet probe = {_pascal(struct.name)} {{ bytes: data }};",
 			        f"\t\tlet version = probe.{_ident(c_name(field.name))}()"

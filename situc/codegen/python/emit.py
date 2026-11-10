@@ -49,7 +49,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	summed_width,
+	summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -6268,7 +6268,7 @@ class Emitter:
 		# rest, the version field being among the members every version
 		# carries and so inside `base`.
 			field, base, after = by_version
-			body = [f"\t\tif have < {base}:",
+			body = [f"\t\tif have < {version_readable_from(field)}:",
 			        f'\t\t\traise TruncatedError("{struct.name}: incomplete",'
 			        f" {base})",
 			        "\t\tprobe = cls(Message(bytearray(data)), 0, have)",

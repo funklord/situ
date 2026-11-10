@@ -52,7 +52,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	summed_width,
+	summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -3112,7 +3112,8 @@ class Emitter:
 		# carries and so inside `base`.
 			field, base, after = by_version
 			body = [f"\t\tstd::uint32_t at = {base}u;", "",
-			        f"\t\tif (have < {base}u) {{", "\t\t\tneed = at;",
+			        f"\t\tif (have < {version_readable_from(field)}u) {{",
+			        "\t\t\tneed = at;",
 			        "\t\t\treturn ::situ::rt::err::truncated;", "\t\t}",
 			        "\t\tconst auto version = static_cast<std::uint64_t>("
 			        f"this->{bare_name(field.name)}());", ""]

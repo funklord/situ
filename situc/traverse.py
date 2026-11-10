@@ -1152,6 +1152,19 @@ def _fields_end(struct: ResolvedStruct, source: str,
 	return end
 
 
+def version_readable_from(field: Placement) -> int:
+	"""Where a `[version]` field's own bytes end (26.950).
+
+	`required` framed a versioned struct behind a guard on every member the
+	versions share, so `edges.versioned` -- `u8 ver; u16 length;` -- was
+	told 3 with its version in hand, and 9 a byte later. The version is
+	readable once its own bytes are, which is what each backend guards on
+	now; while it is short the answer is still the shared members.
+	"""
+	assert field.offset_bits is not None
+	return -(-(field.offset_bits + field.size_bits) // BITS_PER_BYTE)
+
+
 def summed_width(placement: Placement) -> int:
 	"""How many bytes each element `sum(run)` adds is (26.896, 26.949).
 
