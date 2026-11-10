@@ -36,6 +36,11 @@ class ResolvedStruct:
 class ResolvedSchema:
 	structs: dict[str, ResolvedStruct]	= field(default_factory=dict)
 	layout: SchemaLayout			= field(default_factory=SchemaLayout)
+	#: Each struct's `refuse` predicates (0051), which `validate` applies.
+	#: Here because the check generators build fixtures from this and not
+	#: from the AST, and a fixture a rule refuses asserts the wrong thing
+	#: (26.949).
+	refusals: dict[str, tuple[ast.Expr, ...]] = field(default_factory=dict)
 
 	def find(self, path: str) -> Resolved | None:
 		head, _, _ = path.partition(".")
@@ -108,6 +113,12 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 		refusal = negative_value(maintains, stated)
 		if refusal is not None:
 			raise refusal
+
+	from situc.traverse import messages
+	for name in result.structs:
+		result.refusals[name] = tuple(
+			when.expr for when in messages(schema, name)
+			if when.severity is ast.Severity.REFUSE)
 
 	return result
 

@@ -13,7 +13,7 @@
 # each -- no digits at all, which every tar reader takes as zero (26.948).
 #
 # `chksum` is 4322, and the 512 bytes add up to that with its own eight read as
-# spaces; nothing below checks it, which the schema says.
+# spaces, which the schema's `when` checks.
 #
 # ENTRY ONE, 1024 bytes: the header, "hello\n", and 506 zero bytes to the
 # end of the block. The archive's two zero blocks and GNU's padding to 10240

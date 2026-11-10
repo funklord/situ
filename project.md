@@ -2164,7 +2164,11 @@ Permitted:
 - `popcount(x)`: the bits set in an unsigned value, for a presence bitmap
   counting what follows it (26.899)
 - `sum(run)` in a size: the elements of a counted run of unsigned integers
-  declared earlier, a table of lengths ahead of what it sizes (26.896)
+  declared earlier, a table of lengths ahead of what it sizes (26.896). In
+  a `when` it may also name a fixed-width text number, whose elements are
+  its characters -- 8.6.2's width of digits -- so `sum(mode)` over `octal
+  u32 mode[8]` adds eight bytes, which is what ustar's header checksum adds
+  (26.949)
 
 Forbidden, by construction:
 
@@ -6066,8 +6070,8 @@ nothing re-read the sentence when the records closed.
   [padded]` reads `0000644` and a NUL, `0000644` and a space, `644` and
   five NULs and `00000644` as 420, and eight NULs as 0, which is how GNU
   tar writes an unused `devmajor`. `example/ustar` is the header and an
-  entry with vectors GNU tar wrote. GNU's base-256 numbers and the
-  header's checksum stay open, in 26.948.
+  entry with vectors GNU tar wrote, its checksum a `when` since 26.949.
+  GNU's base-256 numbers stay open, in 26.948.
 - ~~**Four walker identity divergences** of one shape (26.689)~~, a run
   whose declared length overflows the C walk's `size_bits`, where C
   refused naming no check and the Python walk named `fits_frame`.

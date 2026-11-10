@@ -6,8 +6,9 @@ started before the C backend has proven the lattice.
 
 from __future__ import annotations
 
+import operator
 import re
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING
 
 from situc import ast, traverse
@@ -728,7 +729,8 @@ def no_baseline_stands(resolved: ResolvedSchema, struct: ResolvedStruct,
 	refused the fixture before a check had broken anything.
 	"""
 	if held_struct_goes_short(resolved, struct, carried) \
-			or zero_is_no_message(resolved, struct):
+			or zero_is_no_message(resolved, struct) \
+			or rule_refuses_zeros(resolved, struct):
 		return True
 	for entry in struct.entries:
 		placement = entry.placement
@@ -741,6 +743,89 @@ def no_baseline_stands(resolved: ResolvedSchema, struct: ResolvedStruct,
 				     or any(required_run(placement) or b"")):
 			return True
 	return False
+
+
+#: The operators `_at_zero` can answer, all of them total over integers.
+_ZERO_OPS: dict[str, Callable[[int, int], int | bool]] = {
+	"==": operator.eq, "!=": operator.ne, "<": operator.lt,
+	"<=": operator.le, ">": operator.gt, ">=": operator.ge,
+	"+": operator.add, "-": operator.sub, "*": operator.mul,
+	"&": operator.and_, "|": operator.or_, "^": operator.xor,
+}
+
+
+def rule_refuses_zeros(resolved: ResolvedSchema, struct: ResolvedStruct,
+		seen: frozenset[str] = frozenset()) -> bool:
+	"""Whether a `refuse` rule may refuse the fixture a check starts from.
+
+	A baseline writes what each member needs and leaves the rest zero, and
+	`validate` applies the schema's `when ... refuse` rules (0051). ustar's
+	checksum is one no field-at-a-time fixture keeps: the digits the
+	baseline writes add up to something, and `chksum` reads 0. So each rule
+	is evaluated over the baseline's values, three ways -- true, false, or
+	not known here, a `sum` being the usual unknown -- and anything short of
+	false means the baseline does not stand (26.949). cpio's rule opens
+	`check != 0 &&`, false over zeros, so its checks keep their fixture.
+
+	A nested struct's rules apply inside it, so they are asked too.
+	"""
+	if struct.name in seen:
+		return False
+	for expr in resolved.refusals.get(struct.name, ()):
+		if _at_zero(expr, resolved, struct) is not False:
+			return True
+	for entry in struct.entries:
+		nested = resolved.structs.get(entry.placement.type_name or "")
+		if nested is not None and rule_refuses_zeros(
+				resolved, nested, seen | {struct.name}):
+			return True
+	return False
+
+
+def _at_zero(expr: ast.Expr, resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> int | bool | None:
+	"""An expression's value over a baseline fixture, or None if unknown."""
+	from situc.invariant import paths_in
+
+	if isinstance(expr, ast.IntLiteral):
+		return expr.value
+	if isinstance(expr, (ast.NameRef, ast.Access)):
+		paths = paths_in(expr)
+		found = resolved.find(paths[0]) if len(paths) == 1 else None
+		if found is None:
+			return None
+		placement = found.placement
+		if placement.radix is not None:
+			return 0		# the baseline writes zeros as digits
+		if placement.scalar is None or placement.array_count is not None:
+			return None
+		value = required_pattern(resolved, struct, placement)
+		return 0 if value is None else value
+	if isinstance(expr, ast.Unary):
+		operand = _at_zero(expr.operand, resolved, struct)
+		if operand is None:
+			return None
+		if expr.op == "!":
+			return not operand
+		if expr.op == "-":
+			return -operand
+		return ~operand if expr.op == "~" else None
+	if isinstance(expr, ast.Binary):
+		left  = _at_zero(expr.left, resolved, struct)
+		right = _at_zero(expr.right, resolved, struct)
+		if expr.op == "&&":
+			if left is False or right is False:
+				return False
+			return True if left is True and right is True else None
+		if expr.op == "||":
+			if left is True or right is True:
+				return True
+			return False if left is False and right is False else None
+		if left is None or right is None:
+			return None
+		known = _ZERO_OPS.get(expr.op)
+		return None if known is None else known(int(left), int(right))
+	return None
 
 
 def held_struct_goes_short(resolved: ResolvedSchema, struct: ResolvedStruct,

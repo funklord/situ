@@ -46,3 +46,4 @@ struct ustar_header size=512
   @0x0151   8         u32        devminor  big radix=8 padded
   @0x0159   155       u8         prefix  big
   @0x01f4   12        u8         <reserved0>  big
+  ustar_header refuses: checksum_mismatch when ustar_header.chksum != sum(ustar_header.name) + sum(ustar_header.mode) + sum(ustar_header.uid) + sum(ustar_header.gid) + sum(ustar_header.size) + sum(ustar_header.mtime) + 256 + ustar_header.typeflag + sum(ustar_header.linkname) + sum(ustar_header.magic) + sum(ustar_header.uname) + sum(ustar_header.gname) + sum(ustar_header.devmajor) + sum(ustar_header.devminor) + sum(ustar_header.prefix)

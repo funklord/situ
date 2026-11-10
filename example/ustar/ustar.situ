@@ -65,10 +65,8 @@ struct ustar_header {
 	octal u64  size[12]  [padded];
 	octal u64  mtime[12] [padded];
 
-	// The sum of the header's 512 bytes with these eight read as spaces.
-	// Read here and not checked: the sum is over the whole block, and a
-	// rule that reads one member as other bytes is not one this schema
-	// states yet.
+	// The sum of the header's 512 bytes with these eight read as spaces;
+	// the `when` below the struct checks it.
 	octal u32  chksum[8] [padded];
 
 	type_flag  typeflag;
@@ -81,6 +79,24 @@ struct ustar_header {
 	u8  prefix[155];
 	reserved u8 [12];
 }
+
+// The checksum: every byte of the header added, with `chksum`'s own eight
+// counted as spaces -- 8 * 0x20 is the 256. A text number's `sum` adds its
+// characters, not its value (26.949), which is what a tar reader adds.
+// `typeflag` is one byte, so its value is its sum; the twelve reserved
+// bytes at the end are refused unless zero, so they add nothing.
+//
+// POSIX's sum is unsigned. Some old archivers summed signed bytes, and
+// GNU tar accepts either; a name in the upper half of Latin-1 written by
+// one of those is refused here, which is the stricter of the two.
+when ustar_header.chksum != sum(ustar_header.name) + sum(ustar_header.mode)
+	+ sum(ustar_header.uid) + sum(ustar_header.gid)
+	+ sum(ustar_header.size) + sum(ustar_header.mtime) + 256
+	+ ustar_header.typeflag + sum(ustar_header.linkname)
+	+ sum(ustar_header.magic) + sum(ustar_header.uname)
+	+ sum(ustar_header.gname) + sum(ustar_header.devmajor)
+	+ sum(ustar_header.devminor) + sum(ustar_header.prefix)
+	refuse checksum_mismatch "the header's bytes do not add up to `chksum`";
 
 require size(ustar_header) == BLOCK;
 require absolute_static(ustar_header);
