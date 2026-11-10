@@ -5968,6 +5968,19 @@ nothing re-read the sentence when the records closed.
     owed, and a variant is chosen once the fields measuring it arrive,
     which took seven off the list. Each entry must still read late, so the list
     shrinks as they are taken.
+  - **A consumer asked whether the floor's removal was safe** (raidcfgd,
+    inbox 20261110T1100Z). Regenerating from `5b925c0d`, it found the
+    `have < <NAME>_SIZE_MIN` pre-check gone from thirteen `_required`
+    functions, generated into a root daemon's untrusted-input path. It
+    would not regenerate until it knew whether a truncated buffer was
+    now read further. Answered in its inbox (20261110T1133Z): no.
+    The floor was an answer, not a guard; 2025f692 removed it because it
+    could exceed the truth for a frame breaking a `[min]`. Every read in
+    `required` has its own `have <` guard, held by the exact-size ASan
+    sweeps in `test_required_over_the_corpus.py`. The view still refuses
+    `length < SIZE_MIN` with BOUNDS before anything decodes. Nothing in
+    the generated code says that the floor's absence is deliberate; a
+    regenerating consumer can only learn it from the log.
 - **The population story was wrong for one of them, and the correction
   is worth more than the fault** (26.725). 26.693 closed with "the
   property was right and the population was not", and 26.723's record
