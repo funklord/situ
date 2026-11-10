@@ -5848,7 +5848,18 @@ class Emitter:
 			              f"\t\t*need = {floor}u;",
 			              "\t\treturn SITU_ERR_TRUNCATED;", "\t}"])
 		tail = versioned_tail(self.resolved.structs, struct)
-		at = str(constant - (tail[1] if tail else 0)) + "u"
+		# EVERY VARIABLE MEMBER'S FLOOR IS OWED FROM THE START (26.952). `at`
+		# already holds every fixed member, the ones after the member being
+		# measured included, so an early answer owed them; it did not owe
+		# the floors of the variable members after it, and netlink's
+		# message was told 16 below six bytes and 20 once its type arrived.
+		# Each member's floor is taken back out as it is reached, before its
+		# own length goes in -- a length is never below its floor, so no
+		# answer falls, and the walks that credit an element's floor
+		# themselves find it removed first.
+		floors = [traverse.nested_floor(self.resolved.structs, one)
+		          for one in variable]
+		at = str(constant - (tail[1] if tail else 0) + sum(floors)) + "u"
 		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
 		# `at` is a running TOTAL and includes every fixed member, the ones
 		# AFTER this one included, so it is not an offset; and the offset
@@ -5966,18 +5977,21 @@ class Emitter:
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
 			# And before a nested struct's bytes arrive, its own floor
-			# is owed already: it needs no reading (26.946).
-			floor = traverse.nested_floor(self.resolved.structs, placement)
-			owed = f"situ_need_u32(at, {floor}u)" if floor else "at"
+			# is owed already: it needs no reading (26.946). `at` holds it
+			# from the start, and gives it back here (26.952).
+			floor = floors[index]
 			steps.extend([
 				"",
 				f"\t/* {placement.path}: reading its length means reading bytes"
 				" that",
 				"\t * have to be here first. */",
 				f"\tif (have < {ready}) {{",
-				f"\t\t*need = {owed};",
+				"\t\t*need = at;",
 				"\t\treturn SITU_ERR_TRUNCATED;",
 				"\t}",
+				*([f"\tif (at < UINT32_MAX) {{",
+				   f"\t\tat -= {floor}u; /* its own length goes in below */",
+				   "\t}"] if floor else []),
 			])
 			# A counted run of variable-size elements is framed the same way,
 			# and was not. `is_run` names the two spellings that END where the
@@ -6020,7 +6034,7 @@ class Emitter:
 					f"\tif ({width}(view) == 0u) {{",
 					f"\t\t/* {placement.path}: mid-varint, so one more byte"
 					" and ask again. */",
-					"\t\t*need = situ_need_u32(have, 1u);",
+					*self._partial_need(cursor),
 					"\t\t/* ... and never below the total the walk has",
 					"\t\t * already accounted. The two are different",
 					"\t\t * quantities and neither bounds the other, so",
@@ -6054,7 +6068,7 @@ class Emitter:
 					"\t\t * question only the sender can answer, so the honest"
 					" lower",
 					"\t\t * bound is one byte: read again and ask again. */",
-					"\t\t*need = have + 1u;",
+					*self._partial_need(cursor),
 					"\t\t/* ... and never below the total the walk has",
 					"\t\t * already accounted. The two are different",
 					"\t\t * quantities and neither bounds the other, so",
@@ -6232,6 +6246,26 @@ class Emitter:
 			"}",
 		]
 		return lines
+
+	@staticmethod
+	def _partial_need(cursor: str | None) -> list[str]:
+		"""What a member still arriving owes: one byte past what is here.
+
+		ON TOP OF `at`, which holds every fixed member after this one, where
+		it was `have + 1` floored at `at` -- two quantities, and the larger
+		of them is not the sum. `edges.text_driver_moved` is a varint and
+		then six fixed bytes: told 9 at eight bytes of continuation, and 15
+		a byte later whatever that byte was (26.952). The member runs from
+		the cursor, so what has arrived of it is `have - cursor`, and it is
+		at least one byte longer. Without a cursor the old floor stands.
+		"""
+		if cursor is None:
+			return ["\t\t*need = situ_need_u32(have, 1u);"]
+		# `have` is past the cursor whenever this runs -- the guard before
+		# the member answered otherwise -- and the test is kept anyway,
+		# since a wrapped subtraction here is a need of four billion.
+		return [f"\t\t*need = situ_need_u32(at, (have > {cursor} ?"
+		        f" have - {cursor} : 0u) + 1u);"]
 
 	def _frames_itself(self, struct: ResolvedStruct) -> bool:
 		"""Whether `_required` is emitted for this struct at all.

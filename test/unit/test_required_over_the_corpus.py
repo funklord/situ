@@ -550,10 +550,11 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# base: its first element's length is readable sooner. A COUNTED run
 	# reads its count early and credits each element owed (26.946).
 	("flac.situ", "situ_stream_head_required"): "run of records",
-	# A guard that owes only its own member: before nlmsg_type arrives the
-	# variant's guard answers 16, though the `while` run after it owes an
-	# element whatever the arm -- see test_a_while_run_owes_an_element.
-	("netlink.situ", "situ_nl_message_required"): "a later member's floor",
+	# The `while` run's element is owed from the first byte now (26.952);
+	# what is left is a discriminant two bytes wide whose arm the FIRST
+	# byte already settles: in host order, a low byte no named type has
+	# chooses `default` and its `nlmsg_len - 16` before the second arrives.
+	("netlink.situ", "situ_nl_message_required"): "arm settled by a partial discriminant",
 	# A variant whose arm the data sizes, framed by `_variant_framing`,
 	# which reads early once every field measuring it has arrived
 	# (`discriminant_readable_from`); these still learn something late.
@@ -561,7 +562,6 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# A length named by a varint, or placed after one, is at no static
 	# offset, so `length_readable_from` declines it.
 	("sqlite.situ", "situ_table_leaf_cell_required"): "length from a varint",
-	("edges.situ", "situ_text_driver_moved_required"): "field after a varint",
 	# A NESTED struct whose answer still moves on a byte that tells it
 	# nothing, after `nested_floor` credited a single nested member's own
 	# minimum and took five such structs off this list (26.946).
@@ -739,10 +739,11 @@ def test_a_while_run_owes_an_element(tmp_path: Path) -> None:
 	"""26.946: a `while` run holds at least one element, since its condition
 	is asked of one already read, so the guard before it owes that element's
 	floor. netlink's `attrs` was told 16 at fifteen bytes and 20 at sixteen.
+	Since 26.952 the floor is owed from the first byte, before the variant's
+	guard: 20 at every length, where it was 16 below six bytes.
 
 	Asked directly because the readability sweep cannot see it: netlink is
-	still late at five bytes, where the variant's guard answers, so the
-	struct stays in READS_LATE either way.
+	still late on a partial discriminant, so it stays in READS_LATE.
 	"""
 	schema   = ROOT / "example" / "netlink" / "netlink.situ"
 	source   = Source(str(schema), schema.read_text(encoding="ascii"))
@@ -757,7 +758,7 @@ def test_a_while_run_owes_an_element(tmp_path: Path) -> None:
 #include <string.h>
 int main(void)
 {
-	for (uint32_t n = 6u; n <= 16u; n++) {
+	for (uint32_t n = 0u; n <= 16u; n++) {
 		uint8_t *p = calloc(n, 1u);
 		uint32_t need = 0u;
 		(void)situ_nl_message_required(p, n, &need);
@@ -776,5 +777,6 @@ int main(void)
 	run = subprocess.run([str(tmp_path / "w")], capture_output=True,
 	                     text=True, timeout=60)
 	# Zero bytes: nlmsg_type 0 takes the default arm, sized nlmsg_len - 16
-	# and so empty, then one four-byte attribute is owed.
-	assert run.stdout.split() == [f"{n}:20" for n in range(6, 17)], run.stdout
+	# and so empty, then one four-byte attribute is owed -- below six bytes
+	# too, where the type has not arrived (26.952).
+	assert run.stdout.split() == [f"{n}:20" for n in range(0, 17)], run.stdout

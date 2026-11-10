@@ -3161,6 +3161,10 @@ class Emitter:
 		# The C emitter's `_required` carries the reasoning and the proof.
 		gaps = framing_gaps(self.resolved.structs, struct)
 		cursor = "pos" if gaps is not None else None
+		# Every variable member's floor is owed from the start and taken
+		# back as the member is reached: C's `_required` says why (26.952).
+		floors = [traverse.nested_floor(self.resolved.structs, one)
+		          for one in variable]
 		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
@@ -3253,17 +3257,20 @@ class Emitter:
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
 			# And before a nested struct's bytes arrive, its own floor
-			# is owed already: it needs no reading (26.946).
-			floor = traverse.nested_floor(self.resolved.structs, placement)
-			owed = f"situ_need_u32(at, {floor}u)" if floor else "at"
+			# is owed already: it needs no reading (26.946). `at` holds it
+			# from the start, and gives it back here (26.952).
+			floor = floors[index]
 			steps.extend([
 				"",
 				f"\t\t/* {placement.path}: reading its length means reading",
 				"\t\t * bytes that have to be here first. */",
 				f"\t\tif (have < {ready}) {{",
-				f"\t\t\tneed = {owed};",
+				"\t\t\tneed = at;",
 				"\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t}",
+				*([f"\t\tif (at < UINT32_MAX) {{",
+				   f"\t\t\tat -= {floor}u; /* its own length goes in below */",
+				   "\t\t}"] if floor else []),
 			])
 			# A counted run of variable-size elements is framed the same
 			# way, and was not -- see `_framing_walk` (26.557).
@@ -3295,7 +3302,9 @@ class Emitter:
 					f"\t\tif ({width}_len() == 0u) {{",
 					f"\t\t\t/* {placement.path}: mid-varint, so one more",
 					"\t\t\t * byte and ask again. */",
-					"\t\t\tneed = situ_need_u32(have, 1u);",
+					*(["\t\t\tneed = situ_need_u32(have, 1u);"] if cursor is None else [
+						f"\t\t\tneed = situ_need_u32(at, (have > {cursor} ?"
+						f" have - {cursor} : 0u) + 1u);"]),
 					"\t\t\t/* ... and never below the total the walk has",
 					"\t\t\t * already accounted. The two are different",
 					"\t\t\t * quantities and neither bounds the other, so",
@@ -3327,7 +3336,9 @@ class Emitter:
 					" much more",
 					"\t\t\t * is the sender's to know. One byte is the honest"
 					" bound. */",
-					"\t\t\tneed = have + 1u;",
+					*(["\t\t\tneed = have + 1u;"] if cursor is None else [
+						f"\t\t\tneed = situ_need_u32(at, (have > {cursor} ?"
+						f" have - {cursor} : 0u) + 1u);"]),
 					"\t\t\t/* ... and never below the total the walk has",
 					"\t\t\t * already accounted. The two are different",
 					"\t\t\t * quantities and neither bounds the other, so",
@@ -3386,7 +3397,7 @@ class Emitter:
 
 		return [
 			*head,
-			f"\t\tstd::uint32_t at = {constant}u;",
+			f"\t\tstd::uint32_t at = {constant + sum(floors)}u;",
 			*([f"\t\tstd::uint32_t {cursor} = {gaps[0]}u;"]
 			  if cursor and gaps and any(cursor in line for line in steps)
 			  else []),

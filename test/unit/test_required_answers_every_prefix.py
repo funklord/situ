@@ -183,8 +183,11 @@ CASES: dict[str, tuple[bytes, list[int | None]]] = {
 	             [5, 6, 6, 6, 6, None]),
 	"lastrun":  (bytes([1, 0x81, 0x01]),
 	             [2, 3, None]),
+	# 3 from the first byte, where it was 2: a varint still continuing is
+	# at least one byte longer than what has arrived, and `k` is owed on
+	# top of that rather than beside it (26.952).
 	"lone":     (bytes([0x81, 0x01, 0x77]),
-	             [2, 3, None]),
+	             [3, 3, None]),
 	"outer":    (bytes([0xAA, 0x03, 0x81, 0x01, 0x05, 0x06]),
 	             [2, 5, 6, 6, 6, None]),
 	# Eight zero bytes, `count = 2`, then a one-byte id and a two-byte

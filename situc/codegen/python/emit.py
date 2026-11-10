@@ -6324,6 +6324,10 @@ class Emitter:
 		gaps = framing_gaps(self.resolved.structs, struct)
 		cursor = "pos" if gaps is not None else None
 
+		# Every variable member's floor is owed from the start and taken
+		# back as the member is reached: C's `_required` says why (26.952).
+		floors = [traverse.nested_floor(self.resolved.structs, one)
+		          for one in variable]
 		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
@@ -6414,16 +6418,19 @@ class Emitter:
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
 			# And before a nested struct's bytes arrive, its own floor
-			# is owed already: it needs no reading (26.946).
-			floor = traverse.nested_floor(self.resolved.structs, placement)
-			owed = f"min(at + {floor}, 0xFFFFFFFF)" if floor else "at"
+			# is owed already: it needs no reading (26.946). `at` holds it
+			# from the start, and gives it back here (26.952).
+			floor = floors[index]
 			steps.extend([
 				"",
 				f"\t\t# {placement.path}: reading its length means reading",
 				"\t\t# bytes that have to be here first.",
 				f"\t\tif have < {ready}:",
 				f'\t\t\traise TruncatedError("{placement.path}: '
-				f'incomplete", {owed})',
+				'incomplete", at)',
+				*([f"\t\tif at < 0xFFFFFFFF:",
+				   f"\t\t\tat -= {floor}  # its own length goes in below"]
+				  if floor else []),
 			])
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
@@ -6456,7 +6463,7 @@ class Emitter:
 					"\t\t\t# quantities and neither bounds the other",
 					"\t\t\t# (26.726).",
 					f'\t\t\traise TruncatedError("{placement.path}:'
-					' mid-varint", max(have + 1, at))',
+					f' mid-varint", {self._partial_need(cursor)})',
 				])
 
 			# `leaf_bounded=False`, the only caller that asks: this
@@ -6483,7 +6490,7 @@ class Emitter:
 					"\t\t\t# quantities and neither bounds the other",
 					"\t\t\t# (26.726).",
 					f'\t\t\traise TruncatedError("{placement.path}: '
-					'no delimiter yet", max(have + 1, at))',
+					f'no delimiter yet", {self._partial_need(cursor)})',
 				])
 			# Saturating at `0xFFFFFFFF`, like C's `situ_need_u32` and
 			# Rust's `saturating_add`. A plain `+=` is where this backend
@@ -6540,7 +6547,7 @@ class Emitter:
 
 		return [
 			*head,
-			f"\t\tat = {constant}",
+			f"\t\tat = {constant + sum(floors)}",
 			*([f"\t\t{cursor} = {gaps[0]}"]
 			  if cursor and gaps and any(cursor in line for line in steps)
 			  else []),
@@ -6714,6 +6721,14 @@ class Emitter:
 			  if ahead else []),
 		])
 		return lines
+
+	@staticmethod
+	def _partial_need(cursor: str | None) -> str:
+		"""What a member still arriving owes: one byte past what is here,
+		on top of `at` -- C's `_partial_need` says why (26.952)."""
+		if cursor is None:
+			return "max(have + 1, at)"
+		return f"min(at + max(have - {cursor}, 0) + 1, 0xFFFFFFFF)"
 
 	def _framing_walk(self, struct: ResolvedStruct,
 			placement: Placement,

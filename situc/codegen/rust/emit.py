@@ -6256,6 +6256,10 @@ class Emitter:
 		# The C emitter's `_required` carries the reasoning and the proof.
 		gaps = framing_gaps(self.resolved.structs, struct)
 		cursor = "pos" if gaps is not None else None
+		# Every variable member's floor is owed from the start and taken
+		# back as the member is reached: C's `_required` says why (26.952).
+		floors = [traverse.nested_floor(self.resolved.structs, one)
+		          for one in variable]
 		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
@@ -6349,16 +6353,19 @@ class Emitter:
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
 			# And before a nested struct's bytes arrive, its own floor
-			# is owed already: it needs no reading (26.946).
-			floor = traverse.nested_floor(self.resolved.structs, placement)
-			owed = f"situ_rt::need(at, {floor})" if floor else "at"
+			# is owed already: it needs no reading (26.946). `at` holds it
+			# from the start, and gives it back here (26.952).
+			floor = floors[index]
 			steps.extend([
 				"",
 				f"\t\t// {placement.path}: reading its length means reading",
 				"\t\t// bytes that have to be here first.",
 				f"\t\tif have < {ready} {{",
-				f"\t\t\treturn situ_rt::Framing::Need({owed});",
+				"\t\t\treturn situ_rt::Framing::Need(at);",
 				"\t\t}",
+				*([f"\t\tif at < u32::MAX as usize {{",
+				   f"\t\t\tat -= {floor}; // its own length goes in below",
+				   "\t\t}"] if floor else []),
 			])
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
@@ -6392,8 +6399,7 @@ class Emitter:
 					"\t\t\t// already accounted: the two are different",
 					"\t\t\t// quantities and neither bounds the other",
 					"\t\t\t// (26.726).",
-					"\t\t\treturn situ_rt::Framing::Need("
-					"situ_rt::need(have, 1).max(at));",
+					*self._partial_need(cursor, "situ_rt::need(have, 1)"),
 					"\t\t}",
 				])
 
@@ -6420,8 +6426,7 @@ class Emitter:
 					"\t\t\t// already accounted: the two are different",
 					"\t\t\t// quantities and neither bounds the other",
 					"\t\t\t// (26.726).",
-					"\t\t\treturn situ_rt::Framing::Need("
-					"(have + 1).max(at));",
+					*self._partial_need(cursor, "(have + 1)"),
 					"\t\t}",
 				])
 			# The cursor is advanced only where a LATER variable member
@@ -6472,7 +6477,7 @@ class Emitter:
 			# `mut` only where something adds to it. A schema whose only
 			# variable member is a versioned one resolves entirely to
 			# constants, and `unused_mut` is an error under `-D warnings`.
-			f"\t\tlet {'mut ' if steps else ''}at = {constant};",
+			f"\t\tlet {'mut ' if steps else ''}at = {constant + sum(floors)};",
 			# `mut` on the same terms as `at`'s, and declared only where
 			# something reads it: `unused_mut`, `unused_variables` and
 			# `unused_assignments` are all errors under `-D warnings`,
@@ -6679,6 +6684,15 @@ class Emitter:
 		if gap == 0:
 			return []
 		return [f"\t\t{cursor} = situ_rt::need({cursor}, {gap});"]
+
+	@staticmethod
+	def _partial_need(cursor: str | None, alone: str) -> list[str]:
+		"""What a member still arriving owes: one byte past what is here,
+		on top of `at` -- C's `_partial_need` says why (26.952)."""
+		if cursor is None:
+			return [f"\t\t\treturn situ_rt::Framing::Need({alone}.max(at));"]
+		return ["\t\t\treturn situ_rt::Framing::Need(situ_rt::need(at,"
+		        f" have.saturating_sub({cursor}) + 1));"]
 
 	def _framing_walk(self, struct: ResolvedStruct,
 			placement: Placement,

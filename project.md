@@ -5959,10 +5959,12 @@ nothing re-read the sentence when the records closed.
     it names end, not where the member begins, so `udp_header` is told 10
     at six bytes where it was told 8 and then 10.
     `test_required_reads_a_length_once_it_arrives` holds it over the
-    corpus, and `READS_LATE` names the eight structs framed by branches it
+    corpus, and `READS_LATE` names the seven structs framed by branches it
     has not reached yet -- a terminated run of records, two variants,
-    varint-placed lengths and three nested structs; `[since]` members
-    left it when the version came to be read at its own end (26.950). A
+    a varint-placed length and three nested structs taking arguments.
+    `[since]` members left it when the version came to be read at its own
+    end (26.950), and a field after a varint when every early answer came
+    to owe what follows it (26.952). A
     single nested member is credited its own floor before its bytes
     arrive, a counted run reads its count early and credits each element
     owed, and a variant is chosen once the fields measuring it arrive,
@@ -8409,6 +8411,10 @@ Moved to `doc/decision/26.950-a-version-is-read-once-its-own-bytes-arrive.md`.
 ### 26.951 A delimited octal number reached the C generator
 
 Moved to `doc/decision/26.951-a-delimited-octal-number-reached-the-c-generator.md`.
+
+### 26.952 An early answer owes what follows
+
+Moved to `doc/decision/26.952-an-early-answer-owes-what-follows.md`.
 
 ### 26.929 The offset cache counts bits
 
