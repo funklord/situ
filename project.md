@@ -1211,6 +1211,12 @@ value. Situ cannot tell which case a protocol is in; only the author knows
 whether a comma inside a CSV field is possible, so this is stated rather than
 inferred and the safe reading is the silent one.
 
+Both relax several alternatives as well (26.955): `u8 field[] until "," |
+"\r\n" [quoted = "\""]` is a CSV field, ending at whichever bare one comes
+first, the quote's state carried past every alternative. A run of RECORDS
+with several terminators keeps no quote's state between its elements, and
+that combination is still refused.
+
 ### 8.6.2 Text-encoded numbers
 
 A number may be written as digits rather than stored as bits:
@@ -8423,6 +8429,10 @@ Moved to `doc/decision/26.953-a-fixed-width-minimal-number-in-c-plus-plus.md`.
 ### 26.954 A signed varint run in the differential
 
 Moved to `doc/decision/26.954-a-signed-varint-run-in-the-differential.md`.
+
+### 26.955 Several delimiters may be quoted or escaped
+
+Moved to `doc/decision/26.955-several-delimiters-may-be-quoted-or-escaped.md`.
 
 ### 26.929 The offset cache counts bits
 

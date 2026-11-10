@@ -207,9 +207,11 @@ def test_the_same_alternative_twice_is_refused() -> None:
 
 
 @pytest.mark.parametrize(("body", "why"), [
-	# `quoted`/`escape` carry state past the delimiter, and with several the
-	# scan would have to carry it past each.
-	("struct s { u8 v[] until ',' | ']' [quoted = \"\\\"\"]; u8 a; }\n",
+	# A RUN OF RECORDS with several terminators and an escaping form: it
+	# checks terminators between elements and keeps no quote's state there.
+	# A byte run with the same is built since 26.955.
+	("struct e { u8 x; }\n"
+	 "struct s { e v[] until ',' | ']' [quoted = \"\\\"\"]; u8 a; }\n",
 	 "escaping form"),
 ])
 def test_the_constructs_it_does_not_reach_are_refused(body: str,

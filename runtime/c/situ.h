@@ -1038,6 +1038,61 @@ static inline uint32_t situ_scan_relaxed(const uint8_t *data, uint32_t limit,
 	return limit;
 }
 
+/* Several delimiters AND an escaping form: `situ_scan_any` with the quote
+ * and escape state of `situ_scan_relaxed` (26.955). A CSV field ends at a
+ * comma or at the line's end and may be quoted; an HTTP parameter ends at
+ * `;` or CRLF and may be a quoted-string. The state is one quote flag over
+ * the whole scan, so each alternative is tried only outside a quoted run
+ * and never at a byte an escape made content. Earliest first and longest
+ * second, as `situ_scan_any`; a quoted run left open finds nothing.
+ */
+static inline uint32_t situ_scan_any_relaxed(const uint8_t *data,
+        uint32_t limit, const uint8_t *const *delims, const uint8_t *lens,
+        uint32_t count, uint32_t quote, uint32_t escape, uint32_t *took)
+{
+	uint32_t i;
+	uint32_t d;
+	int      quoted = 0;
+
+	*took = 0u;
+	for (i = 0u; i < limit; i++) {
+		uint32_t best = 0u;
+
+		if (escape != SITU_NO_BYTE && data[i] == (uint8_t)escape) {
+			i++;		/* the next byte is content, whatever it is */
+			continue;
+		}
+		if (quote != SITU_NO_BYTE && data[i] == (uint8_t)quote) {
+			quoted = !quoted;
+			continue;
+		}
+		if (quoted) {
+			continue;
+		}
+		for (d = 0u; d < count; d++) {
+			const uint32_t n = lens[d];
+			uint32_t       j;
+
+			if (n == 0u || n <= best || i + n > limit) {
+				continue;
+			}
+			for (j = 0u; j < n; j++) {
+				if (data[i + j] != delims[d][j]) {
+					break;
+				}
+			}
+			if (j == n) {
+				best = n;
+			}
+		}
+		if (best != 0u) {
+			*took = best;
+			return i;
+		}
+	}
+	return limit;
+}
+
 /* Whether the content of a bare delimited member is representable.
  *
  * Without a quote or escape byte the content may not contain the delimiter:

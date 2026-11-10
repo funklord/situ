@@ -480,6 +480,48 @@ pub fn scan_any(bytes: &[u8], delims: &[&[u8]]) -> (usize, usize) {
 	(limit, 0)
 }
 
+/// Several delimiters AND an escaping form: `scan_any` with `scan_relaxed`'s
+/// quote and escape state (26.955). One quote flag over the whole scan, so
+/// each alternative is tried only outside a quoted run and never at a byte
+/// an escape made content; earliest first, longest second. Byte for byte
+/// the loop of `situ_scan_any_relaxed` in the C runtime.
+#[inline]
+pub fn scan_any_relaxed(bytes: &[u8], delims: &[&[u8]], quote: u32, escape: u32)
+		-> (usize, usize) {
+	let limit = bytes.len();
+	let mut quoted = false;
+	let mut i = 0;
+
+	while i < limit {
+		if escape != NO_BYTE && bytes[i] as u32 == escape {
+			i += 2;		// the next byte is content, whatever it is
+			continue;
+		}
+		if quote != NO_BYTE && bytes[i] as u32 == quote {
+			quoted = !quoted;
+			i += 1;
+			continue;
+		}
+		if !quoted {
+			let mut best = 0usize;
+			for one in delims {
+				let n = one.len();
+				if n == 0 || n <= best || i + n > limit {
+					continue;
+				}
+				if &bytes[i..i + n] == *one {
+					best = n;
+				}
+			}
+			if best != 0 {
+				return (i, best);
+			}
+		}
+		i += 1;
+	}
+	(limit, 0)
+}
+
 /// How many leading bytes are in a set: the lead a `skip` member owns.
 ///
 /// The inverse question to `scan`, and it needs its own function rather than

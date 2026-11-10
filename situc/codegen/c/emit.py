@@ -8753,22 +8753,29 @@ class Emitter:
 		delim = placement.delimiter
 		assert delim is not None
 
-		if len(placement.delimiters) > 1:
-			# `until "," | "]" | "}"`. `wellformed` refuses this beside an
-			# escaping form, so there is no relaxed variant to reach: the
-			# state a quote carries would have to be carried past each
-			# alternative, which is a fifth scan rather than a parameter.
-			assert took is not None, "the caller has to name a `took`"
-			return (f"situ_scan_any({data}, {limit}, {sym}, {sym}_len, "
-			        f"{len(placement.delimiters)}u, &{took})")
-
-		if placement.delimiter_quote is None and placement.delimiter_escape is None:
-			return f"situ_scan({data}, {limit}, {sym}, {len(delim)}u)"
-
 		quote  = (f"{placement.delimiter_quote}u"
 		          if placement.delimiter_quote is not None else "SITU_NO_BYTE")
 		escape = (f"{placement.delimiter_escape}u"
 		          if placement.delimiter_escape is not None else "SITU_NO_BYTE")
+		relaxed = (placement.delimiter_quote is not None
+		           or placement.delimiter_escape is not None)
+
+		if len(placement.delimiters) > 1:
+			# `until "," | "]" | "}"`, and with an escaping form the fifth
+			# scan: the quote's state carried past every alternative
+			# (26.955), which is what a CSV field ending at a comma or a
+			# line end needs.
+			assert took is not None, "the caller has to name a `took`"
+			if relaxed:
+				return (f"situ_scan_any_relaxed({data}, {limit}, {sym}, "
+				        f"{sym}_len, {len(placement.delimiters)}u, {quote}, "
+				        f"{escape}, &{took})")
+			return (f"situ_scan_any({data}, {limit}, {sym}, {sym}_len, "
+			        f"{len(placement.delimiters)}u, &{took})")
+
+		if not relaxed:
+			return f"situ_scan({data}, {limit}, {sym}, {len(delim)}u)"
+
 		return (f"situ_scan_relaxed({data}, {limit}, {sym}, "
 		        f"{len(delim)}u, {quote}, {escape})")
 

@@ -4856,6 +4856,17 @@ class Emitter:
 			table = ", ".join(
 				"b\"" + "".join(f"\\x{byte:02x}" for byte in one) + "\""
 				for one in placement.delimiters)
+			# With an escaping form, the fifth scan (26.955).
+			if placement.delimiter_quote is not None \
+					or placement.delimiter_escape is not None:
+				quote  = (f"{placement.delimiter_quote}"
+				          if placement.delimiter_quote is not None
+				          else "situ_rt::NO_BYTE")
+				escape = (f"{placement.delimiter_escape}"
+				          if placement.delimiter_escape is not None
+				          else "situ_rt::NO_BYTE")
+				return (f"situ_rt::scan_any_relaxed({slice_expr}, &[{table}], "
+				        f"{quote}, {escape})")
 			return f"situ_rt::scan_any({slice_expr}, &[{table}])"
 
 		if placement.delimiter_quote is None and placement.delimiter_escape is None:

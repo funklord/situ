@@ -567,14 +567,28 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved,
 		# are written `[quoted = ...]` beside the member and `layout` reads
 		# them from there, so the AST node's own fields are never set and a
 		# check on them could not fire. Found by writing the test first.
-		if any(attr.name in DELIMITER_ATTRS for attr in member.attrs):
+		#
+		# A BYTE RUN with several delimiters and an escaping form is built
+		# since 26.955 -- a CSV field ends at a comma or the line's end and
+		# may be quoted -- by a scan that carries the quote's state past
+		# every alternative, in the three runtimes and both walkers, and the
+		# dissector's scan always took both. A run of RECORDS is still
+		# refused: it checks its terminators between elements, where no
+		# quote's state is kept.
+		record_run = getattr(getattr(member, "type_ref", None),
+		                     "scalar", None) is None \
+			and getattr(getattr(member, "type_ref", None), "name", None) \
+			not in tokens
+		if record_run \
+				and any(attr.name in DELIMITER_ATTRS for attr in member.attrs):
 			raise error(
-				f"`{name}` has several delimiters and an escaping form",
+				f"`{name}` is a run of records with several delimiters and "
+				"an escaping form",
 				member.until.span,
 				label = "more than one alternative",
-				notes = ["`quoted` and `escape` say how a delimiter may "
-				         "appear inside the content, and with several the "
-				         "scan has to carry that state past each of them",
+				notes = ["a run of records checks its terminators where an "
+				         "element would start, and keeps no quote's state "
+				         "between them",
 				         "state one delimiter, or drop the escaping form"],
 			)
 

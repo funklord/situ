@@ -619,6 +619,10 @@ class Emitter:
 			needed.append("scan")
 		if any(len(p.delimiters) > 1 for p in placements):
 			needed.append("scan_any")
+		if any(len(p.delimiters) > 1 and (p.delimiter_quote is not None
+		                                  or p.delimiter_escape is not None)
+		       for p in placements):
+			needed.append("scan_any_relaxed")
 		if any(p.radix is not None and not (p.scalar and p.scalar.signed)
 		       and not p.scaled for p in placements):
 			needed.append("parse_uint")
@@ -5447,6 +5451,14 @@ class Emitter:
 			# length of whichever alternative matched.
 			table = ", ".join(repr(one) for one in placement.delimiters)
 			call = f"scan_any({data}, {limit}, ({table}))"
+			# With an escaping form, the fifth scan (26.955).
+			extra = "".join(
+				f", {key}={value}" for key, value in (
+					("quote", placement.delimiter_quote),
+					("escape", placement.delimiter_escape))
+				if value is not None)
+			if extra:
+				call = f"scan_any_relaxed({data}, {limit}, ({table}){extra})"
 			return call if part is None else f"{call}[{part}]"
 
 		args = [data, limit, repr(delim)]

@@ -590,6 +590,40 @@ def skip_run(data: "memoryview | bytes", limit: int,
 	return len(raw)
 
 
+def scan_any_relaxed(data: "memoryview | bytes", limit: int,
+		delims: tuple[bytes, ...], quote: int = NO_BYTE,
+		escape: int = NO_BYTE) -> tuple[int, int]:
+	"""`scan_any` with `scan`'s quote and escape state (26.955).
+
+	One quote flag over the whole scan: each alternative is tried only
+	outside a quoted run and never at a byte an escape made content.
+	Earliest first, longest second, and `(limit, 0)` where none matched --
+	the loop of `situ_scan_any_relaxed` in the C runtime, byte for byte.
+	"""
+	raw    = bytes(data)[:limit]
+	quoted = False
+	i      = 0
+	while i < limit:
+		byte = raw[i]
+		if escape != NO_BYTE and byte == escape:
+			i += 2
+			continue
+		if quote != NO_BYTE and byte == quote:
+			quoted = not quoted
+			i += 1
+			continue
+		if not quoted:
+			best = 0
+			for one in delims:
+				if one and len(one) > best and i + len(one) <= limit \
+						and raw[i:i + len(one)] == one:
+					best = len(one)
+			if best:
+				return i, best
+		i += 1
+	return limit, 0
+
+
 def scan_any(data: memoryview | bytes, limit: int,
 		delims: tuple[bytes, ...]) -> tuple[int, int]:
 	"""Where the first of ANY of `delims` is, and how long it was.

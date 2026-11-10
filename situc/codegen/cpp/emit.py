@@ -2228,18 +2228,27 @@ class Emitter:
 		assert delim is not None
 		array = self._delimiter_array(placement)
 
-		if len(placement.delimiters) > 1:
-			assert took is not None, "the caller has to name a `took`"
-			return (f"situ_scan_any({data}, {limit}, {array}, {array}_len, "
-			        f"{len(placement.delimiters)}u, &{took})")
-
-		if placement.delimiter_quote is None and placement.delimiter_escape is None:
-			return f"situ_scan({data}, {limit}, {array}, {len(delim)}u)"
-
 		quote  = (f"{placement.delimiter_quote}u"
 		          if placement.delimiter_quote is not None else "SITU_NO_BYTE")
 		escape = (f"{placement.delimiter_escape}u"
 		          if placement.delimiter_escape is not None else "SITU_NO_BYTE")
+		relaxed = (placement.delimiter_quote is not None
+		           or placement.delimiter_escape is not None)
+
+		if len(placement.delimiters) > 1:
+			assert took is not None, "the caller has to name a `took`"
+			# Several alternatives and an escaping form: C's fifth scan
+			# (26.955).
+			if relaxed:
+				return (f"situ_scan_any_relaxed({data}, {limit}, {array}, "
+				        f"{array}_len, {len(placement.delimiters)}u, "
+				        f"{quote}, {escape}, &{took})")
+			return (f"situ_scan_any({data}, {limit}, {array}, {array}_len, "
+			        f"{len(placement.delimiters)}u, &{took})")
+
+		if not relaxed:
+			return f"situ_scan({data}, {limit}, {array}, {len(delim)}u)"
+
 		return (f"situ_scan_relaxed({data}, {limit}, {array}, {len(delim)}u, "
 		        f"{quote}, {escape})")
 
