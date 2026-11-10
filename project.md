@@ -8420,6 +8420,10 @@ Moved to `doc/decision/26.952-an-early-answer-owes-what-follows.md`.
 
 Moved to `doc/decision/26.953-a-fixed-width-minimal-number-in-c-plus-plus.md`.
 
+### 26.954 A signed varint run in the differential
+
+Moved to `doc/decision/26.954-a-signed-varint-run-in-the-differential.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

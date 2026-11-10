@@ -1798,13 +1798,17 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	if ask.probe is Probe.VARINT_RUN:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst uint32_t n = {call.format('count')}(view);",
-		        "\t\t\t\tuint64_t first = 0;",
+		        # A signed run's element is an `int64_t` and prints signed,
+		        # as Python's does: the driver passed a `uint64_t *` and
+		        # printed -39 as 18446744073709551577 (26.954).
+		        f"\t\t\t\t{'int64_t' if ask.signed else 'uint64_t'} first = 0;",
 		        "",
 		        f"\t\t\t\t(void){call.format('at')}(view, 0u, &first);",
 		        f'\t\t\t\tprintf("{ask.local} count=%u span=%u'
-		        ' [0]=%llu\\n",',
+		        f' [0]={"%lld" if ask.signed else "%llu"}\\n",',
 		        f"\t\t\t\t\tn, {call.format('span')}(view),",
-		        "\t\t\t\t\t(unsigned long long)(n ? first : 0));",
+		        f"\t\t\t\t\t({'long long' if ask.signed else 'unsigned long long'})"
+		        "(n ? first : 0));",
 		        "\t\t\t}"]
 	if ask.probe is Probe.ARM_BYTES:
 		return ["\t\t\t{",
@@ -2280,13 +2284,15 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.VARINT_RUN:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst std::uint32_t n = view.{call}_count();",
-		        "\t\t\t\tstd::uint64_t first = 0;",
+		        # Signed where the run is: its `_at` takes `std::int64_t &`,
+		        # and a `std::uint64_t` did not compile (26.954).
+		        f"\t\t\t\tstd::{'int64_t' if ask.signed else 'uint64_t'} first = 0;",
 		        "",
 		        f"\t\t\t\t(void)view.{call}_at(0u, first);",
 		        f'\t\t\t\tstd::printf("{ask.local} count=%u span=%u'
-		        ' [0]=%llu\\n",',
+		        f' [0]={"%lld" if ask.signed else "%llu"}\\n",',
 		        f"\t\t\t\t\tn, view.{call}_span(),",
-		        "\t\t\t\t\tstatic_cast<unsigned long long>"
+		        f"\t\t\t\t\tstatic_cast<{'long long' if ask.signed else 'unsigned long long'}>"
 		        "(n ? first : 0));",
 		        "\t\t\t}"]
 	if ask.probe is Probe.ARM_BYTES:
@@ -2622,9 +2628,9 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        f'\t\t\t\t\tprintln!("{ask.local} count={{}} span={{}}'
 		        ' [0]={}", n,',
 		        f"\t\t\t\t\t\tview.{rust_ident(ask.local + '_span')}(),",
-		        "\t\t\t\t\t\tif n == 0 { 0u64 } else {",
+		        f"\t\t\t\t\t\tif n == 0 {{ 0{'i64' if ask.signed else 'u64'} }} else {{",
 		        f"\t\t\t\t\t\t\tview.{rust_ident(ask.local + '_at')}(0)",
-		        "\t\t\t\t\t\t\t\t.map(|held| held as u64)"
+		        f"\t\t\t\t\t\t\t\t.map(|held| held as {'i64' if ask.signed else 'u64'})"
 		        ".unwrap_or(0)",
 		        "\t\t\t\t\t\t});",
 		        "\t\t\t\t}"]
