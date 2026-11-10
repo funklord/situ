@@ -324,6 +324,19 @@ def _check_one_text_number(member: ast.Field) -> None:
 			         "this construct does not have (0063)"],
 		)
 
+	padded  = next((attr for attr in member.attrs if attr.name == "padded"),
+	               None)
+	minimal = any(attr.name == "minimal" for attr in member.attrs)
+	if padded is not None and minimal:
+		raise error(
+			f"`{member.name}` is both `[padded]` and `[minimal]`",
+			padded.span,
+			label = "pick one",
+			notes = ["`[minimal]` says a value has one spelling, and "
+			         "`[padded]` gives it several: `644` followed by a NUL, "
+			         "a space or any mix of the two (26.948)"],
+		)
+
 	if member.scaled and fixed:
 		assert member.array is not None, "`fixed` says there is one"
 		# ...and that it has a size: `fixed` is what says the width is a
@@ -2562,6 +2575,25 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 		return None if getattr(member, "radix", None) is not None else (
 			"a radix-encoded number, whose leading zeros it forbids")
 
+	# 26.948: where a fixed width's digits may stop. A delimited number's
+	# digits already stop at its delimiter, a width the message states is
+	# not a field's padding, and a scaled or signed number has a grammar
+	# the padding would have to be threaded through -- none of which
+	# ustar, the format it exists for, has.
+	if attr.name == "padded":
+		from situc.parser import evaluate_literal
+		array = getattr(member, "array", None)
+		scalar = getattr(getattr(member, "type_ref", None), "scalar", None)
+		if (getattr(member, "radix", None) is not None
+				and not getattr(member, "scaled", False)
+				and getattr(member, "until", None) is None
+				and array is not None and array.size is not None
+				and evaluate_literal(array.size) is not None
+				and scalar is not None and scalar.kind is ScalarKind.UINT):
+			return None
+		return ("an unsigned integer text number of a written width, "
+		        "whose digits it lets stop at a NUL or a space")
+
 	# `_reserved_policy` reads these three, and reads them from a `reserved`
 	# member. `must_be_zero` is deliberately absent: it is that function's
 	# default, so writing it on a reserved member changes no byte and is still
@@ -2858,7 +2890,7 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 #: that moving a name out of `UNPLACED_ATTRS` and forgetting to add it here is
 #: the exhaustiveness test failing rather than a silent gap.
 PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
-	"equalize", "allow_unverified_read", "minimal",
+	"equalize", "allow_unverified_read", "minimal", "padded",
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 	"no_rmw", "truncated", "size", "trim", "case_insensitive",

@@ -572,6 +572,27 @@ pub fn parse_uint(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
 	Some(value)
 }
 
+/// `parse_uint` over the digits a `[padded]` field holds (26.948).
+///
+/// The digits stop at the first NUL or space, and every byte from there to
+/// the end of the width must be a NUL or a space -- ustar's `0000644` and a
+/// NUL. A field with no terminator is all digits, and one that is all padding
+/// is zero, as GNU tar writes an unused `devmajor` and every tar reader takes
+/// it. The same signature as
+/// `parse_uint`, so a generated call site changes its name and nothing else;
+/// a malformed padding hands it no digits, which it refuses.
+#[inline]
+pub fn parse_uint_padded(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
+	let stop = bytes.iter().position(|&b| b == 0 || b == b' ').unwrap_or(bytes.len());
+	if bytes[stop..].iter().any(|&b| b != 0 && b != b' ') {
+		return None;
+	}
+	if stop == 0 {
+		return Some(0);
+	}
+	parse_uint(&bytes[..stop], radix, max)
+}
+
 /// A signed text number: an optional leading `-`, then digits.
 ///
 /// A separate function rather than a flag on `parse_uint`, so every schema

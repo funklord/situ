@@ -191,6 +191,9 @@ ATTRIBUTE_NAMES = frozenset({
 	"quoted", "escape",
 	# section 8.6.2: one spelling per value for a text number
 	"minimal",
+	# 26.948: a fixed-width text number whose digits stop at a NUL or a
+	# space, the rest of the width being padding -- ustar's numbers
+	"padded",
 	# section 8.6.4: what a delimited value ignores
 	"trim", "case_insensitive",
 	# section 19.4: one file, more than one version of the protocol

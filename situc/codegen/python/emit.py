@@ -147,6 +147,16 @@ from situc import __version__
 
 
 
+def _uint_parser(placement: Placement) -> str:
+	"""The runtime's digit parse for this text number (26.948).
+
+	`[padded]` lets the digits stop at a NUL or a space inside the width; the
+	function has `parse_uint`'s signature, so only the name differs.
+	"""
+	return ("parse_uint_padded" if placement.radix_padded
+	        else "parse_uint")
+
+
 def _is_run(placement: Placement) -> bool:
 	"""A member whose bytes are a run rather than one value.
 
@@ -618,6 +628,8 @@ class Emitter:
 			needed.append("parse_scaled")
 		if any(p.radix_minimal for p in placements):
 			needed.append("digits_minimal")
+		if any(p.radix_padded for p in placements):
+			needed.append("parse_uint_padded")
 		if any(p.trimmed for p in placements):
 			needed.append("trim")
 		if any(p.case_insensitive for p in placements):
@@ -3020,7 +3032,7 @@ class Emitter:
 			   f" > max(0, self._len - ({start})):",
 			   f'\t\t\traise BoundsError("{placement.path}: the digits are '
 			   'not all here")'] if sized else []),
-			f"\t\tvalue = parse_uint(self.{name}_digits,"
+			f"\t\tvalue = {_uint_parser(placement)}(self.{name}_digits,"
 			f" {placement.radix}, {limit})",
 			"\t\tif value is None:",
 			f'\t\t\traise ConstraintError(',
@@ -4058,7 +4070,7 @@ class Emitter:
 				"\t\tself._check()",
 				f"\t\traw = self._msg.buffer[self._at + {at}:"
 				f"self._at + {at + placement.array_count}]",
-				f"\t\tvalue = parse_uint(raw, {placement.radix}, {limit})",
+				f"\t\tvalue = {_uint_parser(placement)}(raw, {placement.radix}, {limit})",
 				"\t\treturn 0 if value is None else value",
 			])
 		return lines
@@ -5614,7 +5626,7 @@ class Emitter:
 			        f" {placement.radix_min}, {placement.radix_max})")
 			span = f"{placement.radix_min}..{placement.radix_max}"
 		else:
-			call = f"parse_uint({raw}, {placement.radix}, {limit})"
+			call = f"{_uint_parser(placement)}({raw}, {placement.radix}, {limit})"
 			span = f"0..{limit}"
 
 		return [
@@ -9052,7 +9064,7 @@ class Emitter:
 		         if placement.radix_minimal else [])
 		return [
 			*spell,
-			f"\t\t{local} = parse_uint(self.{name},"
+			f"\t\t{local} = {_uint_parser(placement)}(self.{name},"
 			f" {placement.radix}, {limit})",
 			f"\t\tif {local} is None:",
 			"\t\t\traise ConstraintError(",
@@ -9665,7 +9677,7 @@ class Emitter:
 			f"\t\t\t{name}_at = self._at + ({start})",
 			f"\t\t\t{digits} = self._msg.buffer"
 			f"[{name}_at:{name}_at + {width}]",
-			f"\t\t\t{local} = parse_uint({digits},"
+			f"\t\t\t{local} = {_uint_parser(placement)}({digits},"
 			f" {placement.radix}, {limit})",
 			f"\t\t\tif {local} is None:",
 			"\t\t\t\traise ConstraintError(",

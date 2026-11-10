@@ -1252,7 +1252,9 @@ struct header_field {
 A radix prefix -- `decimal`, `hex`, `octal` or `scaled` -- says a number is
 written as digits rather than laid down as bytes, which is what `cpio`'s
 eight-character hex fields, its portable header's octal ones and HTTP's
-status codes need. The scalar beside it gives the
+status codes need. `[padded]` lets a fixed width's digits stop at a NUL or a
+space, which is ustar's tar header: `octal u32 mode[8] [padded]` reads
+`0000644` and a NUL as 420. The scalar beside it gives the
 value's domain rather than its width in the buffer, so `decimal i16 offset
 until ','` is a signed number whose text is one to six bytes and whose sign
 costs a byte a fixed width cannot pay -- the leading `-` is part of the

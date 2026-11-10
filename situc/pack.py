@@ -3178,7 +3178,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		scalar = placement.scalar
 		is_bcd = scalar is not None and scalar.is_bcd
 		text = (1 if placement.radix_minimal else 0) \
-			| (2 if placement.trimmed else 0) \
+			| (2 if placement.trimmed or placement.radix_padded else 0) \
 			| (4 if placement.case_insensitive else 0) \
 			| (8 if is_bcd else 0) \
 			| (16 if placement.scaled else 0) \

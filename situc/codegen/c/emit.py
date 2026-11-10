@@ -171,6 +171,16 @@ _NO_CHECK = "0xFFFFFFFFu"
 _REFUSES = re.compile(r"\s*return (?:SITU_ERR_\w+|e|err);\s*$")
 
 
+def _uint_parser(placement: Placement) -> str:
+	"""The runtime's digit parse for this text number (26.948).
+
+	`[padded]` lets the digits stop at a NUL or a space inside the width; the
+	function has `situ_parse_uint`'s signature, so only the name differs.
+	"""
+	return ("situ_parse_uint_padded" if placement.radix_padded
+	        else "situ_parse_uint")
+
+
 def _reads_signed(placement: Placement) -> bool:
 	"""Whether a varint or a text number holds a signed value."""
 	return placement.varint_signed \
@@ -8107,7 +8117,7 @@ class Emitter:
 			"\tuint64_t value;",
 			"",
 			*fits,
-			f"\tif (situ_parse_uint({ident(self.prefix, struct.name, local, 'ptr')}"
+			f"\tif ({_uint_parser(placement)}({ident(self.prefix, struct.name, local, 'ptr')}"
 			f"(view), {digits}, {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
@@ -8164,7 +8174,7 @@ class Emitter:
 			held = "\tint64_t value;"
 			said = f"outside {floor}..{limit}"
 		else:
-			call = (f"\tif (situ_parse_uint({ptr}(view), {length}(view), "
+			call = (f"\tif ({_uint_parser(placement)}({ptr}(view), {length}(view), "
 			        f"{placement.radix}u, {limit}u, &value) != 0) {{")
 			held = "\tuint64_t value;"
 			said = f"above {limit}"
@@ -10769,7 +10779,7 @@ class Emitter:
 			((f"	(void)situ_parse_int({source[0]}, {source[1]},"
 			  f" {placement.radix}u, {self._int64_literal(placement.radix_min)},"
 			  f" {self._int64_literal(placement.radix_max)}, &value);") if signed_text else
-			 (f"	(void)situ_parse_uint({source[0]}, {source[1]},"
+			 (f"	(void){_uint_parser(placement)}({source[0]}, {source[1]},"
 			  f" {placement.radix}u, {limit}u, &value);")),
 			f"	return ({ctype})value;",
 			"}",
@@ -13395,7 +13405,7 @@ class Emitter:
 			"\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t}",
 			*[f"\t{one}" for one in spell],
-			f"\t\tif (situ_parse_uint({local}_at, {local}_count,"
+			f"\t\tif ({_uint_parser(placement)}({local}_at, {local}_count,"
 			f" {placement.radix}u, {limit}u, &{local}_parsed) != 0) {{",
 			"\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t}",
@@ -13483,7 +13493,7 @@ class Emitter:
 			# pointer, and the bounds below compare fine against it.
 			f"\t\tuint64_t {local}_parsed = 0;",
 			"",
-			f"\t\tif (situ_parse_uint(situ_base(view) + ({start}), {width}u,"
+			f"\t\tif ({_uint_parser(placement)}(situ_base(view) + ({start}), {width}u,"
 			f" {placement.radix}u, {limit}u, &{local}_parsed) != 0) {{",
 			"\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t}",

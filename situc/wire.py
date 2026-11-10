@@ -422,6 +422,10 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		facts.append("scaled")
 	if placement.radix_minimal:
 		facts.append("minimal")
+	if placement.radix_padded:
+		# Where the digits end is part of what the bytes mean: `644` and a
+		# NUL is a number under `[padded]` and malformed without it.
+		facts.append("padded")
 	if placement.trimmed:
 		# The bytes, not the flag, which is what `skip=` below already does
 		# and for the same reason: `trim` alone cannot tell a reader whether

@@ -695,6 +695,35 @@ def parse_uint(data: memoryview | bytes, radix: int, limit: int) -> int | None:
 	return value if 0 <= value <= limit else None
 
 
+def padded_digits(data: "memoryview | bytes") -> bytes:
+	"""The digits of a `[padded]` field, or no bytes where it is malformed.
+
+	The digits stop at the first NUL or space, and every byte from there to
+	the end of the width must be a NUL or a space (26.948). A field with no
+	terminator is all digits. A field that is all padding is zero, which is
+	how GNU tar writes a ustar `devmajor` it has nothing to say in and how
+	every tar reader takes it -- so it answers `0`. A malformed one answers
+	no bytes, which every parser refuses as no digits, so the caller needs
+	one test, not two.
+	"""
+	raw = bytes(data)
+	stop = next((at for at, byte in enumerate(raw) if byte in (0, 0x20)),
+	            len(raw))
+	if any(byte not in (0, 0x20) for byte in raw[stop:]):
+		return b""
+	return raw[:stop] if stop else b"0"
+
+
+def parse_uint_padded(data: "memoryview | bytes", radix: int,
+		limit: int) -> int | None:
+	"""`parse_uint` over the digits a `[padded]` field holds (26.948).
+
+	The same signature, so a generated call site changes its name and
+	nothing else.
+	"""
+	return parse_uint(padded_digits(data), radix, limit)
+
+
 def parse_int(data: "memoryview | bytes", radix: int,
 		low: int, high: int) -> int | None:
 	"""A signed text number: an optional leading `-`, then digits.

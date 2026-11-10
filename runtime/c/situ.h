@@ -1118,6 +1118,40 @@ static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
 	return 0;
 }
 
+/* `[padded]` (26.948): a fixed-width text number whose digits stop at the
+ * first NUL or space, every byte after them to the end of the width being
+ * a NUL or a space -- ustar's `0000644` and a NUL. A field with no
+ * terminator is all digits.
+ *
+ * A field that is all padding is zero: GNU tar writes a ustar `devmajor`
+ * it has nothing to say in as eight NULs, and every tar reader takes that
+ * as 0. That is the one place no digits is a number, and only here.
+ *
+ * The same signature as `situ_parse_uint`, so a generated call site
+ * changes its name and nothing else. A malformed padding hands the parse
+ * no digits, which it refuses for its own reason.
+ */
+static inline int situ_parse_uint_padded(const uint8_t *data, uint32_t len,
+        uint32_t radix, uint64_t max, uint64_t *out)
+{
+	uint32_t stop = 0u;
+	uint32_t i;
+
+	while (stop < len && data[stop] != 0u && data[stop] != (uint8_t)' ') {
+		stop++;
+	}
+	for (i = stop; i < len; i++) {
+		if (data[i] != 0u && data[i] != (uint8_t)' ') {
+			return -1;
+		}
+	}
+	if (stop == 0u) {
+		*out = 0u;
+		return 0;
+	}
+	return situ_parse_uint(data, stop, radix, max, out);
+}
+
 /* Optional whitespace, and case-insensitive tokens (section 8.6.4).
  *
  * The SET IS PASSED IN, and that is the whole of what changed here. It was

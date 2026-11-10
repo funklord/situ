@@ -3706,6 +3706,31 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
  * point -- a second copy of what a flag means is how two readers of one
  * attribute start disagreeing. */
 #define TEXT_BCD 8u
+
+/* `text_flags` value 2 on a fixed-width text number: `[padded]` (26.948).
+ * The same bit is `[trim]` on a delimited member, and neither walker reads
+ * that one; wellformed refuses each attribute in the other's place, so one
+ * bit says both. The digits stop at the first NUL or space and every byte
+ * after them to the width must be one too -- `runtime/c/situ.h`'s
+ * `situ_parse_uint_padded`, answered as a digit count. A field that is all
+ * padding is zero, as there; a malformed padding answers UINT32_MAX. */
+#define TEXT_PADDED 2u
+
+static uint32_t padded_digits(const uint8_t *data, uint32_t len)
+{
+	uint32_t stop = 0u;
+	uint32_t i;
+
+	while (stop < len && data[stop] != 0u && data[stop] != (uint8_t)' ') {
+		stop++;
+	}
+	for (i = stop; i < len; i++) {
+		if (data[i] != 0u && data[i] != (uint8_t)' ') {
+			return UINT32_MAX;
+		}
+	}
+	return stop;
+}
 #define TEXT_SCALED 16u
 
 static situ_walk_err read_at(const uint8_t *message, uint32_t len,
@@ -3928,6 +3953,17 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		if ((held.text_flags & TEXT_SCALED) != 0u) {
 			return parse_scaled(message + at, width,
 			                    (held.flags & FLAG_SIGNED) != 0u, out);
+		}
+		if ((held.text_flags & TEXT_PADDED) != 0u
+		                && delimiter_rules(image, index) == NULL) {
+			width = padded_digits(message + at, width);
+			if (width == UINT32_MAX) {
+				return SITU_WALK_CONSTRAINT;
+			}
+			if (width == 0u) {
+				*out = 0u;
+				return SITU_WALK_OK;
+			}
 		}
 		return parse_digits(message + at, width, held.radix,
 		                    (held.flags & FLAG_SIGNED) != 0u, out);

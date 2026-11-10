@@ -1235,11 +1235,31 @@ status are both exactly three digits with nothing after them, and requiring
 `until` made those unwriteable. A signed number has only the first, for the
 reason below.
 
-The two differ on canonicity, in the direction that surprises. A *padded*
-field is `Canonical`: `007` is the only spelling of seven in three digits,
-because `7` alone does not fit and the parse refuses a space, so the padding
-is forced rather than optional. A delimited number is `NonCanonical` unless
-`[minimal]` says otherwise.
+**And a width whose digits may stop short: `[padded]`** (26.948, the
+copyright holder's answer). ustar writes `mode[8]` as `0000644` and a NUL,
+`chksum[8]` as six digits, a NUL and a space, and an unused `devmajor[8]` as
+eight NULs. Under `octal u32 mode[8] [padded]` the digits stop at the first
+NUL or space, every byte after them to the end of the width must be a NUL
+or a space, a field with no terminator is all digits, and a field that is
+all padding is zero, which is how every tar reader takes GNU tar's empty
+`devmajor`. The span is the width either way; only where the digits end
+moves. A leading space is refused, as ustar's POSIX spelling has none.
+
+It is opt-in, and only on an unsigned integer of a written width. cpio's
+`newc` header writes every digit and SMTP's reply code is exactly three of
+them -- `25 ` is not a reply code -- so loosening every fixed width would
+have accepted malformed messages in two formats to admit one. A delimited
+number's digits already stop at its delimiter, and a sign or a point would
+need the padding threaded through a grammar ustar does not have.
+
+The forms differ on canonicity, in the direction that surprises. A
+fixed-width field is `Canonical`: `007` is the only spelling of seven in
+three digits, because `7` alone does not fit and the parse refuses a space,
+so the padding is forced rather than optional. A delimited number is
+`NonCanonical` unless `[minimal]` says otherwise, and a `[padded]` one is
+`NonCanonical` outright -- `0000644` and a NUL, `644` and five NULs and
+`00000644` are one value -- which is also why it has no owned form, whose
+decode then encode is byte-exact.
 
 A width is digits, not elements. `decimal u16 code[3]` is three bytes:
 everywhere else `[n]` counts elements of the declared type, and here the type
@@ -2301,6 +2321,7 @@ output can be read against this table directly.
 | `repeat-while` | a run that ends after the element failing a condition | `access := Sequential`, `mutate := Shifting` |
 | `text-number` | a number written as digits rather than stored as bits | `repr := TextConverted` |
 | `non-minimal-text-number` | a text number that accepts leading zeros | `canonical := NonCanonical` |
+| `padded-text-number` | a fixed-width text number whose digits may stop short | `canonical := NonCanonical` |
 | `trimmed-value` | a value with optional whitespace around it | `canonical := NonCanonical` |
 | `case-insensitive-token` | a token compared without regard to case | `canonical := NonCanonical` |
 | `nul-terminated` | a nul-terminated field | `canonical := NonCanonical` |
@@ -6037,39 +6058,16 @@ nothing re-read the sentence when the records closed.
   VERSION. All four backends' `required` and both walkers now end that
   message at 2, and the walker's listing reads the arm as absent, as the
   accessors do.
-- **A ustar header's numbers end inside their width** (`suggestion/hull.md`
-  section 19). `octal` is a radix since 26.756, which describes cpio's
-  `odc` header outright; ustar's fields are octal digits then a NUL or a
-  space, padded to the field's width.
-
-  **Measured 2026-11-03, both available spellings against the four byte
-  patterns a real `mode[8]` takes.** `octal u32 mode[8]` wants exactly
-  eight octal digits:
-
-  | the eight bytes | `octal u32 mode[8]` | `octal u32 mode until "\x00"` |
-  |---|---|---|
-  | `0000644` + NUL | refused, "not 8 digits in base 8" | 0o644 |
-  | `0000644` + space | refused | refused, "not a u32 written in base 8" |
-  | `00000644` | 0o644 | refused, no NUL to end at |
-  | `000644` + NUL + NUL | refused | 0o644, and see below |
-
-  So the fixed form accepts exactly the one spelling ustar never writes,
-  and the delimited form **ends where the digits do**: with six digits
-  and two padding bytes the member after `mode` reads offset 7 rather
-  than 8, which misplaces every field after it in the header. That is
-  this entry's title, demonstrated rather than asserted.
-
-  `[trim]` is refused outright on a fixed-width field -- "`[trim]` means
-  nothing here" -- and `[8] until "\x00"` is refused as saying the width
-  twice, which is the language being consistent rather than a gap: a
-  fixed width and a terminator are two answers to one question today.
-  GNU's base-256 numbers, a first byte with its high bit set, are a
-  second variant the header needs.
-
-  **Still the holder's**: where a fixed-width text number's digits stop
-  is a language decision, and the measurement above is only the cost of
-  not making it. hull's own tar readers are tested, so this is coverage
-  of a format rather than a fault.
+- ~~**A ustar header's numbers end inside their width**~~ (`suggestion/hull.md`
+  section 19). **Settled by the copyright holder 2026-11-10: the digits end
+  at a NUL or a space** (26.948). Built as `[padded]`, opt-in, because
+  cpio's `newc` fields and SMTP's reply code write every digit and a global
+  rule would have accepted `25 ` as a reply code. `octal u32 mode[8]
+  [padded]` reads `0000644` and a NUL, `0000644` and a space, `644` and
+  five NULs and `00000644` as 420, and eight NULs as 0, which is how GNU
+  tar writes an unused `devmajor`. `example/ustar` is the header and an
+  entry with vectors GNU tar wrote. GNU's base-256 numbers and the
+  header's checksum stay open, in 26.948.
 - ~~**Four walker identity divergences** of one shape (26.689)~~, a run
   whose declared length overflows the C walk's `size_bits`, where C
   refused naming no check and the Python walk named `fits_frame`.

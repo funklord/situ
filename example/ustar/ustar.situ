@@ -1,0 +1,97 @@
+// ustar, the POSIX tar header (POSIX.1-1988, and the `pax` chapter of
+// POSIX.1-2001 that keeps it).
+//
+// Every number in this header is octal text in a field of fixed width, and
+// the digits do not have to fill it: GNU tar writes `mode` as seven digits
+// and a NUL, `chksum` as six digits, a NUL and a space, and an unused
+// `devmajor` as eight NULs. That is `[padded]` (26.948): the digits stop at
+// the first NUL or space, the rest of the width is NULs and spaces, and a
+// field that is all padding is zero. Without it the header could only be
+// byte runs with the numbers parsed by hand, which is what hull's readers
+// do and what `suggestion/hull.md` section 19 asked to describe.
+//
+// The vectors beside this file are an archive GNU tar 1.35 wrote, not one
+// laid out here:
+//
+//   tar --format=ustar --owner=0 --group=0 --numeric-owner \
+//       -cf greeting.tar greeting.txt
+//
+// with `greeting.txt` holding "hello\n", mode 0644, mtime 2026-01-01.
+
+target buffer;
+endian big;                  // every number is text; byte order decides nothing
+
+const BLOCK = 512;
+
+// `magic` and `version`, as the eight bytes a reader compares. POSIX writes
+// "ustar", a NUL and "00"; GNU tar's own format writes "ustar", two spaces
+// and a NUL in the same eight bytes, and its readers take both. A pre-POSIX
+// (v7) header has no magic at all and is not this struct.
+enum ustar_magic : u8[8] {
+	posix = "ustar\x0000",
+	gnu   = "ustar  \x00",
+}
+
+// What the entry is. POSIX names `0` through `7`, and a NUL for a regular
+// file written by a v7 archiver; `x`, `g` and GNU's `L` and `K` carry
+// extended headers in the data that follows. Readers skip a type they do
+// not know, so the set is open.
+enum type_flag : u8 {
+	regular_old = 0x00,
+	regular     = 0x30,     // '0'
+	link        = 0x31,     // '1'
+	symlink     = 0x32,     // '2'
+	character   = 0x33,     // '3'
+	block       = 0x34,     // '4'
+	directory   = 0x35,     // '5'
+	fifo        = 0x36,     // '6'
+	contiguous  = 0x37,     // '7'
+	default = pass,
+}
+
+struct ustar_header {
+	// NUL-terminated unless it fills the field, so a byte run: a name of
+	// exactly 100 bytes has no terminator, which `until "\x00"` cannot say.
+	u8  name[100];
+
+	octal u32  mode[8]   [padded];
+	octal u32  uid[8]    [padded];
+	octal u32  gid[8]    [padded];
+
+	// Eleven digits and a NUL in GNU tar's hands, so 8 GiB less one byte;
+	// twelve digits fill the field. A larger file takes a pax header or
+	// GNU's base-256 form, whose first byte has its high bit set -- that is
+	// a second spelling this member refuses rather than misreads.
+	octal u64  size[12]  [padded];
+	octal u64  mtime[12] [padded];
+
+	// The sum of the header's 512 bytes with these eight read as spaces.
+	// Read here and not checked: the sum is over the whole block, and a
+	// rule that reads one member as other bytes is not one this schema
+	// states yet.
+	octal u32  chksum[8] [padded];
+
+	type_flag  typeflag;
+	u8  linkname[100];
+	ustar_magic magic;
+	u8  uname[32];
+	u8  gname[32];
+	octal u32  devmajor[8] [padded];
+	octal u32  devminor[8] [padded];
+	u8  prefix[155];
+	reserved u8 [12];
+}
+
+require size(ustar_header) == BLOCK;
+require absolute_static(ustar_header);
+
+// One entry: the header and the file's data, padded to a whole block.
+struct ustar_entry {
+	ustar_header header;
+	u8  data[header.size];
+	reserved u8 [align_up(header.size, BLOCK) - header.size];
+}
+
+// An archive is entries until two blocks of zeros, and an all-zero block is
+// not a header -- its magic is no arm of `ustar_magic`. So, as with cpio's
+// trailer, the archive is a caller's loop over `ustar_entry`.

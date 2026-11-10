@@ -145,7 +145,16 @@ def _shape(parsed, resolved):			# type: ignore[no-untyped-def]
 
 
 def _member(struct: ResolvedStruct, quoted: str) -> Placement | None:
-	"""The placement a message names, by its local name or its own."""
+	"""The placement a message names, by its local name or its own.
+
+	The struct's own member first: `ustar_entry` has a `<reserved0>` and so
+	does the header nested in it, and the flattened entries reach the
+	header's first, so a message about the entry's padding was checked
+	against the header's twelve zeros (26.948).
+	"""
+	for entry in struct.entries:
+		if entry.placement.path == f"{struct.name}.{quoted}":
+			return entry.placement
 	for entry in struct.entries:
 		if traverse.local_name(struct, entry.placement) == quoted:
 			return entry.placement

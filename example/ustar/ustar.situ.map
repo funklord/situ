@@ -1,0 +1,51 @@
+# situ capability map v1
+# schema: ustar.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct ustar_entry size=512..68719477758 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header                     offset=AbsoluteStatic(0x00) size=Fixed(512) align=Aligned(8) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.name                offset=AbsoluteStatic(0x00) size=Fixed(100) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.header.mode                offset=AbsoluteStatic(0x64) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.uid                 offset=AbsoluteStatic(0x6C) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.gid                 offset=AbsoluteStatic(0x74) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.size                offset=AbsoluteStatic(0x7C) size=Fixed(12) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.mtime               offset=AbsoluteStatic(0x88) size=Fixed(12) align=Aligned(8) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.chksum              offset=AbsoluteStatic(0x94) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.typeflag            offset=AbsoluteStatic(0x9C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  ustar_entry.header.linkname            offset=AbsoluteStatic(0x9D) size=Fixed(100) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.header.magic               offset=AbsoluteStatic(0x101) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.header.uname               offset=AbsoluteStatic(0x109) size=Fixed(32) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.header.gname               offset=AbsoluteStatic(0x129) size=Fixed(32) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.header.devmajor            offset=AbsoluteStatic(0x149) size=Fixed(8) align=Aligned(1) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.devminor            offset=AbsoluteStatic(0x151) size=Fixed(8) align=Aligned(1) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_entry.header.prefix              offset=AbsoluteStatic(0x159) size=Fixed(155) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.header.<reserved0>         offset=AbsoluteStatic(0x1F4) size=Fixed(12) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  ustar_entry.data                       offset=AbsoluteStatic(0x200) size=Bounded(0, 68719476735) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  ustar_entry.<reserved0>                offset=Dynamic size=Bounded(0, 511) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct ustar_header size=512 repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.name                      offset=AbsoluteStatic(0x00) size=Fixed(100) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  ustar_header.mode                      offset=AbsoluteStatic(0x64) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.uid                       offset=AbsoluteStatic(0x6C) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.gid                       offset=AbsoluteStatic(0x74) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.size                      offset=AbsoluteStatic(0x7C) size=Fixed(12) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.mtime                     offset=AbsoluteStatic(0x88) size=Fixed(12) align=Aligned(8) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.chksum                    offset=AbsoluteStatic(0x94) size=Fixed(8) align=Aligned(4) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.typeflag                  offset=AbsoluteStatic(0x9C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
+  ustar_header.linkname                  offset=AbsoluteStatic(0x9D) size=Fixed(100) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_header.magic                     offset=AbsoluteStatic(0x101) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_header.uname                     offset=AbsoluteStatic(0x109) size=Fixed(32) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_header.gname                     offset=AbsoluteStatic(0x129) size=Fixed(32) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_header.devmajor                  offset=AbsoluteStatic(0x149) size=Fixed(8) align=Aligned(1) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.devminor                  offset=AbsoluteStatic(0x151) size=Fixed(8) align=Aligned(1) repr=TextConverted atomic=NonAtomic canonical=NonCanonical
+  ustar_header.prefix                    offset=AbsoluteStatic(0x159) size=Fixed(155) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ustar_header.<reserved0>               offset=AbsoluteStatic(0x1F4) size=Fixed(12) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic

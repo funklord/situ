@@ -351,6 +351,11 @@ def _is_loose_text_number(context: Context) -> bool:
 	return placement.array_count is None
 
 
+def _is_padded_text_number(context: Context) -> bool:
+	"""`[padded]`: the digits may stop short of the width (26.948)."""
+	return context.placement.radix_padded
+
+
 def _is_uncapped_scan(context: Context) -> bool:
 	placement = context.placement
 	return bool(placement.delimiters) and placement.delimiter_cap is None
@@ -876,6 +881,23 @@ TABLE: tuple[Row, ...] = (
 			            "on a varint",
 		),
 		applies = _is_loose_text_number,
+	),
+	Row(
+		rule = Rule(
+			name      = "padded-text-number",
+			construct = "a fixed-width text number whose digits may stop short",
+			effects   = (
+				Effect(Axis.CANONICAL, Value("NonCanonical"),
+				       "`0000644` and a NUL, `644` and five NULs and "
+				       "`00000644` are one value in an eight-byte field, so "
+				       "the bytes do not follow from the number"),
+			),
+			remedy    = "drop `[padded]` where the format always writes every "
+			            "digit, as cpio's `newc` header does; ustar's readers "
+			            "accept all three spellings, so its header cannot be "
+			            "described as having one (26.948)",
+		),
+		applies = _is_padded_text_number,
 	),
 	Row(
 		rule = Rule(

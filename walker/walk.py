@@ -1304,6 +1304,11 @@ def _bits_lsb(block: int, span: int, skip: int, width: int) -> int:
 	return (little >> skip) & ((1 << width) - 1)
 
 
+#: `text_flags` value 2 on a fixed-width text number: `[padded]` (26.948).
+#: The same bit is `[trim]` on a delimited member, which no walker reads;
+#: wellformed refuses each attribute in the other's place.
+TEXT_PADDED = 2
+
 #: `text_flags` bit 3: the value is packed decimal, a digit per nibble.
 BCD = 1 << 3
 
@@ -1948,6 +1953,18 @@ def digits_of(view: View, index: int) -> bytes:
 		content = content_bits(view, index) // BITS_PER_BYTE
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	data  = bytes(view.buffer[start:start + content])
+	if index not in view.image.delimiters \
+			and view.image.placements[index].text_flags & TEXT_PADDED:
+		# `[padded]` (26.948): the digits stop at a NUL or a space, and the
+		# rest of the width is those alone. All padding is zero, as tar
+		# reads it; a malformed padding is no digits, refused below as the
+		# runtime's parse refuses it.
+		stop = next((at for at, byte in enumerate(data) if byte in (0, 0x20)),
+		            len(data))
+		if any(byte not in (0, 0x20) for byte in data[stop:]):
+			data = b""
+		else:
+			data = data[:stop] if stop else b"0"
 	if not data:
 		raise Refused("a text number with no digits")
 	return data

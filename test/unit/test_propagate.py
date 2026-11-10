@@ -579,6 +579,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"scanned-predecessor",
 		"text-number",
 		"non-minimal-text-number",
+		"padded-text-number",
 		"versioned-member",
 		"trimmed-value",
 		"case-insensitive-token",
@@ -1133,6 +1134,14 @@ def test_a_delimited_text_number_is_not() -> None:
 	body = 'struct S { decimal u16 code until "\\r\\n"; u8 rest[remaining]; }'
 
 	assert axis_of(body, "S.code", Axis.CANONICAL) == Value("NonCanonical")
+
+
+def test_a_number_whose_digits_may_stop_short_is_not() -> None:
+	"""`[padded]` gives one value three spellings in a field of eight:
+	`0000644` and a NUL, `644` and five NULs, and `00000644` (26.948)."""
+	body = "struct S { octal u32 mode[8] [padded]; u8 rest[remaining]; }"
+
+	assert rules_for(body, "S.mode", Axis.CANONICAL) == ["padded-text-number"]
 
 
 # -- the spec table and the rows that run (section 11.3) --------------------

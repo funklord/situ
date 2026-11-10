@@ -155,6 +155,70 @@ def cpio_situ(module: object, archive: bytes) -> list[dict[str, object]]:
 	return sorted(found, key=lambda row: str(row["name"]))
 
 
+# -- ustar ---------------------------------------------------------------------
+#
+# GNU tar writes the archive and Python's `tarfile` reads it back: two
+# implementations from different hands, and every number in the header is
+# octal digits that stop short of their field (26.948), so `[padded]` is the
+# path on trial, along with the size that places every entry after the first.
+
+def ustar_corpus(tmp: Path) -> bytes:
+	"""A ustar archive GNU tar laid out, over sizes either side of a block.
+
+	Zero, one, six, 512 and 513 bytes: the data is padded to 512, so a size
+	one either side of a block is what exercises the rounding, and an empty
+	file is the run a walk skips.
+	"""
+	src = tmp / "src"
+	(src / "sub").mkdir(parents=True)
+	(src / "empty").write_bytes(b"")
+	(src / "tiny.bin").write_bytes(b"x")
+	(src / "greeting.txt").write_bytes(b"hello\n")
+	(src / "sub" / "block.bin").write_bytes(b"b" * 512)
+	(src / "sub" / "over.bin").write_bytes(b"o" * 513)
+	names = ["empty", "tiny.bin", "greeting.txt", "sub/block.bin",
+	         "sub/over.bin"]
+	made = subprocess.run(["tar", "--format=ustar", "--owner=0", "--group=0",
+	                       "--numeric-owner", "-cf", "-", *names],
+	                      cwd=src, capture_output=True)
+	assert made.returncode == 0, made.stderr
+	return made.stdout
+
+
+def ustar_says(archive: bytes, tmp: Path) -> list[dict[str, object]]:
+	"""What Python's `tarfile` reports: one row per member."""
+	import io
+	import tarfile
+
+	with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as held:
+		found = [{"name": member.name, "size": member.size,
+		          "mode": member.mode, "mtime": int(member.mtime),
+		          "uid": member.uid} for member in held.getmembers()]
+	return sorted(found, key=lambda row: str(row["name"]))
+
+
+def ustar_situ(module: object, archive: bytes) -> list[dict[str, object]]:
+	"""The same rows, read through situ's accessors and nothing else."""
+	from situ_runtime import Message
+
+	msg   = Message(bytearray(archive))
+	at    = 0
+	found: list[dict[str, object]] = []
+
+	# The archive ends at a block of zeros, which is no header: its magic
+	# is no arm of `ustar_magic`, so the caller's loop is what stops.
+	while at + 512 <= len(archive) and any(archive[at:at + 512]):
+		entry = module.ustar_entry.at(msg, at, len(archive) - at)   # type: ignore[attr-defined]
+		entry.validate()
+		header = entry.header
+		name   = bytes(header.name).split(b"\0")[0].decode("ascii")
+		found.append({"name": name, "size": header.size, "mode": header.mode,
+		              "mtime": header.mtime, "uid": header.uid})
+		at += 512 + (header.size + 511) // 512 * 512
+
+	return sorted(found, key=lambda row: str(row["name"]))
+
+
 # -- bmp ----------------------------------------------------------------------
 #
 # ImageMagick writes the bitmap and reports its geometry. The interesting part
@@ -1280,6 +1344,15 @@ ORACLES: tuple[Oracle, ...] = (
 		          "text-number path any example exercises."),
 	),
 	Oracle(
+		name   = "ustar",
+		schema = ROOT / "example" / "ustar" / "ustar.situ",
+		tool   = "tar",
+		why    = ("GNU tar writes the archive and Python's tarfile reads it "
+		          "back. Every number in the header is octal digits that "
+		          "stop short of their field, which is `[padded]`, and the "
+		          "checksum is validated on every entry."),
+	),
+	Oracle(
 		name   = "png",
 		schema = ROOT / "example" / "png" / "png.situ",
 		tool   = "convert",
@@ -1477,6 +1550,7 @@ DRIVERS = {
 	"json": (json_corpus, json_says, json_situ),
 	"id3":  (id3_corpus, id3_says, id3_situ),
 	"cpio": (cpio_corpus, cpio_says, cpio_situ),
+	"ustar": (ustar_corpus, ustar_says, ustar_situ),
 	"bmp":  (bmp_corpus, bmp_says, bmp_situ),
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),

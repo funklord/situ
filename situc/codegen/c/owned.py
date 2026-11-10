@@ -95,6 +95,12 @@ def _can_own(placement: Placement, resolved: ResolvedSchema) -> bool:
 	if placement.sized_by is not None:
 		return False
 
+	# `[padded]` reads `0000644` and a NUL and `00000644` as one value, so
+	# whichever the encode writes, the other does not come back (26.948).
+	# The round trip this mode promises is byte-exact; refusing says so.
+	if placement.radix_padded:
+		return False
+
 	# `preserve` and `unknown` say the bits are somebody else's to keep. An
 	# owned struct drops them by construction -- it holds fields, not the
 	# buffer -- so the round-trip this mode promises cannot be made.
@@ -135,8 +141,12 @@ def refusals(resolved: ResolvedSchema) -> list[tuple[str, str]]:
 		blocked = [entry.placement for entry in own_entries(struct)
 		           if not _can_own(entry.placement, resolved)]
 		if blocked:
-			found.append((name, f"`{blocked[0].name}` has no fixed-size C "
-			                    f"field ({blocked[0].kind})"))
+			found.append((name, f"`{blocked[0].name}` is `[padded]`, so a "
+			                    "value has several spellings and decode "
+			                    "then encode cannot give the bytes back"
+			              if blocked[0].radix_padded else
+			              f"`{blocked[0].name}` has no fixed-size C "
+			              f"field ({blocked[0].kind})"))
 	return found
 
 

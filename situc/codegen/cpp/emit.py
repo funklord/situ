@@ -172,6 +172,16 @@ WORD_WIDTHS = (8, 16, 32, 64)
 
 
 
+def _uint_parser(placement: Placement) -> str:
+	"""The runtime's digit parse for this text number (26.948).
+
+	`[padded]` lets the digits stop at a NUL or a space inside the width; the
+	function has `situ_parse_uint`'s signature, so only the name differs.
+	"""
+	return ("situ_parse_uint_padded" if placement.radix_padded
+	        else "situ_parse_uint")
+
+
 def _deeper(lines: list[str], levels: int = 2) -> list[str]:
 	"""Nest emitted lines, counting the ones that carry their own newlines.
 
@@ -2430,7 +2440,7 @@ class Emitter:
 			span = f"{placement.radix_min}..{placement.radix_max}"
 		else:
 			held = "\t\tstd::uint64_t value"
-			call = (f"situ_parse_uint({value_at}, {name}_len(),"
+			call = (f"{_uint_parser(placement)}({value_at}, {name}_len(),"
 			        f" {placement.radix}u, {limit}u, &value)")
 			span = f"0..{limit}"
 
@@ -4509,7 +4519,7 @@ class Emitter:
 				   f"\t\t\treturn static_cast<{ctype}>(0);",
 				   "\t\t}",
 				   ""] if value_fits is not None else []),
-				f"\t\t(void)situ_parse_uint(situ_base(raw_) + ({at}),"
+				f"\t\t(void){_uint_parser(placement)}(situ_base(raw_) + ({at}),"
 				# `u`, as every other parse site writes it: a `u64` text
 				# number's limit is 2^64 - 1, which without a suffix is a
 				# constant too large for any signed type and an error
@@ -9176,7 +9186,7 @@ class Emitter:
 			   ""] if held_fits is not None else []),
 			f"\t\t/* Zero is success, which is C's convention here and not",
 			"\t\t * this backend's. */",
-			f"\t\tif (situ_parse_uint(situ_base(raw_) + ({start}), {count},"
+			f"\t\tif ({_uint_parser(placement)}(situ_base(raw_) + ({start}), {count},"
 			f" {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
@@ -9188,7 +9198,7 @@ class Emitter:
 			   "\t{",
 			   "\t\tstd::uint64_t value = 0;",
 			   "",
-			   f"\t\t(void)situ_parse_uint(situ_base(raw_) + ({start}), {count},"
+			   f"\t\t(void){_uint_parser(placement)}(situ_base(raw_) + ({start}), {count},"
 			   f" {placement.radix}, {limit}, &value);",
 			   f"\t\treturn static_cast<{ctype}>(value);",
 			   "\t}"] if sized else []),
@@ -11377,7 +11387,7 @@ class Emitter:
 			*spell,
 			f"\t\tstd::uint64_t {name}_parsed = 0;",
 			"",
-			f"\t\tif (situ_parse_uint({at}, {count}, {placement.radix}u,"
+			f"\t\tif ({_uint_parser(placement)}({at}, {count}, {placement.radix}u,"
 			f" {limit}u, &{name}_parsed) != 0) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
@@ -11452,7 +11462,7 @@ class Emitter:
 			# `!= 0`, not `!`: the runtime answers 0 for success and -1
 			# for a byte that is not a digit, so the negation reads the
 			# wrong way round and would refuse every valid number.
-			"\t\t\tif (situ_parse_uint(situ_base(raw_) + "
+			f"\t\t\tif ({_uint_parser(placement)}(situ_base(raw_) + "
 			f"({start}), {width}u, {placement.radix}u, {limit}u,"
 			f" &{name}_parsed) != 0) {{",
 			"\t\t\t\treturn ::situ::rt::err::constraint;",

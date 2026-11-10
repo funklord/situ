@@ -657,6 +657,12 @@ class Placement:
 	#: Without it "007" and "7" are the same number written two ways, which is
 	#: what `canonical` exists to report.
 	radix_minimal: bool		= False
+	#: `[padded]` (26.948): the digits of a fixed-width text number may stop
+	#: short, at a NUL or a space, and every byte after them to the end of
+	#: the width is a NUL or a space. ustar's header is the case: `0000644`
+	#: and a NUL in an eight-byte field. The span is the width either way;
+	#: only where the digits end moves, so a value has several spellings.
+	radix_padded: bool		= False
 	#: `[trim]`: whitespace at either end is framing, not value. The member's
 	#: *span* is unchanged -- the bytes are still there and still partition
 	#: the struct -- but the value they carry is what is left after it.
@@ -2668,6 +2674,7 @@ class Solver:
 			from_end           = self._from_end(member, scalar),
 			parameter          = bool(getattr(member, "parameter", False)),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
+			radix_padded       = _has_attr(member.attrs, "padded"),
 			trimmed            = _has_attr(member.attrs, "trim"),
 			trim_set           = (_whitespace_of(self.schema, member.span)
 			                      if _has_attr(member.attrs, "trim") else ()),

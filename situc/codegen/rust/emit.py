@@ -165,6 +165,16 @@ WORD_WIDTHS = (8, 16, 32, 64)
 
 
 
+def _uint_parser(placement: Placement) -> str:
+	"""The runtime's digit parse for this text number (26.948).
+
+	`[padded]` lets the digits stop at a NUL or a space inside the width; the
+	function has `parse_uint`'s signature, so only the name differs.
+	"""
+	return ("parse_uint_padded" if placement.radix_padded
+	        else "parse_uint")
+
+
 def _is_run(placement: Placement) -> bool:
 	"""A member whose bytes are a run rather than one value.
 
@@ -2295,14 +2305,14 @@ class Emitter:
 				f"\t\tif {declared} > situ_rt::remaining(self.bytes.len(), {at}) {{",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
-				f"\t\tsitu_rt::parse_uint(self.{name}_digits(),"
+				f"\t\tsitu_rt::{_uint_parser(placement)}(self.{name}_digits(),"
 				f" {placement.radix}, {limit})",
 				f"\t\t\t.map(|v| v as {rtype})",
 				"\t\t\t.ok_or(Error::Constraint)",
 				"\t}",
 				"",
 				f"\tpub fn {name}_value(&self) -> {rtype} {{",
-				f"\t\tsitu_rt::parse_uint(self.{name}_digits(),"
+				f"\t\tsitu_rt::{_uint_parser(placement)}(self.{name}_digits(),"
 				f" {placement.radix}, {limit})",
 				f"\t\t\t.map_or(0, |v| v as {rtype})",
 				"\t}",
@@ -2330,7 +2340,7 @@ class Emitter:
 			"\t}",
 			"",
 			f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
-			f"\t\tsitu_rt::parse_uint(self.{name}_digits(),"
+			f"\t\tsitu_rt::{_uint_parser(placement)}(self.{name}_digits(),"
 			f" {placement.radix}, {limit})",
 			f"\t\t\t.map(|v| v as {rtype})",
 			"\t\t\t.ok_or(Error::Constraint)",
@@ -5109,7 +5119,7 @@ class Emitter:
 			"",
 			(f"\t\tmatch situ_rt::parse_int(raw, {placement.radix},"
 			 f" {floor}, {limit}) {{" if signed_text else
-			 f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix},"
+			 f"\t\tmatch situ_rt::{_uint_parser(placement)}(raw, {placement.radix},"
 			 f" {limit}) {{"),
 			f"\t\t\tSome(value) => Ok(value as {rtype}),",
 			"\t\t\tNone => Err(Error::Constraint),",
@@ -5179,7 +5189,7 @@ class Emitter:
 				"\t\t}",
 				f"\t\tlet raw = &self.bytes[at..at + {placement.array_count}];",
 				"",
-				f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix},"
+				f"\t\tmatch situ_rt::{_uint_parser(placement)}(raw, {placement.radix},"
 				f" {limit}) {{",
 				f"\t\t\tSome(value) => value as {rtype},",
 				"\t\t\tNone => 0,",
@@ -5938,7 +5948,7 @@ class Emitter:
 		return [
 			*spell,
 			f"\t\tif let Ok(_digits) = {span} {{",
-			f"\t\t\tlet {held} = match situ_rt::parse_uint(_digits,"
+			f"\t\t\tlet {held} = match situ_rt::{_uint_parser(placement)}(_digits,"
 			f" {placement.radix}, {limit}) {{",
 			"\t\t\t\tSome(value) => value,",
 			"\t\t\t\tNone => return Err(Error::Constraint),",
@@ -7777,7 +7787,7 @@ class Emitter:
 			"\t\t\t\treturn Err(Error::Bounds);",
 			"\t\t\t}",
 			*spell,
-			f"\t\t\tlet {name}_parsed = match situ_rt::parse_uint(",
+			f"\t\t\tlet {name}_parsed = match situ_rt::{_uint_parser(placement)}(",
 			f"\t\t\t\t\t&self.bytes[{name}_at..{name}_at + {width}],"
 			f" {placement.radix}, {limit}) {{",
 			"\t\t\t\tSome(value) => value,",

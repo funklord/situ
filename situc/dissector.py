@@ -175,6 +175,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	       for struct in resolved.structs.values()
 	       for entry in struct.entries):
 		lines.extend(DIGITS_HELPER)
+	if any(entry.placement.radix_padded
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(PADDED_HELPER)
 
 	values = _value_strings(schema, resolved)
 	if values:
@@ -300,6 +304,36 @@ DIGITS_HELPER = [
 	"\t\treturn 0",
 	"\tend",
 	"\treturn value",
+	"end",
+	"",
+]
+
+
+PADDED_HELPER = [
+	"-- `[padded]` (situ 26.948): the digits stop at the first NUL or space,",
+	"-- and every byte after them to the end of the width must be one too --",
+	"-- ustar's `0000644` and a NUL. All padding is zero, as tar reads it, and",
+	"-- a malformed padding is 0 as well, the value every other reader keeps.",
+	"local function situ_digits_padded(tvb, at, width, base)",
+	"\tif at < 0 or at + width > tvb:len() then",
+	"\t\treturn 0",
+	"\tend",
+	"\tlocal stop = width",
+	"\tfor i = 0, width - 1 do",
+	"\t\tlocal byte = tvb(at + i, 1):uint()",
+	"\t\tif stop == width and (byte == 0 or byte == 32) then",
+	"\t\t\tstop = i",
+	"\t\telseif stop < width and byte ~= 0 and byte ~= 32 then",
+	"\t\t\treturn 0",
+	"\t\tend",
+	"\tend",
+	"\treturn situ_digits(tvb, at, stop, base)",
+	"end",
+	"",
+	"-- What such a field shows: its digits, without the padding after them.",
+	"local function situ_padded_text(tvb, at, width)",
+	"\tlocal text = tvb(at, width):string()",
+	"\treturn (text:match(\"^[^\\0 ]*\"))",
 	"end",
 	"",
 ]
@@ -2206,8 +2240,14 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		span = byte_span(placement)
 		if span is not None:
 			first, count = span
+			# The digits as the value, over the whole width: shown as the
+			# width's string, ustar's `chksum` -- six digits, a NUL and a
+			# space -- drew Wireshark's "trailing stray characters" on
+			# every header, measured with tshark (26.948).
+			shown = (f", situ_padded_text(tvb, {first}, {count})"
+			         if placement.radix_padded else "")
 			return [
-				f"\tsubtree:add({field}, tvb({first}, {count}))",
+				f"\tsubtree:add({field}, tvb({first}, {count}){shown})",
 				f"\tat = {first + count}",
 			]
 		# At an offset the walk decides, the same width from `at`. It fell
@@ -2217,10 +2257,12 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		if placement.is_fixed_size and not placement.delimiters \
 				and placement.size_bits % BITS_PER_BYTE == 0:
 			digits = placement.size_bits // BITS_PER_BYTE
+			shown = (f", situ_padded_text(tvb, at, {digits})"
+			         if placement.radix_padded else "")
 			return [
 				f"\t-- {placement.path}: {digits} digits", *seek,
 				f"\tif tvb:len() >= at + {digits} then",
-				f"\t\tsubtree:add({field}, tvb(at, {digits}))",
+				f"\t\tsubtree:add({field}, tvb(at, {digits}){shown})",
 				"\tend",
 				f"\tat = math.min(at + {digits}, tvb:len())",
 			]
@@ -2532,7 +2574,9 @@ def _read(placement: Placement, base: str) -> str | None:
 				return (f"situ_digits(tvb, {_at(base, first)}, "
 				        f"({_scan_call(placement, _at(base, first))}), "
 				        f"{placement.radix})")
-			return (f"situ_digits(tvb, {_at(base, first)}, {count},"
+			helper = ("situ_digits_padded" if placement.radix_padded
+			          else "situ_digits")
+			return (f"{helper}(tvb, {_at(base, first)}, {count},"
 			        f" {placement.radix})")
 
 		if _host_order(placement):
