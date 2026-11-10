@@ -64,3 +64,44 @@ def test_both_walkers_read_octal(tmp_path: Path) -> None:
 	for label, (verdict, _line, packet) in CASES.items():
 		assert python_verdict(blob, packet, shape) == verdict, label
 		assert c_verdict(tmp_path, blob, packet, shape) == verdict, label
+
+
+#: A DELIMITED octal number, whose getter C generates by another path: it
+#: looked the radix up in a table holding ten and sixteen and raised
+#: KeyError out of the generator (26.951).
+DELIMITED = """target buffer;
+endian big;
+struct framed {
+	octal u32  n until ":" max 12;
+	u8         d[n];
+}
+"""
+
+DELIMITED_CASES = {
+	"ten bytes, as octal": ("0", "n ok=1 value=10", b"12:" + b"x" * 10),
+	"a 9 is not octal":    ("2", "n ok=0 value=0", b"19:" + b"x" * 17),
+}
+
+
+def test_all_four_read_a_delimited_octal(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(DELIMITED, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for label, (verdict, line, packet) in DELIMITED_CASES.items():
+		given = {name: fourway.answers(argv, packet, tmp_path)
+		         for name, argv in command.items()}
+		first = next(iter(given.values()))
+		assert all(answer == first for answer in given.values()), \
+			(label, given)
+		lines = first.splitlines()
+		assert line in lines, f"{label}: {lines!r}"
+		assert f"validate {verdict}" in lines, f"{label}: {lines!r}"
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_both_walkers_read_a_delimited_octal(tmp_path: Path) -> None:
+	blob  = packed_text(DELIMITED)
+	shape = shape_named_text(DELIMITED, "framed")
+	for label, (verdict, _line, packet) in DELIMITED_CASES.items():
+		assert python_verdict(blob, packet, shape) == verdict, label
+		assert c_verdict(tmp_path, blob, packet, shape) == verdict, label

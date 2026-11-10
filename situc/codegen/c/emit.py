@@ -8147,7 +8147,11 @@ class Emitter:
 		ctype  = self._field_ctype(placement)
 		length = ident(self.prefix, struct.name, local, "len")
 		ptr    = ident(self.prefix, struct.name, local, "ptr")
-		base   = {10: "decimal", 16: "hexadecimal"}[placement.radix]
+		# `octal` was missing from this table, so a DELIMITED octal number
+		# raised KeyError out of the generator: 26.756 tested the fixed
+		# width alone, and this is the delimited getter (26.951).
+		base   = {8: "octal", 10: "decimal",
+		          16: "hexadecimal"}[placement.radix]
 		limit  = placement.radix_max
 		floor  = placement.radix_min
 
