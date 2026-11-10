@@ -1796,28 +1796,28 @@ Beyond those, `project.md` is long and is meant to be. Useful entry points:
   after finding drift, and each found more than expected.
 - `example/README.md` for what each worked example is there to prove.
 
-Thirty worked examples ship, and they are the schemas to read first:
+The worked examples under `example/` are the schemas to read first:
 `example/udp` for the smallest complete one, `example/ipv4` for bit packing,
 `example/dns` and `example/dnsname` for a variant and a walk, `example/http`
 for a text protocol, `example/sqlite` for an offset table, `example/ble` for a
 count of records that each say how long they are, `example/netlink` for a
-format whose byte order is the sending machine's, `example/cpio` for numbers
-written as digits, `example/register` for memory-mapped hardware, and
-`example/packet` for authenticated and sealed regions.
+format whose byte order is the sending machine's, `example/cpio` and
+`example/ustar` for numbers written as digits, `example/register` for
+memory-mapped hardware, and `example/packet` for authenticated and sealed
+regions. `example/README.md` says what each one is there to prove.
 
-Eleven carry a `.vectors` file, and where the bytes came from matters more
-than that they exist. Eight are bytes some *other* implementation wrote, with
-that implementation named: ImageMagick for `bmp` -- a whole file, header and
-pixels -- glibc's `struct arphdr` for `arp`, lwIP's SNTP client for `ntp`,
-U-Boot's `bin2bcd` and DS1307 driver for `rtc`, the Linux Bluetooth stack for
-`ble`, GNU cpio for `cpio`, libtiff and matplotlib's committed test data for
-`tiff`, and for `netlink` the reply a `NETLINK_ROUTE` socket gave to a dump
-request. Two more are laid out by hand from an RFC's own field list rather
-than by situ (`tcp` and `udp`, both pseudo-headers). The eleventh, `packet`,
-is situ's own output and its header says so in the first paragraph, because a
-vector file that agrees only with its own compiler has demonstrated nothing
-and should not be counted as though it had. Two of the eight disagreed with
-the schema on arrival.
+Most carry a `.vectors` file, and where the bytes came from matters more than
+that they exist. Wherever it can be, a vector is bytes some *other*
+implementation wrote, with that implementation named: ImageMagick for `bmp`,
+glibc's `struct arphdr` for `arp`, lwIP's SNTP client for `ntp`, the Linux
+Bluetooth stack for `ble`, GNU cpio for `cpio`, GNU tar for `ustar`, libtiff
+for `tiff`, and for `netlink` the reply a `NETLINK_ROUTE` socket gave to a
+dump request. Where nothing else writes the format, the bytes are laid out by
+hand from the specification's own field list (`tcp` and `udp`, both
+pseudo-headers), and the one file that is situ's own output, `packet`'s, says
+so in its first paragraph: a vector that agrees only with its own compiler has
+demonstrated nothing and is not counted as though it had. Vectors from
+outside have disagreed with a schema on arrival, which is what they are for.
 
 ## Copyright
 
