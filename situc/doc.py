@@ -637,9 +637,14 @@ def _notes(placement: Placement) -> list[str]:
 	if placement.covered_by:
 		notes.append("covered by " + ", ".join(placement.covered_by))
 	if placement.radix is not None:
-		base = {10: "decimal", 16: "hexadecimal"}.get(placement.radix,
-		                                             f"base {placement.radix}")
+		base = {8: "octal", 10: "decimal", 16: "hexadecimal"}.get(
+			placement.radix, f"base {placement.radix}")
 		notes.append(f"{base} digits")
+		# Where the digits stop is part of the encoding (26.948): somebody
+		# writing an encoder from this table needs to know `644` and a NUL
+		# is a spelling a reader accepts.
+		if placement.radix_padded:
+			notes.append("the digits end at a NUL or a space")
 	if placement.since is not None:
 		notes.append(f"from version {placement.since}")
 	if placement.derived_by is not None:
