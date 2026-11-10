@@ -12,7 +12,7 @@ than a style one, which is why they are errors here.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import difflib
 
@@ -102,6 +102,7 @@ def check(schema: ast.Schema) -> None:
 	check_versions(schema)
 	check_invariants(schema)
 	check_whens(schema)
+	check_when_sums(schema)
 	check_relations(schema)
 
 
@@ -3729,6 +3730,69 @@ def check_sums(schema: ast.Schema) -> None:
 						_check_sum(call, seen)
 			if isinstance(member, ast.Field):
 				seen[member.name] = member
+
+
+def check_when_sums(schema: ast.Schema) -> None:
+	"""`sum(x)` in a `when` names something with elements to add (26.949).
+
+	26.896 holds a size's `sum` to a counted run of unsigned integers, and a
+	`when` was held to nothing: `sum(a)` over a scalar, a delimited number
+	or a nested struct reached all four backends with no count to give, and
+	C++ and Rust did not compile what they were handed. So a `when` takes
+	the same counted run, a fixed-width text number -- whose elements are
+	its characters -- and an enum of bytes, whose elements are its bytes.
+	"""
+	from situc.parser import evaluate_literal
+
+	structs    = {decl.name: decl for decl in schema.structs()}
+	byte_enums = {decl.name for decl in schema.enums()
+	              if decl.width is not None}
+	for held in schema.whens():
+		for call in _calls_in(held.expr):
+			if call.name != "sum":
+				continue
+			paths = paths_in(call.args[0]) if len(call.args) == 1 else []
+			member = None
+			if len(paths) == 1 and isinstance(call.args[0],
+			                                  (ast.NameRef, ast.Access)):
+				struct_name, _, field = paths[0].partition(".")
+				struct = structs.get(struct_name)
+				if struct is not None and field:
+					holder, step = _step_through(structs, struct, field,
+					                             held, paths[0])
+					member = _find_member(holder, step)
+			if isinstance(member, ast.Field) \
+					and _summable(member, byte_enums, evaluate_literal):
+				continue
+			raise error(
+				"`sum` adds the elements of a run, and this has none to add",
+				call.span,
+				label = "not a counted run, a fixed-width text number or "
+				        "an enum of bytes",
+				notes = ["`sum(lens)` over `u16 lens[n]`, `sum(mode)` over "
+				         "`octal u32 mode[8]`, which adds its eight "
+				         "characters, and `sum(magic)` over an enum of bytes "
+				         "(26.896, 26.949)"],
+			)
+
+
+def _summable(member: ast.Field, byte_enums: set[str],
+		literal: Callable[[ast.Expr], int | None]) -> bool:
+	"""Whether `sum` has elements to add in this member (26.949)."""
+	# Before the array: an enum of bytes carries one, its width, and no
+	# scalar for the run's test below to read.
+	if member.type_ref.name in byte_enums:
+		return True
+	if member.array is None:
+		return False
+	size   = member.array.size
+	scalar = member.type_ref.scalar
+	if size is None or isinstance(size, ast.Remaining) \
+			or member.until is not None or member.repeat is not None:
+		return False
+	if member.radix is not None:
+		return not member.scaled and literal(size) is not None
+	return scalar is not None and not scalar.signed and scalar.bits % 8 == 0
 
 
 def _check_sum(call: ast.Call, seen: dict[str, ast.Field]) -> None:

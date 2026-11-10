@@ -61,3 +61,22 @@ def test_both_walkers_add_characters(tmp_path: Path) -> None:
 	for label, (verdict, packet) in CASES.items():
 		assert python_verdict(blob, packet, shape) == verdict, label
 		assert c_verdict(tmp_path, blob, packet, shape) == verdict, label
+
+
+@pytest.mark.parametrize("member", [
+	"u16 a;",				# one value, no elements
+	"decimal u16 a until \",\";",		# a delimited number
+	"inner a;",				# a nested struct
+	"i8 a[2];",				# signed elements
+])
+def test_a_when_sums_only_what_has_elements(member: str) -> None:
+	"""A `when`'s `sum` was held to nothing, and these reached the backends
+	with no count to give: C++ and Rust did not compile (26.949)."""
+	from situc.diagnostics import Source, SituError
+	from situc.parser import parse
+
+	text = ("target buffer;\nendian big;\nstruct inner { u8 x; }\n"
+	        f"struct s {{\n\t{member}\n\tu8 k;\n}}\n"
+	        'when s.k != sum(s.a) refuse bad "x";\n')
+	with pytest.raises(SituError, match="has none to add"):
+		parse(Source("unit.situ", text))
