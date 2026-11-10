@@ -674,8 +674,12 @@ def _wrap(rendered: str, binding: int, parent_binding: int) -> str:
 	return f"({rendered})" if binding < parent_binding else rendered
 
 
-#: `decimal`/`hex`, by the radix the parser recorded (8.6.2).
-RADIX_KEYWORDS = {10: "decimal", 16: "hex"}
+#: `decimal`/`hex`/`octal`, by the radix the parser recorded (8.6.2).
+#: `octal` was missing from 26.756 until 26.948's ustar example
+#: round-tripped through here: an unknown radix rendered as nothing, so
+#: `octal u32 mode[8]` came back a binary `u32[8]`. A radix this table
+#: lacks is now a KeyError rather than a silent change of construct.
+RADIX_KEYWORDS = {8: "octal", 10: "decimal", 16: "hex"}
 
 
 def _radix_to_source(radix: int | None, scaled: bool = False) -> str:
@@ -688,7 +692,7 @@ def _radix_to_source(radix: int | None, scaled: bool = False) -> str:
 	"""
 	if scaled:
 		return "scaled "
-	return f"{RADIX_KEYWORDS[radix]} " if radix in RADIX_KEYWORDS else ""
+	return "" if radix is None else f"{RADIX_KEYWORDS[radix]} "
 
 
 def _byte_set_to_source(values: tuple[int, ...],
