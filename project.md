@@ -8394,6 +8394,22 @@ Moved to `doc/decision/26.946-required-reads-every-length-that-is-readable.md`.
 
 Moved to `doc/decision/26.947-a-versioned-arm-frames-as-absent.md`.
 
+### 26.948 A `[padded]` text number's digits stop at a NUL or a space
+
+Moved to `doc/decision/26.948-a-padded-text-numbers-digits-stop-at-a-nul-or-space.md`.
+
+### 26.949 A text number's `sum` adds its characters
+
+Moved to `doc/decision/26.949-a-text-numbers-sum-adds-its-characters.md`.
+
+### 26.950 A version is read once its own bytes arrive
+
+Moved to `doc/decision/26.950-a-version-is-read-once-its-own-bytes-arrive.md`.
+
+### 26.951 A delimited octal number reached the C generator
+
+Moved to `doc/decision/26.951-a-delimited-octal-number-reached-the-c-generator.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
