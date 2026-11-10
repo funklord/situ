@@ -907,7 +907,9 @@ def _sum(view: View, index: int) -> int:
 	Only those the frame holds, and saturating at 32 bits (26.896).
 	"""
 	placement = view.image.placements[index]
-	width = (placement.element_bits // BITS_PER_BYTE
+	# A text number's elements are its characters (26.949).
+	width = (1 if placement.radix
+	         else placement.element_bits // BITS_PER_BYTE
 	         if placement.element_bits != NONE else 1)
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	room  = max(0, view.limit - start)

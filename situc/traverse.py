@@ -1152,6 +1152,20 @@ def _fields_end(struct: ResolvedStruct, source: str,
 	return end
 
 
+def summed_width(placement: Placement) -> int:
+	"""How many bytes each element `sum(run)` adds is (26.896, 26.949).
+
+	A text number's elements are its characters -- 8.6.2's "a width is
+	digits, not elements" -- so `sum(mode)` over `octal u32 mode[8]` adds
+	eight bytes. Reading the scalar's width instead added eight `u32`s, 32
+	bytes from an 8-byte field, which is how a `when` over ustar's header
+	checksum came out wrong in every backend.
+	"""
+	if placement.radix is not None:
+		return 1
+	return (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+
+
 def nested_floor(structs: dict[str, ResolvedStruct],
 		placement: Placement) -> int:
 	"""What a single nested struct member adds to `required`'s answer

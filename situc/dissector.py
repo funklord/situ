@@ -50,6 +50,7 @@ from situc.names import (
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source
 from situc.traverse import (
+	summed_width,
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
 	extent_parts, fixed_span_bits, is_counted_run, is_recursive, local_name,
 	nest_of,
@@ -2768,7 +2769,7 @@ def _sum_read(struct: ResolvedStruct, run: str, base: str) -> str | None:
 	                           base))
 	if count is None:
 		return None
-	width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+	width  = summed_width(member)
 	little = "true" if member.endian is ast.Endian.LITTLE else "false"
 	return (f"situ_sum(tvb, {_at(base, member.offset_bits // BITS_PER_BYTE)},"
 	        f" {count}, {width}, {little})")

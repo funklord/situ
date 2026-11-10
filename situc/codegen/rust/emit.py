@@ -49,6 +49,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
+	summed_width,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -5216,7 +5217,7 @@ class Emitter:
 		member = found.placement
 		start  = self._offset_expression(struct, member)
 		count  = self._count_expression(struct, member)
-		width  = (member.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
+		width  = summed_width(member)
 		big    = "true" if member.endian is ast.Endian.BIG else "false"
 		return (f"situ_rt::sum_run(&self.bytes[core::cmp::min({start},"
 		        f" self.bytes.len())..], {count}, {width}, {big})")

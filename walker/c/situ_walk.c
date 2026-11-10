@@ -1918,20 +1918,26 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		uint32_t count = 0u;
 		uint32_t bits  = 0u;
 		uint64_t total = 0u;
-		situ_walk_err err = situ_walk_count(ctx->image, ctx->message, ctx->len,
-		                                    ctx->shape, index, &count);
+		situ_walk_err err = situ_walk_placement_at(ctx->image, index, &run);
 
+		/* A fixed-width text number's elements are its characters
+		 * (26.949), as many as its digits; `situ_walk_count` declines
+		 * one, its bracket being no count of elements. */
+		if (err == SITU_WALK_OK && run.radix != 0u && run.radix_digits != 0u) {
+			count = run.radix_digits;
+		} else if (err == SITU_WALK_OK) {
+			err = situ_walk_count(ctx->image, ctx->message, ctx->len,
+			                      ctx->shape, index, &count);
+		}
 		if (err == SITU_WALK_OK) {
 			err = offset_bits_deep(ctx->image, ctx->message, ctx->len,
 			                       ctx->shape, index, ctx->depth, &bits);
 		}
-		if (err == SITU_WALK_OK) {
-			err = situ_walk_placement_at(ctx->image, index, &run);
-		}
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		const uint32_t width = run.element_bits / 8u;
+		/* A text number's elements are its characters (26.949). */
+		const uint32_t width = run.radix != 0u ? 1u : run.element_bits / 8u;
 		const uint32_t start = bits / 8u;
 
 		if (width == 0u) {

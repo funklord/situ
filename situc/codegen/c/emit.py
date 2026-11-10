@@ -50,6 +50,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
+	summed_width,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -7388,8 +7389,7 @@ class Emitter:
 		member = found.placement
 		base   = self._base_expression(struct, member)
 		count  = self._count_expression(struct, member, held)
-		width  = (BITS_PER_BYTE if member.element_bits is None
-		          else member.element_bits) // BITS_PER_BYTE
+		width  = summed_width(member)
 		big    = int(member.endian is ast.Endian.BIG)
 		return (f"((int64_t)situ_sum_run(situ_base({held}) + {base}, {count},"
 		        f" {width}u, {big}, situ_remaining_u32({held}.limit, {base})))")
