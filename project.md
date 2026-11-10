@@ -8416,6 +8416,10 @@ Moved to `doc/decision/26.951-a-delimited-octal-number-reached-the-c-generator.m
 
 Moved to `doc/decision/26.952-an-early-answer-owes-what-follows.md`.
 
+### 26.953 A fixed-width `[minimal]` number compiled nowhere in C++
+
+Moved to `doc/decision/26.953-a-fixed-width-minimal-number-in-c-plus-plus.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

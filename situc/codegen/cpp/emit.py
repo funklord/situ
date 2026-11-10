@@ -10800,6 +10800,13 @@ class Emitter:
 			      f" {name}_trim_set, {len(placement.trim_set)}u)")
 			if placement.array_count is None and not placement.delimiters:
 				at = f"{name}_digits().data()"
+			# A fixed width at a constant offset has no `_offset()` either:
+			# `decimal u32 n[4] [minimal]` first in a struct named an
+			# accessor nothing defined, and the header did not compile
+			# (26.953). Its start is the offset expression, as `sum`'s is.
+			elif not placement.delimiters and not placement.trimmed:
+				at = (f"situ_base(raw_) + "
+				      f"({self._offset_expression(struct, placement)})")
 			# The fixed-width form has no `_len`: its length is the digit
 			# count the schema declared, which is a constant here.
 			count = (f"{name}_len()"
