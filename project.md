@@ -6079,6 +6079,18 @@ nothing re-read the sentence when the records closed.
     *this schema answered 196 calls and not one truncated*. Fourth time
     this run that a count of what a check asked found what the check
     could not.
+- **A scalar placed by `at` has no value getter in any backend**
+  (found 2026-11-11 by a sweep of placed members). `u8 c at 3;` is
+  accepted, and all four backends expose it as one byte of the message --
+  C `situ_s_c_view`, C++ and Rust a byte slice, Python a `memoryview` --
+  never as the number the type declares. They agree with each other, so
+  no differential sees it; the C driver asks for `situ_s_c_get` and does
+  not compile, which `differ.py`'s own comment at the located case
+  predicts ("a located SCALAR ... would want a shape of its own"). Open:
+  either a value getter in the four backends and the walkers -- the
+  aims' answer, since a field at an absolute offset is a real header's
+  shape -- or a refusal naming `u8 c[1] at 3`. Every placed member in the
+  corpus is a byte run, so nothing depends on it today.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
