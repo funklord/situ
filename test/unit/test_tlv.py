@@ -213,16 +213,15 @@ def test_two_defaults_are_refused() -> None:
 	assert "at most one `default`" in report
 
 
-def test_a_zero_length_value_is_refused() -> None:
-	"""A walk over zero-extent items does not advance."""
-	report = rendered(one_region(
+def test_a_tag_with_no_value_is_accepted() -> None:
+	"""An item may be its tag alone (26.958): DHCP's Pad and End are one
+	byte each. This was refused because "a walk over zero-extent items does
+	not advance", and it does -- by the tag, which every item has."""
+	parse_text(one_region(
 		"\t\ttag_type = pb_varint,\n"
 		"\t\ttag_decode = { wire = tag & 0x7 },\n"
 		"\t\tvalue_size = switch (wire) { case 1: 0 },\n"
-		"\t\tunknown = error"))
-
-	assert "sizes its value at zero bytes" in report
-	assert "does not advance" in report
+		"\t\tunknown = error"), path="s.situ")
 
 
 def test_an_unknown_length_type_is_refused() -> None:

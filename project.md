@@ -8448,6 +8448,10 @@ Moved to `doc/decision/26.956-a-negative-value-shifted-or-divided.md`.
 
 Moved to `doc/decision/26.957-an-arm-behind-a-sized-member-in-the-c-walker.md`.
 
+### 26.958 A TLV item may be its tag alone
+
+Moved to `doc/decision/26.958-a-tlv-item-may-be-its-tag-alone.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

@@ -932,15 +932,6 @@ def _check_value_size(region: ast.Tlv, varints: set[str]) -> None:
 			)
 		seen[case.label] = case
 
-		if isinstance(case.rule, ast.FixedValue) and case.rule.size == 0:
-			raise error(
-				f"wire type {case.label} sizes its value at zero bytes",
-				case.rule.span,
-				label = "a zero-length value",
-				notes = ["an item that occupies only its tag is legal;"
-				         " say so with `0` on the *tag* type, not here",
-				         "a walk over zero-extent values does not advance"],
-			)
 
 	for case in sizes.cases:
 		if isinstance(case.rule, ast.ComputedValue):
