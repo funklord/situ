@@ -6091,6 +6091,25 @@ nothing re-read the sentence when the records closed.
   aims' answer, since a field at an absolute offset is a real header's
   shape -- or a refusal naming `u8 c[1] at 3`. Every placed member in the
   corpus is a byte run, so nothing depends on it today.
+
+  **The getter's shape, settled from the byte accessors already there**
+  (2026-11-11), so the build starts from it. Each backend's placed byte
+  accessor takes the message already -- the offset is the message's -- and
+  the value getter is that accessor's sibling, named `<name>_value`, so the
+  bytes stay reachable under the name they have today:
+
+  | backend | bytes, today | value, to add |
+  |---|---|---|
+  | C | `situ_s_c_view(msg, view, &out)` | `situ_s_c_value(msg, view, &v)` -> `situ_err_t` |
+  | C++ | `c(msg, bytes &out)` | `c_value(msg, T &out)` -> `err` |
+  | Rust | `c(&self, msg) -> Result<&[u8]>` | `c_value(&self, msg) -> Result<T>` |
+  | Python | property `c` -> `memoryview` | property `c_value` -> `int` |
+
+  Each reads the bytes through the existing accessor and loads them with
+  the member's byte order, so the bounds check stays in one place. Then
+  `differ.py`'s located-scalar probe asks `_value` in all four drivers, and
+  a six-reader test holds `u8 c at 3`, a `u16` big and little, and an
+  offset past the frame refused alike.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
