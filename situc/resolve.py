@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from situc import ast
 from situc.invariant import negative_value
 from situc.capability import Axis, Value, Vector, meet_all
-from situc.diagnostics import error
+from situc.diagnostics import SituError, error
 from situc.layout import (BITS_PER_BYTE, Placement, SchemaLayout,
                           StructLayout, regions_covered_by,
                           transform_covers)
@@ -115,6 +115,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 			raise refusal
 
 	from situc.traverse import messages
+	_check_when_arithmetic(schema, layout, result)
 	for name in result.structs:
 		result.refusals[name] = tuple(
 			when.expr for when in messages(schema, name)
@@ -803,3 +804,59 @@ def _check_required_alignment(decl: ast.StructDecl, layout: StructLayout) -> Non
 
 def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
 	return any(attr.name == name for attr in attrs)
+
+
+#: The refusals `_check_when_arithmetic` raises; anything else `interval_of`
+#: says about a `when` is about what the solver can see, not the rule.
+_ARITHMETIC_REFUSALS = ("the left operand of", "the shift amount of",
+                        "division by zero")
+
+
+def _check_when_arithmetic(schema: ast.Schema, layout: SchemaLayout,
+		result: ResolvedSchema) -> None:
+	"""A `when` rule's arithmetic, held to what a size's is (26.956).
+
+	`interval_of` refuses `/`, `%` and `>>` over a left operand that may be
+	negative, because C truncates and shifts by the compiler's grace where
+	Python floors -- but it ran only on layout expressions. A `when` rule
+	reads the same fields and was asked nothing: `when s.a / 2 == -1` over
+	an `i8 a` refused -3 in C, C++ and Rust and accepted it in Python.
+
+	Each path the rule names takes the range the solver kept for it, or
+	failing that its placement's scalar range -- wider, and never wrong
+	about whether the value can be negative, which is all these refusals
+	ask. A path neither knows is left out, and `interval_of` says nothing
+	worse about it than it says of any field it cannot see.
+	"""
+	from dataclasses import replace as _replace
+	from situc.expr import interval_of, scalar_interval
+	from situc.invariant import paths_in
+	from situc.traverse import messages
+
+	for name, struct in layout.structs.items():
+		fields = {f"{name}.{path}": held
+		          for path, held in struct.value_ranges.items()}
+		for when in messages(schema, name):
+			named = dict(fields)
+			for path in paths_in(when.expr):
+				if path in named:
+					continue
+				found = result.find(path)
+				scalar = found.placement.scalar if found is not None else None
+				if scalar is not None:
+					named[path] = scalar_interval(scalar.bits, scalar.signed)
+			if any(path not in named and path.partition(".")[0] == name
+			       for path in paths_in(when.expr)):
+				continue	# a member with no scalar value to reason about
+			env = _replace(layout.env, fields={**layout.env.fields, **named},
+			               layout=layout.lookup)
+			# Only the arithmetic refusals are this check's to raise. A
+			# `when` may read what no compile-time range can say -- `size`
+			# of a variable member is the run's length in THIS message --
+			# and `interval_of` reports that as an unknown path, which is
+			# true of the solver and nothing a `when` did wrong.
+			try:
+				interval_of(when.expr, env)
+			except SituError as refused:
+				if refused.diagnostic.message.startswith(_ARITHMETIC_REFUSALS):
+					raise

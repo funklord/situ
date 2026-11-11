@@ -8434,6 +8434,10 @@ Moved to `doc/decision/26.954-a-signed-varint-run-in-the-differential.md`.
 
 Moved to `doc/decision/26.955-several-delimiters-may-be-quoted-or-escaped.md`.
 
+### 26.956 A negative value shifted or divided
+
+Moved to `doc/decision/26.956-a-negative-value-shifted-or-divided.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

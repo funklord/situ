@@ -758,6 +758,10 @@ class StructLayout:
 	size_max_bits: int | None	= None
 	# Set when this struct was written as a `register` (section 15.2).
 	register: ast.RegisterInfo | None = None
+	#: Each field's value range as the solver last knew it, by the path an
+	#: expression inside the struct would use. The `when` rules read the
+	#: same fields and are checked against these (26.956).
+	value_ranges: dict[str, Interval] = field(default_factory=dict)
 
 	@property
 	def is_frame(self) -> bool:
@@ -1229,6 +1233,9 @@ class Solver:
 		state  = Walk(fields={}, cursor=Extent(0, 0))
 		self.place_members(decl, decl.members, scope, layout, name, state)
 		_leave_the_tail(layout, state)
+		# Kept for the `when` rules, which read the same fields by the same
+		# ranges and were checked against none of them (26.956).
+		layout.value_ranges = dict(state.fields)
 		self.resolve_coverage(decl, layout)
 		self.resolve_invariants(decl, layout)
 

@@ -2866,10 +2866,14 @@ static situ_walk_err held_to_parameter(const situ_walk_image *image,
 	if (member.size_bits >= 64u || member.size_bits == 0u) {
 		return SITU_WALK_OK;
 	}
-	const int     is_signed = (member.flags & SITU_WALK_SIGNED) != 0u;
-	const int64_t room      = (int64_t)1 << member.size_bits;
-	const int64_t lo        = is_signed ? -(room / 2) : 0;
-	const int64_t hi        = is_signed ? room / 2 - 1 : room - 1;
+	/* In unsigned arithmetic: `(int64_t)1 << 63` for a 63-bit member is
+	 * undefined, and cppcheck found it (26.956). Half the room is
+	 * `1 << (bits - 1)`, which fits for every width below 64. */
+	const int      is_signed = (member.flags & SITU_WALK_SIGNED) != 0u;
+	const uint64_t half      = (uint64_t)1 << (member.size_bits - 1u);
+	const int64_t  lo        = is_signed ? -(int64_t)half : 0;
+	const int64_t  hi        = is_signed ? (int64_t)(half - 1u)
+	                                     : (int64_t)(half * 2u - 1u);
 	if (*value < lo) {
 		*value = lo;
 	} else if (*value > hi) {
@@ -7911,7 +7915,11 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			    ((uint64_t)left << right) : 0;
 			break;
 		case 0x19u:
-			answer = (right >= 0 && right < 64) ? (left >> right) : 0;
+			/* Arithmetic, as Python's and Rust's, and spelled so: a
+			 * right shift of a negative signed value is implementation-
+			 * defined in C (26.956). */
+			answer = !(right >= 0 && right < 64) ? 0
+			       : left < 0 ? ~(~left >> right) : (left >> right);
 			break;
 		case 0x20u: answer = (left == right); break;
 		case 0x21u: answer = (left != right); break;

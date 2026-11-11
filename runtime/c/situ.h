@@ -2426,7 +2426,11 @@ static inline uint32_t situ_varint_put(uint8_t *p, uint32_t avail, uint64_t valu
  * whether it is positive or negative. */
 static inline uint64_t situ_zigzag_encode(int64_t value)
 {
-	return ((uint64_t)value << 1) ^ (uint64_t)(value >> 63);
+	/* Not `value >> 63`: a right shift of a negative signed value is
+	 * implementation-defined in C (6.5.7p5), and every input this exists
+	 * for is negative half the time. The sign as all-ones or all-zeros,
+	 * spelled without a shift (26.956; raidcfgd's cppcheck found it). */
+	return ((uint64_t)value << 1) ^ (value < 0 ? ~(uint64_t)0 : (uint64_t)0);
 }
 
 static inline int64_t situ_zigzag_decode(uint64_t raw)

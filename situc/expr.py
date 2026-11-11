@@ -366,6 +366,25 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 				         "below zero"],
 			)
 
+		# A right shift of a negative value is implementation-defined in C
+		# and in C++17, where Rust and Python shift arithmetically -- so the
+		# four agree only by the grace of the compiler. Refused for the
+		# reason `/` above is (26.956): cppcheck found the same shift in the
+		# runtime's zigzag and in the walker's evaluator, which are mended,
+		# and generated code copies this operator as written.
+		if expr.op == ">>" and (not left.lo_known or left.lo < 0):
+			raise error(
+				"the left operand of `>>` may be negative",
+				expr.left.span,
+				label = f"range is {left.render()}",
+				notes = ["a right shift of a negative value is "
+				         "implementation-defined in C and C++17, and "
+				         "arithmetic in Rust and Python",
+				         "give it a lower bound -- `[min = 0]` on the fields "
+				         "it reads -- or divide by a power of two after "
+				         "making it non-negative"],
+			)
+
 		# And the shift amount, for the reason 0049 gives. The generated C
 		# widens every operand of a layout expression to 64 bits before
 		# shifting -- `situ_leaf_u64(...) >> 2` -- so the amount has to land
