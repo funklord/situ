@@ -8438,6 +8438,10 @@ Moved to `doc/decision/26.955-several-delimiters-may-be-quoted-or-escaped.md`.
 
 Moved to `doc/decision/26.956-a-negative-value-shifted-or-divided.md`.
 
+### 26.957 An arm behind a sized member, in the C walker
+
+Moved to `doc/decision/26.957-an-arm-behind-a-sized-member-in-the-c-walker.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

@@ -3531,6 +3531,25 @@ static situ_walk_err chain_sum(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 
+		/* An arm starts where its variant does, and is no member of the
+		 * struct, so a sum looking for it ran off the end and answered
+		 * "not a member". Wherever an arm's offset was written down that
+		 * never mattered; behind a member the data sizes it is summed,
+		 * and every arm read refused -- a text-number arm reported
+		 * `digits` broken on a message the other five readers took
+		 * (26.957). `walk.py` stops here and has since 26.909. */
+		{
+			uint32_t       arms = 0u;
+			const uint8_t *rows = arm_rows(image, before, &arms);
+
+			for (uint32_t a = 0u; rows != NULL && a < arms; a++) {
+				if (u32_at(rows + a * image->arm_stride + 4u) == index) {
+					*out = total;
+					return SITU_WALK_OK;
+				}
+			}
+		}
+
 		situ_walk_placement earlier;
 		err = situ_walk_placement_at(image, before, &earlier);
 		if (err != SITU_WALK_OK) {

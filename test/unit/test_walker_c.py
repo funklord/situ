@@ -604,6 +604,12 @@ def python_arms(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 			def _count() -> int:
 				if placement.repeat_code != NONE:
 					return walk.while_count(view, chosen)
+				# `situ_walk_count` declines a text number: its bracket
+				# is digits, not elements. `_count` answers the digits,
+				# which is what `sum` needs and no count of numbers
+				# (26.957); an arm reached at all showed the difference.
+				if placement.radix:
+					raise Refused("a text number's bracket is no count")
 				return walk._count(view, chosen)
 
 			try:
