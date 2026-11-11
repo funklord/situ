@@ -5989,6 +5989,12 @@ nothing re-read the sentence when the records closed.
     `length < SIZE_MIN` with BOUNDS before anything decodes. Nothing in
     the generated code says that the floor's absence is deliberate; a
     regenerating consumer can only learn it from the log.
+  - **raidcfgd's cppcheck run found a signed right shift in the runtime**
+    (inbox 20261111T0055Z): `situ_zigzag_encode` took the sign as
+    `value >> 63`, implementation-defined in C. Fixed with two more the
+    same tool found in the C walker, and a live C/Python disagreement over
+    a `when` rule's `/` that the same family led to (26.956). Answered in
+    its inbox (20261111T0354Z).
 - **The population story was wrong for one of them, and the correction
   is worth more than the fault** (26.725). 26.693 closed with "the
   property was right and the population was not", and 26.723's record
