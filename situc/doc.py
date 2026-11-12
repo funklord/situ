@@ -254,8 +254,13 @@ def _diagram(struct: ResolvedStruct) -> list[str]:
 	is full, because a row is one line however many fields share it -- which is
 	the entire point of drawing bit-packed fields this way.
 	"""
+	# Not a `parameter`, which occupies no bytes: it sits at the offset of
+	# the member after it, and was drawn there as a field of its own width
+	# -- a pcap record's handed byte order as four bytes the record does
+	# not have (26.972).
 	members = [placement for placement in own_members(struct)
-	           if placement.offset_bits is not None]
+	           if placement.offset_bits is not None
+	           and not placement.parameter]
 	if not members:
 		return []
 
@@ -485,6 +490,13 @@ def _regions(struct: ResolvedStruct, fmt: str) -> list[str]:
 
 
 def _row(struct: ResolvedStruct, placement: Placement) -> tuple[str, ...]:
+	# A `parameter` is the caller's, not the message's: no offset and no
+	# bytes. Listed at offset 0 with its type's width, a pcap record read
+	# as a struct whose first four bytes are a byte order (26.972).
+	if placement.parameter:
+		return (_label(struct, placement), "-", "argument",
+		        placement.type_name or "-",
+		        "; ".join(_notes(placement)) or "")
 	return (
 		_label(struct, placement),
 		_offset(placement),

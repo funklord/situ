@@ -469,3 +469,19 @@ def test_a_struct_with_no_region_gets_no_table() -> None:
 	assert _fields(rendered) == ["a", "b"]
 	assert _regions_table(rendered) == []
 	assert "Region" not in rendered
+
+
+def test_a_parameter_is_not_drawn_as_bytes() -> None:
+	"""A `parameter` occupies nothing: the caller hands it over (0050).
+
+	It sits at the offset of the member after it, and the diagram drew it
+	there as a field of its own width -- a pcap record's handed byte order
+	as four bytes the record does not have, and a TIFF directory entry's
+	as a sixteen-bit cell that made a 48-bit row. The table listed it at
+	offset 0 (26.972).
+	"""
+	text = emit("struct e { parameter u16 order [stream]; u16 tag; u16 kind;"
+	            " u32 count; }\n")
+	assert not any("order" in line for line in diagram(text)), text
+	row = next(line for line in text.splitlines() if line.startswith("order"))
+	assert row.split()[1:3] == ["-", "argument"], row

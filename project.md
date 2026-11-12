@@ -8547,6 +8547,10 @@ Moved to `doc/decision/26.970-an-array-in-an-arm-reads-a-handed-order.md`.
 
 Moved to `doc/decision/26.971-validate-reads-an-enum-placed-by-at.md`.
 
+### 26.972 The doc draws no parameter
+
+Moved to `doc/decision/26.972-the-doc-draws-no-parameter.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
