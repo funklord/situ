@@ -51,7 +51,7 @@ export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
 	fuzz fuzz-generated fuzz-cpp fuzz-walker test-codec-san \
-	veryclean distclean style style-source style-docs hooks walk-c \
+	veryclean distclean style style-source style-tool style-docs hooks walk-c \
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -411,7 +411,15 @@ clean:
 # The shared style gate: one tool, copied verbatim from
 # ~/.claude/tool/style_gate.py into every private project. It refuses to
 # run against a collapsed file list, so a pass means it actually looked.
-style: style-source style-docs
+style: style-tool style-source style-docs
+
+# The style gate's own suite, run ahead of the gate's verdict. A checker
+# that has stopped inspecting anything passes exactly as loudly as one
+# that works, so its pass is worth reading only once its suite has.
+# tool/test_style_gate.py arrives beside tool/style_gate.py and was
+# carried here unrun until 2026-11-12, on the holder's word.
+style-tool:
+	$(PYTHON) tool/test_style_gate.py
 
 style-source:
 	$(PYTHON) tool/style_gate.py check
