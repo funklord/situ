@@ -6079,15 +6079,14 @@ nothing re-read the sentence when the records closed.
     *this schema answered 196 calls and not one truncated*. Fourth time
     this run that a count of what a check asked found what the check
     could not.
-- **Seven files in the main checkout are not group-readable** (inbox
-  20261112T0046Z, from claude-guidelines): six decision records
-  26.846-26.853 and `situc/codegen/c/fuzz.py`, claude-owned at mode 600,
-  so `tool/style_gate.py`, mypy and any test reading them fail with
-  PermissionError for the funk account -- why every gate here runs in a
-  worktree, where git checks them out 644. Only the owning account can
-  mend the checkout:
-  `find . -path ./.git -prune -o -type f -user claude ! -perm -g+r -exec chmod g+r {} +`.
-  Blocks nothing in a worktree; the holder's or the claude session's to run.
+- ~~**Seven files in the main checkout were not group-readable**~~ (inbox
+  20261112T0046Z): six decision records 26.846-26.853 and
+  `situc/codegen/c/fuzz.py`, owned by the other account at mode 600, so the
+  style gate, mypy and tests reading them failed with PermissionError for
+  funk. **Closed 2026-11-12**: the holder ran the chmod; every file outside
+  `.git` is group-readable and `tool/style_gate.py check` passes as funk
+  (1592 files), checked here. Gates still run in a worktree, which is
+  cheaper than trusting a shared checkout's modes.
 - ~~**A scalar placed by `at` has no value getter in any backend**~~
   (found 2026-11-11). **Built 2026-11-12** (26.959): `<name>_value` beside
   the bytes in all four backends -- C `situ_s_c_value(msg, view, &v)`,
