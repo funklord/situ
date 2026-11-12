@@ -8574,6 +8574,10 @@ Moved to `doc/decision/26.976-a-located-struct-is-reached-as-its-struct.md`.
 
 Moved to `doc/decision/26.977-generated-c-suites-need-no-framework.md`.
 
+### 26.978 The dissector shows a located struct's fields
+
+Moved to `doc/decision/26.978-the-dissector-shows-a-located-struct-s-fields.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

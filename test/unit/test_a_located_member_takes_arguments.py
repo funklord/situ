@@ -160,6 +160,12 @@ def test_the_dissector_shows_the_directory_where_it_is(tmp_path: Path) -> None:
 		# Two entries: a count, 2 * 12 bytes of entries, a next offset.
 		assert ("tiff.first", 12, 2 + 2 * 12 + 4) in \
 			[(name, at, length) for name, at, length, _ in rows], rows
+		# And dissected there as the struct it is, in the header's order:
+		# it was a row of hex (26.978).
+		shown = [(name, at, value) for name, at, _, value in rows]
+		assert ("ifd.count", 12, "2") in shown, rows
+		assert ("ifd_entry.tag", 14, "256") in shown, rows
+		assert ("ifd_entry.tag", 26, "257") in shown, rows
 
 
 #: The entry's value as TIFF means it: a SHORT left-justified in the four

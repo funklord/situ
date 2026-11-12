@@ -2072,9 +2072,24 @@ def _located_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	else:
 		lines.append(f"\tlocal {extent} = {length}")
 
+	# A STRUCT is dissected there too, as a nested member is: its row was
+	# the bytes alone, so a TIFF directory reached Wireshark as a run of
+	# hex with no entry in it (26.978). Under the bytes' row, and handed
+	# the member's arguments where it takes any.
+	inner = resolved.structs.get(placement.type_name or "")
+	nested: str | None = None
+	if inner is not None:
+		nested = (f"Dissector.get(\"{placement.type_name}\"):call("
+		          f"tvb({local}_at, {extent}):tvb(), pinfo, {local}_tree)")
+		if placement.arguments:
+			nested = _handing_call(struct, placement, "0",
+			                       f"function() return {nested} end")
 	lines.extend([
 		f"\tif {local}_at + {extent} <= tvb:len() then",
-		f"\t\tsubtree:add({field}, tvb({local}_at, {extent}))",
+		*([f"\t\tlocal {local}_tree = subtree:add({field},"
+		   f" tvb({local}_at, {extent}))",
+		   f"\t\t{nested}"] if nested is not None else
+		  [f"\t\tsubtree:add({field}, tvb({local}_at, {extent}))"]),
 		"\tend",
 		# `at` is deliberately untouched: 9.8 again. The member after this one
 		# sits where it would if this one were not declared.
