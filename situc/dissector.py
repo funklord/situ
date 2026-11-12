@@ -126,6 +126,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	_STRUCTS.update(resolved.structs)
 	_MARKERS.clear()
 	_MARKERS.update({decl.name: decl for decl in schema.markers()})
+	_CODECS.clear()
+	_CODECS.update({decl.name: decl for decl in schema.codecs()})
 
 	lines = _preamble(basename)
 
@@ -2323,7 +2325,13 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		if little is not None:
 			opener = (f"subtree[{little} and \"add_le\" or \"add\"]"
 			          "(subtree, ")
-	span = byte_span(placement)
+	# A coded or sealed region the data sizes has no span, whatever its
+	# minimum is: `byte_span` answers with `size_bits`, which for one is
+	# the fixed part of its interior, and the member after it was placed
+	# there -- `coded body(c) { u16 x; u8 data[n]; }` showed `k` two bytes
+	# in for any `n` (26.965).
+	span = (None if placement.kind in ("coded", "sealed")
+	        and not placement.is_fixed_size else byte_span(placement))
 
 	# The note the module docstring has promised since this backend was
 	# written. `add` on a `ProtoField.bytes` shows the bytes whichever way it
@@ -2415,6 +2423,37 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# reachable one gets "fixed" back to the wrong answer later.
 		f"\tat = {first if placement.peek or placement.shares_byte else first + count}",
 	]
+
+
+def _region_length(resolved: ResolvedSchema, struct: ResolvedStruct,
+		region: Placement, base: str) -> str | None:
+	"""A coded or sealed region's bytes on the wire, in Lua (26.965).
+
+	The backends' rule, `traverse.region_extent`: the interior's extent --
+	its fixed part and each member the data sizes -- put through the
+	codec's expansion, in the same integer arithmetic C's
+	`_region_length` uses. None where that rule has no closed form, or
+	where the interior's extent is versioned, and the caller declines.
+	"""
+	codec = _CODECS.get(region.type_name or "")
+	rule  = traverse.region_extent(struct, region, codec, resolved.structs)
+	if rule is None or rule.version is not None:
+		return None
+	parts = [str(rule.constant)]
+	for member in rule.variable:
+		length = _length(resolved, struct, member, base)
+		if length is None:
+			return None
+		parts.append(f"({length})")
+	inner = "(" + " + ".join(parts) + ")"
+	if rule.kind == "preserving":
+		return inner
+	if rule.kind == "add":
+		return f"({inner} + {rule.add})"
+	if rule.kind == "ratio":
+		return f"math.floor({inner} * {rule.out} / {rule.into})"
+	return (f"(math.floor(({inner} + {rule.group_in - 1}) / {rule.group_in})"
+	        f" * {rule.group_out})")
 
 
 def _dynamic_width(placement: Placement) -> int | None:
@@ -2662,6 +2701,9 @@ _ENUMS: dict[str, dict[str, int]] = {}
 
 #: Every struct, for what a member hands its type, set beside `_CONSTS`.
 _STRUCTS: dict[str, ResolvedStruct] = {}
+
+#: Every codec, for a region's expansion (26.965).
+_CODECS: dict[str, ast.CodecDecl] = {}
 
 
 #: Every `endian_marker`, for the literal a governed member is compared against.
@@ -3373,6 +3415,9 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base, where)
+
+	if placement.kind in ("coded", "sealed"):
+		return _region_length(resolved, struct, placement, base)
 
 	# A pad, to the next multiple of its unit from where the struct starts,
 	# as the body's own pad counts from the start of the struct's tvb. An

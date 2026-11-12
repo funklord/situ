@@ -8519,6 +8519,10 @@ Moved to `doc/decision/26.963-the-dissector-follows-a-byte-order-marker.md`.
 
 Moved to `doc/decision/26.964-a-marker-that-states-neither-order-is-refused.md`.
 
+### 26.965 The dissector measures a coded region
+
+Moved to `doc/decision/26.965-the-dissector-measures-a-coded-region.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

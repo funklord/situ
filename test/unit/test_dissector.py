@@ -966,8 +966,10 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 	Four branches declined a member by returning a comment and leaving `at`
 	where it was, and the walk carried on placing every member after it at a
 	cursor that was now wrong. `stuffed_opaque_tail`'s body is byte-stuffed
-	and `coded_run`'s is a coded region, and neither has a length this can
-	render: both still decline, and nothing after them is placed.
+	and has no length this can render: it still declines, and nothing after
+	it is placed. `coded_run`'s coded region declined too until 26.965 --
+	`coded body(doubling) { u8 content[n]; }` is `2 * n` bytes by the
+	backends' rule -- and is placed now, its `trailer` with it.
 
 	`segments` was the first of those until 26.932: `segment parts[count];
 	u16 after;` over records each saying its own length is walked now, and
@@ -991,7 +993,10 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 	lua = generate(parse(source), resolved, "edges")
 
 	assert "stuffed_opaque_tail.after: not shown" in lua
-	assert "coded_run.trailer: not shown" in lua
+	assert "coded_run.trailer: not shown" not in lua
+
+	body = lua[lua.index("function coded_run.dissector"):]
+	assert "subtree:add(coded_run.fields.trailer" in body[:body.index("\nend")]
 
 	body = lua[lua.index("function stuffed_opaque_tail.dissector"):]
 	assert "subtree:add(stuffed_opaque_tail.fields.after" \
