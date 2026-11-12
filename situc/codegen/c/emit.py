@@ -13482,7 +13482,7 @@ class Emitter:
 		# beside its bytes, through the view's `owner` (26.967). A member
 		# the message does not reach is BOUNDS, as both walkers say.
 		if placement.located is not None:
-			if not traverse.located_value(placement):
+			if not traverse.located_raw(placement):
 				return []
 			held   = f"{local}_located"
 			checks = [*self._enum_check(placement, held),
@@ -13490,16 +13490,28 @@ class Emitter:
 			if not checks:
 				return []
 			assert scalar is not None
+			# An enum has no `_value`, so its integer is loaded from the
+			# bytes its `_view` places, in its own order (26.971).
+			fetch = ([f"\t\tif (view.owner == NULL || "
+			         f"{ident(self.prefix, struct.name, local, 'value')}"
+			         f"(view.owner, view, &{held}) != SITU_OK) {{",
+			         "\t\t\treturn SITU_ERR_BOUNDS;",
+			         "\t\t}"]
+			        if traverse.located_value(placement) else
+			        [f"\t\tsitu_view_t {local}_bytes;",
+			         "\t\tif (view.owner == NULL || "
+			         f"{ident(self.prefix, struct.name, local, 'view')}"
+			         f"(view.owner, view, &{local}_bytes) != SITU_OK) {{",
+			         "\t\t\treturn SITU_ERR_BOUNDS;",
+			         "\t\t}",
+			         f"\t\t{held} = ({self._ctype(scalar)})("
+			         f"{self._load_expression(scalar, placement, f'{local}_bytes.base', offset=0)});"])
 			return [
 				f"\t/* {placement.path}: at `{placement.located}` from the"
 				" start of the message */",
 				"\t{",
 				f"\t\t{self._ctype(scalar)} {held} = 0;",
-				"\t\tif (view.owner == NULL || "
-				f"{ident(self.prefix, struct.name, local, 'value')}"
-				f"(view.owner, view, &{held}) != SITU_OK) {{",
-				"\t\t\treturn SITU_ERR_BOUNDS;",
-				"\t\t}",
+				*fetch,
 				*("\t" + one for one in checks),
 				"\t}",
 			]

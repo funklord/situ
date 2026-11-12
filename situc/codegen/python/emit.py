@@ -9983,9 +9983,14 @@ class Emitter:
 		# reach it -- as both walkers refuse it. `self.w > 9` compared a
 		# memoryview with an int (26.967).
 		if placement.located is not None:
-			if not traverse.located_value(placement):
+			if not traverse.located_raw(placement):
 				return []
-			read = f"self.{name}_value"
+			# An enum has no `_value`: its integer is the bytes the
+			# accessor places, in the member's order (26.971).
+			read = (f"self.{name}_value" if traverse.located_value(placement)
+			        else f"int.from_bytes(self.{name},"
+			        f" \"{'little' if placement.endian is ast.Endian.LITTLE else 'big'}\","
+			        f" signed={scalar.signed})")
 
 		# A fixed-width text number: the property parses the digits and
 		# raises for bytes that are not digits of its radix, which is the

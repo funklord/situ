@@ -8543,6 +8543,10 @@ Moved to `doc/decision/26.969-a-tiff-directory-through-every-generator.md`.
 
 Moved to `doc/decision/26.970-an-array-in-an-arm-reads-a-handed-order.md`.
 
+### 26.971 Validate reads an enum placed by `at`
+
+Moved to `doc/decision/26.971-validate-reads-an-enum-placed-by-at.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

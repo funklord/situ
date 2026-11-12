@@ -1204,6 +1204,27 @@ def located_value(placement: Placement) -> bool:
 	        and scalar.kind in (ScalarKind.UINT, ScalarKind.SINT))
 
 
+def located_raw(placement: Placement) -> bool:
+	"""Whether `validate` can read a member placed by `at` as one integer.
+
+	`located_value`'s shape with an enum type allowed: an enum has no
+	public `_value` getter, each backend typing one its own way (26.959),
+	but its bytes are one plain integer of its backing width, and
+	`validate` has to read it to refuse a value the enum does not name --
+	which both walkers do and no backend did (26.971).
+	"""
+	scalar = placement.scalar
+	return (placement.located is not None and scalar is not None
+	        and placement.radix is None and placement.array_count is None
+	        and placement.sized_by is None and not placement.size_expr
+	        and placement.is_fixed_size and placement.size_bits == scalar.bits
+	        and not placement.delimiters and placement.marker is None
+	        and (scalar.bits == BITS_PER_BYTE
+	             or placement.endian in (ast.Endian.BIG, ast.Endian.LITTLE))
+	        and not scalar.is_bit_packed and scalar.bits in (8, 16, 32, 64)
+	        and scalar.kind in (ScalarKind.UINT, ScalarKind.SINT))
+
+
 def summed_width(placement: Placement) -> int:
 	"""How many bytes each element `sum(run)` adds is (26.896, 26.949).
 

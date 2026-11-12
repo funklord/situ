@@ -10656,9 +10656,12 @@ class Emitter:
 			if held.located is not None:
 				if held.type_name in self.resolved.structs:
 					return True
-				if traverse.located_value(held) and any(
+				enum = self.enums.get(held.type_name or "")
+				if traverse.located_raw(held) and (any(
 						attr.name in ("must_eq", "min", "max")
-						for attr in held.attrs):
+						for attr in held.attrs)
+						or (enum is not None and enum.effective_default
+						    is ast.EnumDefault.ERROR)):
 					return True
 				continue
 			inner = self.resolved.structs.get(held.type_name or "")
@@ -11388,15 +11391,32 @@ class Emitter:
 		# the member is (26.967). A member the message does not reach is a
 		# bounds failure, as both walkers say.
 		if placement.located is not None:
-			if not traverse.located_value(placement):
+			if not traverse.located_raw(placement):
 				return out
 			held   = f"{_ident(local_name(struct, placement))}_located"
 			bounds = self._attr_checks(struct, placement, held)
+			enum   = self.enums.get(placement.type_name or "")
+			# An enum that refuses an unknown value is a check too, read as
+			# the integer its bytes hold (26.971).
+			if enum is not None \
+					and enum.effective_default is ast.EnumDefault.ERROR:
+				bounds = [f"\t\tif !{_pascal(enum.name)}::is_known({held}) {{",
+				          "\t\t\treturn Err(Error::Constraint);",
+				          "\t\t}", *bounds]
 			if not bounds:
 				return out
-			out.append(f"\t\tlet {held} = self."
-			           f"{_ident(local_name(struct, placement))}_value(msg)"
-			           ".map_err(|_| Error::Bounds)?;")
+			held_at = _ident(local_name(struct, placement))
+			if traverse.located_value(placement):
+				out.append(f"\t\tlet {held} = self.{held_at}_value(msg)"
+				           ".map_err(|_| Error::Bounds)?;")
+			else:
+				assert scalar is not None
+				reader = ("read_le" if placement.endian is ast.Endian.LITTLE
+				          else "read_be")
+				out.append(f"\t\tlet {held} = situ_rt::{reader}("
+				           f"self.{held_at}(msg).map_err(|_| Error::Bounds)?, 0,"
+				           f" {scalar.bits // BITS_PER_BYTE}) as"
+				           f" {self._rust_type(scalar)};")
 			out.extend(bounds)
 			return out
 

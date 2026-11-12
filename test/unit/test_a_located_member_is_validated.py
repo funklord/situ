@@ -108,3 +108,48 @@ def test_both_walkers_validate_what_at_places(tmp_path: Path,
 		message = bytes.fromhex(packet)
 		assert python_verdict(blob, message, shape) == verdict, label
 		assert c_verdict(tmp_path, blob, message, shape) == verdict, label
+
+
+#: An enum placed by `at`: no backend has a public value getter for one
+#: (26.959), so `validate` read nothing and accepted a value the enum does
+#: not name, and one the message does not reach, where both walkers
+#: refused (26.971). Little-endian and sixteen bits, so the order is read.
+ENUMS = """target buffer;
+endian little;
+enum kind : u16 { a = 1, b = 0x0201 }
+struct t {
+	u8   off;
+	kind k at off;
+}
+"""
+
+ENUM_CASES = {
+	"a, little-endian":        ("01" "0100", "0"),
+	"b, little-endian":        ("01" "0102", "0"),
+	"b read big-endian is no": ("01" "0201", "2"),
+	"past the end":            ("05" "0100", "1"),
+}
+
+
+@pytest.mark.parametrize("schema_text, cases", [(ENUMS, ENUM_CASES)],
+                         ids=["enum"])
+def test_a_located_enum_is_validated(tmp_path: Path, schema_text: str,
+		cases: dict[str, tuple[str, str]]) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(schema_text, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	blob  = packed_text(schema_text)
+	shape = shape_named_text(schema_text, "t")
+	for label, (packet, verdict) in cases.items():
+		message = bytes.fromhex(packet)
+		given = {name: fourway.answers(argv, message, tmp_path)
+		         for name, argv in command.items()}
+		first = next(iter(given.values()))
+		assert all(answer == first for answer in given.values()), \
+			(label, given)
+		said = [one for one in first.splitlines()
+		        if one.startswith("validate ")]
+		assert said[-1] == f"validate {verdict}", (label, first)
+		assert python_verdict(blob, message, shape) == verdict, label
+		if COMPILER is not None:
+			assert c_verdict(tmp_path, blob, message, shape) == verdict, label

@@ -12044,23 +12044,44 @@ class Emitter:
 		# and did not compile (26.967). A member the message does not reach
 		# is a bounds failure, as both walkers say.
 		if placement.located is not None:
-			if not traverse.located_value(placement):
+			if not traverse.located_raw(placement):
 				return []
 			held   = f"{name}_located"
 			checks = self._attr_checks(struct, placement, held)
 			enum   = self.enums.get(placement.type_name or "")
+			# An enum that refuses an unknown value is a check too, read as
+			# the integer its bytes hold (26.971).
+			if enum is not None \
+					and enum.effective_default is ast.EnumDefault.ERROR:
+				checks = [
+					f"\t\tif (!is_known(static_cast<::{self.namespace}::{c_name(enum.name)}>"
+					f"({held}))) {{",
+					"\t\t\treturn ::situ::rt::err::constraint;",
+					"\t\t}",
+					*checks,
+				]
 			if not checks:
 				return []
+			fetch = ([f"\t\t\tif (raw_.owner == nullptr"
+			         f" || this->{name}_value(raw_.owner, {held})"
+			         " != ::situ::rt::err::ok) {",
+			         "\t\t\t\treturn ::situ::rt::err::bounds;",
+			         "\t\t\t}"]
+			        if traverse.located_value(placement) else
+			        ["\t\t\t::situ::rt::bytes _placed;",
+			         "\t\t\tif (raw_.owner == nullptr"
+			         f" || this->{name}(raw_.owner, _placed)"
+			         " != ::situ::rt::err::ok) {",
+			         "\t\t\t\treturn ::situ::rt::err::bounds;",
+			         "\t\t\t}",
+			         f"\t\t\t{held} = "
+			         f"{self._raw_load(scalar, placement, '_placed.data()')};"])
 			return [
 				f"\t\t/* {placement.path}: at `{placement.located}` from the"
 				" start of the message */",
 				"\t\t{",
 				f"\t\t\t{self._ctype(scalar)} {held} = 0;",
-				"\t\t\tif (raw_.owner == nullptr"
-				f" || this->{name}_value(raw_.owner, {held})"
-				" != ::situ::rt::err::ok) {",
-				"\t\t\t\treturn ::situ::rt::err::bounds;",
-				"\t\t\t}",
+				*fetch,
 				*("\t" + one for one in checks),
 				"\t\t}",
 			]
