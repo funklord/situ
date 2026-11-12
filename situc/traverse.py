@@ -872,13 +872,18 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 	constant = fixed // BITS_PER_BYTE
 
 	expansion = getattr(codec, "expansion", None)
-	name      = getattr(expansion, "value", None)
 	ratio     = getattr(codec, "ratio", None)
 
-	if name == "length_preserving":
+	# By the enum, not its spelling. These compared `expansion.value` with
+	# strings, and `+N` is spelt "add" there while this asked for
+	# "fixed_add" -- so from d633a094 on every `expansion = +N` region was
+	# one with no closed form, in all four backends: no accessor for the
+	# region, and none for anything after it whose offset it decided. The
+	# "add" branch each backend carries had never run (26.962).
+	if expansion is ast.Expansion.PRESERVING:
 		return RegionExtent(constant, tuple(variable), "preserving",
 		                    version=version, steps=steps)
-	if name == "fixed_add":
+	if expansion is ast.Expansion.FIXED_ADD:
 		# A region's size program is BYTE-valued: `pack.py` emits this as a
 		# `PUSH` of a byte count and both walkers evaluate it that way. So a
 		# code that grows by a number of bits no byte holds has no closed
@@ -895,11 +900,11 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 		return RegionExtent(constant, tuple(variable), "add",
 		                    add=bits // BITS_PER_BYTE,
 		                    version=version, steps=steps)
-	if name == "ratio_exact" and ratio is not None:
+	if expansion is ast.Expansion.RATIO_EXACT and ratio is not None:
 		return RegionExtent(constant, tuple(variable), "ratio",
 		                    out=ratio[0], into=ratio[1],
 		                    version=version, steps=steps)
-	if name == "ratio_padded" and ratio is not None:
+	if expansion is ast.Expansion.RATIO_PADDED and ratio is not None:
 		out, into = ratio
 		group_in  = lcm(BITS_PER_BYTE, into)
 		return RegionExtent(constant, tuple(variable), "padded",

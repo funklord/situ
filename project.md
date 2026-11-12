@@ -8505,6 +8505,10 @@ Moved to `doc/decision/26.960-the-dissector-assembles-a-bit-field-by-its-bit-ord
 
 Moved to `doc/decision/26.961-a-struct-takes-its-byte-order-from-its-caller-s-marker.md`.
 
+### 26.962 A region whose codec adds a count has a length
+
+Moved to `doc/decision/26.962-a-region-whose-codec-adds-a-count-has-a-length.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
