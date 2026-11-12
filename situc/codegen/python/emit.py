@@ -4880,7 +4880,8 @@ class Emitter:
 				measure = [
 					"\t\ttry:",
 					f"\t\t\t_measured = {py_name(inner.name)}.required("
-					"self._msg.buffer[at:])",
+					"self._msg.buffer[at:]"
+					f"{self._child(struct, placement)[1]})",
 					"\t\texcept TruncatedError:",
 					f'\t\t\traise BoundsError("{placement.path}: '
 					f'`{placement.located}` points outside the message")'
@@ -9908,7 +9909,8 @@ class Emitter:
 				return [
 					f"\t\t{'_' if fixed else '_bytes'} = self.{name}",
 					f"\t\t{held}.at(self._msg, {offset}"
-					f"{'' if fixed else ', len(_bytes)'}).validate()",
+					f"{'' if fixed else ', len(_bytes)'}"
+					f"{self._child(struct, placement)[1]}).validate()",
 				]
 			return [*self._entering_depth(struct, placement),
 			        f"\t\tself.{name}.validate()"]

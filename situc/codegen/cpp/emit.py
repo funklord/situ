@@ -8884,7 +8884,8 @@ class Emitter:
 					"\t\tstd::uint32_t measured = 0;",
 					"\t\tif (at > msg->size || ::"
 					f"{self.namespace}::{self._struct_class(inner.name)}"
-					"::required(msg->base + at, msg->size - at, measured)"
+					"::required(msg->base + at, msg->size - at"
+					f"{self._child_args(struct, placement)}, measured)"
 					" != ::situ::rt::err::ok) {",
 					"\t\t\treturn ::situ::rt::err::bounds;",
 					"\t\t}",
@@ -11950,7 +11951,8 @@ class Emitter:
 					"\t\t\tconst situ_view_t _raw = {_bytes.data(),"
 					" static_cast<std::uint32_t>(_bytes.size()),"
 					" raw_.owner->generation, raw_.owner};",
-					f"\t\t\tconst {held} _held(_raw);",
+					f"\t\t\tconst {held} _held(_raw"
+					f"{self._child_args(struct, placement)});",
 					"\t\t\tif (const ::situ::rt::err e = _held.validate();"
 					" e != ::situ::rt::err::ok) {",
 					"\t\t\t\treturn e;",

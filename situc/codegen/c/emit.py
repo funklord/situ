@@ -9081,7 +9081,8 @@ class Emitter:
 			          f"at > msg->size ? UINT32_MAX : "
 			          f"{ident(self.prefix, inner.name, 'extent')}"
 			          "((situ_view_t){msg->base + at, msg->size - at,"
-			          " msg->generation, msg})")
+			          " msg->generation, msg}"
+			          f"{self._child_args(struct, placement)})")
 		if length is None:
 			return [
 				f"/* No accessor for `{placement.name}`: it is placed by"
@@ -14835,7 +14836,8 @@ class Emitter:
 				"\t\tif (err != SITU_OK) {",
 				"\t\t\treturn err;",
 				"\t\t}",
-				f"\t\terr = {ident(self.prefix, nested, 'validate')}(nested);",
+				f"\t\terr = {ident(self.prefix, nested, 'validate')}"
+				f"(nested{self._child_args(struct, placement)});",
 				"\t\tif (err != SITU_OK) {",
 				"\t\t\treturn err;",
 				"\t\t}",

@@ -3920,7 +3920,9 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# 0068 steps 2 to 4: a member of the struct itself, of one of
 			# its variant's arms, or of a `positional` or `authenticated`
 			# block, one or a run of them, named with its arguments. A
-			# sealed or coded interior is later.
+			# sealed or coded interior is later. One placed by `at` is
+			# built too (26.968): a TIFF's first directory, handed the
+			# header's byte order, at `ifd_offset`.
 			#
 			# AND STEP 5 FOR A SINGLE NESTED MEMBER: an argument that hands
 			# on one of the parent's OWN parameters. In C that is the only
@@ -3943,7 +3945,6 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					and (member in struct.members
 					     or member in arms_of(struct)
 					     or member in _transparent_members(struct)) \
-					and member.located is None \
 					and not _indexed_hands_on_a_parameter(struct, member):
 				unbuilt = _unmeasured_in_a_cycle(struct, member, cycles)
 				if unbuilt is None:

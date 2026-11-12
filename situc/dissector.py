@@ -1368,8 +1368,13 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# not: a run of them was read as one nested struct, declared no field,
 	# and the body then added the name anyway -- `subtree:add(nil, ...)`, a
 	# Lua error at the first packet rather than a wrong display.
+	# ...except one placed by `at`, whose body is a row of its bytes where
+	# the message puts them: the body adds `<struct>.fields.<name>`, and no
+	# field was declared, so the first packet that reached it was a Lua
+	# error (26.968).
 	if placement.type_name in resolved.structs \
-			and placement.array_count is None and not data_sized(placement):
+			and placement.array_count is None and not data_sized(placement) \
+			and placement.located is None:
 		return ""			# a nested struct: its own Proto dissects it
 
 	# -- what is shown as CHARACTERS, and where that stops -----------------
@@ -1450,7 +1455,9 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	#
 	# A tlv region too, whose items are each a row of it (26.937).
 	if placement.varint is not None \
-			or placement.kind in ("coded", "sealed", "tlv"):
+			or placement.kind in ("coded", "sealed", "tlv") \
+			or (placement.located is not None
+			    and placement.type_name in resolved.structs):
 		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
@@ -2050,7 +2057,11 @@ def _located_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	          f"{driver.size_bits // BITS_PER_BYTE}, {little})")
 
 	local  = _lua(name)
-	length = _length(resolved, struct, placement, "0", "at")
+	# Measured where it is placed, not at the cursor: a struct the data
+	# sizes was measured from `at`, which is wherever the walk had got to
+	# -- a TIFF directory at `ifd_offset` 44 was measured from byte 8 and
+	# never shown (26.968).
+	length = _length(resolved, struct, placement, "0", f"{local}_at")
 	extent = f"{local}_n" if length is not None else None
 
 	lines = [f"\t-- {placement.path}: placed at `{placement.located}`",

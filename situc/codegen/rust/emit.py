@@ -8632,7 +8632,8 @@ class Emitter:
 			length = (None if not has_computable_extent(
 			              self.resolved.structs, inner) else
 			          f"match {_pascal(inner.name)}::required("
-			          "msg.get(at..).ok_or(Error::Bounds)?) {"
+			          "msg.get(at..).ok_or(Error::Bounds)?"
+			          f"{self._child_args(struct, placement)}) {{"
 			          " situ_rt::Framing::Complete(held) => held,"
 			          " _ => return Err(Error::Bounds) }")
 		if length is None:
@@ -9461,7 +9462,12 @@ class Emitter:
 			]),
 			*([f"\t\tlet at = self.{_ident(base + '_offset')}()"
 			   f" + index * {inner}::SIZE;",
-			   f"\t\t{inner}::new(&self.bytes[at..])"]
+			   # The parent's arguments, as the walked form below hands
+			   # them: a fixed element that takes one -- a TIFF directory
+			   # entry in its file's byte order -- was built without and
+			   # did not compile (26.968).
+			   f"\t\t{inner}::new(&self.bytes[at..]"
+			   f"{self._child_args(struct, placement)})"]
 			  if nested.layout.is_fixed_size else [
 				# No stride to index by, so the run is walked -- the
 				# terminated run's walk with the count as its stopping rule.
@@ -9756,9 +9762,12 @@ class Emitter:
 		# message chose and can land past the end -- where an unchecked
 		# slice panics rather than answering, which is the one thing an
 		# accessor may not do. Same shape as the single nested member above.
+		# The parent's arguments too, which a fixed array of structs that
+		# take one was built without, so it did not compile (26.968).
+		handed = self._child_args(struct, placement)
 		if placement.offset_bits is not None:
 			body = [f"\t\t{outer}::new(&self.bytes[{placement.offset_bytes}"
-			        f" + index * {outer}::SIZE..])"]
+			        f" + index * {outer}::SIZE..]{handed})"]
 		else:
 			body = [
 				f"\t\tlet at = {start} + index * {outer}::SIZE;",
@@ -9766,7 +9775,7 @@ class Emitter:
 				f" || self.bytes.len() - at < {outer}::SIZE {{",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
-				f"\t\t{outer}::new(&self.bytes[at..])",
+				f"\t\t{outer}::new(&self.bytes[at..]{handed})",
 			]
 
 		return [
@@ -11284,7 +11293,8 @@ class Emitter:
 				tail = ("validate_in(msg)" if self._reaches_located(inner)
 				        else "validate()")
 				out.append(f"\t\t{_pascal(inner.name)}::new("
-				           f"self.{name}(msg)?)?.{tail}?;")
+				           f"self.{name}(msg)?"
+				           f"{self._child_args(struct, placement)})?.{tail}?;")
 				return out
 			out.extend(self._entering_depth(struct, placement))
 			tail = ("validate_in(msg)" if inner is not None
