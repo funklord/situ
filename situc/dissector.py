@@ -331,10 +331,12 @@ PADDED_HELPER = [
 	"\treturn situ_digits(tvb, at, stop, base)",
 	"end",
 	"",
-	"-- What such a field shows: its digits, without the padding after them.",
+	"-- What such a field shows: its digits, without the padding after them,",
+	"-- and `?` for any byte that is no digit -- the message's own bytes",
+	"-- would otherwise reach the label as they are, control bytes included.",
 	"local function situ_padded_text(tvb, at, width)",
 	"\tlocal text = tvb(at, width):string()",
-	"\treturn (text:match(\"^[^\\0 ]*\"))",
+	"\treturn ((text:match(\"^[^\\0 ]*\")):gsub(\"[^%x]\", \"?\"))",
 	"end",
 	"",
 ]
@@ -2284,7 +2286,18 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# four bits across a byte boundary -- as 4 where every other reading
 	# says 14. Only a straddling field is affected: within one byte the two
 	# assemblies are the same byte (26.375).
-	if placement.bit_order is ast.BitOrder.LSB_FIRST \
+	#
+	# And the other half: a BIT-PACKED field is assembled by its bit order
+	# and never by `endian`, which orders whole-byte scalars -- the rule
+	# every backend's load follows (`scalar.is_bit_packed`). An MSB-first
+	# bit field in an `endian little` schema was assembled little-endian
+	# here, and every straddling field of five layouts showed a number no
+	# other reader gives (26.960).
+	scalar = placement.scalar
+	if scalar is not None and scalar.is_bit_packed:
+		add = ("add_le" if placement.bit_order is ast.BitOrder.LSB_FIRST
+		       and (placement.size_bits or 0) % BITS_PER_BYTE else "add")
+	elif placement.bit_order is ast.BitOrder.LSB_FIRST \
 			and (placement.size_bits or 0) % BITS_PER_BYTE:
 		add = "add_le"
 	else:

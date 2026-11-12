@@ -8473,6 +8473,10 @@ Moved to `doc/decision/26.958-a-tlv-item-may-be-its-tag-alone.md`.
 
 Moved to `doc/decision/26.959-a-placed-scalar-reads-as-its-number.md`.
 
+### 26.960 The dissector assembles a bit field by its bit order
+
+Moved to `doc/decision/26.960-the-dissector-assembles-a-bit-field-by-its-bit-order.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

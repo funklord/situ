@@ -232,7 +232,11 @@ def _read_all(lua: Path, proto: str, packet: bytes,
 	result = subprocess.run(
 		[LUA, str(HARNESS), str(lua), proto, packet.hex(),
 		 *( [pref] if pref else [] )],
-		capture_output=True, text=True)
+		# A label may carry the message's own bytes -- a `[padded]`
+		# number shows its digits as the field's text, and a draw's
+		# digits are any bytes -- which Wireshark escapes for display
+		# and a strict UTF-8 decode raised on (26.960).
+		capture_output=True, text=True, errors="backslashreplace")
 	assert result.returncode == 0, result.stderr
 
 	lines    = result.stdout.splitlines()
