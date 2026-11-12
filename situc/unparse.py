@@ -170,8 +170,9 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.EndianMarkerDecl):
 		return [
 			f"endian_marker {decl.name} : {decl.backing.name} {{",
-			f"\tlittle = {expr_to_source(decl.little)},",
-			f"\tbig = {expr_to_source(decl.big)},",
+			*(f"\t{order} = {expr_to_source(one)},"
+			  for order in ("little", "big")
+			  for one in decl.literals(order)),
 			"}",
 		]
 

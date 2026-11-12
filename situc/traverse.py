@@ -4180,6 +4180,18 @@ def handed_range(struct: "ResolvedStruct", held: Placement,
 ARGUMENT_PREFIX = "arg_"
 
 
+def marker_literals(decl: ast.EndianMarkerDecl, order: str,
+		env: object) -> list[int]:
+	"""Every value that says `order`, the one a writer emits first (26.975).
+
+	A format may write more than one -- pcap's microsecond and nanosecond
+	magics -- and each reader's test is membership in this list.
+	"""
+	from situc.expr import evaluate
+
+	return [int(evaluate(one, env)) for one in decl.literals(order)]  # type: ignore[arg-type]
+
+
 def marker_argument(struct: ResolvedStruct,
 		placement: Placement) -> Placement | None:
 	"""The parameter a member's byte order is handed in, or None.

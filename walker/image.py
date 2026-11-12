@@ -411,6 +411,8 @@ class Image:
 	varint_zigzag: set[int] = field(default_factory=set)
 	#: placement index -> the value that means little-endian.
 	markers: dict[int, int]			= field(default_factory=dict)
+	#: Further `little` literals of a marker that has several (26.975).
+	markers_also: dict[int, set[int]]	= field(default_factory=dict)
 	#: Codec index -> what computing it takes, for a derived kernel (26.579).
 	kernels: dict[int, Kernel]		= field(default_factory=dict)
 	#: One table per polynomial codec, indexed by `Kernel.table`.
@@ -828,7 +830,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 		for i in range(records):
 			where, little, _pad = _struct.unpack_from(
 				"<IqI", blob, at + i * stride)
-			image.markers[where] = little
+			# The first row for a placement is its `little` literal as it
+			# always was; a further row is another value that says little
+			# (26.975).
+			if where in image.markers:
+				image.markers_also.setdefault(where, set()).add(little)
+			else:
+				image.markers[where] = little
 
 	if ARMS in found:
 		at, records, stride = found[ARMS]

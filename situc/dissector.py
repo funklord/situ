@@ -2742,24 +2742,34 @@ def _little(placement: Placement, base: str = "0") -> str | None:
 		return None
 	given = traverse.marker_argument(owner, placement)
 	if given is not None:
-		decl   = _MARKERS.get(given.type_name or "")
-		little = getattr(getattr(decl, "little", None), "value", None)
-		if little is None:
+		littles = _little_literals(_MARKERS.get(given.type_name or ""))
+		if not littles:
 			return None
-		return (f"({_lua(owner.name)}_arg.{_lua(given.name)}"
-		        f" == {little})")
+		held = f"{_lua(owner.name)}_arg.{_lua(given.name)}"
+		return "(" + " or ".join(f"{held} == {one}" for one in littles) + ")"
 	marker = next((held for held in own_members(owner)
 	               if held.kind == "marker" and held.name == placement.marker),
 	              None)
-	decl   = None if marker is None else _MARKERS.get(marker.type_name or "")
-	# The literal as the packer takes it for the walkers' table.
-	little = getattr(getattr(decl, "little", None), "value", None)
-	if marker is None or little is None or marker.offset_bits is None \
+	decl    = None if marker is None else _MARKERS.get(marker.type_name or "")
+	# The literals as the packer takes them for the walkers' table.
+	littles = _little_literals(decl)
+	if marker is None or not littles or marker.offset_bits is None \
 			or marker.offset_bits % BITS_PER_BYTE \
 			or marker.size_bits not in (8, 16, 24, 32):
 		return None
-	return (f"(situ_uint(tvb, {_at(base, marker.offset_bits // BITS_PER_BYTE)},"
-	        f" {marker.size_bits // BITS_PER_BYTE}, false) == {little})")
+	held = (f"situ_uint(tvb, {_at(base, marker.offset_bits // BITS_PER_BYTE)},"
+	        f" {marker.size_bits // BITS_PER_BYTE}, false)")
+	return "(" + " or ".join(f"{held} == {one}" for one in littles) + ")"
+
+
+def _little_literals(decl: ast.EndianMarkerDecl | None) -> list[int]:
+	"""Every literal value that says little, where all are plain numbers:
+	a format may write more than one for an order (26.975)."""
+	if decl is None:
+		return []
+	found = [getattr(one, "value", None) for one in decl.literals("little")]
+	return [int(one) for one in found if one is not None] \
+		if all(one is not None for one in found) else []
 
 
 #: Operators the schema has and Lua either spells differently or does not have,

@@ -1805,9 +1805,10 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				marker_decl = next((decl for decl in schema.decls
 				                    if isinstance(decl, ast.EndianMarkerDecl)
 				                    and decl.name == placement.type_name), None)
-				literals = [getattr(getattr(marker_decl, side, None),
-				                    "value", None)
-				            for side in ("little", "big")]
+				literals = [getattr(one, "value", None)
+				            for side in ("little", "big")
+				            for one in (marker_decl.literals(side)
+				                        if marker_decl is not None else ())]
 				if any(one is None or not fits_q(int(one))
 				       for one in literals):
 					whole = False
@@ -2806,9 +2807,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if placement.kind == "marker" or (
 				placement.parameter and placement.type_name in marker_decls):
 			marker_decl = marker_decls.get(placement.type_name or "")
-			little = getattr(getattr(marker_decl, "little", None), "value", None)
-			if little is not None:
-				markers_blob += _struct.pack("<IqI", at, int(little), 0)
+			# One row per `little` literal, where a format writes several
+			# (26.975): a walker reads the order as little when any row for
+			# the placement matches. The first is the one it always was.
+			for literal in (marker_decl.literals("little")
+			                if marker_decl is not None else ()):
+				little = getattr(literal, "value", None)
+				if little is not None:
+					markers_blob += _struct.pack("<IqI", at, int(little), 0)
 		if placement.varint is not None:
 			varint_index.setdefault(placement.varint, len(varint_index))
 			varint_decl = varint_decls.get(placement.varint)

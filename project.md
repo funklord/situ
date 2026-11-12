@@ -1075,6 +1075,9 @@ Capability consequences, which are mercifully narrow:
   marker resolves, not before.
 - A marker equal to neither literal is refused by `validate` as a
   constraint (26.964). Reads still take it as big; a read is not a verdict.
+- An order may be named more than once where a format writes several
+  values for it -- pcap's nanosecond magics (26.975); the first is what a
+  writer emits.
 
 **A struct inside a marker's struct takes the order as an argument.** A
 marker governs its own struct's members; a struct used inside it reads in
@@ -8558,6 +8561,10 @@ Moved to `doc/decision/26.973-a-builder-over-a-tail-that-ends-the-message.md`.
 ### 26.974 The differentials compare what a marker governs
 
 Moved to `doc/decision/26.974-the-differentials-compare-what-a-marker-governs.md`.
+
+### 26.975 A marker may name an order twice
+
+Moved to `doc/decision/26.975-a-marker-may-name-an-order-twice.md`.
 
 ### 26.929 The offset cache counts bits
 

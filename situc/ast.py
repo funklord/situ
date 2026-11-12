@@ -1620,6 +1620,16 @@ class EndianMarkerDecl(Decl):
 	backing: TypeRef
 	little: Expr
 	big: Expr
+	#: Further literals for the same orders, where a format writes more
+	#: than one: pcap's nanosecond magic is a second pair (26.975). `little`
+	#: and `big` stay the first, which a writer emits.
+	little_also: tuple[Expr, ...] = ()
+	big_also: tuple[Expr, ...] = ()
+
+	def literals(self, order: str) -> tuple[Expr, ...]:
+		"""Every literal that says `order`, the one a writer emits first."""
+		return ((self.little, *self.little_also) if order == "little"
+		        else (self.big, *self.big_also))
 
 
 @dataclass(frozen=True)

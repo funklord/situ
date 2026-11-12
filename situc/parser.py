@@ -1671,7 +1671,11 @@ class Parser:
 
 		self.expect_symbol("{", "to open the marker body")
 
+		# An order may be named more than once: a format that writes two
+		# values for one order -- pcap's microsecond and nanosecond magics
+		# -- states both, and the first is what a writer emits (26.975).
 		seen: dict[str, ast.Expr] = {}
+		also: dict[str, list[ast.Expr]] = {"little": [], "big": []}
 		while not self.current.is_symbol("}"):
 			member = self.expect_ident("`little` or `big`")
 			if member.text not in ("little", "big"):
@@ -1680,11 +1684,12 @@ class Parser:
 					member.span,
 					label = "expected `little` or `big`",
 				)
-			if member.text in seen:
-				raise error(f"`{member.text}` is declared twice", member.span)
 
 			self.expect_symbol("=", "after the marker member name")
-			seen[member.text] = self.parse_expr()
+			if member.text in seen:
+				also[member.text].append(self.parse_expr())
+			else:
+				seen[member.text] = self.parse_expr()
 
 			if self.accept_symbol(",") is None:
 				break
@@ -1700,8 +1705,24 @@ class Parser:
 				notes = ["a marker that names only one order cannot select the other"],
 			)
 
+		# A value can say one order. Named for both, every reader would
+		# have to pick, and a wrong pick reads the whole message swapped.
+		values = {order: [getattr(one, "value", None)
+		                  for one in (seen[order], *also[order])]
+		          for order in ("little", "big")}
+		both = sorted({one for one in values["little"] if one is not None}
+		              & {one for one in values["big"] if one is not None})
+		if both:
+			raise error(
+				f"marker `{name.text}` names 0x{both[0]:X} for both orders",
+				self.span_from(start),
+				label = "a value says one byte order",
+				notes = ["every reader compares the marker against the "
+				         "`little` values, so one also given for `big` would "
+				         "be read as little and validate as either"])
 		return ast.EndianMarkerDecl(self.span_from(start), name.text, backing,
-		                            seen["little"], seen["big"])
+		                            seen["little"], seen["big"],
+		                            tuple(also["little"]), tuple(also["big"]))
 
 	def parse_marker_field(self) -> ast.MarkerField:
 		start = self.advance()

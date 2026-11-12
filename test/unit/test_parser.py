@@ -674,9 +674,14 @@ def test_marker_rejects_an_unknown_member() -> None:
 		parse_text("endian_marker bo : u16 { middle = 1, }")
 
 
-def test_marker_rejects_a_duplicate_order() -> None:
-	with pytest.raises(SituError, match="`little` is declared twice"):
-		parse_text("endian_marker bo : u16 { little = 1, little = 2, }")
+def test_marker_takes_an_order_again_as_another_value() -> None:
+	"""An order named twice is a second value for it, as pcap's nanosecond
+	magics are (26.975) -- refused as a duplicate until then."""
+	decl = parse_text("endian_marker bo : u16 { little = 1, big = 3,"
+	                  " little = 2, }").markers()[0]
+	assert [getattr(one, "value", None) for one in decl.literals("little")] \
+		== [1, 2]
+	assert [getattr(one, "value", None) for one in decl.literals("big")] == [3]
 
 
 def test_marker_backing_must_be_byte_sized() -> None:

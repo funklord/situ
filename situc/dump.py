@@ -74,8 +74,8 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.EndianMarkerDecl):
 		return [
 			_indent(depth, f"endian_marker {decl.name} : {decl.backing.name}"),
-			_indent(depth + 1, f"little = {expr_to_source(decl.little)}"),
-			_indent(depth + 1, f"big = {expr_to_source(decl.big)}"),
+			*(_indent(depth + 1, f"{order} = {expr_to_source(one)}")
+			  for order in ("little", "big") for one in decl.literals(order)),
 		]
 
 	if isinstance(decl, ast.CodecDecl):

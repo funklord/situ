@@ -8,10 +8,10 @@
 // little-endian machine starts `d4 c3 b2 a1`; one written on a big-endian
 // machine, `a1 b2 c3 d4`.
 //
-// The nanosecond variant (`a1 b2 3c 4d`) is a second pair of literals for
-// the same two orders, which one marker cannot state, and it is not
-// described here, and `validate` refuses a file carrying it: a marker is one
-// of its two literals or no marker at all (26.964).
+// The nanosecond variant writes a second pair of magics for the same two
+// orders, `a1 b2 3c 4d` and its reverse; `ts_usec` then holds nanoseconds,
+// which the magic -- readable as a number through its getter -- says.
+// Anything else is refused by `validate` (26.964, 26.975).
 //
 // Reference: the pcap file format, draft-ietf-opsawg-pcap.
 
@@ -20,6 +20,8 @@ target buffer;
 endian_marker magic : u32 {
 	little = 0xD4C3B2A1,
 	big    = 0xA1B2C3D4,
+	little = 0x4D3CB2A1,         // nanosecond timestamps
+	big    = 0xA1B23C4D,
 }
 
 // One packet: when it was captured, how much of it was kept and how long it

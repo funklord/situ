@@ -4295,8 +4295,10 @@ class Emitter:
 			f"static inline int "
 			f"{ident(self.prefix, struct.name, local, 'is_little')}(situ_view_t view)",
 			"{",
-			f"\treturn situ_get_be{width}(situ_base(view) + {placement.offset_bytes}u)"
-			f" == {base}_LITTLE;",
+			f"\tconst uint{width}_t held = situ_get_be{width}(situ_base(view) +"
+			f" {placement.offset_bytes}u);",
+			"",
+			f"\treturn {self._marker_test(marker, 'held', 'little', width)};",
 			"}",
 			# The marker as read, big-endian whatever it says: what a
 			# member hands a struct that takes its order as an argument
@@ -12131,17 +12133,19 @@ class Emitter:
 			# caller read it, against the literal the marker declares.
 			# A bare identifier, so a function not given the argument's
 			# tail fails to compile rather than reading a byte.
-			return f"({self._argument_name(given)} == {self._marker_little(given)})"
+			marker = self.markers[given.type_name]
+			width  = given.scalar.bits if given.scalar is not None else 32
+			return self._marker_test(marker, self._argument_name(given),
+			                         "little", width)
 		return ident(self.prefix, owner, placement.marker or "", "is_little") + "(view)"
 
-	def _marker_little(self, given: Placement) -> str:
-		"""The `little` literal of the marker a parameter is typed by."""
-		from situc.expr import evaluate
-
-		marker = self.markers[given.type_name]
-		width  = given.scalar.bits if given.scalar is not None else 32
-		little = evaluate(marker.little, self.resolved.layout.env)
-		return f"0x{little:0{width // 4}X}u"
+	def _marker_test(self, marker: ast.EndianMarkerDecl, held: str,
+			order: str, width: int) -> str:
+		"""Whether `held` is one of the literals that say `order` (26.975)."""
+		return "(" + " || ".join(
+			f"{held} == 0x{one:0{width // 4}X}u"
+			for one in traverse.marker_literals(marker, order,
+			                                    self.resolved.layout.env)) + ")"
 
 	def _store_statement(self, scalar: ScalarType, placement: Placement,
 			base: str, value: str, offset: int | None = None) -> str:
@@ -13019,12 +13023,14 @@ class Emitter:
 		# (26.964).
 		if placement.kind == "marker" \
 				and "." not in placement.path[len(struct.name) + 1:]:
-			base  = macro(self.prefix, struct.name, placement.name)
 			held  = (f"{ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'get')}"
 			         "(view)")
+			marker = self.markers[placement.name]
+			bits   = placement.size_bits
 			return [
-				f"\t/* {placement.path}: one of its two literals */",
-				f"\tif ({held} != {base}_LITTLE && {held} != {base}_BIG) {{",
+				f"\t/* {placement.path}: one of its literals */",
+				f"\tif (!{self._marker_test(marker, held, 'little', bits)}"
+				f" && !{self._marker_test(marker, held, 'big', bits)}) {{",
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			]

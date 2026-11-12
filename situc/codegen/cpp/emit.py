@@ -9162,8 +9162,12 @@ class Emitter:
 			"",
 			f"\t[[nodiscard]] bool {name}_is_little() const noexcept",
 			"\t{",
-			f"\t\treturn situ_get_be{width}(situ_base(raw_) + {placement.offset_bytes})"
-			f" == {name}_little;",
+			f"\t\tconst std::uint{width}_t held = situ_get_be{width}(situ_base(raw_)"
+			f" + {placement.offset_bytes});",
+			"\t\treturn " + " || ".join(
+				f"held == 0x{one:0{digits}X}u" for one in
+				traverse.marker_literals(marker, "little",
+				                         self.resolved.layout.env)) + ";",
 			"\t}",
 			# The marker as read, big-endian whatever it says: what a member
 			# hands a struct that takes its order as an argument.
@@ -9196,9 +9200,11 @@ class Emitter:
 		if held is not None and given is not None:
 			marker = self.markers[given.type_name]
 			width  = given.scalar.bits if given.scalar is not None else 32
-			little = evaluate(marker.little, self.resolved.layout.env)
-			return (f"({self._argument_member(held, given)} == "
-			        f"0x{little:0{width // 4}X}u)")
+			member = self._argument_member(held, given)
+			return "(" + " || ".join(
+				f"{member} == 0x{one:0{width // 4}X}u" for one in
+				traverse.marker_literals(marker, "little",
+				                         self.resolved.layout.env)) + ")"
 		return f"{c_name(placement.marker or '')}_is_little()"
 
 	def _fixed_text_number(self, struct: ResolvedStruct,
@@ -11884,10 +11890,16 @@ class Emitter:
 		if check is Check.MARKER:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
-			held = bare_name(local_name(struct, placement))
+			held   = bare_name(local_name(struct, placement))
+			marker = self.markers[placement.name]
+			every  = [*traverse.marker_literals(marker, "little",
+			                                    self.resolved.layout.env),
+			          *traverse.marker_literals(marker, "big",
+			                                    self.resolved.layout.env)]
 			return [
-				f"\t\tif (this->{held}() != {held}_little"
-				f" && this->{held}() != {held}_big) {{",
+				"\t\tif (" + " && ".join(
+					f"this->{held}() != 0x{one:0{placement.size_bits // 4}X}u"
+					for one in every) + ") {",
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			]

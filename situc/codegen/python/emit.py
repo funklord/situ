@@ -4480,7 +4480,10 @@ class Emitter:
 			'\t\tbefore its own order is known."""',
 			f"\t\treturn self._read({placement.offset_bytes}, {size},"
 			f" signed=False, big=True) \\",
-			f"\t\t\t== self.{name.upper()}_LITTLE",
+			"\t\t\tin (" + ", ".join(
+				f"0x{one:0{digits}X}" for one in
+				traverse.marker_literals(marker, "little",
+				                         self.resolved.layout.env)) + ",)",
 		]
 
 	def _marker_predicate(self, placement: Placement) -> str:
@@ -4493,9 +4496,11 @@ class Emitter:
 		if given is not None:
 			marker = self.markers[given.type_name]
 			width  = given.scalar.bits if given.scalar is not None else 32
-			little = evaluate(marker.little, self.resolved.layout.env)
-			return (f"(self.{self._argument_ident(given)} == "
-			        f"0x{little:0{width // 4}X})")
+			return (f"(self.{self._argument_ident(given)} in ("
+			        + ", ".join(f"0x{one:0{width // 4}X}" for one in
+			                    traverse.marker_literals(
+			                        marker, "little", self.resolved.layout.env))
+			        + ",))")
 		return f"self.{py_name(placement.marker or '')}_is_little"
 
 	def _order_argument(self, placement: Placement) -> str:
@@ -9859,8 +9864,13 @@ class Emitter:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
 			return [
-				f"\t\tif self.{name} not in (self.{name.upper()}_LITTLE,"
-				f" self.{name.upper()}_BIG):",
+				f"\t\tif self.{name} not in ("
+				+ ", ".join(f"0x{one:X}" for one in [
+					*traverse.marker_literals(self.markers[placement.name],
+					                          "little", self.resolved.layout.env),
+					*traverse.marker_literals(self.markers[placement.name],
+					                          "big", self.resolved.layout.env)])
+				+ ",):",
 				f"\t\t\traise ConstraintError(f\"{placement.path} is"
 				f" {{self.{name}:#x}}, neither byte order\")",
 			]

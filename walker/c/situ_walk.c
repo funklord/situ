@@ -7478,6 +7478,22 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
  * `field 0, reserved 1, marker 2, region 3`. */
 #define KIND_MARKER 2u
 
+/* Whether `held` is one of the literals that say little for marker
+ * placement `index`: one row per such literal, where a format writes more
+ * than one for an order -- pcap's microsecond and nanosecond magics
+ * (26.975). The scan the walker always made, taking every row. */
+static int says_little(const situ_walk_image *image, uint32_t index,
+                       uint64_t held)
+{
+	for (uint32_t i = 0u; i < image->marker_count; i++) {
+		const uint8_t *row = image->markers + i * image->marker_stride;
+		if (u32_at(row) == index && held == (uint64_t)i64_at(row + 4)) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 situ_walk_err situ_walk_marker(const situ_walk_image *image,
                                const uint8_t *message, uint32_t len,
                                uint32_t shape, uint32_t index,
@@ -7497,13 +7513,11 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
 	 * markers table is keyed by placement; a marker with no row is an image
 	 * that carries the member and not the question, which this build cannot
 	 * answer rather than answer wrongly. */
-	int64_t sentinel = 0;
-	int     found    = 0;
+	int found = 0;
 	for (uint32_t i = 0u; i < image->marker_count; i++) {
 		const uint8_t *row = image->markers + i * image->marker_stride;
 		if (u32_at(row) == index) {
-			sentinel = i64_at(row + 4);
-			found    = 1;
+			found = 1;
 			break;
 		}
 	}
@@ -7519,7 +7533,7 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		*little = (given == (uint64_t)sentinel) ? 1u : 0u;
+		*little = says_little(image, index, given) ? 1u : 0u;
 		return SITU_WALK_OK;
 	}
 
@@ -7550,7 +7564,7 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
 	for (uint32_t b = 0u; b < width; b++) {
 		held = (held << 8) | message[start + b];
 	}
-	*little = (held == (uint64_t)sentinel) ? 1u : 0u;
+	*little = says_little(image, index, held) ? 1u : 0u;
 	return SITU_WALK_OK;
 }
 

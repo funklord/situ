@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from walker import vm
 from walker.image import FRAME_CAP, NONE, Image, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
+                         says_little,
                          Unsupplied, View, child_args,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
@@ -2343,7 +2344,7 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			held = int.from_bytes(view.buffer[start:start + width], "big")
 		except Refused:
 			continue
-		little = 1 if held == image.markers[index] else 0
+		little = 1 if says_little(image, index, held) else 0
 		lines.append(f"{local} little={little}")
 
 	for index in _nested(image, struct_index):

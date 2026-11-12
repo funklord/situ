@@ -1259,7 +1259,7 @@ def marker_order(view: View) -> Literal["little", "big"]:
 	# Handed in (`parameter magic order;`): the caller's marker as the
 	# caller read it, which is the value the argument carries.
 	if image.placements[index].parameter:
-		return "little" if argument(view, index) == image.markers[index] \
+		return "little" if says_little(image, index, argument(view, index)) \
 			else "big"
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	width = size_bits(view, index) // BITS_PER_BYTE
@@ -1267,7 +1267,17 @@ def marker_order(view: View) -> Literal["little", "big"]:
 		raise Refused("the frame does not reach the byte-order marker")
 
 	held = int.from_bytes(view.buffer[start:start + width], "big")
-	return "little" if held == image.markers[index] else "big"
+	return "little" if says_little(image, index, held) else "big"
+
+
+def says_little(image: Image, index: int, held: int) -> bool:
+	"""Whether a marker value is one of the literals that say little.
+
+	One literal, or several where a format writes more than one for an
+	order -- pcap's microsecond and nanosecond magics (26.975).
+	"""
+	return held == image.markers[index] \
+		or held in image.markers_also.get(index, ())
 
 
 def _order(view: View, index: int) -> Literal["little", "big"]:

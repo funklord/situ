@@ -9854,8 +9854,12 @@ class Emitter:
 			f" {width // 8}) as u{width}",
 			"\t}",
 			f"\tpub fn {_ident(name + '_is_little')}(&self) -> bool {{",
-			f"\t\tsitu_rt::read_be(self.bytes, {placement.offset_bytes},"
-			f" {width // 8}) as u{width} == Self::{name.upper()}_LITTLE",
+			f"\t\tlet held = situ_rt::read_be(self.bytes, {placement.offset_bytes},"
+			f" {width // 8}) as u{width};",
+			"\t\t" + " || ".join(
+				f"held == 0x{one:0{digits}X}" for one in
+				traverse.marker_literals(marker, "little",
+				                         self.resolved.layout.env)),
 			"\t}",
 		]
 
@@ -9870,9 +9874,11 @@ class Emitter:
 		if given is not None:
 			marker = self.markers[given.type_name]
 			width  = given.scalar.bits if given.scalar is not None else 32
-			little = evaluate(marker.little, self.resolved.layout.env)
-			return (f"self.{self._argument_ident(given)} == "
-			        f"0x{little:0{width // 4}X}u{width}")
+			member = self._argument_ident(given)
+			return " || ".join(
+				f"self.{member} == 0x{one:0{width // 4}X}u{width}" for one in
+				traverse.marker_literals(marker, "little",
+				                         self.resolved.layout.env))
 		name = c_name(placement.marker or "")
 		return f"self.{_ident(name + '_is_little')}()"
 
@@ -11197,10 +11203,16 @@ class Emitter:
 		if check is Check.MARKER:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return out
-			held = c_name(local_name(struct, placement))
+			held   = c_name(local_name(struct, placement))
+			marker = self.markers[placement.name]
+			every  = [*traverse.marker_literals(marker, "little",
+			                                    self.resolved.layout.env),
+			          *traverse.marker_literals(marker, "big",
+			                                    self.resolved.layout.env)]
 			return [
-				f"\t\tif self.{_ident(held)}() != Self::{held.upper()}_LITTLE"
-				f" && self.{_ident(held)}() != Self::{held.upper()}_BIG {{",
+				"\t\tif " + " && ".join(
+					f"self.{_ident(held)}() != 0x{one:0{placement.size_bits // 4}X}"
+					for one in every) + " {",
 				"\t\t\treturn Err(Error::Constraint);",
 				"\t\t}",
 			]
