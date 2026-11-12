@@ -8509,6 +8509,10 @@ Moved to `doc/decision/26.961-a-struct-takes-its-byte-order-from-its-caller-s-ma
 
 Moved to `doc/decision/26.962-a-region-whose-codec-adds-a-count-has-a-length.md`.
 
+### 26.963 The dissector follows a byte-order marker
+
+Moved to `doc/decision/26.963-the-dissector-follows-a-byte-order-marker.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

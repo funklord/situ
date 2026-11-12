@@ -124,6 +124,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	_ENUMS.update(resolved.layout.env.enums)
 	_STRUCTS.clear()
 	_STRUCTS.update(resolved.structs)
+	_MARKERS.clear()
+	_MARKERS.update({decl.name: decl for decl in schema.markers()})
 
 	lines = _preamble(basename)
 
@@ -1912,7 +1914,9 @@ def _key_read(resolved: ResolvedSchema, struct_name: str,
 			return None	# `uint` tops out at four bytes, as elsewhere here
 		if _host_order(placement):
 			return None	# no answer a capture can give
-		little = "true" if placement.endian is ast.Endian.LITTLE else "false"
+		little = _little(placement)
+		if little is None:
+			return None
 		return (f"situ_uint(tvb, {placement.offset_bits // 8}, "
 		        f"{width}, {little})")
 	return None
@@ -2002,6 +2006,11 @@ def _version_guard(struct: ResolvedStruct, placement: Placement) -> str | None:
 	first, count = span
 	read  = "le_uint" if field.endian is ast.Endian.LITTLE else "uint"
 	test  = f"tvb({first}, {count}):{read}() >= {placement.since}"
+	if field.marker is not None:
+		little = _little(field)
+		if little is None or count > 4:
+			return None
+		test = f"situ_uint(tvb, {first}, {count}, {little}) >= {placement.since}"
 	holds = _reaches(placement)
 	if holds is not None:
 		test = f"{holds} and {test}"
@@ -2031,7 +2040,10 @@ def _located_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return [f"\t-- {placement.path}: placed by `{placement.located}`, "
 		        f"which this dissector cannot read at a constant offset"]
 
-	little = "true" if driver.endian is ast.Endian.LITTLE else "false"
+	little = _little(driver)
+	if little is None:
+		return [f"\t-- {placement.path}: placed by `{placement.located}`, "
+		        f"whose byte order this dissector cannot read"]
 	where  = (f"situ_uint(tvb, {driver.offset_bits // BITS_PER_BYTE}, "
 	          f"{driver.size_bits // BITS_PER_BYTE}, {little})")
 
@@ -2302,6 +2314,15 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		add = "add_le"
 	else:
 		add = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
+	# Where a marker decides, the message does: the method is chosen as
+	# the member is shown (26.963).
+	opener = f"subtree:{add}("
+	if placement.marker is not None and not (scalar is not None
+	                                         and scalar.is_bit_packed):
+		little = _little(placement)
+		if little is not None:
+			opener = (f"subtree[{little} and \"add_le\" or \"add\"]"
+			          "(subtree, ")
 	span = byte_span(placement)
 
 	# The note the module docstring has promised since this backend was
@@ -2323,7 +2344,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\t-- {placement.path}: {back} bytes from the end of the frame",
 			*note,
 			f"\tif tvb:len() >= {back} then",
-			f"\t\tsubtree:{add}({field}, tvb(tvb:len() - {back}, {wide}))",
+			f"\t\t{opener}{field}, tvb(tvb:len() - {back}, {wide}))",
 			"\tend",
 		]
 
@@ -2367,7 +2388,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			*note,
 			*seek,
 			f"\tif tvb:len() >= at + {width} then",
-			f"\t\tsubtree:{add}({field}, tvb(at, {width}))",
+			f"\t\t{opener}{field}, tvb(at, {width}))",
 			"\tend",
 			# A peeked member is SHOWN and not spent (0057): its lead is
 			# gone -- `seek` took it -- and its own byte belongs to whatever
@@ -2384,7 +2405,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	first, count = span
 	return [
 		*note,
-		f"\tsubtree:{add}({field}, tvb({first}, {count}))",
+		f"\t{opener}{field}, tvb({first}, {count}))",
 		# `peek` for the reason above. This branch appears to be
 		# unobservable rather than merely untested: a peeked member is
 		# always a discriminant, a variant either follows and assigns `at`
@@ -2507,6 +2528,7 @@ def _capturable(struct: ResolvedStruct,
 	        and held.located is None and held.since is None
 	        and held.size_bits in (8, 16, 24, 32)
 	        and not _host_order(held)
+	        and held.marker is None
 	        and re.search(rf"\b{re.escape(held.name)}\b", named)]
 
 
@@ -2595,7 +2617,9 @@ def _read(placement: Placement, base: str) -> str | None:
 
 		if _host_order(placement):
 			return None		# no answer a capture can give
-		little = "true" if placement.endian is ast.Endian.LITTLE else "false"
+		little = _little(placement, base)
+		if little is None or (count > 4 and placement.marker is not None):
+			return None
 		if count > 4:
 			# `uint` tops out at four bytes, so a wider one is two reads
 			# and arithmetic: exact as a Lua 5.4 integer, and as near as a
@@ -2638,6 +2662,51 @@ _ENUMS: dict[str, dict[str, int]] = {}
 
 #: Every struct, for what a member hands its type, set beside `_CONSTS`.
 _STRUCTS: dict[str, ResolvedStruct] = {}
+
+
+#: Every `endian_marker`, for the literal a governed member is compared against.
+_MARKERS: dict[str, ast.EndianMarkerDecl] = {}
+
+
+def _little(placement: Placement, base: str = "0") -> str | None:
+	"""Whether `placement` reads little-endian, as a Lua boolean expression.
+
+	`true` or `false` where the schema decides. Where an `endian_marker`
+	does, the message decides, and this read the member big-endian whatever
+	the marker said: a little-endian TIFF showed `magic` as 10752, and a
+	pcap file's `version_major` as 512 (26.963). So the marker is read
+	here, big-endian as every reader reads one, and compared against its
+	`little` literal -- or, where the struct takes its order as an argument
+	(26.961), the argument is.
+
+	None where the marker is somewhere this cannot read from the struct's
+	own frame, and the caller declines as for any read it cannot make.
+	"""
+	if placement.marker is None:
+		return "true" if placement.endian is ast.Endian.LITTLE else "false"
+	owner = _STRUCTS.get(placement.path.partition(".")[0])
+	if owner is None:
+		return None
+	given = traverse.marker_argument(owner, placement)
+	if given is not None:
+		decl   = _MARKERS.get(given.type_name or "")
+		little = getattr(getattr(decl, "little", None), "value", None)
+		if little is None:
+			return None
+		return (f"({_lua(owner.name)}_arg.{_lua(given.name)}"
+		        f" == {little})")
+	marker = next((held for held in own_members(owner)
+	               if held.kind == "marker" and held.name == placement.marker),
+	              None)
+	decl   = None if marker is None else _MARKERS.get(marker.type_name or "")
+	# The literal as the packer takes it for the walkers' table.
+	little = getattr(getattr(decl, "little", None), "value", None)
+	if marker is None or little is None or marker.offset_bits is None \
+			or marker.offset_bits % BITS_PER_BYTE \
+			or marker.size_bits not in (8, 16, 24, 32):
+		return None
+	return (f"(situ_uint(tvb, {_at(base, marker.offset_bits // BITS_PER_BYTE)},"
+	        f" {marker.size_bits // BITS_PER_BYTE}, false) == {little})")
 
 
 #: Operators the schema has and Lua either spells differently or does not have,
@@ -2783,7 +2852,9 @@ def _sum_read(struct: ResolvedStruct, run: str, base: str) -> str | None:
 	if count is None:
 		return None
 	width  = summed_width(member)
-	little = "true" if member.endian is ast.Endian.LITTLE else "false"
+	little = _little(member, base)
+	if little is None:
+		return None
 	return (f"situ_sum(tvb, {_at(base, member.offset_bits // BITS_PER_BYTE)},"
 	        f" {count}, {width}, {little})")
 
@@ -3139,7 +3210,9 @@ def _read_version(field: Placement) -> str | None:
 	if span is None or _host_order(field):
 		return None
 	first, count = span
-	little = "true" if field.endian is ast.Endian.LITTLE else "false"
+	little = _little(field, "at")
+	if little is None:
+		return None
 	return f"situ_uint(tvb, at + {first}, {count}, {little})"
 
 
@@ -3463,6 +3536,12 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# Wireshark once its arms were reached (26.932).
 		add   = ("add_le" if member.scalar is not None
 		         and member.endian is ast.Endian.LITTLE else "add")
+		adder = f"subtree:{add}("
+		little = (_little(member) if member.scalar is not None
+		          and member.marker is not None else None)
+		if little is not None:
+			adder = (f"subtree[{little} and \"add_le\" or \"add\"]"
+			         "(subtree, ")
 		# One struct goes to its own dissector, as a nested member does;
 		# it was stepped over, so radiotap's channel was never shown.
 		nested = (not shown
@@ -3480,7 +3559,7 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\t\tlocal n = {length}",
 			*([
 				"\t\tif n > 0 and tvb:len() >= at + n then",
-				f"\t\t\tsubtree:{add}({field}, tvb(at, n))",
+				f"\t\t\t{adder}{field}, tvb(at, n))",
 				"\t\tend",
 			] if shown else [
 				"\t\tif n > 0 and tvb:len() >= at + n then",
@@ -3652,7 +3731,8 @@ def _condition_reads(element: ResolvedStruct) -> dict[str, str]:
 		behind += span // BITS_PER_BYTE
 		if held.offset_bits is not None or held.scalar is None \
 				or held.scalar.signed or held.size_bits not in (8, 16, 24, 32) \
-				or _host_order(held) or held.radix is not None:
+				or _host_order(held) or held.radix is not None \
+				or held.marker is not None:
 			if lead:
 				break
 			continue
