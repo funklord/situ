@@ -9069,6 +9069,19 @@ class Emitter:
 		          and placement.size_bits % BITS_PER_BYTE == 0
 		          else self._length_expression(struct, placement)
 		          if self._has_length(struct, placement) else None)
+		# A STRUCT the data sizes is measured where the message places it:
+		# its extent over the message from `at` on. The length above named
+		# `<member>_extent(view)`, a frame-relative helper never emitted for
+		# a located member, and the header did not compile (26.967). Past
+		# the end, the length is one no message holds, so the check below
+		# refuses it.
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is not None and not placement.is_fixed_size:
+			length = (None if not self._struct_extent(inner) else
+			          f"at > msg->size ? UINT32_MAX : "
+			          f"{ident(self.prefix, inner.name, 'extent')}"
+			          "((situ_view_t){msg->base + at, msg->size - at,"
+			          " msg->generation, msg})")
 		if length is None:
 			return [
 				f"/* No accessor for `{placement.name}`: it is placed by"
@@ -9153,6 +9166,10 @@ class Emitter:
 			"\tout->base       = msg->base + at;",
 			"\tout->limit      = n;",
 			"\tout->generation = msg->generation;",
+			# The message it is a view OF, as `situ_view_at`'s is: a struct
+			# placed here may place a member of its own by `at`, and its
+			# `check` reaches that member through this (26.967).
+			"\tout->owner      = msg;",
 			"\treturn SITU_OK;",
 			"}",
 			*self._located_value(struct, placement, taken),
@@ -13452,6 +13469,33 @@ class Emitter:
 				"\t}",
 			])
 
+		# Placed by `at`, and read where the message places it: the plain
+		# getter does not exist for one, so the checks read the `_value`
+		# beside its bytes, through the view's `owner` (26.967). A member
+		# the message does not reach is BOUNDS, as both walkers say.
+		if placement.located is not None:
+			if not traverse.located_value(placement):
+				return []
+			held   = f"{local}_located"
+			checks = [*self._enum_check(placement, held),
+			          *self._attr_checks(struct, placement, held, env)]
+			if not checks:
+				return []
+			assert scalar is not None
+			return [
+				f"\t/* {placement.path}: at `{placement.located}` from the"
+				" start of the message */",
+				"\t{",
+				f"\t\t{self._ctype(scalar)} {held} = 0;",
+				"\t\tif (view.owner == NULL || "
+				f"{ident(self.prefix, struct.name, local, 'value')}"
+				f"(view.owner, view, &{held}) != SITU_OK) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				*("\t" + one for one in checks),
+				"\t}",
+			]
+
 		lines.extend(self._attr_checks(struct, placement, value, env))
 
 		# The gate is emitted for its own sake where the member has no
@@ -14773,6 +14817,30 @@ class Emitter:
 			] if walked and placement.repeat_while is not None
 			     and must_end(placement) else []),
 				*self._element_validation(struct, placement)]
+
+		# Placed by `at`: its view is taken from the MESSAGE, which `check`
+		# reaches through the view's `owner` (26.306). It called the
+		# accessor with the view alone, which takes the message first, and
+		# did not compile (26.967).
+		if placement.located is not None:
+			return [
+				f"\t/* {placement.path} : {nested}, at `{placement.located}`"
+				" from the start of the message */",
+				"\t{",
+				"\t\tsitu_view_t nested;",
+				"\t\tsitu_err_t err = view.owner == NULL ? SITU_ERR_BOUNDS",
+				f"\t\t\t: {ident(self.prefix, struct.name, local, 'view')}"
+				"(view.owner, view, &nested);",
+				"",
+				"\t\tif (err != SITU_OK) {",
+				"\t\t\treturn err;",
+				"\t\t}",
+				f"\t\terr = {ident(self.prefix, nested, 'validate')}(nested);",
+				"\t\tif (err != SITU_OK) {",
+				"\t\t\treturn err;",
+				"\t\t}",
+				"\t}",
+			]
 
 		return [
 			*self._entering_depth(struct, placement),

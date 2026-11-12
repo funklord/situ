@@ -6616,6 +6616,17 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * such a member reaches past the frame by construction (9.8), so
 		 * bmp's `image_size` of 0xff000018 is a clamp in every other reader. */
 		if (err != SITU_WALK_OK) {
+			/* ...but a located STRUCT is validated where the message puts
+			 * it, as every backend does (26.967), so one the message does
+			 * not hold is BOUNDS: its own lengths sit past the end, which
+			 * is the failure here, and `walk.py` refuses it. A run of
+			 * bytes keeps the clamp the comment above describes. */
+			if (held.located_code != SITU_WALK_NONE
+			    && held.type_struct != SITU_WALK_NONE) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
 			if (held.located_code != SITU_WALK_NONE) {
 				continue;
 			}

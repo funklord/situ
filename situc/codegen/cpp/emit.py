@@ -8869,6 +8869,26 @@ class Emitter:
 		if length is None and placement.is_fixed_size \
 				and placement.size_bits % BITS_PER_BYTE == 0:
 			length = str(placement.size_bits // BITS_PER_BYTE)
+		# A STRUCT the data sizes is measured where the message places it,
+		# by its own `required` over the message from `at` on: the length
+		# above named `<member>_extent()`, a frame-relative helper never
+		# emitted for a located member (26.967).
+		inner   = self.resolved.structs.get(placement.type_name or "")
+		measure: list[str] = []
+		if inner is not None and not placement.is_fixed_size:
+			if not has_computable_extent(self.resolved.structs, inner):
+				length = None
+			else:
+				length  = "measured"
+				measure = [
+					"\t\tstd::uint32_t measured = 0;",
+					"\t\tif (at > msg->size || ::"
+					f"{self.namespace}::{self._struct_class(inner.name)}"
+					"::required(msg->base + at, msg->size - at, measured)"
+					" != ::situ::rt::err::ok) {",
+					"\t\t\treturn ::situ::rt::err::bounds;",
+					"\t\t}",
+				]
 		if length is None:
 			return ["",
 			        f"\t/* No accessor for {placement.path}: it is placed by",
@@ -8908,6 +8928,7 @@ class Emitter:
 			   "\t\t\treturn ::situ::rt::err::bounds;",
 			   "\t\t}"] if reaches else []),
 			f"\t\tconst std::uint32_t at = static_cast<std::uint32_t>({offset});",
+			*measure,
 			f"\t\tconst std::uint32_t n  = static_cast<std::uint32_t>({length});",
 			"",
 			"\t\tif (n > msg->size || at > msg->size - n) {",
@@ -11911,6 +11932,31 @@ class Emitter:
 			# `::situ::value` to be a function. JSON's array element holds
 			# exactly that member, and a generated local named after a
 			# schema construct is a collision the schema gets to cause.
+			# Placed by `at`: its accessor takes the message, reached
+			# through the raw view's `owner` (26.967).
+			if placement.located is not None:
+				# The accessor hands back its bytes, so the struct's view
+				# is taken over them, owned by the same message.
+				return [
+					"\t\t{",
+					"\t\t\t::situ::rt::bytes _bytes;",
+					"\t\t\tif (raw_.owner == nullptr) {",
+					"\t\t\t\treturn ::situ::rt::err::bounds;",
+					"\t\t\t}",
+					f"\t\t\tif (const ::situ::rt::err e = this->{name}"
+					"(raw_.owner, _bytes); e != ::situ::rt::err::ok) {",
+					"\t\t\t\treturn e;",
+					"\t\t\t}",
+					"\t\t\tconst situ_view_t _raw = {_bytes.data(),"
+					" static_cast<std::uint32_t>(_bytes.size()),"
+					" raw_.owner->generation, raw_.owner};",
+					f"\t\t\tconst {held} _held(_raw);",
+					"\t\t\tif (const ::situ::rt::err e = _held.validate();"
+					" e != ::situ::rt::err::ok) {",
+					"\t\t\t\treturn e;",
+					"\t\t\t}",
+					"\t\t}",
+				]
 			return [
 				*self._entering_depth(struct, placement),
 				"\t\t{",
@@ -11989,6 +12035,33 @@ class Emitter:
 			return lines
 
 		name = bare_name(local_name(struct, placement))
+
+		# Placed by `at`, and read where the MESSAGE places it: its accessors
+		# take the message, which `check` reaches through the raw view's
+		# `owner` (26.306). This called `this->w()` against `w(msg, bytes)`
+		# and did not compile (26.967). A member the message does not reach
+		# is a bounds failure, as both walkers say.
+		if placement.located is not None:
+			if not traverse.located_value(placement):
+				return []
+			held   = f"{name}_located"
+			checks = self._attr_checks(struct, placement, held)
+			enum   = self.enums.get(placement.type_name or "")
+			if not checks:
+				return []
+			return [
+				f"\t\t/* {placement.path}: at `{placement.located}` from the"
+				" start of the message */",
+				"\t\t{",
+				f"\t\t\t{self._ctype(scalar)} {held} = 0;",
+				"\t\t\tif (raw_.owner == nullptr"
+				f" || this->{name}_value(raw_.owner, {held})"
+				" != ::situ::rt::err::ok) {",
+				"\t\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t\t}",
+				*("\t" + one for one in checks),
+				"\t\t}",
+			]
 
 		# A versioned member's accessor takes an out-parameter and returns an
 		# error, there being no value to return when the field is not there.

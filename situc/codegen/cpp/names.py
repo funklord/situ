@@ -100,6 +100,9 @@ SUFFIXES = frozenset({
 	# interpolation; and a member called `code_parsed` beside `code` would
 	# be shadowed by it, which is 26.806's defect in a new place.
 	"parsed",
+	# `located`: the local a check reads a member placed by `at` into, from
+	# the message (26.967). A local as `parsed` is, listed for its reason.
+	"located",
 	"raw_len", "read", "self_span", "span",
 	"span_from", "spans", "t",
 	# A run of varints reaches as far as its elements' own lengths sum to,

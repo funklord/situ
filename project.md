@@ -8527,6 +8527,10 @@ Moved to `doc/decision/26.965-the-dissector-measures-a-coded-region.md`.
 
 Moved to `doc/decision/26.966-a-codec-places-nothing-after-it-whatever-came-first.md`.
 
+### 26.967 Validate reaches a member placed by `at`
+
+Moved to `doc/decision/26.967-validate-reaches-a-member-placed-by-at.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

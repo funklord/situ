@@ -4866,6 +4866,26 @@ class Emitter:
 		if length is None and placement.is_fixed_size \
 				and placement.size_bits % BITS_PER_BYTE == 0:
 			length = str(placement.size_bits // BITS_PER_BYTE)
+		# A STRUCT the data sizes is measured where the message places it,
+		# by its own `required` over the message from `at` on: the length
+		# above named `first_extent`, a frame-relative helper never emitted
+		# for a located member (26.967).
+		inner   = self.resolved.structs.get(placement.type_name or "")
+		measure: list[str] = []
+		if inner is not None and not placement.is_fixed_size:
+			if not has_computable_extent(self.resolved.structs, inner):
+				length = None
+			else:
+				length  = "_measured"
+				measure = [
+					"\t\ttry:",
+					f"\t\t\t_measured = {py_name(inner.name)}.required("
+					"self._msg.buffer[at:])",
+					"\t\texcept TruncatedError:",
+					f'\t\t\traise BoundsError("{placement.path}: '
+					f'`{placement.located}` points outside the message")'
+					" from None",
+				]
 		if length is None:
 			return ["",
 			        f"\t# No accessor for {placement.path}: it is placed by",
@@ -4905,6 +4925,7 @@ class Emitter:
 			   f'\t\t\traise BoundsError("{placement.path}: the frame does'
 			   f' not reach `{placement.located}`")'] if reaches else []),
 			f"\t\tat = {offset}",
+			*measure,
 			f"\t\tn  = {length}",
 			"\t\tif at + n > len(self._msg.buffer):",
 			f'\t\t\traise BoundsError("{placement.path}: `{placement.located}`'
@@ -9876,6 +9897,19 @@ class Emitter:
 			if inner is not None and not inner.layout.is_fixed_size \
 					and not has_computable_extent(self.resolved.structs, inner):
 				return [f"\t\t# {placement.path}: no accessor to validate through."]
+			# Placed by `at`: its accessor hands back the MESSAGE's bytes,
+			# bounds-checked, and `.validate()` on a memoryview was an
+			# AttributeError (26.967). The struct is taken over those bytes,
+			# where the message places them.
+			if placement.located is not None and inner is not None:
+				offset = self._over_fields(struct, placement.located, "self")
+				held   = py_name(inner.name)
+				fixed  = inner.layout.is_fixed_size
+				return [
+					f"\t\t{'_' if fixed else '_bytes'} = self.{name}",
+					f"\t\t{held}.at(self._msg, {offset}"
+					f"{'' if fixed else ', len(_bytes)'}).validate()",
+				]
 			return [*self._entering_depth(struct, placement),
 			        f"\t\tself.{name}.validate()"]
 
@@ -9939,6 +9973,14 @@ class Emitter:
 			return self._fits_check(struct, placement)
 
 		read = f"{name}_value" if versioned else f"self.{name}"
+		# Placed by `at`: its value is `_value`, read where the message
+		# places it, and raising BoundsError where the message does not
+		# reach it -- as both walkers refuse it. `self.w > 9` compared a
+		# memoryview with an int (26.967).
+		if placement.located is not None:
+			if not traverse.located_value(placement):
+				return []
+			read = f"self.{name}_value"
 
 		# A fixed-width text number: the property parses the digits and
 		# raises for bytes that are not digits of its radix, which is the

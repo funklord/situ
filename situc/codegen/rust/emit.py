@@ -8623,6 +8623,18 @@ class Emitter:
 		if length is None and placement.is_fixed_size \
 				and placement.size_bits % BITS_PER_BYTE == 0:
 			length = str(placement.size_bits // BITS_PER_BYTE)
+		# A STRUCT the data sizes is measured where the message places it,
+		# by its own `required` over the message from `at` on: the length
+		# above named `first_extent()`, a frame-relative helper never
+		# emitted for a located member (26.967).
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is not None and not placement.is_fixed_size:
+			length = (None if not has_computable_extent(
+			              self.resolved.structs, inner) else
+			          f"match {_pascal(inner.name)}::required("
+			          "msg.get(at..).ok_or(Error::Bounds)?) {"
+			          " situ_rt::Framing::Complete(held) => held,"
+			          " _ => return Err(Error::Bounds) }")
 		if length is None:
 			return ["",
 			        f"\t// No accessor for {placement.path}: it is placed by",
@@ -10523,6 +10535,58 @@ class Emitter:
 			"\t\tOk(())",
 			"\t}",
 		]
+		# A struct whose checks reach a member placed by `at` reads it from
+		# the MESSAGE, which this backend's views do not hold: so it takes
+		# one, as its located accessors already do, and `validate()` hands
+		# it its own bytes -- the message, for a view acquired over the
+		# whole of one (26.967).
+		if self._reaches_located(struct):
+			if not ids:
+				return [
+					*self._nesting_probe(struct),
+					"",
+					"\t/// Every constraint the schema declares, on parse,",
+					"\t/// reading what `at` places from `msg`.",
+					"\tpub fn validate_in(&self, msg: &[u8]) -> Result<()> {",
+					*body,
+					"",
+					"\t/// `validate_in` over this view's own bytes.",
+					"\tpub fn validate(&self) -> Result<()> {",
+					"\t\tself.validate_in(self.bytes)",
+					"\t}",
+				]
+			return [
+				*self._nesting_probe(struct),
+				"",
+				"\t/// The id `check` reports when nothing refused.",
+				f"\tpub const NO_CHECK: u32 = {_NO_CHECK_RS};",
+				*(f"\tpub const CHECK_{member.upper()}: u32 = {at};"
+				  for at, member in enumerate(ids)),
+				"",
+				"\t/// Every constraint the schema declares, naming the member",
+				"\t/// that refused, reading what `at` places from `msg`.",
+				"\tpub fn check_which_in(&self, msg: &[u8], which: &mut u32)"
+				" -> Result<()> {",
+				"\t\t*which = Self::NO_CHECK;",
+				*body,
+				"",
+				"\t/// `check_which_in` over this view's own bytes.",
+				"\tpub fn check_which(&self, which: &mut u32) -> Result<()> {",
+				"\t\tself.check_which_in(self.bytes, which)",
+				"\t}",
+				"",
+				"\t/// The verdict alone, reading what `at` places from `msg`.",
+				"\tpub fn validate_in(&self, msg: &[u8]) -> Result<()> {",
+				"\t\tlet mut sink = Self::NO_CHECK;",
+				"\t\tself.check_which_in(msg, &mut sink)",
+				"\t}",
+				"",
+				"\t/// `validate_in` over this view's own bytes.",
+				"\tpub fn validate(&self) -> Result<()> {",
+				"\t\tself.validate_in(self.bytes)",
+				"\t}",
+			]
+
 		if not ids:
 			return [
 				*self._nesting_probe(struct),
@@ -10561,6 +10625,35 @@ class Emitter:
 			"\t\tself.check_which(&mut sink)",
 			"\t}",
 		]
+
+	def _reaches_located(self, struct: ResolvedStruct,
+			seen: frozenset[str] = frozenset()) -> bool:
+		"""Whether `validate` reads a member `at` places, here or below.
+
+		Directly: a constrained scalar with a value getter, or a struct.
+		Below: through a single nested member, which is the delegation
+		that passes the message on. A run's elements and an arm's member
+		validate through their own paths, which do not carry it.
+		"""
+		if struct.name in seen:
+			return False
+		for held in own_members(struct):
+			if held.located is not None:
+				if held.type_name in self.resolved.structs:
+					return True
+				if traverse.located_value(held) and any(
+						attr.name in ("must_eq", "min", "max")
+						for attr in held.attrs):
+					return True
+				continue
+			inner = self.resolved.structs.get(held.type_name or "")
+			if inner is not None and held.array_count is None \
+					and held.sized_by is None and not held.size_expr \
+					and held.repeat_while is None and not held.delimiters \
+					and self._reaches_located(inner,
+					                          seen | {struct.name}):
+				return True
+		return False
 
 	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""A `refuse` makes a message illegal, so `validate` says so (0051).
@@ -11184,8 +11277,19 @@ class Emitter:
 			# the member at all, which the accessor refuses now (26.31),
 			# and the member may be there and malformed. `?` carries both
 			# out, in that order.
+			# Placed by `at`: its accessor takes the MESSAGE and hands back
+			# its bytes, so the struct is taken over them. This called
+			# `self.first()` with no message and did not compile (26.967).
+			if placement.located is not None and inner is not None:
+				tail = ("validate_in(msg)" if self._reaches_located(inner)
+				        else "validate()")
+				out.append(f"\t\t{_pascal(inner.name)}::new("
+				           f"self.{name}(msg)?)?.{tail}?;")
+				return out
 			out.extend(self._entering_depth(struct, placement))
-			out.append(f"\t\tself.{name}()?.validate()?;")
+			tail = ("validate_in(msg)" if inner is not None
+			        and self._reaches_located(inner) else "validate()")
+			out.append(f"\t\tself.{name}()?.{tail}?;")
 			return out
 
 		# A VARINT'S VALUE BOUNDS (26.426). It has no `scalar` -- its width
@@ -11262,6 +11366,23 @@ class Emitter:
 		versioned = placement.since is not None \
 		            and placement.version_field is not None
 		mine: list[str] = []
+
+		# Placed by `at`, and read where the MESSAGE places it: this read
+		# the bytes at a fixed offset in its own frame, which is not where
+		# the member is (26.967). A member the message does not reach is a
+		# bounds failure, as both walkers say.
+		if placement.located is not None:
+			if not traverse.located_value(placement):
+				return out
+			held   = f"{_ident(local_name(struct, placement))}_located"
+			bounds = self._attr_checks(struct, placement, held)
+			if not bounds:
+				return out
+			out.append(f"\t\tlet {held} = self."
+			           f"{_ident(local_name(struct, placement))}_value(msg)"
+			           ".map_err(|_| Error::Bounds)?;")
+			out.extend(bounds)
+			return out
 
 		# The parsed value, not the bytes. This backend reads a member's
 		# raw load everywhere else, which for a text number is its digits
