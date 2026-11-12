@@ -739,6 +739,14 @@ def no_baseline_stands(resolved: ResolvedSchema, struct: ResolvedStruct,
 			or zero_is_no_message(resolved, struct) \
 			or rule_refuses_zeros(resolved, struct):
 		return True
+	# A struct placed by `at`, which `validate` reads where the message puts
+	# it (26.967): a zeroed offset puts it over the bytes before it, which
+	# are this fixture's own and nothing it chose. `tiff_file.first` at an
+	# `ifd_offset` of zero read the header as a directory of 19789 entries.
+	if any(entry.placement.located is not None
+	       and entry.placement.type_name in resolved.structs
+	       for entry in struct.entries):
+		return True
 	for entry in struct.entries:
 		placement = entry.placement
 		if placement.offset_bits is not None or not placement.size_bits \

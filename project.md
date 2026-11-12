@@ -8535,6 +8535,10 @@ Moved to `doc/decision/26.967-validate-reaches-a-member-placed-by-at.md`.
 
 Moved to `doc/decision/26.968-a-member-placed-by-at-takes-arguments.md`.
 
+### 26.969 A TIFF directory through every generator
+
+Moved to `doc/decision/26.969-a-tiff-directory-through-every-generator.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

@@ -282,7 +282,10 @@ _REFUSES = re.compile(r"\s*raise \w+Error\(")
 #: (26.789).
 _PROPAGATES = re.compile(
 	r"\s*(?:self\.[\w.]+(?:\(\))?\.validate\(\)|_ = self\.\w+"
-	r"|_\w+_element\.validate\(\))\s*$")
+	r"|_\w+_element\.validate\(\)"
+	# A struct placed by `at`: its bytes from the message, then the struct
+	# taken over them and validated (26.967) -- both name the member.
+	r"|_bytes = self\.\w+|\w+\.at\(self\._msg, .*\)\.validate\(\))\s*$")
 
 
 def _name_the_member(lines: list[str], const: str) -> list[str]:

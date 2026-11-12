@@ -31,7 +31,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [tls](tls/) | A ClientHello from the record to its extensions: a length in bytes over records that each state their own size, framed by `[holds]`. Three hellos OpenSSL wrote, their extension lists checked against tshark. |
 | [radiotap](radiotap/) | Two dozen optional fields behind one `present` word, each aligned from the header with `[align = n]`, in one builder where a builder per combination would be 2^24. Vectors laid out from the specification and read back by tshark. |
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
-| [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
+| [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. The first directory too, placed by `ifd_offset` and handed the header's byte order as an argument, which no marker of its own could give it. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 | [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |
 | [sqlite](sqlite/) | An offset table: pointers in key order, cells filling the page backwards, and the two things a real one asked for that situ has not got. Also the file header, whose sixteen-byte magic is the longest pinned byte run here. project.md section 9.3. |

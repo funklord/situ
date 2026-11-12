@@ -6231,7 +6231,13 @@ class Emitter:
 			        "\t\tsitu_rt::Framing::Complete(at)", "\t}"]
 
 		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
+			# A fixed struct's length takes nothing from its arguments, so
+			# the signature's are unused -- an error under `-D warnings`,
+			# first met by a TIFF directory entry handed its byte order
+			# (26.968).
 			return [*head,
+			        *(f"\t\tlet _ = {self._argument_ident(one)};"
+			          for one in self._arguments(struct)),
 			        "\t\tif have < Self::SIZE {",
 			        "\t\t\treturn situ_rt::Framing::Need(Self::SIZE);",
 			        "\t\t}",

@@ -81,8 +81,21 @@ def owned_structs(resolved: ResolvedSchema) -> list[ResolvedStruct]:
 	        if struct.layout.is_fixed_size
 	        and struct.layout.register is None
 	        and struct.layout.size_bytes > 0
+	        and not _takes_arguments(struct)
 	        and all(_can_own(entry.placement, resolved)
 	                for entry in own_entries(struct))]
+
+
+def _takes_arguments(struct: ResolvedStruct) -> bool:
+	"""Whether the struct reads a `parameter` (0050).
+
+	An owned form is decoded from bytes alone, and an argument is the one
+	thing the bytes do not carry: a TIFF directory entry handed its file's
+	byte order (26.968) emitted a decode naming the order as a marker it
+	has not got, and a `validate` call missing the argument, and did not
+	compile. No struct taking one had reached this generator before.
+	"""
+	return any(entry.placement.parameter for entry in own_entries(struct))
 
 
 def _can_own(placement: Placement, resolved: ResolvedSchema) -> bool:
@@ -131,6 +144,10 @@ def refusals(resolved: ResolvedSchema) -> list[tuple[str, str]]:
 			continue
 		if struct.layout.is_fixed_size and struct.layout.size_bytes == 0:
 			found.append((name, "it occupies no bytes"))
+			continue
+		if _takes_arguments(struct):
+			found.append((name, "it takes an argument, which the bytes an "
+			                    "owned form decodes from do not carry"))
 			continue
 		if not struct.layout.is_fixed_size:
 			found.append((name, "its size is decided by the data, so an owned "

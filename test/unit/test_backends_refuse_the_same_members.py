@@ -968,9 +968,16 @@ BODY = {
 	# Rust follows C and C++: where a struct has a member to name, the
 	# checks live in `check_which` and `validate` is a wrapper over it. The
 	# lookahead drops the wrapper, which is a body with no floor.
-	"rust":   r"pub fn (?:check_which\(&self, which: &mut u32\)"
-	          r"|validate\(&self\)) -> Result<\(\)> \{"
-	          r"(?!\n\t\tlet mut sink)(.*?)\n\t\}",
+	# A struct reaching a member placed by `at` has its checks in
+	# `check_which_in` or `validate_in`, which take the message, and its
+	# `check_which` and `validate` hand them the view's own bytes: two more
+	# wrappers, dropped the same way (26.967).
+	"rust":   r"pub fn (?:check_which(?:_in\(&self, msg: &\[u8\], "
+	          r"which: &mut u32\)|\(&self, which: &mut u32\))"
+	          r"|validate(?:_in\(&self, msg: &\[u8\]\)|\(&self\)))"
+	          r" -> Result<\(\)> \{"
+	          r"(?!\n\t\tlet mut sink|\n\t\tself\.(?:check_which|validate)_in\()"
+	          r"(.*?)\n\t\}",
 	"python": r"def validate\(self\) -> None:(.*?)(?=\n\t*(?:def |@)|\Z)",
 }
 

@@ -11,6 +11,41 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
+struct ifd size=6..786426 mutate=Shifting address=Unstable repr=ConditionallyConverted(order) atomic=NonAtomic canonical=CanonicalGiven(order)
+  ifd.order                              parameter
+  ifd.count                              offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd.entries                            offset=AbsoluteStatic(0x02) size=Bounded(0, 786420) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  ifd.entries[]                          offset=FrameStatic(0x00) size=Fixed(12) align=Aligned(8) repr=ConditionallyConverted(order) atomic=NonAtomic canonical=CanonicalGiven(order)
+  ifd.entries[].order                    parameter
+  ifd.entries[].tag                      offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd.entries[].type                     offset=FrameStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd.entries[].count                    offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd.entries[].value                    offset=FrameStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd.next                               offset=Dynamic size=Fixed(4) align=Unaligned repr=ConditionallyConverted(order) atomic=NonAtomic address=Unstable canonical=CanonicalGiven(order)
+
+struct ifd_entry size=12 repr=ConditionallyConverted(order) canonical=CanonicalGiven(order)
+  ifd_entry.order                        parameter
+  ifd_entry.tag                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd_entry.type                         offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd_entry.count                        offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  ifd_entry.value                        offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+
+struct tiff_file size=8 mutate=Shifting address=Unstable repr=ConditionallyConverted(byte_order) atomic=NonAtomic canonical=CanonicalGiven(byte_order)
+  tiff_file.byte_order                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  tiff_file.magic                        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)
+  tiff_file.ifd_offset                   offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)
+  tiff_file.first                        offset=DataPlaced size=Bounded(6, 786426) align=Unaligned repr=ConditionallyConverted(order) atomic=NonAtomic mutate=Shifting address=Unstable canonical=CanonicalGiven(order)
+  tiff_file.first.order                  parameter
+  tiff_file.first.count                  offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  tiff_file.first.entries                offset=AbsoluteStatic(0x0A) size=Bounded(0, 786420) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  tiff_file.first.entries[]              offset=FrameStatic(0x08) size=Fixed(12) align=Aligned(8) repr=ConditionallyConverted(order) atomic=NonAtomic canonical=CanonicalGiven(order)
+  tiff_file.first.entries[].order        parameter
+  tiff_file.first.entries[].tag          offset=FrameStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  tiff_file.first.entries[].type         offset=FrameStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  tiff_file.first.entries[].count        offset=FrameStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  tiff_file.first.entries[].value        offset=FrameStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ConditionallyConverted(order) atomic=AtomicWord canonical=CanonicalGiven(order)
+  tiff_file.first.next                   offset=Dynamic size=Fixed(4) align=Unaligned repr=ConditionallyConverted(order) atomic=NonAtomic address=Unstable canonical=CanonicalGiven(order)
+
 struct tiff_header size=8 repr=ConditionallyConverted(byte_order) canonical=CanonicalGiven(byte_order)
   tiff_header.byte_order                 offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   tiff_header.magic                      offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ConditionallyConverted(byte_order) atomic=AtomicWord canonical=CanonicalGiven(byte_order)

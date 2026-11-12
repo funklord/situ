@@ -51,3 +51,37 @@ require in_place(tiff_header.ifd_offset);
 //
 // The marker itself is compared as a byte sequence rather than decoded as a
 // number: it has to be readable before its own byte order is known.
+
+// The first image file directory, where `ifd_offset` puts it (TIFF 6.0
+// section 2). Every entry is in the header's byte order, which a directory
+// holds no marker of its own to say: it is handed the header's, as an
+// argument (26.961, 26.968).
+//
+// `value` is four bytes whose meaning `type` and `count` decide -- a SHORT
+// sits in its first two, left-justified in either order, and a value too
+// big for four bytes is an offset to it. Read here as the `u32` the field
+// is; a reader wanting a SHORT takes the first two bytes in the file's
+// order.
+struct ifd_entry [endian = from(order)] {
+	parameter byte_order order [stream];
+	u16 tag;
+	u16 type;
+	u32 count;
+	u32 value;
+}
+
+struct ifd [endian = from(order)] {
+	parameter byte_order order [stream];
+	u16                       count;
+	ifd_entry(order = order)  entries[count];
+	u32                       next;
+}
+
+// The header and the directory it points to. The header alone stays
+// `tiff_header`, fixed at eight bytes, which is what a reader meets first.
+struct tiff_file [endian = from(byte_order)] {
+	endian_marker            byte_order;
+	u16                      magic       [must_eq = 42];
+	u32                      ifd_offset;
+	ifd(order = byte_order)  first       at ifd_offset;
+}

@@ -570,21 +570,22 @@ def tiff_says(image: bytes, tmp: Path) -> dict[str, object]:
 def tiff_situ(module: object, image: bytes) -> dict[str, object]:
 	"""The same two facts, out of the generated accessors.
 
-	The entry count is read here rather than by the schema because the schema
-	stops at the header: `tiff_header` is eight bytes and the IFD is a
-	structure situ does not describe. What it does describe is where the IFD
-	is and which order to read it in, and that is exactly what this uses.
+	The entry count was read by hand here while the schema stopped at the
+	header. It describes the first directory now -- `tiff_file.first`,
+	placed by `ifd_offset` and handed the header's byte order (26.968) --
+	so the count is the directory's own, and `validate` has walked every
+	entry in the marker's order before it is asked.
 	"""
 	from situ_runtime import Message
 
-	view = module.tiff_header.at(Message(bytearray(image)), 0)   # type: ignore[attr-defined]
-	little = bool(view.byte_order_is_little)
-	at     = int(view.ifd_offset)
-
-	assert int(view.magic) == 42, "not a TIFF, or the marker did not resolve"
-	count = (int.from_bytes(image[at:at + 2], "little") if little
-	         else int.from_bytes(image[at:at + 2], "big"))
-	return {"little": little, "direntries": count}
+	msg  = Message(bytearray(image))
+	view = module.tiff_file.at(msg, 0)                       # type: ignore[attr-defined]
+	view.validate()
+	held = view.first
+	directory = module.ifd.at(msg, int(view.ifd_offset), len(held),  # type: ignore[attr-defined]
+	                          arg_order=int(view.byte_order))
+	return {"little": bool(view.byte_order_is_little),
+	        "direntries": int(directory.count)}
 
 
 def proto_corpus(tmp: Path) -> bytes:
@@ -1561,14 +1562,16 @@ LIES = {
 	# eight bytes, which is what `require size(tiff_header) == 8` insists on.
 	# The byte order still resolves -- the marker has not moved -- so an
 	# oracle comparing only that would not notice. `direntries` is what does.
-	"tiff":    ("\tu16            magic       [must_eq = 42];\n"
-	            "\tu32            ifd_offset;",
-	            "\tu32            ifd_offset;\n"
-	            "\tu16            magic       [must_eq = 42];"),
-	"tiff-be": ("\tu16            magic       [must_eq = 42];\n"
-	            "\tu32            ifd_offset;",
-	            "\tu32            ifd_offset;\n"
-	            "\tu16            magic       [must_eq = 42];"),
+	# `tiff_file`'s, which is what the oracle reads since it describes the
+	# directory (26.968): the swapped offset puts the directory elsewhere.
+	"tiff":    ("\tu16                      magic       [must_eq = 42];\n"
+	            "\tu32                      ifd_offset;",
+	            "\tu32                      ifd_offset;\n"
+	            "\tu16                      magic       [must_eq = 42];"),
+	"tiff-be": ("\tu16                      magic       [must_eq = 42];\n"
+	            "\tu32                      ifd_offset;",
+	            "\tu32                      ifd_offset;\n"
+	            "\tu16                      magic       [must_eq = 42];"),
 	"ethernet": ("\tmac_address  destination;\n\tmac_address  source;",
 	             "\tmac_address  source;\n\tmac_address  destination;"),
 	# Two u16s, so the layout keeps its size and only the values move -- the

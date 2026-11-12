@@ -96,6 +96,9 @@ RUST_CENSUS = {
 	"cpio.situ": 1,
 	# Read, 2026-11-10: the nested header's own bound, behind `len() < at`.
 	"ustar.situ": 1,
+	# Read, 2026-11-12: the first directory's located accessor, `msg.len()
+	# - n`, behind `n > msg.len()` (26.968).
+	"tiff.situ": 1,
 	"dnsname.situ": 4,
 	"hpack.situ": 7,
 	# Read rather than added too: each is a nested or an arm member's own
