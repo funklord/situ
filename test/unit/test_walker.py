@@ -1396,13 +1396,14 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	# `example/rtp` to 50 and 1008, and `example/quic`, `example/x509` and
 	# `example/bitcoin` to 53 and 1070, `example/cbor` and `example/hpack`
 	# to 55 and 1107, the five of 26.925 and 26.928 to 60 and 1209, and
-	# `example/ustar` (26.948) to 61 and 1218, of 1319 asked.
-	assert len(SCHEMAS) == 61, (
+	# `example/ustar` (26.948) to 61 and 1218, of 1319 asked, and
+	# `example/pcap` (26.961) to 62 and 1220, of 1321 asked.
+	assert len(SCHEMAS) == 62, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 61; re-measure and re-pin both")
+		f"measured over 62; re-measure and re-pin both")
 
-	assert both >= 1208, (
-		f"the differential compares {both} members, down from 1218; "
+	assert both >= 1210, (
+		f"the differential compares {both} members, down from 1220; "
 		f"C asks about {asked} and the walker renders {walked}")
 	assert both * 100 >= asked * 92, (
 		f"only {100 * both // asked}% of what C asks is compared, "

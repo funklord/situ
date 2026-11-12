@@ -17,6 +17,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | Example | Demonstrates |
 |---|---|
 | [ethernet](ethernet/) | The control case. Every capability at its strongest value. |
+| [pcap](pcap/) | A capture file whose byte order the first four bytes state, and every record after the header in it: `record` takes the header's magic as an argument, `parameter magic order [stream]` with `[endian = from(order)]`, because a marker governs only its own struct. The vectors are a capture text2pcap wrote and editcap cut to a 40-byte snapshot, so two records keep fewer bytes than they had. |
 | [udp](udp/) | The smallest header with a length field pointing at a payload it does not describe -- and the payload, which costs nothing because nothing follows it. |
 | [icmp](icmp/) | A field whose meaning depends on an earlier one -- a variant whose arms are all four bytes, so it costs nothing -- and a checksum that covers its own bytes. `[self_as = 0]` is RFC 1071 said in the schema; `test/generated/test_icmp.c` computes it and compares against a number the kernel wrote. |
 | [arp](arp/) | A generic format pinned into a static one with `[must_eq]`, and the same packet unpinned beside it: two capability maps for one format, which is what pinning a length buys, in one file. |

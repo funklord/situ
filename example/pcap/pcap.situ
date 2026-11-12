@@ -1,0 +1,53 @@
+// A libpcap capture file: the classic format tcpdump and Wireshark write.
+//
+// The byte order is the writing machine's, stated once by the first four
+// bytes, and every record after the header is in it -- which is why this
+// example exists. `endian_marker` governs only its own struct's members, so
+// `record` takes the order as an argument: the header's magic, as the
+// header read it, handed to each record (26.961). A pcap file written on a
+// little-endian machine starts `d4 c3 b2 a1`; one written on a big-endian
+// machine, `a1 b2 c3 d4`.
+//
+// The nanosecond variant (`a1 b2 3c 4d`) is a second pair of literals for
+// the same two orders, which one marker cannot state, and it is not
+// described here. A marker is read as big-endian whenever it is not the
+// `little` literal, so a little-endian nanosecond file is refused at
+// `version_major` and a big-endian one reads, with `ts_usec` holding
+// nanoseconds.
+//
+// Reference: the pcap file format, draft-ietf-opsawg-pcap.
+
+target buffer;
+
+endian_marker magic : u32 {
+	little = 0xD4C3B2A1,
+	big    = 0xA1B2C3D4,
+}
+
+// One packet: when it was captured, how much of it was kept and how long it
+// was on the wire. `incl_len` is at most the header's `snaplen`, and below
+// `orig_len` where the capture truncated it.
+struct record [endian = from(order)] {
+	parameter magic order [stream];
+	u32  ts_sec;
+	u32  ts_usec;
+	u32  incl_len;
+	u32  orig_len;
+	u8   data[incl_len];
+}
+
+struct pcap [endian = from(magic)] {
+	endian_marker magic;
+	u16     version_major [must_eq = 2];
+	u16     version_minor;
+	i32     thiszone;
+	u32     sigfigs;
+	u32     snaplen;
+	u32     network;          // the link type: 1 is Ethernet
+	record(order = magic)  packets[remaining];
+}
+
+// The header is fixed and every member of it at a constant offset, whichever
+// order the magic states: a byte order never moves anything (8.3).
+require absolute_static(pcap.network);
+require frame_static(record.orig_len);

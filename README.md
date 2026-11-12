@@ -1810,9 +1810,9 @@ Most carry a `.vectors` file, and where the bytes came from matters more than
 that they exist. Wherever it can be, a vector is bytes some *other*
 implementation wrote, with that implementation named: ImageMagick for `bmp`,
 glibc's `struct arphdr` for `arp`, lwIP's SNTP client for `ntp`, the Linux
-Bluetooth stack for `ble`, GNU cpio for `cpio`, GNU tar for `ustar`, libtiff
-for `tiff`, and for `netlink` the reply a `NETLINK_ROUTE` socket gave to a
-dump request. Where nothing else writes the format, the bytes are laid out by
+Bluetooth stack for `ble`, GNU cpio for `cpio`, GNU tar for `ustar`,
+Wireshark's text2pcap and editcap for `pcap`, libtiff for `tiff`, and for
+`netlink` the reply a `NETLINK_ROUTE` socket gave to a dump request. Where nothing else writes the format, the bytes are laid out by
 hand from the specification's own field list (`tcp` and `udp`, both
 pseudo-headers), and the one file that is situ's own output, `packet`'s, says
 so in its first paragraph: a vector that agrees only with its own compiler has

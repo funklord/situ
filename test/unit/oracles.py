@@ -219,6 +219,52 @@ def ustar_situ(module: object, archive: bytes) -> list[dict[str, object]]:
 	return sorted(found, key=lambda row: str(row["name"]))
 
 
+# -- pcap ---------------------------------------------------------------------
+#
+# Wireshark's text2pcap writes a capture and editcap cuts it to a snapshot
+# length, so two records keep fewer bytes than they had; tshark reads it
+# back. The records are in the order the header's magic states, which is the
+# argument `record` takes (26.961), and `data[incl_len]` is what places every
+# record after the first.
+
+def pcap_corpus(tmp: Path) -> bytes:
+	"""Packets of 1, 14, 60 and 300 bytes, cut at 40."""
+	lines = []
+	for size in (1, 14, 60, 300):
+		data = bytes((size * 7 + one * 13) % 256 for one in range(size))
+		for at in range(0, size, 16):
+			lines.append(f"{at:04x} " + " ".join(f"{one:02x}"
+			                                     for one in data[at:at + 16]))
+		lines.append("")
+	(tmp / "packets.txt").write_text("\n".join(lines) + "\n", encoding="ascii")
+	_run(["text2pcap", "-q", "-F", "pcap", str(tmp / "packets.txt"),
+	      str(tmp / "full.pcap")])
+	_run(["editcap", "-F", "pcap", "-s", "40", str(tmp / "full.pcap"),
+	      str(tmp / "cut.pcap")])
+	return (tmp / "cut.pcap").read_bytes()
+
+
+def pcap_says(capture: bytes, tmp: Path) -> list[dict[str, int]]:
+	"""Each frame's kept and original length, as tshark reports them."""
+	path = tmp / "read.pcap"
+	path.write_bytes(capture)
+	shown = _run(["tshark", "-r", str(path), "-T", "fields",
+	              "-e", "frame.cap_len", "-e", "frame.len"])
+	return [{"incl_len": int(kept), "orig_len": int(whole)}
+	        for kept, whole in (line.split() for line in shown.splitlines())]
+
+
+def pcap_situ(module: object, capture: bytes) -> list[dict[str, int]]:
+	"""The same, through situ's accessors and nothing else."""
+	from situ_runtime import Message
+
+	view = module.pcap.at(Message(bytearray(capture)), 0, len(capture))  # type: ignore[attr-defined]
+	view.validate()
+	return [{"incl_len": int(one.incl_len), "orig_len": int(one.orig_len)}
+	        for one in (view.packets(index)
+	                    for index in range(view.packets_count))]
+
+
 # -- bmp ----------------------------------------------------------------------
 #
 # ImageMagick writes the bitmap and reports its geometry. The interesting part
@@ -1468,6 +1514,16 @@ ORACLES: tuple[Oracle, ...] = (
 		          "Neither knows the other exists."),
 	),
 	Oracle(
+		name   = "pcap",
+		schema = ROOT / "example" / "pcap" / "pcap.situ",
+		tool   = "editcap",
+		why    = ("text2pcap and editcap write the capture and tshark reads "
+		          "it back; situ reads each record in the order the header's "
+		          "magic states, handed to `record` as an argument. Two "
+		          "records are cut short, so a kept length read from the "
+		          "wrong field misplaces every record after it."),
+	),
+	Oracle(
 		name   = "bmp-file",
 		schema = ROOT / "example" / "bmp" / "bmp.situ",
 		tool   = "file",
@@ -1492,6 +1548,10 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# The kept and the original length: equal for two records and not for
+	# the two editcap cut, so the swap reads 60 bytes where 40 are kept.
+	"pcap": ("\tu32  incl_len;\n\tu32  orig_len;",
+	         "\tu32  orig_len;\n\tu32  incl_len;"),
 	"bmp": ("\ti32          width;\n\ti32          height;",
 	        "\ti32          height;\n\ti32          width;"),
 	"bmp-file": ("\ti32          width;\n\ti32          height;",
@@ -1555,6 +1615,7 @@ DRIVERS = {
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
+	"pcap":     (pcap_corpus, pcap_says, pcap_situ),
 	"png":      (png_corpus, png_says, png_situ),
 	"tiff":     (tiff_corpus_little, tiff_says, tiff_situ),
 	"tiff-be":  (tiff_corpus_big, tiff_says, tiff_situ),

@@ -644,6 +644,14 @@ def _member_bytes(resolved: ResolvedSchema, placement: Placement,
 		return INSTANCE_CONTENT + len(placement.delimiter)
 
 	if placement.sized_by == "remaining":
+		# A tail of RECORDS holds whole ones, and a record longer than the
+		# tail is none at all: pcap's `record packets[remaining]` was given
+		# eight bytes for a sixteen-byte record, and the check then asserted
+		# a first element the buffer could not hold. Not pinned, so the
+		# buffer is sized from the layout instead.
+		inner = resolved.structs.get(placement.type_name or "")
+		if inner is not None and inner.layout.size_bytes > INSTANCE_TAIL:
+			return None
 		return INSTANCE_TAIL
 	if placement.sized_by is not None:
 		each = _element_bytes(resolved, placement)
