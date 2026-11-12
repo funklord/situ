@@ -1585,15 +1585,21 @@ class Solver:
 
 		if state.cause is None and extent.hi != extent.lo:
 			state.cause = (region.name, region.span, _render_extent(extent))
-			# And whether it is the CODEC that makes it unmeasurable, which
-			# is a stronger claim than a varying extent: a length-preserving
-			# codec over `u8 body[n]` varies with `n` and is still arithmetic
-			# over a value already read. A delimited region is excluded
-			# because its extent is the scan rather than the expansion --
-			# where the bytes stop is on the wire, whatever the transform did
-			# to them on the way past (section 13.6).
-			if until is None and not expansion_is_closed_form(codec):
-				state.decode_cause = region.codec
+		# And whether it is the CODEC that makes it unmeasurable, which is a
+		# stronger claim than a varying extent: a length-preserving codec
+		# over `u8 body[n]` varies with `n` and is still arithmetic over a
+		# value already read. A delimited region is excluded because its
+		# extent is the scan rather than the expansion -- where the bytes
+		# stop is on the wire, whatever the transform did to them on the way
+		# past (section 13.6).
+		#
+		# Asked whatever the first cause was. It sat inside the test above,
+		# so a region behind `u8 pre[m]` -- whose cause `pre` already was --
+		# never recorded that nothing after it can be placed, and the
+		# differential's driver asked for a setter all four decline (26.966).
+		if state.decode_cause is None and extent.hi != extent.lo \
+				and until is None and not expansion_is_closed_form(codec):
+			state.decode_cause = region.codec
 
 		state.cursor = cursor.advance(extent)
 
