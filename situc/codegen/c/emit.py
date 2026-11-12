@@ -3775,8 +3775,15 @@ class Emitter:
 		load   = self._load_expression(
 			scalar, placement, f"situ_base(view) + {base} + index * {width}u", offset=0)
 
+		# The arguments the text reaches, as the located accessor asks:
+		# a run read in the order its struct was handed reads `arg_order`
+		# in its load, and neither function took it (26.970).
+		counted = self._argument_tail_in(struct, test, declared, base)
+		handed  = self._argument_args_in(struct, test, declared, base)
+		got     = self._argument_tail_in(struct, test, declared, base, load)
 		return [
-			f"static inline situ_err_t {count}(situ_view_t view, uint32_t *out)",
+			f"static inline situ_err_t {count}(situ_view_t view, uint32_t *out"
+			f"{counted})",
 			"{",
 			f"\tif ({test}) {{",
 			"\t\treturn SITU_ERR_VERSION;",
@@ -3788,10 +3795,10 @@ class Emitter:
 			"\treturn SITU_OK;",
 			"}",
 			f"static inline situ_err_t {getter}(situ_view_t view,"
-			f" uint32_t index, {ctype} *out)",
+			f" uint32_t index, {ctype} *out{got})",
 			"{",
 			"\tuint32_t held = 0u;",
-			"\tconst situ_err_t e = " f"{count}(view, &held);",
+			"\tconst situ_err_t e = " f"{count}(view, &held{handed});",
 			"",
 			"\tif (e != SITU_OK) {",
 			"\t\treturn e;",

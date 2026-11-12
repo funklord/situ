@@ -22,19 +22,28 @@ struct ifd size=6..786426
   @0x0000   2         u16        count  endian-from=order
   @0x0002   0..786420 ifd_entry  entries  args order=order endian-from=order sized-by=count
   ~         4         u32        next  endian-from=order
+  value switch: type
+  value case 3: shorts
+  value case default: long
 
 struct ifd_entry size=12
   parameter -         byte_order order [stream]
   @0x0000   2         u16        tag  endian-from=order
   @0x0002   2         u16        type  endian-from=order
   @0x0004   4         u32        count  endian-from=order
-  @0x0008   4         u32        value  endian-from=order
+  @0x0008   4         variant    value
+  value switch: type
+  value case 3: shorts u16
+  value case default: long u32
 
 struct tiff_file size=8
   @0x0000   2         byte_order byte_order
   @0x0002   2         u16        magic  endian-from=byte_order must_eq=42
   @0x0004   4         u32        ifd_offset  endian-from=byte_order
   ~         6..786426 ifd        first  args order=byte_order endian-from=byte_order at=ifd_offset
+  value switch: type
+  value case 3: shorts
+  value case default: long
 
 struct tiff_header size=8
   @0x0000   2         byte_order byte_order

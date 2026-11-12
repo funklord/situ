@@ -160,3 +160,46 @@ def test_the_dissector_shows_the_directory_where_it_is(tmp_path: Path) -> None:
 		# Two entries: a count, 2 * 12 bytes of entries, a next offset.
 		assert ("tiff.first", 12, 2 + 2 * 12 + 4) in \
 			[(name, at, length) for name, at, length, _ in rows], rows
+
+
+#: The entry's value as TIFF means it: a SHORT left-justified in the four
+#: bytes, in the file's order. C's accessors for an array in an arm read
+#: the handed order and did not take it, so this did not compile (26.970).
+SHORTS = SCHEMA.replace("\tu32 value;\n", """\tvariant value switch (type) {
+\t\tcase 3:  u16 shorts[2];
+\t\tdefault: u32 long;
+\t}
+""")
+
+
+def test_a_short_is_read_in_the_handed_order(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(SHORTS, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for order in ("<", ">"):
+		# Width 3 and length 2 as SHORTs: the value's first two bytes.
+		entries = tuple((tag, 3, 1, (value << 16 if order == ">" else value))
+		                for tag, value in ((256, 3), (257, 2)))
+		packet  = tiff(order, entries)
+		given = {name: fourway.answers(argv, packet, tmp_path)
+		         for name, argv in command.items()}
+		first = next(iter(given.values()))
+		assert all(answer == first for answer in given.values()), given
+		said = [one for one in first.splitlines()
+		        if one.startswith("validate ")]
+		assert said[-1] == "validate 0", (order, first)
+
+		import sys
+		sys.path.insert(0, str(tmp_path))
+		try:
+			import situ_runtime  # type: ignore[import-not-found]
+			import unit  # type: ignore[import-not-found]
+			msg  = situ_runtime.Message(bytearray(packet))
+			head = unit.tiff.at(msg, 0)
+			held = unit.ifd.at(msg, head.ifd_offset, len(head.first),
+			                   arg_order=head.byte_order)
+			assert [held.entries(i).value_shorts(0) for i in range(2)] \
+				== [3, 2], order
+		finally:
+			sys.path.remove(str(tmp_path))
+			sys.modules.pop("unit", None)

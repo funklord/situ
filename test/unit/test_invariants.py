@@ -205,8 +205,12 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: (26.930): `segment_child`, `cluster` and `wide_cluster` choose between
 #: two structs each, by a peeked byte or eight, and none of the six arms has
 #: a size of its own. A moved count in an existing cell.
+#: And 80 -> 82 in the scalar cell when `example/tiff` described its first
+#: directory (26.969, 26.970): an entry's value is `u16 shorts[2]` for a
+#: SHORT and `u32 long` otherwise, two ordinary scalar arms at a constant
+#: offset, read 2026-11-12.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                80,
+	("scalar", "not-struct", ""):                82,
 	("no-scalar", "struct", "fixed"):            123,
 	("no-scalar", "struct", "unmeasurable"):     86,
 	("no-scalar", "not-struct", ""):              1,
