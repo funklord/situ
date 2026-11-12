@@ -4941,6 +4941,31 @@ class Emitter:
 			' points outside the message")',
 			"\t\treturn self._msg.buffer[at:at + n]",
 			*self._located_value(placement, name),
+			*self._located_view(struct, placement, name, offset),
+		]
+
+	def _located_view(self, struct: ResolvedStruct, placement: Placement,
+			name: str, offset: str) -> list[str]:
+		"""`<name>_view`: a struct placed by `at`, as the struct (26.976).
+
+		The accessor above hands back its bytes, and a caller took the
+		struct over them by hand -- the offset again, the length, and every
+		argument the member hands its type. C has had `_view` for this.
+		"""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None:
+			return []
+		_, handed = self._child(struct, placement)
+		cls   = py_name(inner.name)
+		fixed = inner.layout.is_fixed_size
+		return [
+			"", "\t@property",
+			f"\tdef {name}_view(self) -> \"{cls}\":",
+			f'\t\t"""{placement.path} as a `{inner.name}`, where `{placement.located}`',
+			'\t\tplaces it in the message."""',
+			f"\t\theld = self.{name}",
+			f"\t\treturn {cls}.at(self._msg, {offset}"
+			f"{'' if fixed else ', len(held)'}{handed})",
 		]
 
 	@staticmethod

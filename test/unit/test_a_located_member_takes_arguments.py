@@ -203,3 +203,34 @@ def test_a_short_is_read_in_the_handed_order(tmp_path: Path) -> None:
 		finally:
 			sys.path.remove(str(tmp_path))
 			sys.modules.pop("unit", None)
+
+
+def test_a_located_struct_is_reached_as_its_struct(tmp_path: Path) -> None:
+	"""`<name>_view` (26.976): the struct `at` places, with the arguments its
+	member hands it -- C has had it, and the other three handed back bytes
+	a caller took the struct over by hand."""
+	import sys
+	import subprocess
+
+	schema = tmp_path / "unit.situ"
+	schema.write_text(SHORTS, encoding="ascii")
+	subprocess.run([sys.executable, "-m", "situc", "build", "--target",
+	                "python", str(schema), "--out", str(tmp_path)],
+	               check=True, capture_output=True,
+	               cwd=Path(__file__).resolve().parents[2])
+	sys.path[:0] = [str(tmp_path),
+	                str(Path(__file__).resolve().parents[2] / "runtime" / "python")]
+	try:
+		import situ_runtime
+		import unit
+		for order in ("<", ">"):
+			entries = tuple((tag, 3, 1, (value << 16 if order == ">" else value))
+			                for tag, value in ((256, 3), (257, 2)))
+			msg  = situ_runtime.Message(bytearray(tiff(order, entries)))
+			held = unit.tiff.at(msg, 0).first_view
+			assert held.count == 2, order
+			assert [held.entries(i).value_shorts(0) for i in range(2)] \
+				== [3, 2], order
+	finally:
+		sys.path.remove(str(tmp_path))
+		sys.modules.pop("unit", None)

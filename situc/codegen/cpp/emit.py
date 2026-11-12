@@ -8939,6 +8939,39 @@ class Emitter:
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 			*self._located_value(placement, name),
+			*self._located_view(struct, placement, name),
+		]
+
+	def _located_view(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""`<name>_view`: a struct placed by `at`, as the struct (26.976).
+
+		The accessor above hands back its bytes; this takes the struct over
+		them, owned by the message and handed its arguments, which a caller
+		otherwise did by hand. C has had `_view` for this.
+		"""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None:
+			return []
+		cls = f"::{self.namespace}::{self._struct_class(inner.name)}"
+		return [
+			"",
+			f"\t/* {placement.path} as a `{inner.name}`, where"
+			f" `{placement.located}` places it. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_view(const situ_msg_t *msg,",
+			f"\t\t\t{cls} &out) const noexcept",
+			"\t{",
+			"\t\t::situ::rt::bytes held;",
+			f"\t\tconst ::situ::rt::err e = this->{name}(msg, held);",
+			"",
+			"\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\treturn e;",
+			"\t\t}",
+			"\t\tconst situ_view_t raw = {held.data(),"
+			" static_cast<std::uint32_t>(held.size()), msg->generation, msg};",
+			f"\t\tout = {cls}(raw{self._child_args(struct, placement)});",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
 		]
 
 	def _located_value(self, placement: Placement, name: str) -> list[str]:

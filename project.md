@@ -8566,6 +8566,10 @@ Moved to `doc/decision/26.974-the-differentials-compare-what-a-marker-governs.md
 
 Moved to `doc/decision/26.975-a-marker-may-name-an-order-twice.md`.
 
+### 26.976 A located struct is reached as its struct
+
+Moved to `doc/decision/26.976-a-located-struct-is-reached-as-its-struct.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

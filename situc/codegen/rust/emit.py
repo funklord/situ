@@ -8692,6 +8692,30 @@ class Emitter:
 			"\t\tOk(&msg[at..at + n])",
 			"\t}",
 			*self._located_value(placement, name),
+			*self._located_view(struct, placement, name),
+		]
+
+	def _located_view(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""`<name>_view`: a struct placed by `at`, as the struct (26.976).
+
+		The accessor above hands back the message's bytes; this takes the
+		struct over them with the arguments the member hands it, which a
+		caller otherwise did by hand. C has had `_view` for this.
+		"""
+		inner = self.resolved.structs.get(placement.type_name or "")
+		if inner is None:
+			return []
+		cls = _pascal(inner.name)
+		return [
+			"",
+			f"\t/// {placement.path} as a `{inner.name}`, where"
+			f" `{placement.located}` places it.",
+			f"\tpub fn {name}_view<'m>(&self, msg: &'m [u8])"
+			f" -> Result<{cls}<'m>> {{",
+			f"\t\t{cls}::new(self.{name}(msg)?"
+			f"{self._child_args(struct, placement)})",
+			"\t}",
 		]
 
 	def _located_value(self, placement: Placement, name: str) -> list[str]:

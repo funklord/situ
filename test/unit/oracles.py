@@ -581,9 +581,7 @@ def tiff_situ(module: object, image: bytes) -> dict[str, object]:
 	msg  = Message(bytearray(image))
 	view = module.tiff_file.at(msg, 0)                       # type: ignore[attr-defined]
 	view.validate()
-	held = view.first
-	directory = module.ifd.at(msg, int(view.ifd_offset), len(held),  # type: ignore[attr-defined]
-	                          arg_order=int(view.byte_order))
+	directory = view.first_view
 	return {"little": bool(view.byte_order_is_little),
 	        "direntries": int(directory.count)}
 
