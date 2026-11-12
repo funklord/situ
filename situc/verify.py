@@ -33,7 +33,7 @@ fourteen lines under ARP's two vectors stated what the packet says and were
 checked by nothing: swapping `sender_*` with `target_*` in the schema left
 `situc verify` reporting "2 vectors conform" while `situc wire --check`
 called the same edit BREAKING. The expectations are read here the way
-`situc gen-tests` reads them into cmocka -- the same `_nested_of`,
+`situc gen-tests` reads them into a C suite -- the same `_nested_of`,
 `_byte_run` and `_hex`, imported rather than restated, because two commands
 that decide the shape of an expectation separately are two commands that
 will eventually disagree about a corpus.
@@ -438,7 +438,7 @@ def _number(macros: dict[str, int], value: str) -> int | None:
 
 	A vector states an enum member the way the generated header spells it --
 	`SITU_OPERATION_REPLY` -- because that is what `gen-tests` drops into
-	cmocka, so the macro table is how one is read here. Everything else is a
+	its C suite, so the macro table is how one is read here. Everything else is a
 	C integer constant, octal and all: `010` is eight to the compiler that
 	reads the generated suite, and reading it as ten here would make the two
 	commands disagree about a corpus rather than about a schema.

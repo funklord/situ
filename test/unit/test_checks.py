@@ -102,7 +102,7 @@ def build(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 *(str(path) for path in sources),
 		 str(ROOT / "build" / "host" / "runtime" / "libsitu.a"),
-		 "-lcmocka", "-o", str(tmp_path / "run")],
+		 "-o", str(tmp_path / "run")],
 		capture_output=True, text=True, cwd=tmp_path)
 		# `check=True` raised a CalledProcessError whose message is the
 		# command and not the compiler's reason, so a CI failure said
@@ -164,7 +164,7 @@ def test_what_is_skipped_is_said_out_loud() -> None:
 
 
 def test_a_schema_with_nothing_checkable_still_emits_a_suite() -> None:
-	"""cmocka refuses an empty group, so an empty one has to be deliberate."""
+	"""A C array may not be empty, so an empty group has to be deliberate."""
 	emitted = emit("struct s { tlv opts (tag_type = u8); }")
 	assert "test_nothing_to_check" in emitted
 	assert "purpose rather than by accident" in emitted
@@ -365,9 +365,9 @@ def test_an_unbounded_struct_gets_one_concrete_instance() -> None:
 	assert "check_s_places_its_members_in_one_instance" in source
 	# hdr 0..3, opts 3..5 (two of them), recs 5..17 (two six-byte records).
 	assert "situ_s_hdr_view(view, &inner_hdr)" in source
-	assert "assert_int_equal((uint32_t)(situ_s_opts_ptr(view) - view.base), 3u);" in source
-	assert "assert_int_equal((uint32_t)(first_recs.base - view.base), 5u);" in source
-	assert "assert_int_equal((uint32_t)(situ_s_rest_ptr(view) - view.base), 17u);" in source
+	assert "situ_check_eq((uint32_t)(situ_s_opts_ptr(view) - view.base), 3u);" in source
+	assert "situ_check_eq((uint32_t)(first_recs.base - view.base), 5u);" in source
+	assert "situ_check_eq((uint32_t)(situ_s_rest_ptr(view) - view.base), 17u);" in source
 
 
 def test_an_instance_takes_the_view_again_after_sizing_it() -> None:
@@ -678,7 +678,7 @@ def test_the_reassembly_loop_is_bounded_by_the_answer() -> None:
 	emitted = emit(SIMPLE)
 
 	assert "while (seen <= 2u" in emitted
-	assert "assert_int_equal(seen, 2u);" in emitted
+	assert "situ_check_eq(seen, 2u);" in emitted
 
 
 # -- conversations -----------------------------------------------------------
@@ -713,7 +713,7 @@ def test_the_handle_a_table_returns_is_the_callers_own() -> None:
 	emitted = emit(CONVERSATION)
 
 	assert "_record(&table, request_view, 7u)" in emitted
-	assert "assert_int_equal(id, 7u);" in emitted
+	assert "situ_check_eq(id, 7u);" in emitted
 
 
 # -- a struct that takes an argument ----------------------------------------

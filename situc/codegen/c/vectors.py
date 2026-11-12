@@ -1,4 +1,4 @@
-"""Generate cmocka golden-vector tests from a schema plus hex vectors.
+"""Generate golden-vector tests from a schema plus hex vectors.
 
 "The only reliable way to know a layout change broke the wire format"
 (project.md section 20.3). A capability map catches a change to what the
@@ -44,6 +44,7 @@ from situc.traverse import invalidating_members
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import Member, classify, data_sized
 from situc import __version__
+from situc.codegen.c import selfcheck
 
 #: The value runs to the end of the line rather than being one token: a byte
 #: run is written as bytes, and `00 1A 2B 3C 4D 5E` is six of them. Which of
@@ -147,7 +148,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# vectors file over a struct with a `parameter` produced C that cannot
 	# be compiled:
 	#
-	#     assert_int_equal(situ_s_validate(view), SITU_OK);
+	#     situ_check_eq(situ_s_validate(view), SITU_OK);
 	#     situ_s_blk_set(&msg, view, situ_s_blk_get(view));
 	#
 	#     error: too few arguments to function 'situ_s_validate'
@@ -182,13 +183,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		" * catch a change to what it emits, which is a different failure.",
 		" */",
 		"",
-		"#include <setjmp.h>",
-		"#include <stdarg.h>",
-		"#include <stddef.h>",
-		"#include <stdint.h>",
-		"#include <string.h>",
+		*selfcheck.INCLUDES,
 		"",
-		"#include <cmocka.h>",
+		*selfcheck.PRELUDE,
 		"",
 		f'#include "{basename}.h"',
 		"",
@@ -296,8 +293,8 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 		"\t(void)state;",
 		f"\tmemcpy(buf, vector_{_symbol(case)}, sizeof(buf));",
 		f"\tsitu_msg_init(&msg, buf, {size});",
-		f"\tassert_int_equal({acquire}, SITU_OK);",
-		f"\tassert_int_equal({ident(prefix, case.struct, 'validate')}(view), SITU_OK);",
+		f"\tsitu_check_eq({acquire}, SITU_OK);",
+		f"\tsitu_check_eq({ident(prefix, case.struct, 'validate')}(view), SITU_OK);",
 		"",
 	]
 
@@ -369,7 +366,7 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 			"\t{",
 			"\t\tsitu_view_t sub;",
 			"",
-			f"\t\tassert_int_equal({ident(prefix, case.struct, member, 'view')}"
+			f"\t\tsitu_check_eq({ident(prefix, case.struct, member, 'view')}"
 			f"({held}, &sub), SITU_OK);",
 			*[f"\t{line}" for line in
 			  _expectation_lines(resolved, Case(inner, case.name, b""),
@@ -394,12 +391,12 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 				"\t{",
 				f"\t\t{_ctype(scalar)} got = 0;",
 				"",
-				f"\t\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
+				f"\t\tsitu_check_eq({ident(prefix, case.struct, local, 'get')}"
 				f"({held}, &got), SITU_OK);",
-				f"\t\tassert_int_equal(got, {value});",
+				f"\t\tsitu_check_eq(got, {value});",
 				"\t}",
 			]
-		return [f"\tassert_int_equal({ident(prefix, case.struct, local, 'get')}"
+		return [f"\tsitu_check_eq({ident(prefix, case.struct, local, 'get')}"
 		        f"({held}), {value});"]
 
 	data = _hex(value)
@@ -408,7 +405,7 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 		f"\t\tstatic const uint8_t want[] = {{"
 		f" {', '.join(f'0x{byte:02X}' for byte in data)} }};",
 		"",
-		f"\t\tassert_memory_equal({ident(prefix, case.struct, local, 'ptr')}"
+		f"\t\tsitu_check_bytes({ident(prefix, case.struct, local, 'ptr')}"
 		f"({held}), want, sizeof(want));",
 		"\t}",
 	]
@@ -506,18 +503,18 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 		"\t/* Every value written back through its own setter must reproduce the",
 		"\t * bytes it came from. This is what catches a layout change. */",
 		*writes,
-		f"\tassert_memory_equal(buf, vector_{_symbol(case)}, sizeof(buf));",
+		f"\tsitu_check_bytes(buf, vector_{_symbol(case)}, sizeof(buf));",
 	]
 
 
 def _main(cases: list[Case]) -> list[str]:
-	lines = ["int main(void)", "{", "\tconst struct CMUnitTest tests[] = {"]
+	lines = ["int main(void)", "{", "\tconst struct situ_check_case tests[] = {"]
 	for case in cases:
-		lines.append(f"\t\tcmocka_unit_test(test_{_symbol(case)}),")
+		lines.append(f"\t\tsitu_check_case(test_{_symbol(case)}),")
 	lines.extend([
 		"\t};",
 		"",
-		"\treturn cmocka_run_group_tests(tests, NULL, NULL);",
+		"\treturn situ_check_run(tests, sizeof tests / sizeof tests[0], \"tests\");",
 		"}",
 	])
 	return lines

@@ -204,7 +204,7 @@ def test_gen_tests_writes_a_vector_suite(
 	assert main(["gen-tests", HEADER, vectors, "--out", str(tmp_path)]) == 0
 
 	text = (tmp_path / "header_vectors.c").read_text(encoding="ascii")
-	assert "cmocka_run_group_tests" in text
+	assert "situ_check_run" in text
 	assert "4 vectors" in capsys.readouterr().err
 
 

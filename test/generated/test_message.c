@@ -9,13 +9,11 @@
  * tests exercise exactly that: one runtime resolution, then constant offsets.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "message.h"
 
@@ -47,7 +45,7 @@ static situ_view_t view_of(situ_msg_t *msg, uint8_t *buf)
 	situ_view_t view;
 
 	situ_msg_init(msg, buf, VECTOR_LEN);
-	assert_int_equal(situ_message_view(msg, 0, VECTOR_LEN, &view), SITU_OK);
+	situ_check_eq(situ_message_view(msg, 0, VECTOR_LEN, &view), SITU_OK);
 	return view;
 }
 
@@ -64,11 +62,11 @@ static void test_static_prefix_is_still_static(void **state)
 
 	/* Everything before `opts` keeps an absolute offset, which is the locality
 	 * rule: a dynamic member weakens what follows it and nothing else. */
-	assert_int_equal(situ_message_hdr_view(view, &hdr), SITU_OK);
-	assert_ptr_equal(hdr.base, buf);
-	assert_int_equal(situ_header_seq_get(hdr), 0x11223344u);
-	assert_int_equal(situ_header_length_get(hdr), 4);
-	assert_int_equal(situ_header_rec_count_get(hdr), 2);
+	situ_check_eq(situ_message_hdr_view(view, &hdr), SITU_OK);
+	situ_check_ptr_eq(hdr.base, buf);
+	situ_check_eq(situ_header_seq_get(hdr), 0x11223344u);
+	situ_check_eq(situ_header_length_get(hdr), 4);
+	situ_check_eq(situ_header_rec_count_get(hdr), 2);
 }
 
 static void test_dynamic_offset_is_resolved_from_the_data(void **state)
@@ -82,10 +80,10 @@ static void test_dynamic_offset_is_resolved_from_the_data(void **state)
 	view = view_of(&msg, buf);
 
 	/* opts is at a static 11; recs starts after it, which needs the length. */
-	assert_int_equal(situ_message_opts_len(view), 4);
-	assert_ptr_equal(situ_message_opts_ptr(view), buf + 11);
-	assert_int_equal(situ_message_recs_offset(view), 15);
-	assert_int_equal(situ_message_recs_count(view), 2);
+	situ_check_eq(situ_message_opts_len(view), 4);
+	situ_check_ptr_eq(situ_message_opts_ptr(view), buf + 11);
+	situ_check_eq(situ_message_recs_offset(view), 15);
+	situ_check_eq(situ_message_recs_count(view), 2);
 }
 
 static void test_frame_elements_are_static_once_the_base_is_found(void **state)
@@ -102,16 +100,16 @@ static void test_frame_elements_are_static_once_the_base_is_found(void **state)
 	/* One runtime resolution per element, then constant offsets inside it.
 	 * The accessors are record's own: a dynamically positioned static struct
 	 * gets its static capabilities back (section 12.2). */
-	assert_int_equal(situ_message_recs_at(view, 0, &record), SITU_OK);
-	assert_ptr_equal(record.base, buf + 15);
-	assert_int_equal(situ_record_id_get(record), 1);
-	assert_int_equal(situ_record_kind_get(record), 2);
-	assert_int_equal(situ_record_value_get(record), 3);
+	situ_check_eq(situ_message_recs_at(view, 0, &record), SITU_OK);
+	situ_check_ptr_eq(record.base, buf + 15);
+	situ_check_eq(situ_record_id_get(record), 1);
+	situ_check_eq(situ_record_kind_get(record), 2);
+	situ_check_eq(situ_record_value_get(record), 3);
 
-	assert_int_equal(situ_message_recs_at(view, 1, &record), SITU_OK);
-	assert_ptr_equal(record.base, buf + 23);
-	assert_int_equal(situ_record_id_get(record), 4);
-	assert_int_equal(situ_record_value_get(record), 6);
+	situ_check_eq(situ_message_recs_at(view, 1, &record), SITU_OK);
+	situ_check_ptr_eq(record.base, buf + 23);
+	situ_check_eq(situ_record_id_get(record), 4);
+	situ_check_eq(situ_record_value_get(record), 6);
 }
 
 static void test_element_mutation_is_in_place(void **state)
@@ -126,15 +124,15 @@ static void test_element_mutation_is_in_place(void **state)
 	view = view_of(&msg, buf);
 
 	/* `require in_place(message.recs[].value)` says this moves nothing. */
-	assert_int_equal(situ_message_recs_at(view, 1, &record), SITU_OK);
+	situ_check_eq(situ_message_recs_at(view, 1, &record), SITU_OK);
 	situ_record_value_set(record, 0x0BAD);
 
-	assert_int_equal(situ_record_value_get(record), 0x0BAD);
-	assert_int_equal(buf[29], 0x0B);
-	assert_int_equal(buf[30], 0xAD);
+	situ_check_eq(situ_record_value_get(record), 0x0BAD);
+	situ_check_eq(buf[29], 0x0B);
+	situ_check_eq(buf[30], 0xAD);
 	/* Nothing else moved. */
-	assert_memory_equal(buf, VECTOR, 29);
-	assert_memory_equal(buf + 31, VECTOR + 31, 3);
+	situ_check_bytes(buf, VECTOR, 29);
+	situ_check_bytes(buf + 31, VECTOR + 31, 3);
 }
 
 static void test_trailer_runs_to_the_end_of_the_view(void **state)
@@ -147,9 +145,9 @@ static void test_trailer_runs_to_the_end_of_the_view(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf);
 
-	assert_int_equal(situ_message_trailer_offset(view), 31);
-	assert_int_equal(situ_message_trailer_len(view), 3);
-	assert_ptr_equal(situ_message_trailer_ptr(view), buf + 31);
+	situ_check_eq(situ_message_trailer_offset(view), 31);
+	situ_check_eq(situ_message_trailer_len(view), 3);
+	situ_check_ptr_eq(situ_message_trailer_ptr(view), buf + 31);
 }
 
 static void test_length_write_shifts_everything_after_it(void **state)
@@ -162,7 +160,7 @@ static void test_length_write_shifts_everything_after_it(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf);
 
-	assert_int_equal(situ_message_recs_offset(view), 15);
+	situ_check_eq(situ_message_recs_offset(view), 15);
 
 	/* Growing the options moves the records. The schema said this would
 	 * happen -- `mutate=Shifting` on opts -- and here it is. */
@@ -175,7 +173,7 @@ static void test_length_write_shifts_everything_after_it(void **state)
 	 * build traps here rather than answering. `test_reacquiring_after_a_
 	 * shift_is_valid_again` below is the same rule stated on purpose. */
 	view = view_of(&msg, buf);
-	assert_int_equal(situ_message_recs_offset(view), 19);
+	situ_check_eq(situ_message_recs_offset(view), 19);
 }
 
 static void test_length_write_increments_the_generation(void **state)
@@ -192,8 +190,8 @@ static void test_length_write_increments_the_generation(void **state)
 
 	situ_message_hdr_length_set(&msg, view, 8);
 
-	assert_int_not_equal(msg.generation, before);
-	assert_int_equal(view.generation, before);
+	situ_check_ne(msg.generation, before);
+	situ_check_eq(view.generation, before);
 }
 
 static void test_stale_view_is_caught_when_checked(void **state)
@@ -207,20 +205,20 @@ static void test_stale_view_is_caught_when_checked(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf);
 
-	assert_int_equal(situ_message_recs_at(view, 0, &record), SITU_OK);
-	assert_int_equal(situ_view_check(record), SITU_OK);
+	situ_check_eq(situ_message_recs_at(view, 0, &record), SITU_OK);
+	situ_check_eq(situ_view_check(record), SITU_OK);
 
 	/* The element view was taken before the shift, so it now points at the
 	 * wrong bytes. This is the bug class section 12.3 exists to catch. */
 	situ_message_hdr_length_set(&msg, view, 8);
 
 #ifdef SITU_CHECKED
-	assert_int_equal(situ_view_check(record), SITU_ERR_STALE);
-	assert_int_equal(situ_view_check(view), SITU_ERR_STALE);
+	situ_check_eq(situ_view_check(record), SITU_ERR_STALE);
+	situ_check_eq(situ_view_check(view), SITU_ERR_STALE);
 #else
 	/* Compiled out in a release build, which is why the checked build is the
 	 * one to develop against. */
-	assert_int_equal(situ_view_check(record), SITU_OK);
+	situ_check_eq(situ_view_check(record), SITU_OK);
 #endif
 }
 
@@ -238,12 +236,12 @@ static void test_reacquiring_after_a_shift_is_valid_again(void **state)
 
 	/* Take the view again and it is live: the generation is what makes the
 	 * difference, not the bytes. */
-	assert_int_equal(situ_message_view(&msg, 0, VECTOR_LEN, &view), SITU_OK);
-	assert_int_equal(situ_view_check(view), SITU_OK);
+	situ_check_eq(situ_message_view(&msg, 0, VECTOR_LEN, &view), SITU_OK);
+	situ_check_eq(situ_view_check(view), SITU_OK);
 
-	assert_int_equal(situ_message_recs_at(view, 0, &record), SITU_OK);
-	assert_int_equal(situ_view_check(record), SITU_OK);
-	assert_ptr_equal(record.base, buf + 19);
+	situ_check_eq(situ_message_recs_at(view, 0, &record), SITU_OK);
+	situ_check_eq(situ_view_check(record), SITU_OK);
+	situ_check_ptr_eq(record.base, buf + 19);
 }
 
 static void test_short_buffer_is_refused(void **state)
@@ -254,7 +252,7 @@ static void test_short_buffer_is_refused(void **state)
 
 	(void)state;
 	situ_msg_init(&msg, buf, sizeof(buf));
-	assert_int_equal(situ_message_view(&msg, 0, (uint32_t)sizeof(buf), &view),
+	situ_check_eq(situ_message_view(&msg, 0, (uint32_t)sizeof(buf), &view),
 	                 SITU_ERR_BOUNDS);
 }
 
@@ -271,24 +269,24 @@ static void test_element_past_the_end_is_refused(void **state)
 
 	/* Acquiring the element view is the bounds check, and it holds even for an
 	 * index the record count would allow. */
-	assert_int_equal(situ_message_recs_at(view, 100, &record), SITU_ERR_BOUNDS);
+	situ_check_eq(situ_message_recs_at(view, 100, &record), SITU_ERR_BOUNDS);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_static_prefix_is_still_static),
-		cmocka_unit_test(test_dynamic_offset_is_resolved_from_the_data),
-		cmocka_unit_test(test_frame_elements_are_static_once_the_base_is_found),
-		cmocka_unit_test(test_element_mutation_is_in_place),
-		cmocka_unit_test(test_trailer_runs_to_the_end_of_the_view),
-		cmocka_unit_test(test_length_write_shifts_everything_after_it),
-		cmocka_unit_test(test_length_write_increments_the_generation),
-		cmocka_unit_test(test_stale_view_is_caught_when_checked),
-		cmocka_unit_test(test_reacquiring_after_a_shift_is_valid_again),
-		cmocka_unit_test(test_short_buffer_is_refused),
-		cmocka_unit_test(test_element_past_the_end_is_refused),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_static_prefix_is_still_static),
+		situ_check_case(test_dynamic_offset_is_resolved_from_the_data),
+		situ_check_case(test_frame_elements_are_static_once_the_base_is_found),
+		situ_check_case(test_element_mutation_is_in_place),
+		situ_check_case(test_trailer_runs_to_the_end_of_the_view),
+		situ_check_case(test_length_write_shifts_everything_after_it),
+		situ_check_case(test_length_write_increments_the_generation),
+		situ_check_case(test_stale_view_is_caught_when_checked),
+		situ_check_case(test_reacquiring_after_a_shift_is_valid_again),
+		situ_check_case(test_short_buffer_is_refused),
+		situ_check_case(test_element_past_the_end_is_refused),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_message");
 }

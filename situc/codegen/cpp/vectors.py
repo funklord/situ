@@ -5,9 +5,9 @@ halves came first because Rust had no suite at all and Python has no
 compiler, and this one completes the row -- one of section 1's four
 artifacts finally reaching all four of its languages.
 
-**A plain `main` rather than a framework.** The C suite uses cmocka and the
-C++ fuzz harness uses libFuzzer, and neither is a thing to ask a user for:
-section 24 requires `situc` itself to run from a bare interpreter with no
+**A plain `main` rather than a framework.** The C suite used cmocka until
+26.977 and the C++ fuzz harness uses libFuzzer, and neither is a thing to
+ask a user for: section 24 requires `situc` itself to run from a bare interpreter with no
 third-party packages, and a suite handed to a consumer should ask no more
 than the compiler does. So this counts its own failures, names each one, and
 exits non-zero -- which is what a `make` target or a CI step actually reads.

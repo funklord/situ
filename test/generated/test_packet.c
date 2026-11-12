@@ -6,7 +6,7 @@
  *     half of that which cannot be tested at run time -- that reaching it does
  *     not compile -- is checked by the compile-refusal test in
  *     test/unit/test_codegen_c.py, because a test that fails to build is not
- *     something cmocka can report.
+ *     something a check can report.
  *   - mutating a covered field marks the tag dirty, and the message refuses to
  *     be transmittable until finalize clears it.
  *   - a field outside coverage stays freely mutable, which is the design
@@ -17,13 +17,11 @@
  * bookkeeping around it, which is what situ generates.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "packet.h"
 
@@ -62,7 +60,7 @@ static situ_view_t view_of(situ_msg_t *msg, uint8_t *buf)
 
 	memcpy(buf, VECTOR, VECTOR_LEN);
 	situ_msg_init(msg, buf, VECTOR_LEN);
-	assert_int_equal(situ_packet_view(msg, 0, VECTOR_LEN, &view), SITU_OK);
+	situ_check_eq(situ_packet_view(msg, 0, VECTOR_LEN, &view), SITU_OK);
 	return view;
 }
 
@@ -78,8 +76,8 @@ static void test_the_gate_refuses_before_verification(void **state)
 	(void)state;
 
 	memset(&gate, 0, sizeof gate);
-	assert_int_equal(situ_packet_sealed_open(view, 0, &gate), SITU_ERR_TAG);
-	assert_null(gate.view.base);
+	situ_check_eq(situ_packet_sealed_open(view, 0, &gate), SITU_ERR_TAG);
+	situ_check_null(gate.view.base);
 }
 
 static void test_the_gate_opens_once_the_tag_verifies(void **state)
@@ -91,9 +89,9 @@ static void test_the_gate_opens_once_the_tag_verifies(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
-	assert_int_equal(situ_packet_sealed_inner_kind_get(gate), 9u);
-	assert_int_equal(situ_packet_sealed_inner_seq_get(gate), 5u);
+	situ_check_eq(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	situ_check_eq(situ_packet_sealed_inner_kind_get(gate), 9u);
+	situ_check_eq(situ_packet_sealed_inner_seq_get(gate), 5u);
 }
 
 static void test_the_gate_costs_nothing_at_run_time(void **state)
@@ -107,10 +105,10 @@ static void test_the_gate_costs_nothing_at_run_time(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
-	assert_ptr_equal(gate.view.base, view.base);
-	assert_int_equal(situ_packet_sealed_body_len(gate), 4u);
-	assert_ptr_equal(situ_packet_sealed_body_ptr(gate), view.base + 46u);
+	situ_check_eq(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	situ_check_ptr_eq(gate.view.base, view.base);
+	situ_check_eq(situ_packet_sealed_body_len(gate), 4u);
+	situ_check_ptr_eq(situ_packet_sealed_body_ptr(gate), view.base + 46u);
 }
 
 /* -- tag coverage and the dirty bit (14.2) -------------------------------- */
@@ -123,8 +121,8 @@ static void test_a_fresh_message_is_transmittable(void **state)
 	(void)state;
 	(void)view_of(&msg, buf);
 
-	assert_int_equal(situ_msg_transmittable(&msg), SITU_OK);
-	assert_false(situ_packet_tag_is_dirty(&msg));
+	situ_check_eq(situ_msg_transmittable(&msg), SITU_OK);
+	situ_check_false(situ_packet_tag_is_dirty(&msg));
 }
 
 static void test_writing_a_covered_field_marks_the_tag_dirty(void **state)
@@ -137,8 +135,8 @@ static void test_writing_a_covered_field_marks_the_tag_dirty(void **state)
 
 	situ_packet_hdr_seq_set(&msg, view, 0xAABBCCDDu);
 
-	assert_true(situ_packet_tag_is_dirty(&msg));
-	assert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);
+	situ_check_true(situ_packet_tag_is_dirty(&msg));
+	situ_check_eq(situ_msg_transmittable(&msg), SITU_ERR_TAG);
 }
 
 static void test_finalize_clears_the_dirty_bit(void **state)
@@ -152,17 +150,17 @@ static void test_finalize_clears_the_dirty_bit(void **state)
 	(void)state;
 
 	situ_packet_hdr_seq_set(&msg, view, 0xAABBCCDDu);
-	assert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);
+	situ_check_eq(situ_msg_transmittable(&msg), SITU_ERR_TAG);
 
 	/* What a caller does between the two: recompute over the covered span and
 	 * write the result. The algorithm is theirs; the span is the compiler's. */
-	assert_int_equal(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
+	situ_check_eq(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
 	memset(situ_packet_tag_ptr(view), 0x5A, SITU_PACKET_TAG_COUNT);
 
 	situ_packet_tag_finalize(&msg);
 
-	assert_false(situ_packet_tag_is_dirty(&msg));
-	assert_int_equal(situ_msg_transmittable(&msg), SITU_OK);
+	situ_check_false(situ_packet_tag_is_dirty(&msg));
+	situ_check_eq(situ_msg_transmittable(&msg), SITU_OK);
 }
 
 static void test_the_covered_span_is_the_authenticated_and_sealed_bytes(void **state)
@@ -175,13 +173,13 @@ static void test_the_covered_span_is_the_authenticated_and_sealed_bytes(void **s
 
 	(void)state;
 
-	assert_int_equal(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
+	situ_check_eq(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
 
 	/* From the start of the authenticated block to the end of the sealed
 	 * region: the hop counter in front is outside, and so is the tag itself. */
-	assert_int_equal(offset, 4u);
-	assert_int_equal(len, TAG_OFFSET - 4u);
-	assert_ptr_equal(situ_packet_tag_ptr(view), view.base + TAG_OFFSET);
+	situ_check_eq(offset, 4u);
+	situ_check_eq(len, TAG_OFFSET - 4u);
+	situ_check_ptr_eq(situ_packet_tag_ptr(view), view.base + TAG_OFFSET);
 }
 
 static void test_the_covered_span_follows_the_length_field(void **state)
@@ -199,9 +197,9 @@ static void test_the_covered_span_follows_the_length_field(void **state)
 	 * exactly right: the bytes it authenticates just changed. */
 	situ_packet_hdr_length_set(&msg, view, 2u);
 
-	assert_true(situ_packet_tag_is_dirty(&msg));
-	assert_int_equal(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
-	assert_int_equal(len, (TAG_OFFSET - 2u) - 4u);
+	situ_check_true(situ_packet_tag_is_dirty(&msg));
+	situ_check_eq(situ_packet_tag_covered(view, &offset, &len), SITU_OK);
+	situ_check_eq(len, (TAG_OFFSET - 2u) - 4u);
 }
 
 static void test_an_uncovered_field_stays_freely_mutable(void **state)
@@ -216,9 +214,9 @@ static void test_an_uncovered_field_stays_freely_mutable(void **state)
 	 * at every forwarder, which is why it is outside coverage. */
 	situ_packet_hop_set(view, 8u);
 
-	assert_int_equal(situ_packet_hop_get(view), 8u);
-	assert_false(situ_packet_tag_is_dirty(&msg));
-	assert_int_equal(situ_msg_transmittable(&msg), SITU_OK);
+	situ_check_eq(situ_packet_hop_get(view), 8u);
+	situ_check_false(situ_packet_tag_is_dirty(&msg));
+	situ_check_eq(situ_msg_transmittable(&msg), SITU_OK);
 }
 
 static void test_writing_through_the_gate_marks_the_tag_too(void **state)
@@ -230,11 +228,11 @@ static void test_writing_through_the_gate_marks_the_tag_too(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	situ_check_eq(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
 	situ_packet_sealed_inner_seq_set(&msg, gate, 0x99u);
 
-	assert_int_equal(situ_packet_sealed_inner_seq_get(gate), 0x99u);
-	assert_true(situ_packet_tag_is_dirty(&msg));
+	situ_check_eq(situ_packet_sealed_inner_seq_get(gate), 0x99u);
+	situ_check_true(situ_packet_tag_is_dirty(&msg));
 }
 
 /* -- secrets (14.6) ------------------------------------------------------- */
@@ -249,36 +247,36 @@ static void test_zeroize_erases_secret_bytes(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
-	assert_int_equal(situ_packet_sealed_session_key_ptr(gate)[0], 0xC0u);
+	situ_check_eq(situ_packet_sealed_open(view, 1, &gate), SITU_OK);
+	situ_check_eq(situ_packet_sealed_session_key_ptr(gate)[0], 0xC0u);
 
 	situ_packet_sealed_session_key_zeroize(gate);
 
 	for (i = 0; i < SITU_PACKET_SEALED_SESSION_KEY_COUNT; i++) {
-		assert_int_equal(situ_packet_sealed_session_key_ptr(gate)[i], 0u);
+		situ_check_eq(situ_packet_sealed_session_key_ptr(gate)[i], 0u);
 	}
 
 	/* Only the secret bytes, and nothing either side of them. */
-	assert_int_equal(situ_packet_sealed_inner_seq_get(gate), 5u);
-	assert_int_equal(buf[KEY_OFFSET - 1u], 0x05u);
-	assert_int_equal(buf[KEY_OFFSET + 16u], 0xDEu);
+	situ_check_eq(situ_packet_sealed_inner_seq_get(gate), 5u);
+	situ_check_eq(buf[KEY_OFFSET - 1u], 0x05u);
+	situ_check_eq(buf[KEY_OFFSET + 16u], 0xDEu);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_the_gate_refuses_before_verification),
-		cmocka_unit_test(test_the_gate_opens_once_the_tag_verifies),
-		cmocka_unit_test(test_the_gate_costs_nothing_at_run_time),
-		cmocka_unit_test(test_a_fresh_message_is_transmittable),
-		cmocka_unit_test(test_writing_a_covered_field_marks_the_tag_dirty),
-		cmocka_unit_test(test_finalize_clears_the_dirty_bit),
-		cmocka_unit_test(test_the_covered_span_is_the_authenticated_and_sealed_bytes),
-		cmocka_unit_test(test_the_covered_span_follows_the_length_field),
-		cmocka_unit_test(test_an_uncovered_field_stays_freely_mutable),
-		cmocka_unit_test(test_writing_through_the_gate_marks_the_tag_too),
-		cmocka_unit_test(test_zeroize_erases_secret_bytes),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_the_gate_refuses_before_verification),
+		situ_check_case(test_the_gate_opens_once_the_tag_verifies),
+		situ_check_case(test_the_gate_costs_nothing_at_run_time),
+		situ_check_case(test_a_fresh_message_is_transmittable),
+		situ_check_case(test_writing_a_covered_field_marks_the_tag_dirty),
+		situ_check_case(test_finalize_clears_the_dirty_bit),
+		situ_check_case(test_the_covered_span_is_the_authenticated_and_sealed_bytes),
+		situ_check_case(test_the_covered_span_follows_the_length_field),
+		situ_check_case(test_an_uncovered_field_stays_freely_mutable),
+		situ_check_case(test_writing_through_the_gate_marks_the_tag_too),
+		situ_check_case(test_zeroize_erases_secret_bytes),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_packet");
 }

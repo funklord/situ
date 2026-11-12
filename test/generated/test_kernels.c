@@ -12,13 +12,11 @@
  * gets rather than a fixture written to be easy on the generator.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "kernels.h"
 
@@ -50,11 +48,11 @@ static void test_cobs_matches_the_published_examples(void **state)
 	for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
 		uint32_t written = situ_cobs_encode(cases[i].in, cases[i].len, out);
 
-		assert_int_equal(written, cases[i].encoded);
-		assert_memory_equal(out, cases[i].want, written);
+		situ_check_eq(written, cases[i].encoded);
+		situ_check_bytes(out, cases[i].want, written);
 
-		assert_int_equal(situ_cobs_decode(out, written, back), cases[i].len);
-		assert_memory_equal(back, cases[i].in, cases[i].len);
+		situ_check_eq(situ_cobs_decode(out, written, back), cases[i].len);
+		situ_check_bytes(back, cases[i].in, cases[i].len);
 	}
 }
 
@@ -75,12 +73,12 @@ static void test_cobs_spends_one_byte_per_254(void **state)
 		in[i] = (uint8_t)(i + 1);
 	}
 
-	assert_int_equal(situ_cobs_encode(in, 254, out), 256);
-	assert_int_equal(out[0], 0xFF);
-	assert_int_equal(out[255], 0x00);
+	situ_check_eq(situ_cobs_encode(in, 254, out), 256);
+	situ_check_eq(out[0], 0xFF);
+	situ_check_eq(out[255], 0x00);
 
-	assert_int_equal(situ_cobs_decode(out, 256, back), 254);
-	assert_memory_equal(back, in, 254);
+	situ_check_eq(situ_cobs_decode(out, 256, back), 254);
+	situ_check_bytes(back, in, 254);
 }
 
 /* -- Hamming(7, 4) --------------------------------------------------------- */
@@ -96,7 +94,7 @@ static void test_hamming_is_systematic(void **state)
 	(void)state;
 
 	for (nibble = 0; nibble < 16; nibble++) {
-		assert_int_equal(situ_hamming_7_4_encode(nibble) & 0x0Fu, nibble);
+		situ_check_eq(situ_hamming_7_4_encode(nibble) & 0x0Fu, nibble);
 	}
 }
 
@@ -113,15 +111,15 @@ static void test_hamming_corrects_any_single_bit_error(void **state)
 		uint8_t word      = situ_hamming_7_4_encode(nibble);
 		int     corrected = 1;
 
-		assert_int_equal(situ_hamming_7_4_decode(word, &corrected), nibble);
-		assert_int_equal(corrected, 0);
+		situ_check_eq(situ_hamming_7_4_decode(word, &corrected), nibble);
+		situ_check_eq(corrected, 0);
 
 		for (bit = 0; bit < 7; bit++) {
 			uint8_t damaged = (uint8_t)(word ^ (uint8_t)(1u << bit));
 
 			corrected = 0;
-			assert_int_equal(situ_hamming_7_4_decode(damaged, &corrected), nibble);
-			assert_int_equal(corrected, 1);
+			situ_check_eq(situ_hamming_7_4_decode(damaged, &corrected), nibble);
+			situ_check_eq(corrected, 1);
 		}
 	}
 }
@@ -139,11 +137,11 @@ static void test_the_additive_scrambler_is_its_own_inverse(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_scrambler_additive_encode(plain, 5, coded), 5);
-	assert_memory_not_equal(coded, plain, 5);
+	situ_check_eq(situ_scrambler_additive_encode(plain, 5, coded), 5);
+	situ_check_bytes_ne(coded, plain, 5);
 
-	assert_int_equal(situ_scrambler_additive_decode(coded, 5, back), 5);
-	assert_memory_equal(back, plain, 5);
+	situ_check_eq(situ_scrambler_additive_decode(coded, 5, back), 5);
+	situ_check_bytes(back, plain, 5);
 }
 
 static void test_the_multiplicative_scrambler_is_not_an_involution(void **state)
@@ -159,12 +157,12 @@ static void test_the_multiplicative_scrambler_is_not_an_involution(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_scrambler_multiplicative_encode(plain, 6, coded), 6);
-	assert_int_equal(situ_scrambler_multiplicative_decode(coded, 6, back), 6);
-	assert_memory_equal(back, plain, 6);
+	situ_check_eq(situ_scrambler_multiplicative_encode(plain, 6, coded), 6);
+	situ_check_eq(situ_scrambler_multiplicative_decode(coded, 6, back), 6);
+	situ_check_bytes(back, plain, 6);
 
 	situ_scrambler_multiplicative_encode(coded, 6, twice);
-	assert_memory_not_equal(twice, plain, 6);
+	situ_check_bytes_ne(twice, plain, 6);
 }
 
 /* -- block interleaver ----------------------------------------------------- */
@@ -185,15 +183,15 @@ static void test_the_interleaver_spreads_adjacent_bytes(void **state)
 		in[i] = i;
 	}
 
-	assert_int_equal(situ_interleave_16_encode(in, 16, out), 16);
-	assert_int_equal(out[0], 0);
-	assert_int_equal(out[1], 4);
-	assert_int_equal(out[2], 8);
-	assert_int_equal(out[3], 12);
-	assert_int_equal(out[4], 1);
+	situ_check_eq(situ_interleave_16_encode(in, 16, out), 16);
+	situ_check_eq(out[0], 0);
+	situ_check_eq(out[1], 4);
+	situ_check_eq(out[2], 8);
+	situ_check_eq(out[3], 12);
+	situ_check_eq(out[4], 1);
 
-	assert_int_equal(situ_interleave_16_decode(out, 16, back), 16);
-	assert_memory_equal(back, in, 16);
+	situ_check_eq(situ_interleave_16_decode(out, 16, back), 16);
+	situ_check_bytes(back, in, 16);
 }
 
 static void test_the_interleaver_refuses_a_partial_block(void **state)
@@ -205,7 +203,7 @@ static void test_the_interleaver_refuses_a_partial_block(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_interleave_16_encode(in, 15, out), 0);
+	situ_check_eq(situ_interleave_16_encode(in, 15, out), 0);
 }
 
 /* -- HDLC bit stuffing ----------------------------------------------------- */
@@ -220,10 +218,10 @@ static void test_hdlc_inserts_a_zero_after_five_ones(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_hdlc_bit_stuffing_encode(ones, 16, out), 19);
-	assert_int_equal(situ_hdlc_bit_stuffing_decode(out, 19, back), 16);
-	assert_int_equal(back[0], 0xFF);
-	assert_int_equal(back[1], 0xFF);
+	situ_check_eq(situ_hdlc_bit_stuffing_encode(ones, 16, out), 19);
+	situ_check_eq(situ_hdlc_bit_stuffing_decode(out, 19, back), 16);
+	situ_check_eq(back[0], 0xFF);
+	situ_check_eq(back[1], 0xFF);
 }
 
 static void test_hdlc_refuses_six_ones(void **state)
@@ -236,7 +234,7 @@ static void test_hdlc_refuses_six_ones(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_hdlc_bit_stuffing_decode(flag, 8, out), 0);
+	situ_check_eq(situ_hdlc_bit_stuffing_decode(flag, 8, out), 0);
 }
 
 /* -- base16 (RFC 4648) ----------------------------------------------------- */
@@ -250,11 +248,11 @@ static void test_base16_encodes_to_ascii_hex(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_base16_encode(in, 24u, out), 48u);
-	assert_memory_equal(out, "DEADBE", 6);
+	situ_check_eq(situ_base16_encode(in, 24u, out), 48u);
+	situ_check_bytes(out, "DEADBE", 6);
 
-	assert_int_equal(situ_base16_decode(out, 48u, back), 24u);
-	assert_memory_equal(back, in, 3);
+	situ_check_eq(situ_base16_decode(out, 48u, back), 24u);
+	situ_check_bytes(back, in, 3);
 }
 
 static void test_base16_needs_no_padding_at_any_length(void **state)
@@ -276,9 +274,9 @@ static void test_base16_needs_no_padding_at_any_length(void **state)
 			in[i] = (uint8_t)(i * 37u + 1u);
 		}
 
-		assert_int_equal(situ_base16_encode(in, len * 8u, out), len * 16u);
-		assert_int_equal(situ_base16_decode(out, len * 16u, back), len * 8u);
-		assert_memory_equal(back, in, len);
+		situ_check_eq(situ_base16_encode(in, len * 8u, out), len * 16u);
+		situ_check_eq(situ_base16_decode(out, len * 16u, back), len * 8u);
+		situ_check_bytes(back, in, len);
 	}
 }
 
@@ -295,8 +293,8 @@ static void test_base16_lower_is_a_different_code_not_an_alias(void **state)
 	situ_base16_encode(in, 8u, upper);
 	situ_base16_lower_encode(in, 8u, lower);
 
-	assert_memory_equal(upper, "AB", 2);
-	assert_memory_equal(lower, "ab", 2);
+	situ_check_bytes(upper, "AB", 2);
+	situ_check_bytes(lower, "ab", 2);
 }
 
 /* -- base32 and base64 (RFC 4648) ------------------------------------------ */
@@ -325,11 +323,11 @@ static void test_base64_matches_rfc_4648_vectors(void **state)
 		uint32_t len     = (uint32_t)strlen(cases[i].in);
 		uint32_t written = situ_base64_encode((const uint8_t *)cases[i].in, len, out);
 
-		assert_int_equal(written, strlen(cases[i].want));
-		assert_memory_equal(out, cases[i].want, written);
+		situ_check_eq(written, strlen(cases[i].want));
+		situ_check_bytes(out, cases[i].want, written);
 
-		assert_int_equal(situ_base64_decode(out, written, back), len);
-		assert_memory_equal(back, cases[i].in, len);
+		situ_check_eq(situ_base64_decode(out, written, back), len);
+		situ_check_bytes(back, cases[i].in, len);
 	}
 }
 
@@ -354,11 +352,11 @@ static void test_base32_matches_rfc_4648_vectors(void **state)
 		uint32_t len     = (uint32_t)strlen(cases[i].in);
 		uint32_t written = situ_base32_encode((const uint8_t *)cases[i].in, len, out);
 
-		assert_int_equal(written, strlen(cases[i].want));
-		assert_memory_equal(out, cases[i].want, written);
+		situ_check_eq(written, strlen(cases[i].want));
+		situ_check_bytes(out, cases[i].want, written);
 
-		assert_int_equal(situ_base32_decode(out, written, back), len);
-		assert_memory_equal(back, cases[i].in, len);
+		situ_check_eq(situ_base32_decode(out, written, back), len);
+		situ_check_bytes(back, cases[i].in, len);
 	}
 }
 
@@ -380,8 +378,8 @@ static void test_the_output_is_always_whole_groups(void **state)
 			in[i] = (uint8_t)(i * 37u + 5u);
 		}
 
-		assert_int_equal(situ_base64_encode(in, n, out), ((n + 2u) / 3u) * 4u);
-		assert_int_equal(situ_base32_encode(in, n, out), ((n + 4u) / 5u) * 8u);
+		situ_check_eq(situ_base64_encode(in, n, out), ((n + 2u) / 3u) * 4u);
+		situ_check_eq(situ_base32_encode(in, n, out), ((n + 4u) / 5u) * 8u);
 	}
 }
 
@@ -400,8 +398,8 @@ static void test_base64url_is_a_different_code(void **state)
 	situ_base64_encode(in, 3, plain);
 	situ_base64url_encode(in, 3, safe);
 
-	assert_memory_equal(plain, "+/+/", 4);
-	assert_memory_equal(safe,  "-_-_", 4);
+	situ_check_bytes(plain, "+/+/", 4);
+	situ_check_bytes(safe,  "-_-_", 4);
 }
 
 static void test_base64_refuses_what_it_did_not_encode(void **state)
@@ -413,9 +411,9 @@ static void test_base64_refuses_what_it_did_not_encode(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_base64_decode((const uint8_t *)"Zm9", 3, back), 0);
-	assert_int_equal(situ_base64_decode((const uint8_t *)"Zm9 ", 4, back), 0);
-	assert_int_equal(situ_base64_decode((const uint8_t *)"Zm9*", 4, back), 0);
+	situ_check_eq(situ_base64_decode((const uint8_t *)"Zm9", 3, back), 0);
+	situ_check_eq(situ_base64_decode((const uint8_t *)"Zm9 ", 4, back), 0);
+	situ_check_eq(situ_base64_decode((const uint8_t *)"Zm9*", 4, back), 0);
 }
 
 /* -- Reed-Solomon ---------------------------------------------------------- */
@@ -446,8 +444,8 @@ static void test_reed_solomon_is_systematic(void **state)
 	}
 	memcpy(block, data, 223);
 
-	assert_int_equal(situ_reed_solomon_255_223_encode(data, 223, block + 223), 32);
-	assert_memory_equal(block, data, 223);
+	situ_check_eq(situ_reed_solomon_255_223_encode(data, 223, block + 223), 32);
+	situ_check_bytes(block, data, 223);
 }
 
 static void test_an_undamaged_block_needs_no_correction(void **state)
@@ -464,7 +462,7 @@ static void test_an_undamaged_block_needs_no_correction(void **state)
 	memcpy(block, data, 223);
 	situ_reed_solomon_255_223_encode(data, 223, block + 223);
 
-	assert_int_equal(situ_reed_solomon_255_223_decode(block, 255), 0);
+	situ_check_eq(situ_reed_solomon_255_223_decode(block, 255), 0);
 }
 
 static void test_reed_solomon_corrects_up_to_sixteen_errors(void **state)
@@ -502,9 +500,9 @@ static void test_reed_solomon_corrects_up_to_sixteen_errors(void **state)
 			}
 		}
 
-		assert_int_equal(situ_reed_solomon_255_223_decode(block, 255),
+		situ_check_eq(situ_reed_solomon_255_223_decode(block, 255),
 		                 (int)errors);
-		assert_memory_equal(block, clean, 255);
+		situ_check_bytes(block, clean, 255);
 	}
 }
 
@@ -524,9 +522,9 @@ static void test_a_shortened_code_works_the_same_way(void **state)
 	}
 	memcpy(clean, data, 56);
 
-	assert_int_equal(situ_reed_solomon_64_56_encode(data, 56, clean + 56), 8);
+	situ_check_eq(situ_reed_solomon_64_56_encode(data, 56, clean + 56), 8);
 	memcpy(block, clean, 64);
-	assert_int_equal(situ_reed_solomon_64_56_decode(block, 64), 0);
+	situ_check_eq(situ_reed_solomon_64_56_decode(block, 64), 0);
 
 	/* Four errors is the capacity of eight parity symbols. */
 	block[3]  = (uint8_t)(block[3] ^ 0xFFu);
@@ -534,8 +532,8 @@ static void test_a_shortened_code_works_the_same_way(void **state)
 	block[58] = (uint8_t)(block[58] ^ 0x7Fu);
 	block[63] = (uint8_t)(block[63] ^ 0xA5u);
 
-	assert_int_equal(situ_reed_solomon_64_56_decode(block, 64), 4);
-	assert_memory_equal(block, clean, 64);
+	situ_check_eq(situ_reed_solomon_64_56_decode(block, 64), 4);
+	situ_check_bytes(block, clean, 64);
 }
 
 static void test_a_block_of_the_wrong_length_is_refused(void **state)
@@ -544,8 +542,8 @@ static void test_a_block_of_the_wrong_length_is_refused(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_reed_solomon_255_223_decode(block, 254), -1);
-	assert_int_equal(situ_reed_solomon_255_223_encode(block, 222, block), 0);
+	situ_check_eq(situ_reed_solomon_255_223_decode(block, 254), -1);
+	situ_check_eq(situ_reed_solomon_255_223_encode(block, 222, block), 0);
 }
 
 
@@ -577,12 +575,12 @@ static void test_dot_stuffing_doubles_a_leading_period(void **state)
 
 		written = situ_smtp_dot_stuffing_encode(
 		    (const uint8_t *)CASES[i].plain, plain, out);
-		assert_int_equal(written, wire);
-		assert_memory_equal(out, CASES[i].wire, wire);
+		situ_check_eq(written, wire);
+		situ_check_bytes(out, CASES[i].wire, wire);
 
-		assert_int_equal(situ_smtp_dot_stuffing_decode(
+		situ_check_eq(situ_smtp_dot_stuffing_decode(
 		    (const uint8_t *)CASES[i].wire, wire, back), plain);
-		assert_memory_equal(back, CASES[i].plain, plain);
+		situ_check_bytes(back, CASES[i].plain, plain);
 	}
 }
 
@@ -594,7 +592,7 @@ static void test_dot_stuffing_meets_its_declared_worst_case(void **state)
 	uint8_t out[16];
 
 	(void)state;
-	assert_int_equal(situ_smtp_dot_stuffing_encode((const uint8_t *)".\r\n", 3,
+	situ_check_eq(situ_smtp_dot_stuffing_encode((const uint8_t *)".\r\n", 3,
 	                                               out), 4);
 }
 
@@ -606,9 +604,9 @@ static void test_dot_stuffing_carries_line_state_across_the_buffer(void **state)
 	uint8_t out[32];
 
 	(void)state;
-	assert_int_equal(situ_smtp_dot_stuffing_decode((const uint8_t *)"..x\r\n", 5,
+	situ_check_eq(situ_smtp_dot_stuffing_decode((const uint8_t *)"..x\r\n", 5,
 	                                               out), 4);
-	assert_memory_equal(out, ".x\r\n", 4);
+	situ_check_bytes(out, ".x\r\n", 4);
 }
 
 /* -- SLIP (RFC 1055) and PPP asynchronous framing (RFC 1662) ---------------- */
@@ -641,12 +639,12 @@ static void test_slip_matches_rfc_1055(void **state)
 		uint32_t written = situ_slip_framing_encode(cases[i].in, cases[i].len,
 		                                            out);
 
-		assert_int_equal(written, cases[i].encoded);
-		assert_memory_equal(out, cases[i].want, written);
+		situ_check_eq(written, cases[i].encoded);
+		situ_check_bytes(out, cases[i].want, written);
 
-		assert_int_equal(situ_slip_framing_decode(out, written, back),
+		situ_check_eq(situ_slip_framing_decode(out, written, back),
 		                 cases[i].len);
-		assert_memory_equal(back, cases[i].in, cases[i].len);
+		situ_check_bytes(back, cases[i].in, cases[i].len);
 	}
 }
 
@@ -662,7 +660,7 @@ static void test_slip_refuses_an_escape_it_does_not_define(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_slip_framing_decode(bad, 3, out), 0);
+	situ_check_eq(situ_slip_framing_decode(bad, 3, out), 0);
 }
 
 static void test_ppp_matches_rfc_1662(void **state)
@@ -688,12 +686,12 @@ static void test_ppp_matches_rfc_1662(void **state)
 		uint32_t written = situ_ppp_async_framing_encode(cases[i].in,
 		                                                 cases[i].len, out);
 
-		assert_int_equal(written, cases[i].encoded);
-		assert_memory_equal(out, cases[i].want, written);
+		situ_check_eq(written, cases[i].encoded);
+		situ_check_bytes(out, cases[i].want, written);
 
-		assert_int_equal(situ_ppp_async_framing_decode(out, written, back),
+		situ_check_eq(situ_ppp_async_framing_decode(out, written, back),
 		                 cases[i].len);
-		assert_memory_equal(back, cases[i].in, cases[i].len);
+		situ_check_bytes(back, cases[i].in, cases[i].len);
 	}
 }
 
@@ -715,44 +713,44 @@ static void test_ppp_decodes_an_accm_escape_it_never_encodes(void **state)
 
 	(void)state;
 
-	assert_int_equal(situ_ppp_async_framing_decode(accm, 5, out), 2);
-	assert_memory_equal(out, want, 2);
+	situ_check_eq(situ_ppp_async_framing_decode(accm, 5, out), 2);
+	situ_check_bytes(out, want, 2);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_cobs_matches_the_published_examples),
-		cmocka_unit_test(test_cobs_spends_one_byte_per_254),
-		cmocka_unit_test(test_hamming_is_systematic),
-		cmocka_unit_test(test_hamming_corrects_any_single_bit_error),
-		cmocka_unit_test(test_the_additive_scrambler_is_its_own_inverse),
-		cmocka_unit_test(test_the_multiplicative_scrambler_is_not_an_involution),
-		cmocka_unit_test(test_the_interleaver_spreads_adjacent_bytes),
-		cmocka_unit_test(test_the_interleaver_refuses_a_partial_block),
-		cmocka_unit_test(test_dot_stuffing_doubles_a_leading_period),
-		cmocka_unit_test(test_dot_stuffing_meets_its_declared_worst_case),
-		cmocka_unit_test(test_dot_stuffing_carries_line_state_across_the_buffer),
-		cmocka_unit_test(test_hdlc_inserts_a_zero_after_five_ones),
-		cmocka_unit_test(test_hdlc_refuses_six_ones),
-		cmocka_unit_test(test_slip_matches_rfc_1055),
-		cmocka_unit_test(test_slip_refuses_an_escape_it_does_not_define),
-		cmocka_unit_test(test_ppp_matches_rfc_1662),
-		cmocka_unit_test(test_ppp_decodes_an_accm_escape_it_never_encodes),
-		cmocka_unit_test(test_base64_matches_rfc_4648_vectors),
-		cmocka_unit_test(test_base32_matches_rfc_4648_vectors),
-		cmocka_unit_test(test_the_output_is_always_whole_groups),
-		cmocka_unit_test(test_base64url_is_a_different_code),
-		cmocka_unit_test(test_base64_refuses_what_it_did_not_encode),
-		cmocka_unit_test(test_base16_encodes_to_ascii_hex),
-		cmocka_unit_test(test_base16_needs_no_padding_at_any_length),
-		cmocka_unit_test(test_base16_lower_is_a_different_code_not_an_alias),
-		cmocka_unit_test(test_reed_solomon_is_systematic),
-		cmocka_unit_test(test_an_undamaged_block_needs_no_correction),
-		cmocka_unit_test(test_reed_solomon_corrects_up_to_sixteen_errors),
-		cmocka_unit_test(test_a_shortened_code_works_the_same_way),
-		cmocka_unit_test(test_a_block_of_the_wrong_length_is_refused),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_cobs_matches_the_published_examples),
+		situ_check_case(test_cobs_spends_one_byte_per_254),
+		situ_check_case(test_hamming_is_systematic),
+		situ_check_case(test_hamming_corrects_any_single_bit_error),
+		situ_check_case(test_the_additive_scrambler_is_its_own_inverse),
+		situ_check_case(test_the_multiplicative_scrambler_is_not_an_involution),
+		situ_check_case(test_the_interleaver_spreads_adjacent_bytes),
+		situ_check_case(test_the_interleaver_refuses_a_partial_block),
+		situ_check_case(test_dot_stuffing_doubles_a_leading_period),
+		situ_check_case(test_dot_stuffing_meets_its_declared_worst_case),
+		situ_check_case(test_dot_stuffing_carries_line_state_across_the_buffer),
+		situ_check_case(test_hdlc_inserts_a_zero_after_five_ones),
+		situ_check_case(test_hdlc_refuses_six_ones),
+		situ_check_case(test_slip_matches_rfc_1055),
+		situ_check_case(test_slip_refuses_an_escape_it_does_not_define),
+		situ_check_case(test_ppp_matches_rfc_1662),
+		situ_check_case(test_ppp_decodes_an_accm_escape_it_never_encodes),
+		situ_check_case(test_base64_matches_rfc_4648_vectors),
+		situ_check_case(test_base32_matches_rfc_4648_vectors),
+		situ_check_case(test_the_output_is_always_whole_groups),
+		situ_check_case(test_base64url_is_a_different_code),
+		situ_check_case(test_base64_refuses_what_it_did_not_encode),
+		situ_check_case(test_base16_encodes_to_ascii_hex),
+		situ_check_case(test_base16_needs_no_padding_at_any_length),
+		situ_check_case(test_base16_lower_is_a_different_code_not_an_alias),
+		situ_check_case(test_reed_solomon_is_systematic),
+		situ_check_case(test_an_undamaged_block_needs_no_correction),
+		situ_check_case(test_reed_solomon_corrects_up_to_sixteen_errors),
+		situ_check_case(test_a_shortened_code_works_the_same_way),
+		situ_check_case(test_a_block_of_the_wrong_length_is_refused),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_kernels");
 }

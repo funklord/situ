@@ -1131,6 +1131,11 @@ def test_generated_c_calls_only_accessors_the_headers_declare(
 	# own `SITU_CODEC_MAX_*` are things the output DEFINES, not things
 	# it expects a header to have declared.
 	own |= set(re.findall(r"^#define\s+(SITU_[A-Z0-9_]+)", harness, re.M))
+	# And a function-like macro the output defines: the checks a suite
+	# carries in place of cmocka, `situ_check_eq(...)` and the rest
+	# (26.977), are calls the harness makes on itself.
+	own |= set(re.findall(r"^#define\s+(situ_[A-Za-z0-9_]+)\(", harness,
+	                      re.M))
 	# And one the BUILD supplies: `test/generated/Makefile` compiles a
 	# fuzz harness with `-DSITU_FUZZ_STANDALONE`, so no header defines
 	# it and none should. Named rather than pattern-matched, so a second
@@ -1676,7 +1681,7 @@ def test_vectors_reject_an_unknown_field() -> None:
 
 def test_generated_vector_test_asserts_the_expectations() -> None:
 	text = vector_source("struct S { u32 a; }", "S basic 00 00 00 2A\n\ta = 42\n")
-	assert "assert_int_equal(situ_S_a_get(view), 42);" in text
+	assert "situ_check_eq(situ_S_a_get(view), 42);" in text
 	assert "situ_S_validate(view)" in text
 
 
@@ -1689,7 +1694,7 @@ def test_a_byte_run_is_expected_as_bytes() -> None:
 		"S basic 00 1A 2B 3C 4D 5E\n\tmac = 00:1A:2B:3C:4D:5E\n")
 
 	assert "static const uint8_t want[] = { 0x00, 0x1A, 0x2B, 0x3C," in text
-	assert "assert_memory_equal(situ_S_mac_ptr(view), want, sizeof(want));" in text
+	assert "situ_check_bytes(situ_S_mac_ptr(view), want, sizeof(want));" in text
 
 
 def test_a_nested_field_is_expected_through_its_own_view() -> None:
@@ -1704,7 +1709,7 @@ def test_a_nested_field_is_expected_through_its_own_view() -> None:
 		"S basic 00 00 00 2A 00 00 00 07\n\ta.s = 42\n")
 
 	assert "situ_S_a_view(view, &sub)" in text
-	assert "assert_int_equal(situ_t_s_get(sub), 42);" in text
+	assert "situ_check_eq(situ_t_s_get(sub), 42);" in text
 
 
 def test_a_byte_run_expectation_of_the_wrong_length_is_refused() -> None:
@@ -1718,7 +1723,7 @@ def test_a_byte_run_expectation_of_the_wrong_length_is_refused() -> None:
 def test_generated_vector_test_round_trips() -> None:
 	text = vector_source("struct S { u32 a; }", "S basic 00 00 00 2A\n")
 	assert "situ_S_a_set(view, situ_S_a_get(view));" in text
-	assert "assert_memory_equal(buf, vector_S_basic, sizeof(buf));" in text
+	assert "situ_check_bytes(buf, vector_S_basic, sizeof(buf));" in text
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
@@ -6879,8 +6884,8 @@ def test_one_case_name_in_two_structs_emits_two_identifiers() -> None:
 
 	assert "static void test_a_same(void **state)" in source
 	assert "static void test_b_same(void **state)" in source
-	assert "cmocka_unit_test(test_a_same)," in source
-	assert "cmocka_unit_test(test_b_same)," in source
+	assert "situ_check_case(test_a_same)," in source
+	assert "situ_check_case(test_b_same)," in source
 	# The bytes are named the same way, and they differ, so a collision here
 	# would have silently given both cases one buffer.
 	assert "vector_a_same[SITU_A_SIZE_FIXED] = {\n\t0x01, 0x02," in source

@@ -1,4 +1,4 @@
-/* test_header.c -- cmocka tests over the code generated from example 5.1.
+/* test_header.c -- tests over the code generated from example 5.1.
  *
  * The header this exercises is generated at build time by `situc build`, so
  * these tests fail if the codegen changes shape as well as if it changes
@@ -10,13 +10,11 @@
  * a layout change broke the wire format (project.md section 20.3).
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "header.h"
 
@@ -38,7 +36,7 @@ static situ_view_t view_of(situ_msg_t *msg, uint8_t *buf, uint32_t size)
 	situ_view_t view;
 
 	situ_msg_init(msg, buf, size);
-	assert_int_equal(situ_header_view(msg, 0, &view), SITU_OK);
+	situ_check_eq(situ_header_view(msg, 0, &view), SITU_OK);
 	return view;
 }
 
@@ -48,10 +46,10 @@ static void test_size_constants(void **state)
 	/* 1 + 1 + 1 + 2 + 4. project.md example 5.1 prints 10, which is off by
 	 * one: reaching it would need a padding byte and section 8.4 inserts
 	 * none. */
-	assert_int_equal(SITU_HEADER_SIZE_FIXED, 9);
-	assert_int_equal(SITU_HEADER_SIZE_MIN, 9);
-	assert_int_equal(SITU_HEADER_SIZE_MAX, 9);
-	assert_int_equal(SITU_FLAGS_SIZE_FIXED, 1);
+	situ_check_eq(SITU_HEADER_SIZE_FIXED, 9);
+	situ_check_eq(SITU_HEADER_SIZE_MIN, 9);
+	situ_check_eq(SITU_HEADER_SIZE_MAX, 9);
+	situ_check_eq(SITU_FLAGS_SIZE_FIXED, 1);
 }
 
 static void test_scalar_getters(void **state)
@@ -64,10 +62,10 @@ static void test_scalar_getters(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_header_version_get(view), 1);
-	assert_int_equal(situ_header_type_get(view), SITU_MSG_TYPE_DATA);
-	assert_int_equal(situ_header_length_get(view), 1500);
-	assert_int_equal(situ_header_seq_get(view), 0xDEADBEEFu);
+	situ_check_eq(situ_header_version_get(view), 1);
+	situ_check_eq(situ_header_type_get(view), SITU_MSG_TYPE_DATA);
+	situ_check_eq(situ_header_length_get(view), 1500);
+	situ_check_eq(situ_header_seq_get(view), 0xDEADBEEFu);
 }
 
 static void test_big_endian_is_decoded_not_aliased(void **state)
@@ -83,9 +81,9 @@ static void test_big_endian_is_decoded_not_aliased(void **state)
 	/* The bytes are 05 DC; the value is 1500 on every host. A cast through a
 	 * uint16_t pointer would give 0xDC05 on a little-endian machine, which is
 	 * exactly why no pointer accessor is generated for this field. */
-	assert_int_equal(buf[3], 0x05);
-	assert_int_equal(buf[4], 0xDC);
-	assert_int_equal(situ_header_length_get(view), 1500);
+	situ_check_eq(buf[3], 0x05);
+	situ_check_eq(buf[4], 0xDC);
+	situ_check_eq(situ_header_length_get(view), 1500);
 }
 
 static void test_bit_fields_through_a_sub_view(void **state)
@@ -99,13 +97,13 @@ static void test_bit_fields_through_a_sub_view(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
-	assert_ptr_equal(flags.base, buf + 2);
+	situ_check_eq(situ_header_flags_view(view, &flags), SITU_OK);
+	situ_check_ptr_eq(flags.base, buf + 2);
 
 	/* 0xE8 = 1110 1000, msb_first: urgent=1, ack=1, priority=101b, rsvd=0 */
-	assert_int_equal(situ_flags_urgent_get(flags), 1);
-	assert_int_equal(situ_flags_ack_get(flags), 1);
-	assert_int_equal(situ_flags_priority_get(flags), 5);
+	situ_check_eq(situ_flags_urgent_get(flags), 1);
+	situ_check_eq(situ_flags_ack_get(flags), 1);
+	situ_check_eq(situ_flags_priority_get(flags), 5);
 }
 
 static void test_bit_field_write_touches_only_its_own_bits(void **state)
@@ -118,16 +116,16 @@ static void test_bit_field_write_touches_only_its_own_bits(void **state)
 	(void)state;
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
+	situ_check_eq(situ_header_flags_view(view, &flags), SITU_OK);
 
 	situ_flags_priority_set(flags, 2);
 
 	/* 1 1 010 000 = 0xD0. The neighbouring fields and the reserved bits are
 	 * unchanged, which is what a read-modify-write has to guarantee. */
-	assert_int_equal(buf[2], 0xD0);
-	assert_int_equal(situ_flags_urgent_get(flags), 1);
-	assert_int_equal(situ_flags_ack_get(flags), 1);
-	assert_int_equal(situ_flags_priority_get(flags), 2);
+	situ_check_eq(buf[2], 0xD0);
+	situ_check_eq(situ_flags_urgent_get(flags), 1);
+	situ_check_eq(situ_flags_ack_get(flags), 1);
+	situ_check_eq(situ_flags_priority_get(flags), 2);
 }
 
 static void test_round_trip_is_byte_identical(void **state)
@@ -148,7 +146,7 @@ static void test_round_trip_is_byte_identical(void **state)
 	(void)state;
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
+	situ_check_eq(situ_header_flags_view(view, &flags), SITU_OK);
 
 	version  = situ_header_version_get(view);
 	type     = situ_header_type_get(view);
@@ -174,7 +172,7 @@ static void test_round_trip_is_byte_identical(void **state)
 	 * Zero them the way a writer would and the buffer must match exactly. */
 	buf[2] &= 0xF8u;
 
-	assert_memory_equal(buf, VECTOR, sizeof(buf));
+	situ_check_bytes(buf, VECTOR, sizeof(buf));
 }
 
 static void test_validate_accepts_the_vector(void **state)
@@ -188,9 +186,9 @@ static void test_validate_accepts_the_vector(void **state)
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_header_validate(view), SITU_OK);
-	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
-	assert_int_equal(situ_flags_validate(flags), SITU_OK);
+	situ_check_eq(situ_header_validate(view), SITU_OK);
+	situ_check_eq(situ_header_flags_view(view, &flags), SITU_OK);
+	situ_check_eq(situ_flags_validate(flags), SITU_OK);
 }
 
 static void test_validate_rejects_a_wrong_must_eq(void **state)
@@ -204,7 +202,7 @@ static void test_validate_rejects_a_wrong_must_eq(void **state)
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
 	situ_header_version_set(view, 2);
-	assert_int_equal(situ_header_validate(view), SITU_ERR_CONSTRAINT);
+	situ_check_eq(situ_header_validate(view), SITU_ERR_CONSTRAINT);
 }
 
 static void test_validate_rejects_a_length_over_max(void **state)
@@ -218,7 +216,7 @@ static void test_validate_rejects_a_length_over_max(void **state)
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
 	situ_header_length_set(view, 1501);
-	assert_int_equal(situ_header_validate(view), SITU_ERR_CONSTRAINT);
+	situ_check_eq(situ_header_validate(view), SITU_ERR_CONSTRAINT);
 }
 
 static void test_validate_rejects_dirty_reserved_bits(void **state)
@@ -231,12 +229,12 @@ static void test_validate_rejects_dirty_reserved_bits(void **state)
 	(void)state;
 	memcpy(buf, VECTOR, sizeof(buf));
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_header_flags_view(view, &flags), SITU_OK);
+	situ_check_eq(situ_header_flags_view(view, &flags), SITU_OK);
 
 	/* Section 14.5: every ignored bit is a malleability surface, so reserved
 	 * bits are rejected on parse rather than preserved. */
 	buf[2] |= 0x01u;
-	assert_int_equal(situ_flags_validate(flags), SITU_ERR_CONSTRAINT);
+	situ_check_eq(situ_flags_validate(flags), SITU_ERR_CONSTRAINT);
 }
 
 static void test_view_refuses_a_short_buffer(void **state)
@@ -247,7 +245,7 @@ static void test_view_refuses_a_short_buffer(void **state)
 
 	(void)state;
 	situ_msg_init(&msg, buf, (uint32_t)sizeof(buf));
-	assert_int_equal(situ_header_view(&msg, 0, &view), SITU_ERR_BOUNDS);
+	situ_check_eq(situ_header_view(&msg, 0, &view), SITU_ERR_BOUNDS);
 }
 
 static void test_pointer_accessor_for_byte_fields(void **state)
@@ -261,27 +259,27 @@ static void test_pointer_accessor_for_byte_fields(void **state)
 	view = view_of(&msg, buf, (uint32_t)sizeof(buf));
 
 	/* version is MemoryIdentical, so a pointer is safe and is offered. */
-	assert_ptr_equal(situ_header_version_ptr(view), buf);
+	situ_check_ptr_eq(situ_header_version_ptr(view), buf);
 	*situ_header_version_ptr(view) = 7;
-	assert_int_equal(situ_header_version_get(view), 7);
+	situ_check_eq(situ_header_version_get(view), 7);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_size_constants),
-		cmocka_unit_test(test_scalar_getters),
-		cmocka_unit_test(test_big_endian_is_decoded_not_aliased),
-		cmocka_unit_test(test_bit_fields_through_a_sub_view),
-		cmocka_unit_test(test_bit_field_write_touches_only_its_own_bits),
-		cmocka_unit_test(test_round_trip_is_byte_identical),
-		cmocka_unit_test(test_validate_accepts_the_vector),
-		cmocka_unit_test(test_validate_rejects_a_wrong_must_eq),
-		cmocka_unit_test(test_validate_rejects_a_length_over_max),
-		cmocka_unit_test(test_validate_rejects_dirty_reserved_bits),
-		cmocka_unit_test(test_view_refuses_a_short_buffer),
-		cmocka_unit_test(test_pointer_accessor_for_byte_fields),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_size_constants),
+		situ_check_case(test_scalar_getters),
+		situ_check_case(test_big_endian_is_decoded_not_aliased),
+		situ_check_case(test_bit_fields_through_a_sub_view),
+		situ_check_case(test_bit_field_write_touches_only_its_own_bits),
+		situ_check_case(test_round_trip_is_byte_identical),
+		situ_check_case(test_validate_accepts_the_vector),
+		situ_check_case(test_validate_rejects_a_wrong_must_eq),
+		situ_check_case(test_validate_rejects_a_length_over_max),
+		situ_check_case(test_validate_rejects_dirty_reserved_bits),
+		situ_check_case(test_view_refuses_a_short_buffer),
+		situ_check_case(test_pointer_accessor_for_byte_fields),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_header");
 }

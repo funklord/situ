@@ -1,8 +1,8 @@
 """`gen-checks --target cpp`: the capability map held to the C++ accessors.
 
 **A plain `main` counting failures rather than a framework**, which is the
-same decision `cpp/vectors.py` records: the C suite uses cmocka and the C++
-one has no dependency to spend, so each check is a function that prints
+same decision `cpp/vectors.py` records -- and the C suite's since 26.977,
+which dropped cmocka for the same reason -- so each check is a function that prints
 `FAIL` and increments a counter. `main` returns non-zero if any did.
 
 The arithmetic is not here. Which value a member must hold, where its bytes
@@ -911,8 +911,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		" * accessors held to the map they were generated beside.",
 		" *",
 		" * A plain `main` counting failures rather than a framework, which",
-		" * is `cpp/vectors.c`'s decision and for its reason: the C suite",
-		" * uses cmocka and this has no dependency to spend.",
+		" * is `cpp/vectors.c`'s decision and for its reason: a suite",
+		" * handed to a user asks no more than the compiler does.",
 		" *",
 		" * The arithmetic is shared with `--target c` and",
 		" * `--target python` -- which value a member must hold, where its",

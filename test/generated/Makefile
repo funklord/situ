@@ -1,4 +1,4 @@
-# cmocka tests over the situ runtime and, from phase 4, over generated code.
+# Tests over the situ runtime and, from phase 4, over generated code.
 #
 # Self-contained: builds standalone against ../../runtime/c. The parent
 # overrides RUNTIME_INC and RUNTIME_LIB through the environment so it can
@@ -25,8 +25,6 @@ BUILD_DIR	?= build
 # Standalone defaults: build the runtime here if the parent did not.
 RUNTIME_INC	?= ../../runtime/c
 RUNTIME_LIB	?= $(BUILD_DIR)/runtime/libsitu.a
-
-CMOCKA_LIBS	?= -lcmocka
 
 # Every test is compiled twice: the checked build exercises the bounds and
 # generation assertions, the release build proves they compile out cleanly.
@@ -94,7 +92,7 @@ GEN_HEADERS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.h)
 GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 
 # Generated golden-vector suites and fuzz harnesses, built alongside the
-# hand-written tests. The vector suites run under cmocka; the fuzz harness is
+# hand-written tests. The vector suites are plain programs; the fuzz harness is
 # built standalone so a harness nobody can compile cannot go unnoticed.
 # Where the tree is, needed here rather than two hundred lines down because
 # VECTOR_SCHEMAS asks the filesystem a question and `:=` answers it now.
@@ -273,15 +271,24 @@ $(foreach name,$(RELATE_NAMES),\
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
-$(BUILD_DIR)/%_checked: %.c $(RUNTIME_LIB) $(GEN_OBJS) $$(OBJS_$$*)
+# The checks and runner every suite here uses, written from the module the
+# generated suites carry them from, so the two cannot drift (26.977). No
+# test framework: what these need is a C compiler and the runtime.
+$(GEN_DIR)/situ_check.h: $(REPO_ROOT)/situc/codegen/c/selfcheck.py
+	@mkdir -p '$(@D)'
+	cd '$(REPO_ROOT)' && $(PYTHON) -c 'import sys; from situc.codegen.c.selfcheck import header; sys.stdout.write(header())' > '$(abspath $@)'
+
+$(BUILD_DIR)/%_checked: %.c $(GEN_DIR)/situ_check.h $(RUNTIME_LIB) $(GEN_OBJS) \
+		$$(OBJS_$$*)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -DSITU_CHECKED -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/%: %.c $(RUNTIME_LIB) $(GEN_OBJS) $$(OBJS_$$*)
+$(BUILD_DIR)/%: %.c $(GEN_DIR)/situ_check.h $(RUNTIME_LIB) $(GEN_OBJS) \
+		$$(OBJS_$$*)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) -o $@
 
 # Standalone fallback: only reached when the parent did not supply a library.
 $(BUILD_DIR)/runtime/libsitu.a:
@@ -321,7 +328,7 @@ $(BUILD_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< codec_impl.c $(GEN_DIR)/edges_derived.o $(RUNTIME_LIB) \
-		$(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$(LDFLAGS) -o $@
 
 # And the tier-2 half: the property tests for every codec `std/kernels.situ`
 # describes, run against the implementations `gen-derived` writes from the same
@@ -337,7 +344,7 @@ $(BUILD_DIR)/kernels_codec_tests: $(GEN_DIR)/kernels_codec_tests.c \
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< $(GEN_DIR)/kernels_derived.o $(RUNTIME_LIB) $(LDFLAGS) \
-		$(CMOCKA_LIBS) -o $@
+		-o $@
 
 $(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' \
@@ -404,12 +411,12 @@ $(BUILD_DIR)/%_checks: $(GEN_DIR)/%_checks.c $(GEN_DIR)/%.o \
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< $(GEN_DIR)/$*.o $(RELATE_OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) \
-		$(CMOCKA_LIBS) -o $@
+		-o $@
 
 $(BUILD_DIR)/%_vectors: $(GEN_DIR)/%_vectors.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) $(CMOCKA_LIBS) -o $@
+		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/%_fuzz: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
@@ -474,14 +481,14 @@ $(SAN_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
 	@mkdir -p '$(@D)'
 	$(SAN_CC) $(SAN_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< codec_impl.c $(GEN_DIR)/edges_derived.c \
-		'$(RUNTIME_INC)/situ.c' $(CMOCKA_LIBS) -o $@
+		'$(RUNTIME_INC)/situ.c' -o $@
 
 $(SAN_DIR)/kernels_codec_tests: $(GEN_DIR)/kernels_codec_tests.c \
 		$(GEN_DIR)/kernels_derived.c $(RUNTIME_INC)/situ.c
 	@mkdir -p '$(@D)'
 	$(SAN_CC) $(SAN_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< $(GEN_DIR)/kernels_derived.c \
-		'$(RUNTIME_INC)/situ.c' $(CMOCKA_LIBS) -o $@
+		'$(RUNTIME_INC)/situ.c' -o $@
 
 # The sources are rebuilt from the schemas rather than reusing `test`'s
 # objects: those are compiled with `$(CFLAGS)` and an object built without

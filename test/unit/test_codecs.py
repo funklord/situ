@@ -324,22 +324,22 @@ def codec_tests(body: str, bind: bool = True) -> str:
 def test_a_length_claim_gets_a_sweep() -> None:
 	text = codec_tests("codec c { length_preserving; }")
 	assert "test_c_length" in text
-	assert "assert_int_equal(out_len, in_len);" in text
+	assert "situ_check_eq(out_len, in_len);" in text
 
 
 def test_a_fixed_expansion_is_checked_exactly() -> None:
 	text = codec_tests("codec c { expansion = +4; }")
-	assert "assert_int_equal(out_len, in_len + 4u);" in text
+	assert "situ_check_eq(out_len, in_len + 4u);" in text
 
 
 def test_an_exact_ratio_is_checked_exactly() -> None:
 	text = codec_tests("codec c { expansion = ratio_exact(2, 1); }")
-	assert "assert_int_equal(out_len, (in_len * 2u + 0u) / 1u);" in text
+	assert "situ_check_eq(out_len, (in_len * 2u + 0u) / 1u);" in text
 
 
 def test_a_bounded_ratio_is_checked_as_a_bound() -> None:
 	text = codec_tests("codec c { expansion = ratio_bounded(255, 254); }")
-	assert "assert_true(out_len <= (in_len * 255u + 253u) / 254u);" in text
+	assert "situ_check_true(out_len <= (in_len * 255u + 253u) / 254u);" in text
 
 
 def test_a_ratio_that_lands_between_bytes_rounds_the_region_up() -> None:
@@ -500,7 +500,7 @@ def test_an_undeclared_property_gets_no_test() -> None:
 def test_a_systematic_appended_parity_codec_is_checked() -> None:
 	text = codec_tests("codec c { expansion = +4; systematic; }")
 	assert "test_c_systematic" in text
-	assert "assert_memory_equal(output, input, sizeof(input));" in text
+	assert "situ_check_bytes(output, input, sizeof(input));" in text
 
 
 def test_a_systematic_codec_with_no_computable_offsets_says_so() -> None:
@@ -529,8 +529,8 @@ def test_a_signature_claiming_nothing_gets_no_test_from_a_claim() -> None:
 	text = codec_tests("codec c { expansion = unbounded; }")
 
 	# Nothing from a claim, and the only case is the ABI attack.
-	assert "cmocka_unit_test(test_c_hostile_input)" in text
-	assert text.count("cmocka_unit_test(") == 1
+	assert "situ_check_case(test_c_hostile_input)" in text
+	assert text.count("\t\tsitu_check_case(") == 1
 	# And the main says which it is.
 	assert "the signatures claim nothing" in text
 	assert "attacks the section 13.2a ABI" in text
@@ -541,7 +541,7 @@ def test_a_schema_with_no_bound_codec_at_all_still_says_so() -> None:
 	original sentence is the one that applies."""
 	text = codec_tests("codec c { expansion = unbounded; }", bind=False)
 
-	assert "cmocka_unit_test(" not in text
+	assert "\t\tsitu_check_case(" not in text
 	assert "That is not a pass: it means the signatures claim nothing" in text
 
 
@@ -571,7 +571,7 @@ def test_a_tier_one_codec_is_handed_a_capacity_it_may_not_fit() -> None:
 	# into a capacity that may not be enough.
 	assert "my_c_decode(input, n, out, n, &out_len)" in text
 	assert "my_c_encode(input, n, out, n, &out_len)" in text
-	assert "assert_int_equal(out[n + g]," in text
+	assert "situ_check_eq(out[n + g]," in text
 
 
 def test_a_tier_one_codec_with_no_implementation_is_not_attacked() -> None:
@@ -627,7 +627,7 @@ def test_a_derived_decoder_is_attacked_with_bytes_no_encoder_made() -> None:
 	# `situ_slip_framing_decode` fails this property and none of the other
 	# four.
 	assert "uint8_t out[SITU_CODEC_MAX_INPUT + SITU_CODEC_GUARD];" in text
-	assert "assert_int_equal(out[n + g]," in text
+	assert "situ_check_eq(out[n + g]," in text
 	# The bit-counted call shape, as the kernel counts it.
 	assert "situ_mm_decode(input, n * 8u, out)" in text
 

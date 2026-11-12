@@ -14,13 +14,11 @@
  * each one was generated from.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "situ.h"
 
@@ -57,7 +55,7 @@ static situ_view_t view_over(situ_msg_t *msg, const uint8_t *data, uint32_t len,
 
 	memcpy(scratch, data, len);
 	situ_msg_init(msg, scratch, len);
-	assert_int_equal(situ_view_at(msg, 0, len, &view), SITU_OK);
+	situ_check_eq(situ_view_at(msg, 0, len, &view), SITU_OK);
 	return view;
 }
 
@@ -69,8 +67,8 @@ static void test_varint_decodes_protoc_output(void **state)
 
 	(void)state;
 	/* 0x96 0x01 is 150: 0x16 low group, 0x01 high group, shifted seven. */
-	assert_int_equal(situ_varint_get(ALL_THREE + 1, 2, 10, &value), 2);
-	assert_int_equal(value, 150);
+	situ_check_eq(situ_varint_get(ALL_THREE + 1, 2, 10, &value), 2);
+	situ_check_eq(value, 150);
 }
 
 static void test_varint_decodes_zero_and_max(void **state)
@@ -78,11 +76,11 @@ static void test_varint_decodes_zero_and_max(void **state)
 	uint64_t value = 1;
 
 	(void)state;
-	assert_int_equal(situ_varint_get(ZERO + 1, 1, 10, &value), 1);
-	assert_int_equal(value, 0);
+	situ_check_eq(situ_varint_get(ZERO + 1, 1, 10, &value), 1);
+	situ_check_eq(value, 0);
 
-	assert_int_equal(situ_varint_get(MAX_U64 + 1, 10, 10, &value), 10);
-	assert_true(value == UINT64_MAX);
+	situ_check_eq(situ_varint_get(MAX_U64 + 1, 10, 10, &value), 10);
+	situ_check_true(value == UINT64_MAX);
 }
 
 static void test_varint_round_trips(void **state)
@@ -98,10 +96,10 @@ static void test_varint_round_trips(void **state)
 		uint64_t back = 0;
 		uint32_t n    = situ_varint_put(buf, sizeof(buf), cases[i]);
 
-		assert_int_not_equal(n, 0);
-		assert_int_equal(n, situ_varint_len(cases[i]));
-		assert_int_equal(situ_varint_get(buf, n, 10, &back), n);
-		assert_true(back == cases[i]);
+		situ_check_ne(n, 0);
+		situ_check_eq(n, situ_varint_len(cases[i]));
+		situ_check_eq(situ_varint_get(buf, n, 10, &back), n);
+		situ_check_true(back == cases[i]);
 	}
 }
 
@@ -111,8 +109,8 @@ static void test_varint_encoding_matches_protoc(void **state)
 
 	(void)state;
 	/* Our minimal encoding of 150 must be the bytes protoc produced. */
-	assert_int_equal(situ_varint_put(buf, sizeof(buf), 150), 2);
-	assert_memory_equal(buf, ALL_THREE + 1, 2);
+	situ_check_eq(situ_varint_put(buf, sizeof(buf), 150), 2);
+	situ_check_bytes(buf, ALL_THREE + 1, 2);
 }
 
 static void test_varint_refuses_a_truncated_value(void **state)
@@ -121,7 +119,7 @@ static void test_varint_refuses_a_truncated_value(void **state)
 	static const uint8_t truncated[] = { 0x96 };	/* continuation bit set */
 
 	(void)state;
-	assert_int_equal(situ_varint_get(truncated, 1, 10, &value), 0);
+	situ_check_eq(situ_varint_get(truncated, 1, 10, &value), 0);
 }
 
 static void test_varint_refuses_an_overlong_value(void **state)
@@ -132,7 +130,7 @@ static void test_varint_refuses_an_overlong_value(void **state)
 	};
 
 	(void)state;
-	assert_int_equal(situ_varint_get(overlong, sizeof(overlong), 10, &value), 0);
+	situ_check_eq(situ_varint_get(overlong, sizeof(overlong), 10, &value), 0);
 }
 
 static void test_non_minimal_encodings_are_accepted(void **state)
@@ -144,8 +142,8 @@ static void test_non_minimal_encodings_are_accepted(void **state)
 	uint64_t value = 0;
 
 	(void)state;
-	assert_int_equal(situ_varint_get(padded, sizeof(padded), 10, &value), 3);
-	assert_int_equal(value, 150);
+	situ_check_eq(situ_varint_get(padded, sizeof(padded), 10, &value), 3);
+	situ_check_eq(value, 150);
 }
 
 static void test_zigzag_round_trips(void **state)
@@ -155,14 +153,14 @@ static void test_zigzag_round_trips(void **state)
 
 	(void)state;
 	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-		assert_true(situ_zigzag_decode(situ_zigzag_encode(cases[i])) == cases[i]);
+		situ_check_true(situ_zigzag_decode(situ_zigzag_encode(cases[i])) == cases[i]);
 	}
 
 	/* protobuf's own mapping: 0 -> 0, -1 -> 1, 1 -> 2, -2 -> 3. */
-	assert_int_equal(situ_zigzag_encode(0), 0);
-	assert_int_equal(situ_zigzag_encode(-1), 1);
-	assert_int_equal(situ_zigzag_encode(1), 2);
-	assert_int_equal(situ_zigzag_encode(-2), 3);
+	situ_check_eq(situ_zigzag_encode(0), 0);
+	situ_check_eq(situ_zigzag_encode(-1), 1);
+	situ_check_eq(situ_zigzag_encode(1), 2);
+	situ_check_eq(situ_zigzag_encode(-2), 3);
 }
 
 /* -- tlv iteration --------------------------------------------------------- */
@@ -175,7 +173,7 @@ static void test_iterates_every_item(void **state)
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
 
-	assert_int_equal(situ_proto_message_fields_count(view), 3);
+	situ_check_eq(situ_proto_message_fields_count(view), 3);
 }
 
 static void test_finds_the_fields_protoc_wrote(void **state)
@@ -193,23 +191,23 @@ static void test_finds_the_fields_protoc_wrote(void **state)
 
 	/* One accessor per tag the schema names, each keyed on the part
 	 * `tag_identity` picks out (decision 0023). */
-	assert_int_equal(situ_proto_message_fields_user_id(view, &item), SITU_OK);
-	assert_int_equal(item.wire, 0);
-	assert_int_equal(situ_varint_get(view.base + item.value_at, item.value_len,
+	situ_check_eq(situ_proto_message_fields_user_id(view, &item), SITU_OK);
+	situ_check_eq(item.wire, 0);
+	situ_check_eq(situ_varint_get(view.base + item.value_at, item.value_len,
 	                                 10, &user_id), item.value_len);
-	assert_int_equal(user_id, 150);
+	situ_check_eq(user_id, 150);
 
-	assert_int_equal(situ_proto_message_fields_username(view, &item), SITU_OK);
-	assert_int_equal(item.wire, 2);
-	assert_int_equal(item.value_len, 4);
+	situ_check_eq(situ_proto_message_fields_username(view, &item), SITU_OK);
+	situ_check_eq(item.wire, 2);
+	situ_check_eq(item.value_len, 4);
 	memcpy(username, view.base + item.value_at, item.value_len);
 	username[item.value_len] = '\0';
-	assert_string_equal(username, "situ");
+	situ_check_str_eq(username, "situ");
 
-	assert_int_equal(situ_proto_message_fields_score(view, &item), SITU_OK);
-	assert_int_equal(item.wire, 5);
+	situ_check_eq(situ_proto_message_fields_score(view, &item), SITU_OK);
+	situ_check_eq(item.wire, 5);
 	/* protobuf fixed32 is little endian on the wire; 1.5f is 0x3FC00000. */
-	assert_int_equal(situ_get_le32(view.base + item.value_at), 0x3FC00000u);
+	situ_check_eq(situ_get_le32(view.base + item.value_at), 0x3FC00000u);
 }
 
 static void test_item_extents_match_the_wire(void **state)
@@ -223,19 +221,19 @@ static void test_item_extents_match_the_wire(void **state)
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
 
 	/* Each item's value sits exactly where protoc put it. */
-	assert_int_equal(situ_proto_message_fields_first(view, &item), SITU_OK);
-	assert_int_equal(item.value_at, 1);
-	assert_int_equal(item.value_len, 2);
+	situ_check_eq(situ_proto_message_fields_first(view, &item), SITU_OK);
+	situ_check_eq(item.value_at, 1);
+	situ_check_eq(item.value_len, 2);
 
-	assert_int_equal(situ_proto_message_fields_next(&item), SITU_OK);
-	assert_int_equal(item.value_at, 5);
-	assert_int_equal(item.value_len, 4);
+	situ_check_eq(situ_proto_message_fields_next(&item), SITU_OK);
+	situ_check_eq(item.value_at, 5);
+	situ_check_eq(item.value_len, 4);
 
-	assert_int_equal(situ_proto_message_fields_next(&item), SITU_OK);
-	assert_int_equal(item.value_at, 10);
-	assert_int_equal(item.value_len, 4);
+	situ_check_eq(situ_proto_message_fields_next(&item), SITU_OK);
+	situ_check_eq(item.value_at, 10);
+	situ_check_eq(item.value_len, 4);
 
-	assert_int_equal(situ_proto_message_fields_next(&item), SITU_ERR_BOUNDS);
+	situ_check_eq(situ_proto_message_fields_next(&item), SITU_ERR_BOUNDS);
 }
 
 static void test_same_size_item_mutation_is_in_place(void **state)
@@ -250,14 +248,14 @@ static void test_same_size_item_mutation_is_in_place(void **state)
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
 	memcpy(expected, ALL_THREE, sizeof(expected));
 
-	assert_int_equal(situ_proto_message_fields_username(view, &item), SITU_OK);
+	situ_check_eq(situ_proto_message_fields_username(view, &item), SITU_OK);
 
 	/* Four bytes for four bytes: `mutate = InPlaceSlack` says this stays
 	 * put, and nothing around it moves. */
 	memcpy(scratch + item.value_at, "SITU", 4);
 
 	memcpy(expected + 5, "SITU", 4);
-	assert_memory_equal(scratch, expected, sizeof(expected));
+	situ_check_bytes(scratch, expected, sizeof(expected));
 }
 
 static void test_a_longer_value_would_not_fit(void **state)
@@ -272,7 +270,7 @@ static void test_a_longer_value_would_not_fit(void **state)
 	(void)state;
 	view = view_over(&msg, ALL_THREE, sizeof(ALL_THREE), scratch);
 
-	assert_int_equal(situ_proto_message_fields_username(view, &item), SITU_OK);
+	situ_check_eq(situ_proto_message_fields_username(view, &item), SITU_OK);
 
 	/* The other half of InPlaceSlack: a longer value does not fit where the
 	 * old one was, so everything after it would have to move. Growing "situ"
@@ -281,9 +279,9 @@ static void test_a_longer_value_would_not_fit(void **state)
 	trailing = view.limit - (item.value_at + item.value_len);
 	grown    = item.value_at + item.value_len + 1u + trailing;
 
-	assert_int_equal(trailing, 5);		/* the fixed32 item */
-	assert_true(grown > view.limit);
-	assert_false(situ_in_bounds(view, 0, grown));
+	situ_check_eq(trailing, 5);		/* the fixed32 item */
+	situ_check_true(grown > view.limit);
+	situ_check_false(situ_in_bounds(view, 0, grown));
 }
 
 static void test_truncated_input_is_refused(void **state)
@@ -303,7 +301,7 @@ static void test_truncated_input_is_refused(void **state)
 		err = situ_proto_message_fields_next(&item);
 	}
 
-	assert_int_equal(err, SITU_ERR_BOUNDS);
+	situ_check_eq(err, SITU_ERR_BOUNDS);
 }
 
 static void test_a_group_wire_type_is_refused(void **state)
@@ -319,7 +317,7 @@ static void test_a_group_wire_type_is_refused(void **state)
 	(void)state;
 	view = view_over(&msg, group, sizeof(group), scratch);
 
-	assert_int_equal(situ_proto_message_fields_first(view, &item),
+	situ_check_eq(situ_proto_message_fields_first(view, &item),
 	                 SITU_ERR_CONSTRAINT);
 }
 
@@ -332,32 +330,32 @@ static void test_an_empty_region_yields_nothing(void **state)
 
 	(void)state;
 	situ_msg_init(&msg, scratch, 0);
-	assert_int_equal(situ_view_at(&msg, 0, 0, &view), SITU_OK);
+	situ_check_eq(situ_view_at(&msg, 0, 0, &view), SITU_OK);
 
-	assert_int_equal(situ_proto_message_fields_first(view, &item),
+	situ_check_eq(situ_proto_message_fields_first(view, &item),
 	                 SITU_ERR_BOUNDS);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_varint_decodes_protoc_output),
-		cmocka_unit_test(test_varint_decodes_zero_and_max),
-		cmocka_unit_test(test_varint_round_trips),
-		cmocka_unit_test(test_varint_encoding_matches_protoc),
-		cmocka_unit_test(test_varint_refuses_a_truncated_value),
-		cmocka_unit_test(test_varint_refuses_an_overlong_value),
-		cmocka_unit_test(test_non_minimal_encodings_are_accepted),
-		cmocka_unit_test(test_zigzag_round_trips),
-		cmocka_unit_test(test_iterates_every_item),
-		cmocka_unit_test(test_finds_the_fields_protoc_wrote),
-		cmocka_unit_test(test_item_extents_match_the_wire),
-		cmocka_unit_test(test_same_size_item_mutation_is_in_place),
-		cmocka_unit_test(test_a_longer_value_would_not_fit),
-		cmocka_unit_test(test_truncated_input_is_refused),
-		cmocka_unit_test(test_a_group_wire_type_is_refused),
-		cmocka_unit_test(test_an_empty_region_yields_nothing),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_varint_decodes_protoc_output),
+		situ_check_case(test_varint_decodes_zero_and_max),
+		situ_check_case(test_varint_round_trips),
+		situ_check_case(test_varint_encoding_matches_protoc),
+		situ_check_case(test_varint_refuses_a_truncated_value),
+		situ_check_case(test_varint_refuses_an_overlong_value),
+		situ_check_case(test_non_minimal_encodings_are_accepted),
+		situ_check_case(test_zigzag_round_trips),
+		situ_check_case(test_iterates_every_item),
+		situ_check_case(test_finds_the_fields_protoc_wrote),
+		situ_check_case(test_item_extents_match_the_wire),
+		situ_check_case(test_same_size_item_mutation_is_in_place),
+		situ_check_case(test_a_longer_value_would_not_fit),
+		situ_check_case(test_truncated_input_is_refused),
+		situ_check_case(test_a_group_wire_type_is_refused),
+		situ_check_case(test_an_empty_region_yields_nothing),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_protobuf");
 }

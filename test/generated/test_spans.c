@@ -18,13 +18,11 @@
  * transform four bytes no schema asked it to touch.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "edges.h"
 
@@ -69,9 +67,9 @@ static void test_a_split_cover_transforms_both_spans(void **state)
 	memcpy(buf, SPLIT, SPLIT_LEN);
 	view = view_of(&msg, buf, SPLIT_LEN);
 
-	assert_int_equal(situ_hp_split_pn_encode_spans(view), SITU_OK);
-	assert_int_equal(buf[0], SPLIT[0] ^ MASK);
-	assert_int_equal(buf[5], SPLIT[5] ^ MASK);
+	situ_check_eq(situ_hp_split_pn_encode_spans(view), SITU_OK);
+	situ_check_eq(buf[0], SPLIT[0] ^ MASK);
+	situ_check_eq(buf[5], SPLIT[5] ^ MASK);
 }
 
 static void test_a_split_cover_leaves_the_gap_alone(void **state)
@@ -87,9 +85,9 @@ static void test_a_split_cover_leaves_the_gap_alone(void **state)
 	memcpy(buf, SPLIT, SPLIT_LEN);
 	view = view_of(&msg, buf, SPLIT_LEN);
 
-	assert_int_equal(situ_hp_split_pn_encode_spans(view), SITU_OK);
+	situ_check_eq(situ_hp_split_pn_encode_spans(view), SITU_OK);
 	for (i = 1u; i < 5u; i++) {
-		assert_int_equal(buf[i], SPLIT[i]);
+		situ_check_eq(buf[i], SPLIT[i]);
 	}
 }
 
@@ -106,9 +104,9 @@ static void test_bytes_after_the_region_are_untouched(void **state)
 	memcpy(buf, SPLIT, SPLIT_LEN);
 	view = view_of(&msg, buf, SPLIT_LEN);
 
-	assert_int_equal(situ_hp_split_pn_encode_spans(view), SITU_OK);
+	situ_check_eq(situ_hp_split_pn_encode_spans(view), SITU_OK);
 	for (i = 6u; i < SPLIT_LEN; i++) {
-		assert_int_equal(buf[i], SPLIT[i]);
+		situ_check_eq(buf[i], SPLIT[i]);
 	}
 }
 
@@ -122,9 +120,9 @@ static void test_the_transform_round_trips(void **state)
 	memcpy(buf, SPLIT, SPLIT_LEN);
 	view = view_of(&msg, buf, SPLIT_LEN);
 
-	assert_int_equal(situ_hp_split_pn_encode_spans(view), SITU_OK);
-	assert_int_equal(situ_hp_split_pn_decode_spans(view), SITU_OK);
-	assert_memory_equal(buf, SPLIT, SPLIT_LEN);
+	situ_check_eq(situ_hp_split_pn_encode_spans(view), SITU_OK);
+	situ_check_eq(situ_hp_split_pn_decode_spans(view), SITU_OK);
+	situ_check_bytes(buf, SPLIT, SPLIT_LEN);
 }
 
 static void test_an_adjacent_cover_transforms_one_merged_run(void **state)
@@ -140,11 +138,11 @@ static void test_an_adjacent_cover_transforms_one_merged_run(void **state)
 	memcpy(buf, PACKET, PACKET_LEN);
 	view = view_of(&msg, buf, PACKET_LEN);
 
-	assert_int_equal(situ_hp_packet_pn_encode_spans(view), SITU_OK);
-	assert_int_equal(buf[0], PACKET[0] ^ MASK);
-	assert_int_equal(buf[1], PACKET[1] ^ MASK);
+	situ_check_eq(situ_hp_packet_pn_encode_spans(view), SITU_OK);
+	situ_check_eq(buf[0], PACKET[0] ^ MASK);
+	situ_check_eq(buf[1], PACKET[1] ^ MASK);
 	for (i = 2u; i < PACKET_LEN; i++) {
-		assert_int_equal(buf[i], PACKET[i]);
+		situ_check_eq(buf[i], PACKET[i]);
 	}
 }
 
@@ -178,15 +176,15 @@ static void test_zeroize_clamps_a_wire_declared_length(void **state)
 	view = view_of(&msg, arena, RUN_FRAME);
 
 	/* What the frame really holds, which is what the eraser must use. */
-	assert_int_equal(situ_secret_run_key_len(view), RUN_FRAME - 1u);
+	situ_check_eq(situ_secret_run_key_len(view), RUN_FRAME - 1u);
 
 	situ_secret_run_key_zeroize(view);
 
 	for (i = 1u; i < RUN_FRAME; i++) {
-		assert_int_equal(arena[i], 0u);
+		situ_check_eq(arena[i], 0u);
 	}
 	for (i = RUN_FRAME; i < RUN_ARENA; i++) {
-		assert_int_equal(arena[i], 0x5Au);
+		situ_check_eq(arena[i], 0x5Au);
 	}
 }
 
@@ -210,12 +208,12 @@ static void test_zeroize_erases_the_key_and_stops(void **state)
 
 	situ_secret_run_key_zeroize(view);
 
-	assert_int_equal(arena[0], 3u);		/* the length itself stays */
-	assert_int_equal(arena[1], 0u);
-	assert_int_equal(arena[2], 0u);
-	assert_int_equal(arena[3], 0u);
-	assert_int_equal(arena[4], 0xDDu);	/* tail, not the eraser's */
-	assert_int_equal(arena[5], 0xEEu);
+	situ_check_eq(arena[0], 3u);		/* the length itself stays */
+	situ_check_eq(arena[1], 0u);
+	situ_check_eq(arena[2], 0u);
+	situ_check_eq(arena[3], 0u);
+	situ_check_eq(arena[4], 0xDDu);	/* tail, not the eraser's */
+	situ_check_eq(arena[5], 0xEEu);
 }
 
 /* An extent function reads the lengths its struct declares OUT OF that
@@ -242,7 +240,7 @@ static void test_extent_does_not_read_an_absent_length(void **state)
 	view = view_of(&msg, arena, 0u);
 
 	/* 1, the constant. Reading `base[0]` would give 1 + 0x5A = 91. */
-	assert_int_equal(situ_segment_extent(view), 1u);
+	situ_check_eq(situ_segment_extent(view), 1u);
 }
 
 /* `validate` is documented as safe on arbitrary bytes -- the fuzz harness
@@ -265,22 +263,22 @@ static void test_validate_refuses_a_short_view(void **state)
 	view = view_of(&msg, arena, sizeof arena);
 
 	/* `pinned` is 19 bytes; this view is 8. */
-	assert_int_equal(situ_pinned_validate(view), SITU_ERR_BOUNDS);
+	situ_check_eq(situ_pinned_validate(view), SITU_ERR_BOUNDS);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_extent_does_not_read_an_absent_length),
-		cmocka_unit_test(test_validate_refuses_a_short_view),
-		cmocka_unit_test(test_zeroize_clamps_a_wire_declared_length),
-		cmocka_unit_test(test_zeroize_erases_the_key_and_stops),
-		cmocka_unit_test(test_a_split_cover_transforms_both_spans),
-		cmocka_unit_test(test_a_split_cover_leaves_the_gap_alone),
-		cmocka_unit_test(test_bytes_after_the_region_are_untouched),
-		cmocka_unit_test(test_the_transform_round_trips),
-		cmocka_unit_test(test_an_adjacent_cover_transforms_one_merged_run),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_extent_does_not_read_an_absent_length),
+		situ_check_case(test_validate_refuses_a_short_view),
+		situ_check_case(test_zeroize_clamps_a_wire_declared_length),
+		situ_check_case(test_zeroize_erases_the_key_and_stops),
+		situ_check_case(test_a_split_cover_transforms_both_spans),
+		situ_check_case(test_a_split_cover_leaves_the_gap_alone),
+		situ_check_case(test_bytes_after_the_region_are_untouched),
+		situ_check_case(test_the_transform_round_trips),
+		situ_check_case(test_an_adjacent_cover_transforms_one_merged_run),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_spans");
 }

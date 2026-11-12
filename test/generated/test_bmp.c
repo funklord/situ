@@ -28,13 +28,11 @@
  * every field. Those sums are what would stop adding up.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "situ.h"
 
@@ -94,9 +92,9 @@ static void open_file(struct opened *held, const uint8_t *data, uint32_t len)
 {
 	situ_msg_init(&held->msg, (uint8_t *)(uintptr_t)(const void *)data, len);
 
-	assert_int_equal(situ_bitmap_file_header_view(&held->msg, 0, &held->file),
+	situ_check_eq(situ_bitmap_file_header_view(&held->msg, 0, &held->file),
 	                 SITU_OK);
-	assert_int_equal(situ_bitmap_info_header_view(
+	situ_check_eq(situ_bitmap_info_header_view(
 	    &held->msg, SITU_BITMAP_FILE_HEADER_SIZE_FIXED, &held->info),
 	                 SITU_OK);
 }
@@ -112,12 +110,12 @@ static void test_a_real_file_validates(void **state)
 	(void)state;
 
 	open_file(&held, RED, (uint32_t)sizeof(RED));
-	assert_int_equal(situ_bitmap_file_header_validate(held.file), SITU_OK);
-	assert_int_equal(situ_bitmap_info_header_validate(held.info), SITU_OK);
+	situ_check_eq(situ_bitmap_file_header_validate(held.file), SITU_OK);
+	situ_check_eq(situ_bitmap_info_header_validate(held.info), SITU_OK);
 
 	open_file(&held, WHITE, (uint32_t)sizeof(WHITE));
-	assert_int_equal(situ_bitmap_file_header_validate(held.file), SITU_OK);
-	assert_int_equal(situ_bitmap_info_header_validate(held.info), SITU_OK);
+	situ_check_eq(situ_bitmap_file_header_validate(held.file), SITU_OK);
+	situ_check_eq(situ_bitmap_info_header_validate(held.info), SITU_OK);
 }
 
 /* The file's own arithmetic, which is where a misplaced field shows. The
@@ -129,16 +127,16 @@ static void test_the_pixels_start_where_the_two_headers_end(void **state)
 	struct opened held;
 
 	(void)state;
-	assert_int_equal(SITU_BITMAP_FILE_HEADER_SIZE_FIXED
+	situ_check_eq(SITU_BITMAP_FILE_HEADER_SIZE_FIXED
 	                 + SITU_BITMAP_INFO_HEADER_SIZE_FIXED, 54);
 
 	open_file(&held, RED, (uint32_t)sizeof(RED));
-	assert_int_equal(situ_bitmap_file_header_pixel_offset_get(held.file),
+	situ_check_eq(situ_bitmap_file_header_pixel_offset_get(held.file),
 	                 SITU_BITMAP_FILE_HEADER_SIZE_FIXED
 	                 + SITU_BITMAP_INFO_HEADER_SIZE_FIXED);
 
 	open_file(&held, WHITE, (uint32_t)sizeof(WHITE));
-	assert_int_equal(situ_bitmap_file_header_pixel_offset_get(held.file),
+	situ_check_eq(situ_bitmap_file_header_pixel_offset_get(held.file),
 	                 SITU_BITMAP_FILE_HEADER_SIZE_FIXED
 	                 + SITU_BITMAP_INFO_HEADER_SIZE_FIXED);
 }
@@ -162,11 +160,11 @@ static void test_the_file_size_is_the_headers_plus_the_pixels(void **state)
 		open_file(&held, FILES[i].data, FILES[i].len);
 
 		/* What the file says about itself... */
-		assert_int_equal(situ_bitmap_file_header_file_size_get(held.file),
+		situ_check_eq(situ_bitmap_file_header_file_size_get(held.file),
 		                 situ_bitmap_file_header_pixel_offset_get(held.file)
 		                 + situ_bitmap_info_header_image_size_get(held.info));
 		/* ...and what it actually is. */
-		assert_int_equal(situ_bitmap_file_header_file_size_get(held.file),
+		situ_check_eq(situ_bitmap_file_header_file_size_get(held.file),
 		                 FILES[i].len);
 	}
 }
@@ -188,8 +186,8 @@ static void test_the_image_size_is_the_padded_rows(void **state)
 	       * situ_bitmap_info_header_bits_per_pixel_get(held.info) / 8u
 	       + 3u) & ~3u;
 
-	assert_int_equal(row, 12);
-	assert_int_equal(row * (uint32_t)situ_bitmap_info_header_height_get(held.info),
+	situ_check_eq(row, 12);
+	situ_check_eq(row * (uint32_t)situ_bitmap_info_header_height_get(held.info),
 	                 situ_bitmap_info_header_image_size_get(held.info));
 }
 
@@ -207,19 +205,19 @@ static void test_a_later_header_version_is_refused(void **state)
 	copy[14] = 108;
 
 	open_file(&held, copy, (uint32_t)sizeof(copy));
-	assert_int_equal(situ_bitmap_info_header_validate(held.info),
+	situ_check_eq(situ_bitmap_info_header_validate(held.info),
 	                 SITU_ERR_CONSTRAINT);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_a_real_file_validates),
-		cmocka_unit_test(test_the_pixels_start_where_the_two_headers_end),
-		cmocka_unit_test(test_the_file_size_is_the_headers_plus_the_pixels),
-		cmocka_unit_test(test_the_image_size_is_the_padded_rows),
-		cmocka_unit_test(test_a_later_header_version_is_refused),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_a_real_file_validates),
+		situ_check_case(test_the_pixels_start_where_the_two_headers_end),
+		situ_check_case(test_the_file_size_is_the_headers_plus_the_pixels),
+		situ_check_case(test_the_image_size_is_the_padded_rows),
+		situ_check_case(test_a_later_header_version_is_refused),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_bmp");
 }

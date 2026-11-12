@@ -29,6 +29,7 @@ from situc.codegen import (INSTANCE_CEILING, PROBE_BYTES, argued_sides,
 	no_baseline_stands, refuse_parameters, zero_is_no_message, required_pattern, required_run,
 	reserved_policy, selected_arms)
 from situc import __version__
+from situc.codegen.c import selfcheck
 
 import re
 
@@ -152,13 +153,9 @@ def _render(suite: Suite, basename: str) -> str:
 		" * believed.",
 		" */",
 		"",
-		"#include <setjmp.h>",
-		"#include <stdarg.h>",
-		"#include <stddef.h>",
-		"#include <stdint.h>",
-		"#include <string.h>",
+		*selfcheck.INCLUDES,
 		"",
-		"#include <cmocka.h>",
+		*selfcheck.PRELUDE,
 		"",
 		f'#include "{basename}.h"',
 	]
@@ -175,8 +172,8 @@ def _render(suite: Suite, basename: str) -> str:
 	if not suite.names:
 		lines.extend([
 			"",
-			"/* Nothing in this schema has a checkable accessor yet. cmocka",
-			" * refuses an empty group, so this one asserts that it is empty on",
+			"/* Nothing in this schema has a checkable accessor yet. A C array",
+			" * may not be empty, so this one says the group is empty on",
 			" * purpose rather than by accident. */",
 			"static void test_nothing_to_check(void **state)",
 			"{",
@@ -185,10 +182,10 @@ def _render(suite: Suite, basename: str) -> str:
 		])
 		suite.names.append("test_nothing_to_check")
 
-	lines.extend(["", "int main(void)", "{", "\tconst struct CMUnitTest checks[] = {"])
-	lines.extend(f"\t\tcmocka_unit_test({name})," for name in suite.names)
+	lines.extend(["", "int main(void)", "{", "\tconst struct situ_check_case checks[] = {"])
+	lines.extend(f"\t\tsitu_check_case({name})," for name in suite.names)
 	lines.extend(["\t};", "",
-	              "\treturn cmocka_run_group_tests(checks, NULL, NULL);", "}"])
+	              "\treturn situ_check_run(checks, sizeof checks / sizeof checks[0], \"checks\");", "}"])
 
 	return "\n".join(lines) + "\n"
 
@@ -276,12 +273,12 @@ def _relation_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 					f"\tmemset({label}_buf, 0x{byte:02x}, sizeof {label}_buf);",
 					f"\tsitu_msg_init(&{label}_msg, {label}_buf, "
 					f"(uint32_t)sizeof {label}_buf);",
-					f"\tassert_int_equal({view}(&{label}_msg, 0, &{label}_view), "
+					f"\tsitu_check_eq({view}(&{label}_msg, 0, &{label}_view), "
 					"SITU_OK);",
 				])
 
 			args = ", ".join(f"{label}_view" for label, _, _ in params)
-			stmts.append(f"\tassert_int_equal({ident(prefix, 'rel', name)}"
+			stmts.append(f"\tsitu_check_eq({ident(prefix, 'rel', name)}"
 			             f"({args}), {expect});")
 			return [*decls, "", *stmts]
 
@@ -329,7 +326,7 @@ def _message_preamble(params: list[tuple[str, ResolvedStruct, int]],
 			f"\tmemset({label}_buf, 0, sizeof {label}_buf);",
 			f"\tsitu_msg_init(&{label}_msg, {label}_buf, "
 			f"(uint32_t)sizeof {label}_buf);",
-			f"\tassert_int_equal({view}(&{label}_msg, 0, &{label}_view), SITU_OK);",
+			f"\tsitu_check_eq({view}(&{label}_msg, 0, &{label}_view), SITU_OK);",
 		])
 
 	return decls, stmts
@@ -404,11 +401,11 @@ def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 		suite.add(
 			f"check_conv_{c_name(name)}_matches_a_reply_to_its_request",
 			[*decls, *table_decls, "", *stmts, "", *init,
-			 f"\tassert_int_equal({table}_record(&table, {asked}_view, 7u),",
+			 f"\tsitu_check_eq({table}_record(&table, {asked}_view, 7u),",
 			 "\t                 SITU_OK);",
-			 f"\tassert_int_equal({table}_match(&table, {answered}_view, &id),",
+			 f"\tsitu_check_eq({table}_match(&table, {answered}_view, &id),",
 			 "\t                 SITU_OK);",
-			 "\tassert_int_equal(id, 7u);"],
+			 "\tsitu_check_eq(id, 7u);"],
 			[f"/* {name}: a request recorded under its key, and the reply that",
 			 " * answers it handed back the caller's own handle for it. The",
 			 " * handle is arbitrary and that is the point -- the table stores",
@@ -417,11 +414,11 @@ def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 		suite.add(
 			f"check_conv_{c_name(name)}_forgets_once_matched",
 			[*decls, *table_decls, "", *stmts, "", *init,
-			 f"\tassert_int_equal({table}_record(&table, {asked}_view, 7u),",
+			 f"\tsitu_check_eq({table}_record(&table, {asked}_view, 7u),",
 			 "\t                 SITU_OK);",
-			 f"\tassert_int_equal({table}_match(&table, {answered}_view, &id),",
+			 f"\tsitu_check_eq({table}_match(&table, {answered}_view, &id),",
 			 "\t                 SITU_OK);",
-			 f"\tassert_int_not_equal({table}_match(&table, {answered}_view, &id),",
+			 f"\tsitu_check_ne({table}_match(&table, {answered}_view, &id),",
 			 "\t                     SITU_OK);"],
 			[f"/* A second copy of the same reply is not a second exchange.",
 			 " * Without this, a table that recorded and never removed would",
@@ -430,7 +427,7 @@ def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 		suite.add(
 			f"check_conv_{c_name(name)}_refuses_a_reply_nobody_asked_for",
 			[*decls, *table_decls, "", *stmts, "", *init,
-			 f"\tassert_int_not_equal({table}_match(&table, {answered}_view, &id),",
+			 f"\tsitu_check_ne({table}_match(&table, {answered}_view, &id),",
 			 "\t                     SITU_OK);"],
 			[f"/* Nothing was recorded, so nothing can match. A table that",
 			 " * answered SITU_OK here would satisfy the first check by",
@@ -505,7 +502,7 @@ def _frame_checks(suite: Suite, resolved: ResolvedSchema, basename: str,
 				f"\t{reader}_init(&reader, back, (uint32_t)sizeof back);",
 				"",
 				"\tfor (i = 0u; i < (uint32_t)sizeof stream; i++) {",
-				f"\t\tassert_int_equal({reader}_push(&reader, &stream[i], 1u),",
+				f"\t\tsitu_check_eq({reader}_push(&reader, &stream[i], 1u),",
 				"\t\t                 SITU_OK);",
 				"\t\t/* Bounded by the answer, not by the reader. A reader that",
 				"\t\t * announced a message on every call would spin here for",
@@ -519,7 +516,7 @@ def _frame_checks(suite: Suite, resolved: ResolvedSchema, basename: str,
 				"\t\t}",
 				"\t}",
 				"",
-				"\tassert_int_equal(seen, 2u);",
+				"\tsitu_check_eq(seen, 2u);",
 			],
 			[f"/* Two whole {name} messages pushed one byte at a time, which",
 			 " * cuts the stream at every boundary it has. Exactly two must",
@@ -537,9 +534,9 @@ def _frame_checks(suite: Suite, resolved: ResolvedSchema, basename: str,
 				"",
 				"\tmemset(stream, 0, sizeof stream);",
 				f"\t{reader}_init(&reader, back, (uint32_t)sizeof back);",
-				f"\tassert_int_equal({reader}_push(&reader, stream,",
+				f"\tsitu_check_eq({reader}_push(&reader, stream,",
 				"\t                 (uint32_t)sizeof stream), SITU_OK);",
-				f"\tassert_int_equal({reader}_next(&reader, &msg, &view),",
+				f"\tsitu_check_eq({reader}_next(&reader, &msg, &view),",
 				"\t                 SITU_ERR_TRUNCATED);",
 			],
 			[f"/* One byte short of a whole {name}. A reader that handed this",
@@ -783,7 +780,7 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 	body.extend([
 		"",
 		"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-		f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+		f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
 		f"(&msg, 0, {total}u, &view), SITU_OK);",
 	])
 
@@ -794,7 +791,7 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 			"\t * these bumps the generation, so the view is taken again after. */",
 			*setters,
 			"",
-			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
 			f"(&msg, 0, {total}u, &view), SITU_OK);",
 		])
 
@@ -868,11 +865,11 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			return []
 		if placement.scalar is not None:
 			ptr = ident(prefix, struct.name, local, "ptr")
-			lines.append(f"\tassert_int_equal((uint32_t)({ptr}(view) - view.base),"
+			lines.append(f"\tsitu_check_eq((uint32_t)({ptr}(view) - view.base),"
 			             f" {offset}u);")
 			if placement.sized_by and placement.sized_by != "remaining":
 				length = ident(prefix, struct.name, local, "len")
-				lines.append(f"\tassert_int_equal({length}(view),"
+				lines.append(f"\tsitu_check_eq({length}(view),"
 				             f" {chosen[placement.sized_by]}u);")
 			return lines
 
@@ -887,8 +884,8 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			count = ident(prefix, struct.name, local, "count")
 			lines.extend([
 				f"\tsitu_view_t {first};",
-				f"\tassert_int_equal({count}(view), 0u);",
-				f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_ERR_BOUNDS);",
+				f"\tsitu_check_eq({count}(view), 0u);",
+				f"\tsitu_check_eq({at}(view, 0u, &{first}), SITU_ERR_BOUNDS);",
 			])
 			return lines
 
@@ -909,11 +906,11 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			lines.extend([
 				f"\tsitu_view_t {first};",
 				f"\tif ({count}(view) > 0u) {{",
-				f"\t\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
-				f"\t\tassert_int_equal((uint32_t)({first}.base - view.base),"
+				f"\t\tsitu_check_eq({at}(view, 0u, &{first}), SITU_OK);",
+				f"\t\tsitu_check_eq((uint32_t)({first}.base - view.base),"
 				f" {offset}u);",
 				"\t} else {",
-				f"\t\tassert_int_equal({at}(view, 0u, &{first}),"
+				f"\t\tsitu_check_eq({at}(view, 0u, &{first}),"
 				" SITU_ERR_BOUNDS);",
 				"\t}",
 			])
@@ -938,12 +935,12 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 
 		lines.extend([
 			f"\tsitu_view_t {first};",
-			f"\tassert_int_equal({at}(view, 0u, &{first}), SITU_OK);",
-			f"\tassert_int_equal((uint32_t)({first}.base - view.base), {offset}u);",
+			f"\tsitu_check_eq({at}(view, 0u, &{first}), SITU_OK);",
+			f"\tsitu_check_eq((uint32_t)({first}.base - view.base), {offset}u);",
 		])
 		if placement.sized_by and placement.sized_by != "remaining":
 			count = ident(prefix, struct.name, local, "count")
-			lines.append(f"\tassert_int_equal({count}(view),"
+			lines.append(f"\tsitu_check_eq({count}(view),"
 			             f" {chosen[placement.sized_by]}u);")
 		return lines
 
@@ -952,8 +949,8 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 		view  = ident(prefix, struct.name, local, "view")
 		lines.extend([
 			f"\tsitu_view_t {inner};",
-			f"\tassert_int_equal({view}(view, &{inner}), SITU_OK);",
-			f"\tassert_int_equal((uint32_t)({inner}.base - view.base), {offset}u);",
+			f"\tsitu_check_eq({view}(view, &{inner}), SITU_OK);",
+			f"\tsitu_check_eq((uint32_t)({inner}.base - view.base), {offset}u);",
 		])
 		return lines
 
@@ -983,7 +980,7 @@ def _acquire(struct: ResolvedStruct, prefix: str, extent: int,
 		"",
 		"\tmemset(buf, 0, sizeof buf);",
 		"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-		f"\tassert_int_equal({call}, SITU_OK);",
+		f"\tsitu_check_eq({call}, SITU_OK);",
 	]
 
 
@@ -1012,7 +1009,7 @@ def _view_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 			"",
 			"\tmemset(buf, 0, sizeof buf);",
 			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-			f"\tassert_int_equal({call}, SITU_ERR_BOUNDS);",
+			f"\tsitu_check_eq({call}, SITU_ERR_BOUNDS);",
 		],
 		[f"/* A buffer one byte short of {name} must be refused rather than",
 		 " * truncated: a view is the one bounds check, and everything after it",
@@ -1054,11 +1051,11 @@ def _delimited_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			"\tmemset(buf, 0x2E, sizeof buf);",
 			*planted,
 			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
 			f"(&msg, 0, {room}u, &view), SITU_OK);",
 			"",
-			f"\tassert_int_equal({length}(view), {content}u);",
-			f"\tassert_true({done}(view));",
+			f"\tsitu_check_eq({length}(view), {content}u);",
+			f"\tsitu_check_true({done}(view));",
 		],
 		[f"/* {placement.path} runs to its delimiter and stops there. Its",
 		 "\t * `size_bits` is the delimiter's own width, so a check written",
@@ -1074,10 +1071,10 @@ def _delimited_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			"",
 			"\tmemset(buf, 0x2E, sizeof buf);",
 			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
 			f"(&msg, 0, {room}u, &view), SITU_OK);",
 			"",
-			f"\tassert_false({done}(view));",
+			f"\tsitu_check_false({done}(view));",
 		],
 		["/* And says so when it is not there, rather than reporting an empty",
 		 "\t * member: a frame that stops early is not a frame with a short",
@@ -1119,7 +1116,7 @@ def _versioned_checks(suite: Suite, resolved: ResolvedSchema,
 			f"\t{ctype} value = 0;",
 			"",
 			f"\t{setter}(view, {at_version});",
-			f"\tassert_int_equal({getter}(view, &value), {expected});",
+			f"\tsitu_check_eq({getter}(view, &value), {expected});",
 		]
 
 	suite.add(
@@ -1141,7 +1138,7 @@ def _versioned_checks(suite: Suite, resolved: ResolvedSchema,
 			*_acquire(struct, prefix, extent),
 			"",
 			f"\t{setter}(view, {since - 1});",
-			f"\tassert_int_equal({writer}(view, ({ctype})1), SITU_ERR_VERSION);",
+			f"\tsitu_check_eq({writer}(view, ({ctype})1), SITU_ERR_VERSION);",
 		],
 		["/* And cannot be written there either. The getter refused this from",
 		 "\t * the start and the setter did not, which is the asymmetry worth",
@@ -1191,11 +1188,11 @@ def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			"",
 			*frame(digits),
 			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
 			f"(&msg, 0, {extent}u, &view), SITU_OK);",
 			"",
-			f"\tassert_int_equal({getter}(view, &value), SITU_OK);",
-			f"\tassert_int_equal(value, {digits});",
+			f"\tsitu_check_eq({getter}(view, &value), SITU_OK);",
+			f"\tsitu_check_eq(value, {digits});",
 		],
 		[f"/* {placement.path} is written as digits. The map calls it",
 		 "\t * TextConverted, which is a claim that the conversion happens --",
@@ -1212,11 +1209,11 @@ def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			"",
 			*frame("4x"),
 			"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
-			f"\tassert_int_equal({ident(prefix, struct.name, 'view')}"
+			f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
 			f"(&msg, 0, {extent}u, &view), SITU_OK);",
 			"",
-			f"\tassert_int_equal({getter}(view, &value), SITU_ERR_CONSTRAINT);",
-			f"\tassert_int_equal({ident(prefix, struct.name, 'validate')}(view),"
+			f"\tsitu_check_eq({getter}(view, &value), SITU_ERR_CONSTRAINT);",
+			f"\tsitu_check_eq({ident(prefix, struct.name, 'validate')}(view),"
 			" SITU_ERR_CONSTRAINT);",
 		],
 		["/* The other half of TextConverted: the conversion can fail, and a",
@@ -1352,14 +1349,14 @@ def _extent_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			"\t\t}",
 			"\t\tbuf[i] = (uint8_t)~buf[i];",
 			"\t}",
-			"\tassert_true(noticed);",
+			"\tsitu_check_true(noticed);",
 			"",
 			"\tfor (i = 0; i < (uint32_t)sizeof buf; i++) {",
 			f"\t\tif ({_outside(first, last)}) {{",
 			"\t\t\tcontinue;",
 			"\t\t}",
 			"\t\tbuf[i] = (uint8_t)~buf[i];",
-			f"\t\tassert_int_equal((uint64_t){_getter(struct, placement, prefix)},"
+			f"\t\tsitu_check_eq((uint64_t){_getter(struct, placement, prefix)},"
 			" before);",
 			"\t\tbuf[i] = (uint8_t)~buf[i];",
 			"\t}",
@@ -1431,7 +1428,7 @@ def _round_trip_check(suite: Suite, resolved: ResolvedSchema,
 		body.extend([
 			"\tmemcpy(witness, buf, sizeof buf);",
 			f"\t{setter}({taken}, {value});",
-			f"\tassert_int_equal((uint64_t){_getter(struct, placement, prefix)}, "
+			f"\tsitu_check_eq((uint64_t){_getter(struct, placement, prefix)}, "
 			f"(uint64_t)({value}));",
 			"",
 			"\t/* InPlaceFixed: this field's bytes, and nothing else. */",
@@ -1439,7 +1436,7 @@ def _round_trip_check(suite: Suite, resolved: ResolvedSchema,
 			f"\t\tif ({_outside(first, last)}) {{",
 			"\t\t\tcontinue;",
 			"\t\t}",
-			"\t\tassert_int_equal(buf[i], witness[i]);",
+			"\t\tsitu_check_eq(buf[i], witness[i]);",
 			"\t}",
 			"",
 		])
@@ -1507,11 +1504,11 @@ def _nested_placement_check(suite: Suite, resolved: ResolvedSchema,
 			"",
 			"\tsitu_view_t inner;",
 			"",
-			f"\tassert_int_equal({getter}(view, &inner), SITU_OK);",
+			f"\tsitu_check_eq({getter}(view, &inner), SITU_OK);",
 			"",
 			"\t/* The map's offset, measured from the parent rather than",
 			"\t * recomputed from it. */",
-			f"\tassert_int_equal((uint32_t)(inner.base - view.base), {offset}u);",
+			f"\tsitu_check_eq((uint32_t)(inner.base - view.base), {offset}u);",
 		],
 		[f"/* {placement.path}: the map claims"
 		 f" {entry.vector.get(Axis.OFFSET).render()}.",
@@ -1605,16 +1602,16 @@ def _array_checks(suite: Suite, resolved: ResolvedSchema,
 			"\tsitu_view_t first;",
 			"\tsitu_view_t second;",
 			"",
-			f"\tassert_int_equal({at}(view, 0u, &first), SITU_OK);",
-			f"\tassert_int_equal({at}(view, 1u, &second), SITU_OK);",
+			f"\tsitu_check_eq({at}(view, 0u, &first), SITU_OK);",
+			f"\tsitu_check_eq({at}(view, 1u, &second), SITU_OK);",
 			"",
 			"\t/* The distance between consecutive elements is the element size,",
 			"\t * measured rather than recomputed. */",
-			"\tassert_int_equal((uint32_t)(second.base - first.base),",
+			"\tsitu_check_eq((uint32_t)(second.base - first.base),",
 			f"\t                 {macro(prefix, nested, 'SIZE_FIXED')});",
 			"",
 			f"\t/* And the array ends where it says it does. */",
-			f"\tassert_int_not_equal({at}(view, {count}u, &second), SITU_OK);",
+			f"\tsitu_check_ne({at}(view, {count}u, &second), SITU_OK);",
 		],
 		[f"/* {placement.path}: {count} elements, and the spacing between them.",
 		 " *",
@@ -1664,7 +1661,7 @@ def _element_encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolve
 	body.append(f"\t/* element {index} of {count} sits {index} strides"
 	            f" ({index * stride} bytes) past the first. */")
 	body.extend(f"\tbuf[{byte}u] = {placed[byte]:#04x}u;" for byte in sorted(placed))
-	body.extend(["", f"\tassert_int_equal({got}, {want});"])
+	body.extend(["", f"\tsitu_check_eq({got}, {want});"])
 
 	suite.add(
 		f"check_{c_name(placement.path)}_element_lands_on_its_stride",
@@ -1750,9 +1747,9 @@ def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	body.extend(f"\tbuf[{byte}u] = {placed[byte]:#04x}u;" for byte in sorted(placed))
 	body.extend([
 		"",
-		f"\tassert_int_equal((uint64_t){ident(prefix, struct.name, local, 'count')}"
+		f"\tsitu_check_eq((uint64_t){ident(prefix, struct.name, local, 'count')}"
 		f"(view), (uint64_t){index + 1}u);",
-		f"\tassert_int_equal({got}, {want});",
+		f"\tsitu_check_eq({got}, {want});",
 	])
 
 	suite.add(
@@ -1817,7 +1814,7 @@ def _run_length_clamp_check(suite: Suite, struct: ResolvedStruct,
 		"",
 		"	/* The length is what the frame holds from the run's start, not",
 		"	 * what the field claimed. A dropped clamp returns the claim. */",
-		f"	assert_true({length}(view) <= (uint32_t)(sizeof buf - {start}u));",
+		f"	situ_check_true({length}(view) <= (uint32_t)(sizeof buf - {start}u));",
 	])
 
 	suite.add(
@@ -1966,7 +1963,7 @@ def _encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	for at in sorted(placed):
 		body.append(f"\tbuf[{at}u] = {placed[at]:#04x}u;")
 	body.append("")
-	body.append(f"\tassert_int_equal({got}, {want});")
+	body.append(f"\tsitu_check_eq({got}, {want});")
 
 	suite.add(
 		f"check_{c_name(placement.path)}_decodes_a_known_encoding",
@@ -2260,11 +2257,11 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 				# The control, which this check did not have: without it a
 				# refusal below proves nothing, because a fixture the schema
 				# already refuses refuses this too.
-				f"\tassert_int_equal({validate}(view), SITU_OK);",
+				f"\tsitu_check_eq({validate}(view), SITU_OK);",
 				"",
 				f"\t/* The schema demands {demanded}; anything else must be refused. */",
 				*broken,
-				f"\tassert_int_equal({validate}(view),",
+				f"\tsitu_check_eq({validate}(view),",
 				"\t                 SITU_ERR_CONSTRAINT);",
 			],
 			[f"/* {placement.path} declares `must_eq`, which is malleability",
@@ -2355,11 +2352,11 @@ def _enum_checks(suite: Suite, schema: ast.Schema,
 				*_acquire(struct, prefix, extent),
 				"",
 				*prelude,
-				f"\tassert_int_equal({validate}(view), SITU_OK);",
+				f"\tsitu_check_eq({validate}(view), SITU_OK);",
 				"",
 				f"\t/* {unknown} names no member of `{placement.type_name}`. */",
 				*broken,
-				f"\tassert_int_equal({validate}(view), SITU_ERR_CONSTRAINT);",
+				f"\tsitu_check_eq({validate}(view), SITU_ERR_CONSTRAINT);",
 			],
 			[f"/* {placement.path} is a `{placement.type_name}`, which rejects",
 			 " * unknown values (section 8.7). A field declared to admit a"
@@ -2523,12 +2520,12 @@ def _pinned_run_body(struct: ResolvedStruct, placement: Placement,
 	validate = ident(prefix, struct.name, "validate")
 
 	body = [*_acquire(struct, prefix, extent), "", *prelude]
-	body.append(f"\tassert_int_equal({validate}(view), SITU_OK);")
+	body.append(f"\tsitu_check_eq({validate}(view), SITU_OK);")
 	body.append("")
 	body.append(f"\t/* {placement.path} is pinned to {shown}; the byte below")
 	body.append("\t * begins none of them. */")
 	body.append(f"\tbuf[{at}u] = {wrong:#04x}u;")
-	body.append(f"\tassert_int_equal({validate}(view), SITU_ERR_CONSTRAINT);")
+	body.append(f"\tsitu_check_eq({validate}(view), SITU_ERR_CONSTRAINT);")
 
 	return body
 
@@ -2636,11 +2633,11 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			continue
 
 		body = [*_acquire(struct, prefix, extent), "", *prelude]
-		body.append(f"\tassert_int_equal({validate}(view), SITU_OK);")
+		body.append(f"\tsitu_check_eq({validate}(view), SITU_OK);")
 		body.append("")
 		body.append(f"\t/* {placement.path} declares {policy}. */")
 		body.extend(broken)
-		body.append(f"\tassert_int_equal({validate}(view), SITU_ERR_CONSTRAINT);")
+		body.append(f"\tsitu_check_eq({validate}(view), SITU_ERR_CONSTRAINT);")
 
 		suite.add(
 			f"check_{c_name(placement.path)}_{policy}_is_enforced",
@@ -2745,20 +2742,20 @@ def _coverage_checks(suite: Suite, schema: ast.Schema,
 			[
 				*_acquire(struct, prefix, extent),
 				"",
-				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
+				"\tsitu_check_eq(situ_msg_transmittable(&msg), SITU_OK);",
 				"",
 				f"\t{setter}(&msg, view, ({ctype})1);",
 				"",
-				f"\tassert_true({stale});",
-				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);",
+				f"\tsitu_check_true({stale});",
+				"\tsitu_check_eq(situ_msg_transmittable(&msg), SITU_ERR_TAG);",
 				"",
 				*([] if len(marks) == 1 else
 				  [f"\t/* The write marks {len(marks)} obligations, innermost",
 				   "\t * first; the message is transmittable once all of them",
 				   "\t * are discharged and not before. */"]),
 				*[f"\t{_discharge(struct, other, prefix)}" for other in marks],
-				f"\tassert_false({stale});",
-				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
+				f"\tsitu_check_false({stale});",
+				"\tsitu_check_eq(situ_msg_transmittable(&msg), SITU_OK);",
 			],
 			[f"/* {entry.placement.path} is Covered({one.label}).",
 			 f"\t * {why} */"])
@@ -2820,7 +2817,7 @@ def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
 	body.append(f"\t/* Every one of this struct's {len(held)} obligation(s)"
 	            " is in the mask. */")
 	for bit in bits:
-		body.append(f"\tassert_int_equal({mask} & {bit}, {bit});")
+		body.append(f"\tsitu_check_eq({mask} & {bit}, {bit});")
 	body.extend([
 		"",
 		"\t/* And nothing else is: marking them all makes the message exactly",
@@ -2828,7 +2825,7 @@ def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
 	])
 	for bit in bits:
 		body.append(f"\tsitu_msg_mark_dirty(&msg, {bit});")
-	body.append(f"\tassert_int_equal(msg.dirty, {mask});")
+	body.append(f"\tsitu_check_eq(msg.dirty, {mask});")
 
 	kinds = ", ".join(sorted({one.kind for one in held}))
 	suite.add(
@@ -2909,17 +2906,17 @@ def _span_check(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 			"\tuint32_t offset = 0;",
 			"\tuint32_t len    = 0;",
 			"",
-			f"\tassert_int_equal({ident(prefix, struct.name, c_name(tag), 'covered')}"
+			f"\tsitu_check_eq({ident(prefix, struct.name, c_name(tag), 'covered')}"
 			"(view, &offset, &len), SITU_OK);",
 			"",
 			f"\t/* The map says bytes {begins}..{ends} are covered. The span may",
 			"\t * reach further -- a codec's expansion is its own business -- but",
 			"\t * it may not leave any of them out. */",
-			f"\tassert_true(offset <= {begins}u);",
-			f"\tassert_true(offset + len >= {ends}u);",
+			f"\tsitu_check_true(offset <= {begins}u);",
+			f"\tsitu_check_true(offset + len >= {ends}u);",
 			"",
 			"\t/* And it has to stay inside the message it is computed over. */",
-			"\tassert_true(offset + len <= view.limit);",
+			"\tsitu_check_true(offset + len <= view.limit);",
 		],
 		[f"/* {struct.name}.{tag} covers {ends - begins} bytes of named members.",
 		 " *",
@@ -2946,13 +2943,13 @@ def _gate_checks(suite: Suite, struct: ResolvedStruct, prefix: str,
 				f"\t{gate} gate;",
 				"",
 				"\tmemset(&gate, 0, sizeof gate);",
-				f"\tassert_int_equal({ident(prefix, struct.name, local, 'open')}"
+				f"\tsitu_check_eq({ident(prefix, struct.name, local, 'open')}"
 				"(view, 0, &gate), SITU_ERR_TAG);",
-				"\tassert_null(gate.view.base);",
+				"\tsitu_check_null(gate.view.base);",
 				"",
-				f"\tassert_int_equal({ident(prefix, struct.name, local, 'open')}"
+				f"\tsitu_check_eq({ident(prefix, struct.name, local, 'open')}"
 				"(view, 1, &gate), SITU_OK);",
-				"\tassert_non_null(gate.view.base);",
+				"\tsitu_check_non_null(gate.view.base);",
 			],
 			[f"/* {placement.path} is VerifyGated. The half of 14.3 that a running",
 			 " * test can reach: no view into the interior before the tag",
@@ -3007,14 +3004,14 @@ def _register_checks(suite: Suite, struct: ResolvedStruct, prefix: str) -> None:
 				"",
 				f"\tword = {ident(prefix, name, local, 'with')}(word, "
 				f"({word})0x{mask:X}u);",
-				f"\tassert_int_equal(word, ({word})(0x{mask:X}u << {shift}u));",
-				f"\tassert_int_equal({ident(prefix, name, local, 'get')}(word), "
+				f"\tsitu_check_eq(word, ({word})(0x{mask:X}u << {shift}u));",
+				f"\tsitu_check_eq({ident(prefix, name, local, 'get')}(word), "
 				f"({word})0x{mask:X}u);",
 				"",
 				"\t/* And it must leave every other bit of the word alone. */",
 				f"\tword = ({word})~({word})0;",
 				f"\tword = {ident(prefix, name, local, 'with')}(word, ({word})0);",
-				f"\tassert_int_equal(word, "
+				f"\tsitu_check_eq(word, "
 				f"({word})~(({word})0x{mask:X}u << {shift}u));",
 			],
 			[f"/* {placement.path}: the builder places the field and the getter",
@@ -3055,7 +3052,7 @@ def _register_bit_operations(suite: Suite, struct: ResolvedStruct, prefix: str,
 					"",
 					"\tmemset(block, 0, sizeof block);",
 					f"\t{ident(prefix, name, local, verb)}(block);",
-					f"\tassert_int_equal(*{at}(block), {expect});",
+					f"\tsitu_check_eq(*{at}(block), {expect});",
 				],
 				[f"/* {placement.path} is `{mode.value}`: the write is not an",
 				 f" * assignment, so the operation is a {verb} and what reaches the",
@@ -3069,7 +3066,7 @@ def _register_bit_operations(suite: Suite, struct: ResolvedStruct, prefix: str,
 					"",
 					"\tmemset(block, 0xFF, sizeof block);",
 					f"\t{ident(prefix, name, local, 'trigger')}(block);",
-					f"\tassert_int_equal(*{at}(block), "
+					f"\tsitu_check_eq(*{at}(block), "
 					f"({word})(0x{mask:X}u << {shift}u));",
 				],
 				[f"/* {placement.path} has `on_write = trigger`. It writes a word",

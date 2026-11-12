@@ -28,13 +28,11 @@
  * test chose, which is why it is 5 and not 1.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "icmp.h"
 
@@ -49,9 +47,9 @@ static uint16_t ones_complement(situ_view_t view)
 {
 	uint32_t at = 0, len = 0, hole = 0, held = 0, sum = 0, i;
 
-	assert_int_equal(situ_icmp_message_checksum_covered(view, &at, &len),
+	situ_check_eq(situ_icmp_message_checksum_covered(view, &at, &len),
 	                 SITU_OK);
-	assert_int_equal(situ_icmp_message_checksum_self_span(view, &hole, &held),
+	situ_check_eq(situ_icmp_message_checksum_self_span(view, &hole, &held),
 	                 SITU_OK);
 
 	for (i = 0; i + 1u < len; i += 2u) {
@@ -73,7 +71,7 @@ static void open_reply(situ_msg_t *msg, situ_view_t *view, uint8_t *buf,
         uint32_t length)
 {
 	situ_msg_init(msg, buf, length);
-	assert_int_equal(situ_icmp_message_view(msg, 0, length, view), SITU_OK);
+	situ_check_eq(situ_icmp_message_view(msg, 0, length, view), SITU_OK);
 }
 
 static void test_a_real_reply_validates(void **state)
@@ -86,8 +84,8 @@ static void test_a_real_reply_validates(void **state)
 	memcpy(buf, REPLY, sizeof(buf));
 	open_reply(&msg, &view, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(situ_icmp_message_validate(view), SITU_OK);
-	assert_int_equal(situ_icmp_message_type_get(view), 0);
+	situ_check_eq(situ_icmp_message_validate(view), SITU_OK);
+	situ_check_eq(situ_icmp_message_type_get(view), 0);
 }
 
 /* The claim `[self_as = 0]` makes, against a number this test did not
@@ -102,7 +100,7 @@ static void test_the_checksum_is_the_one_on_the_wire(void **state)
 	memcpy(buf, REPLY, sizeof(buf));
 	open_reply(&msg, &view, buf, (uint32_t)sizeof(buf));
 
-	assert_int_equal(ones_complement(view),
+	situ_check_eq(ones_complement(view),
 	                 ((uint16_t)REPLY[2] << 8) | REPLY[3]);
 }
 
@@ -125,7 +123,7 @@ static void test_the_hole_is_where_the_checksum_is(void **state)
 	buf[3] = 0xCD;
 	after = ones_complement(view);
 
-	assert_int_equal(before, after);
+	situ_check_eq(before, after);
 }
 
 /* And the other half of 14.2: writing a covered byte says so. `sequence` is
@@ -143,22 +141,22 @@ static void test_a_covered_write_marks_the_checksum_stale(void **state)
 	/* The arm's own setter on the enclosing view: the field is inside the
 	 * coverage, so it takes the message and marks the bit. There is no plain
 	 * setter for it, which is the compile-time half of the same statement. */
-	assert_false(situ_icmp_message_checksum_is_dirty(&msg));
+	situ_check_false(situ_icmp_message_checksum_is_dirty(&msg));
 	situ_icmp_message_body_reply_sequence_set(&msg, view, 9);
-	assert_true(situ_icmp_message_checksum_is_dirty(&msg));
+	situ_check_true(situ_icmp_message_checksum_is_dirty(&msg));
 
 	situ_icmp_message_checksum_finalize(&msg);
-	assert_false(situ_icmp_message_checksum_is_dirty(&msg));
+	situ_check_false(situ_icmp_message_checksum_is_dirty(&msg));
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_a_real_reply_validates),
-		cmocka_unit_test(test_the_checksum_is_the_one_on_the_wire),
-		cmocka_unit_test(test_the_hole_is_where_the_checksum_is),
-		cmocka_unit_test(test_a_covered_write_marks_the_checksum_stale),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_a_real_reply_validates),
+		situ_check_case(test_the_checksum_is_the_one_on_the_wire),
+		situ_check_case(test_the_hole_is_where_the_checksum_is),
+		situ_check_case(test_a_covered_write_marks_the_checksum_stale),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_icmp");
 }

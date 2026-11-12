@@ -4977,8 +4977,8 @@ value:
 
 | Artifact | Command | Why |
 |---|---|---|
-| golden-vector tests | `situc gen-tests` | schema + hex vectors -> cmocka test cases; the only reliable way to know a layout change broke the wire format |
-| capability conformance | `situc gen-checks` | schema alone -> cmocka test cases holding the accessors to what the map claims, and every layer rung the schema reaches to what that rung promises; a map the generated code contradicts is worse than no map |
+| golden-vector tests | `situc gen-tests` | schema + hex vectors -> self-checking C test cases (26.977); the only reliable way to know a layout change broke the wire format |
+| capability conformance | `situc gen-checks` | schema alone -> self-checking C test cases holding the accessors to what the map claims, and every layer rung the schema reaches to what that rung promises; a map the generated code contradicts is worse than no map |
 | fuzz harness | `situc gen-fuzz` | libFuzzer/AFL entry point per parseable struct; parse safety is the top risk in a protocol parser |
 | byte-layout diagram | `situc doc --format=ascii` | RFC-style packet diagrams straight from the schema; what protocol documentation always needs |
 | Wireshark dissector | `situc gen-dissector` | debugging an encrypted protocol without one is painful; large practical payoff. Lua rather than a C plugin, for the ABI reason in `doc/decision/0021-dissector-language.md` |
@@ -5157,15 +5157,15 @@ Three parts, the first now mechanical:
 | requirement discharge | pytest | every predicate in Section 16, passing and failing, with expected blame chain |
 | canonicity | pytest | one test per source of non-canonicity in 14.4 |
 | codegen golden | pytest + file compare | generated C compared against committed expected output |
-| capability conformance | generated cmocka | the accessors are held to the map they were generated beside: a field must occupy exactly the bytes claimed, a write must move nothing else, a constraint must refuse what it forbids. Generated from the schema alone, so it costs nothing to run over every example and a new construct is covered the day it lands |
-| the layer ladder, rungs 3 to 5 | generated cmocka | the same suite, extended past the accessors: a relation's predicate accepts a matching pair and refuses a mismatched one, a framing reader fed a byte at a time yields exactly the messages that were in the stream and nothing from a partial one, and a conversation table matches a reply to its request, forgets it, and refuses one nobody asked for. Each rung emits both cases or neither, because a predicate that accepts everything passes the positive alone. Rung 6 is not here: `drive` owns I/O, and a suite built out of buffers cannot execute it |
+| capability conformance | generated C suite | the accessors are held to the map they were generated beside: a field must occupy exactly the bytes claimed, a write must move nothing else, a constraint must refuse what it forbids. Generated from the schema alone, so it costs nothing to run over every example and a new construct is covered the day it lands |
+| the layer ladder, rungs 3 to 5 | generated C suite | the same suite, extended past the accessors: a relation's predicate accepts a matching pair and refuses a mismatched one, a framing reader fed a byte at a time yields exactly the messages that were in the stream and nothing from a partial one, and a conversation table matches a reply to its request, forgets it, and refuses one nobody asked for. Each rung emits both cases or neither, because a predicate that accepts everything passes the positive alone. Rung 6 is not here: `drive` owns I/O, and a suite built out of buffers cannot execute it |
 | the layer ladder, in four backends | pytest + each toolchain | every rung's output *run* rather than compiled. This was `-fsyntax-only` for C++ and `--crate-type lib` for Rust, neither of which links or executes anything, so rungs 3 to 6 were checked in four backends and executed in one. A driver is given its clock as a parameter, so a retransmission follows from the number passed to `step` rather than from how long the test took |
 | bounds that name a sibling | pytest + cc | `[max = chunks - 1]` is checked against a message in hand, so the bound is read rather than folded, and the test moves the field it names to prove it: a folded bound passes "3 of 4 accepted" and "4 of 4 refused" and fails only when `chunks` becomes 8. The widening refusal is checked in both directions, because a guard that refused every sibling bound would satisfy the first half and take the feature with it |
-| generated code behavior | cmocka | compile generated C and exercise it; use `--wrap` for syscall-level mocking where needed |
-| offset constancy | cmocka + disassembly check | verify view field access compiles to constant offsets |
+| generated code behavior | hand-written C suites | compile generated C and exercise it, with the checks and runner the generated suites carry (`situ_check.h`, written from `selfcheck.py`) |
+| offset constancy | C suite + disassembly check | verify view field access compiles to constant offsets |
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |
 | fuzz | libFuzzer + ASan | `make fuzz` builds every generated harness with `-fsanitize=fuzzer,address` and runs each for `FUZZ_SECONDS`. Not part of `make test`: minutes rather than seconds, and a compiler `test` does not need. The suite still compiles every harness and smoke-runs it on eight inputs from `/dev/urandom`, which catches a harness that stopped running and reaches nothing else -- a length field is a 1-in-2^16 guess |
-| codec properties | generated cmocka | every declared property of every codec gets the cheap falsifying test from 13.1's table, generated from the signature. Both tiers: a tier-1 `impl extern` through 13.2a's ABI, and a derived one through the pair its kernel emits. A decoder is also handed bytes no encoder produced, with the output capacity set to the input count and a guard immediately behind it -- the round-trip tests feed a decoder only its own encoder's output, which is the one input class it is guaranteed to handle, and every buffer they declare has 1792 bytes of slack behind it (26.826, 26.827) |
+| codec properties | generated C suite | every declared property of every codec gets the cheap falsifying test from 13.1's table, generated from the signature. Both tiers: a tier-1 `impl extern` through 13.2a's ABI, and a derived one through the pair its kernel emits. A decoder is also handed bytes no encoder produced, with the output capacity set to the input count and a guard immediately behind it -- the round-trip tests feed a decoder only its own encoder's output, which is the one input class it is guaranteed to handle, and every buffer they declare has 1792 bytes of slack behind it (26.826, 26.827) |
 | codec properties, sanitized | `make test-codec-san` | the same two suites under `-fsanitize=address,undefined`. The guard above catches a write past the capacity with no sanitizer at all, which is why it is a guard; a read past the INPUT it cannot see, the input sitting inside a `SITU_CODEC_MAX_INPUT` array. ASan redzones that array, so the hostile sweeps reach `MAX_INPUT` exactly: at any shorter length there is slack ASan cannot tell from legitimate use. Not part of `make test`, for `make fuzz`'s reason -- it needs a compiler `test` does not |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
@@ -5434,7 +5434,7 @@ situ/
                               it on every commit (26.50)
   test/
     unit/                     compiler tests (pytest), one file per module
-    generated/                cmocka tests over generated C
+    generated/                C tests over generated C
     cross/                    behavioural checks on aarch64 under emulation
     golden/                   pinned diagnostic text; message quality is the
                               product, so a regression in it is a regression
@@ -5454,7 +5454,7 @@ situ/
                               `.situ` file, each with at least one `require`.
                               A `<name>.vectors` beside a schema is bytes
                               some other implementation wrote, and `gen-tests`
-                              turns it into a cmocka suite (26.35)
+                              turns it into a C suite (26.35)
 ```
 
 Every example is parsed by the test suite, and every buildable one has a
@@ -6190,7 +6190,7 @@ any of the above:
 | Layer | Count | What it holds |
 |---|---|---|
 | compiler tests | 2685 | pytest over `situc/`, one file per module |
-| generated C checks | ~670 | cmocka, `gen-checks` output for every schema |
+| generated C checks | ~670 | `gen-checks` output for every schema, self-checking (26.977) |
 | schemas exercised | 27 | 23 examples, `header.situ`, `edges.situ`, two std |
 | targets built | 3 | host, aarch64 under emulation, aarch64 big endian |
 | backends compiled | 3 | every schema, as C++, Python and Rust, in the suite |
@@ -8569,6 +8569,10 @@ Moved to `doc/decision/26.975-a-marker-may-name-an-order-twice.md`.
 ### 26.976 A located struct is reached as its struct
 
 Moved to `doc/decision/26.976-a-located-struct-is-reached-as-its-struct.md`.
+
+### 26.977 Generated C suites need no framework
+
+Moved to `doc/decision/26.977-generated-c-suites-need-no-framework.md`.
 
 ### 26.929 The offset cache counts bits
 

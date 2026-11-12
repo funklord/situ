@@ -5,13 +5,11 @@
  * endianness.
  */
 
-#include <setjmp.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <cmocka.h>
+#include "situ_check.h"
 
 #include "tiff.h"
 
@@ -34,7 +32,7 @@ static situ_view_t view_of(situ_msg_t *msg, uint8_t *buf)
 	situ_view_t view;
 
 	situ_msg_init(msg, buf, SITU_TIFF_HEADER_SIZE_FIXED);
-	assert_int_equal(situ_tiff_header_view(msg, 0, &view), SITU_OK);
+	situ_check_eq(situ_tiff_header_view(msg, 0, &view), SITU_OK);
 	return view;
 }
 
@@ -48,9 +46,9 @@ static void test_little_endian_vector(void **state)
 	memcpy(buf, LITTLE, sizeof(buf));
 	view = view_of(&msg, buf);
 
-	assert_true(situ_tiff_header_byte_order_is_little(view));
-	assert_int_equal(situ_tiff_header_magic_get(view), 42);
-	assert_int_equal(situ_tiff_header_ifd_offset_get(view), 8);
+	situ_check_true(situ_tiff_header_byte_order_is_little(view));
+	situ_check_eq(situ_tiff_header_magic_get(view), 42);
+	situ_check_eq(situ_tiff_header_ifd_offset_get(view), 8);
 }
 
 static void test_big_endian_vector(void **state)
@@ -63,9 +61,9 @@ static void test_big_endian_vector(void **state)
 	memcpy(buf, BIG, sizeof(buf));
 	view = view_of(&msg, buf);
 
-	assert_false(situ_tiff_header_byte_order_is_little(view));
-	assert_int_equal(situ_tiff_header_magic_get(view), 42);
-	assert_int_equal(situ_tiff_header_ifd_offset_get(view), 8);
+	situ_check_false(situ_tiff_header_byte_order_is_little(view));
+	situ_check_eq(situ_tiff_header_magic_get(view), 42);
+	situ_check_eq(situ_tiff_header_ifd_offset_get(view), 8);
 }
 
 static void test_both_orders_yield_the_same_values(void **state)
@@ -86,10 +84,10 @@ static void test_both_orders_yield_the_same_values(void **state)
 	/* Two different byte sequences, one value. That is exactly why the format
 	 * is CanonicalGiven(byte_order) rather than Canonical, and why signing has
 	 * to verify over received bytes rather than re-encoded ones. */
-	assert_memory_not_equal(little_buf, big_buf, sizeof(little_buf));
-	assert_int_equal(situ_tiff_header_magic_get(little_view),
+	situ_check_bytes_ne(little_buf, big_buf, sizeof(little_buf));
+	situ_check_eq(situ_tiff_header_magic_get(little_view),
 	                 situ_tiff_header_magic_get(big_view));
-	assert_int_equal(situ_tiff_header_ifd_offset_get(little_view),
+	situ_check_eq(situ_tiff_header_ifd_offset_get(little_view),
 	                 situ_tiff_header_ifd_offset_get(big_view));
 }
 
@@ -102,10 +100,10 @@ static void test_host_constant_matches_the_build(void **state)
 	host_is_little = (*(const uint8_t *)&probe) == 1;
 
 	if (host_is_little) {
-		assert_int_equal(situ_tiff_header_byte_order_host(),
+		situ_check_eq(situ_tiff_header_byte_order_host(),
 		                 SITU_TIFF_HEADER_BYTE_ORDER_LITTLE);
 	} else {
-		assert_int_equal(situ_tiff_header_byte_order_host(),
+		situ_check_eq(situ_tiff_header_byte_order_host(),
 		                 SITU_TIFF_HEADER_BYTE_ORDER_BIG);
 	}
 }
@@ -127,15 +125,15 @@ static void test_writer_emits_host_order_and_the_matching_marker(void **state)
 	situ_tiff_header_magic_set(view, 42);
 	situ_tiff_header_ifd_offset_set(view, 8);
 
-	assert_int_equal(situ_tiff_header_magic_get(view), 42);
-	assert_int_equal(situ_tiff_header_ifd_offset_get(view), 8);
-	assert_int_equal(situ_tiff_header_validate(view), SITU_OK);
+	situ_check_eq(situ_tiff_header_magic_get(view), 42);
+	situ_check_eq(situ_tiff_header_ifd_offset_get(view), 8);
+	situ_check_eq(situ_tiff_header_validate(view), SITU_OK);
 
 	/* And the bytes are one of the two legal encodings, not a mixture. */
 	if (situ_tiff_header_byte_order_is_little(view)) {
-		assert_memory_equal(buf, LITTLE, sizeof(buf));
+		situ_check_bytes(buf, LITTLE, sizeof(buf));
 	} else {
-		assert_memory_equal(buf, BIG, sizeof(buf));
+		situ_check_bytes(buf, BIG, sizeof(buf));
 	}
 }
 
@@ -165,7 +163,7 @@ static void test_round_trip_preserves_each_order(void **state)
 		situ_tiff_header_magic_set(view, magic);
 		situ_tiff_header_ifd_offset_set(view, ifd);
 
-		assert_memory_equal(buf, vectors[i], sizeof(buf));
+		situ_check_bytes(buf, vectors[i], sizeof(buf));
 	}
 }
 
@@ -179,25 +177,25 @@ static void test_validate_rejects_a_wrong_magic(void **state)
 	memcpy(buf, LITTLE, sizeof(buf));
 	view = view_of(&msg, buf);
 
-	assert_int_equal(situ_tiff_header_validate(view), SITU_OK);
+	situ_check_eq(situ_tiff_header_validate(view), SITU_OK);
 
 	/* Section 8.3: a must_eq constraint in marker scope is validated after the
 	 * marker resolves, not before. */
 	situ_tiff_header_magic_set(view, 43);
-	assert_int_equal(situ_tiff_header_validate(view), SITU_ERR_CONSTRAINT);
+	situ_check_eq(situ_tiff_header_validate(view), SITU_ERR_CONSTRAINT);
 }
 
 int main(void)
 {
-	const struct CMUnitTest tests[] = {
-		cmocka_unit_test(test_little_endian_vector),
-		cmocka_unit_test(test_big_endian_vector),
-		cmocka_unit_test(test_both_orders_yield_the_same_values),
-		cmocka_unit_test(test_host_constant_matches_the_build),
-		cmocka_unit_test(test_writer_emits_host_order_and_the_matching_marker),
-		cmocka_unit_test(test_round_trip_preserves_each_order),
-		cmocka_unit_test(test_validate_rejects_a_wrong_magic),
+	const struct situ_check_case tests[] = {
+		situ_check_case(test_little_endian_vector),
+		situ_check_case(test_big_endian_vector),
+		situ_check_case(test_both_orders_yield_the_same_values),
+		situ_check_case(test_host_constant_matches_the_build),
+		situ_check_case(test_writer_emits_host_order_and_the_matching_marker),
+		situ_check_case(test_round_trip_preserves_each_order),
+		situ_check_case(test_validate_rejects_a_wrong_magic),
 	};
 
-	return cmocka_run_group_tests(tests, NULL, NULL);
+	return situ_check_run(tests, sizeof tests / sizeof tests[0], "test_tiff");
 }
