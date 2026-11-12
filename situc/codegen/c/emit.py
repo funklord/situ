@@ -50,7 +50,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	summed_width, version_readable_from,
+	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -9144,6 +9144,42 @@ class Emitter:
 			"\tout->base       = msg->base + at;",
 			"\tout->limit      = n;",
 			"\tout->generation = msg->generation;",
+			"\treturn SITU_OK;",
+			"}",
+			*self._located_value(struct, placement, taken),
+		]
+
+	def _located_value(self, struct: ResolvedStruct, placement: Placement,
+			taken: str) -> list[str]:
+		"""`<name>_value`: the number a placed scalar holds (26.959).
+
+		Read through `<name>_view`, so the message-relative bounds check is
+		that function's alone. Where the offset takes an argument the view's
+		signature carries it and this does not yet, so it is left out.
+		"""
+		if not located_value(placement) or taken:
+			return []
+		scalar = placement.scalar
+		assert scalar is not None
+		local = c_name(self._local(struct, placement))
+		ctype = self._field_ctype(placement)
+		load  = self._load_expression(scalar, placement, "held.base", 0)
+		return [
+			"",
+			f"/* `{placement.name}`'s value, read where `"
+			f"{ident(self.prefix, struct.name, local, 'view')}` says it is. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'value')}"
+			f"(const situ_msg_t *msg, situ_view_t view, {ctype} *out)",
+			"{",
+			"\tsitu_view_t      held;",
+			f"\tconst situ_err_t err = "
+			f"{ident(self.prefix, struct.name, local, 'view')}(msg, view, &held);",
+			"",
+			"\tif (err != SITU_OK) {",
+			"\t\treturn err;",
+			"\t}",
+			f"\t*out = ({ctype}){load};",
 			"\treturn SITU_OK;",
 			"}",
 		]

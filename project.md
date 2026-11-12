@@ -6079,37 +6079,15 @@ nothing re-read the sentence when the records closed.
     *this schema answered 196 calls and not one truncated*. Fourth time
     this run that a count of what a check asked found what the check
     could not.
-- **A scalar placed by `at` has no value getter in any backend**
-  (found 2026-11-11 by a sweep of placed members). `u8 c at 3;` is
-  accepted, and all four backends expose it as one byte of the message --
-  C `situ_s_c_view`, C++ and Rust a byte slice, Python a `memoryview` --
-  never as the number the type declares. They agree with each other, so
-  no differential sees it; the C driver asks for `situ_s_c_get` and does
-  not compile, which `differ.py`'s own comment at the located case
-  predicts ("a located SCALAR ... would want a shape of its own"). Open:
-  either a value getter in the four backends and the walkers -- the
-  aims' answer, since a field at an absolute offset is a real header's
-  shape -- or a refusal naming `u8 c[1] at 3`. Every placed member in the
-  corpus is a byte run, so nothing depends on it today.
-
-  **The getter's shape, settled from the byte accessors already there**
-  (2026-11-11), so the build starts from it. Each backend's placed byte
-  accessor takes the message already -- the offset is the message's -- and
-  the value getter is that accessor's sibling, named `<name>_value`, so the
-  bytes stay reachable under the name they have today:
-
-  | backend | bytes, today | value, to add |
-  |---|---|---|
-  | C | `situ_s_c_view(msg, view, &out)` | `situ_s_c_value(msg, view, &v)` -> `situ_err_t` |
-  | C++ | `c(msg, bytes &out)` | `c_value(msg, T &out)` -> `err` |
-  | Rust | `c(&self, msg) -> Result<&[u8]>` | `c_value(&self, msg) -> Result<T>` |
-  | Python | property `c` -> `memoryview` | property `c_value` -> `int` |
-
-  Each reads the bytes through the existing accessor and loads them with
-  the member's byte order, so the bounds check stays in one place. Then
-  `differ.py`'s located-scalar probe asks `_value` in all four drivers, and
-  a six-reader test holds `u8 c at 3`, a `u16` big and little, and an
-  offset past the frame refused alike.
+- ~~**A scalar placed by `at` has no value getter in any backend**~~
+  (found 2026-11-11). **Built 2026-11-12** (26.959): `<name>_value` beside
+  the bytes in all four backends -- C `situ_s_c_value(msg, view, &v)`,
+  C++ `c_value(msg, out)`, Rust `c_value(&self, msg) -> Result<T>`,
+  Python property `c_value` -- reading through the byte accessor, for a
+  plain 8/16/32/64-bit integer, big or little. An enum-typed, native-order,
+  text, float or bit-field placed member keeps its bytes alone. The
+  differential asks the value now and no longer asks a setter nobody
+  emits.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
@@ -8482,6 +8460,10 @@ Moved to `doc/decision/26.957-an-arm-behind-a-sized-member-in-the-c-walker.md`.
 ### 26.958 A TLV item may be its tag alone
 
 Moved to `doc/decision/26.958-a-tlv-item-may-be-its-tag-alone.md`.
+
+### 26.959 A placed scalar reads as its number
+
+Moved to `doc/decision/26.959-a-placed-scalar-reads-as-its-number.md`.
 
 ### 26.929 The offset cache counts bits
 

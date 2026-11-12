@@ -49,7 +49,7 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
-	summed_width, version_readable_from,
+	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -8671,6 +8671,29 @@ class Emitter:
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"\t\tOk(&msg[at..at + n])",
+			"\t}",
+			*self._located_value(placement, name),
+		]
+
+	def _located_value(self, placement: Placement, name: str) -> list[str]:
+		"""`<name>_value`: the number a placed scalar holds, read through
+		the slice accessor above so its bounds check stays the only one
+		(26.959). C's `_located_value` says which scalars get one."""
+		if not located_value(placement):
+			return []
+		scalar = placement.scalar
+		assert scalar is not None
+		held = self._rust_type(scalar)
+		read = ("from_le_bytes" if placement.endian is ast.Endian.LITTLE
+		        else "from_be_bytes")
+		return [
+			"",
+			f"\t/// `{placement.path}`'s value, read where `{name}` says it is.",
+			f"\tpub fn {name}_value(&self, msg: &[u8]) -> Result<{held}> {{",
+			f"\t\tlet bytes = self.{name}(msg)?;",
+			f"\t\tlet mut held = [0u8; {scalar.bits // BITS_PER_BYTE}];",
+			"\t\theld.copy_from_slice(bytes);",
+			f"\t\tOk({held}::{read}(held))",
 			"\t}",
 		]
 

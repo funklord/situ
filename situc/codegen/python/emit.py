@@ -49,7 +49,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	summed_width, version_readable_from,
+	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -4891,6 +4891,26 @@ class Emitter:
 			f'\t\t\traise BoundsError("{placement.path}: `{placement.located}`'
 			' points outside the message")',
 			"\t\treturn self._msg.buffer[at:at + n]",
+			*self._located_value(placement, name),
+		]
+
+	@staticmethod
+	def _located_value(placement: Placement, name: str) -> list[str]:
+		"""`<name>_value`: the number a placed scalar holds, read through
+		the bytes property above so its bounds check stays the only one
+		(26.959). C's `_located_value` says which scalars get one."""
+		if not located_value(placement):
+			return []
+		scalar = placement.scalar
+		assert scalar is not None
+		order  = "little" if placement.endian is ast.Endian.LITTLE else "big"
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}_value(self) -> int:",
+			f'\t\t"""{placement.path}\'s value, read where `{name}` says it is."""',
+			f"\t\treturn int.from_bytes(self.{name}, {order!r},"
+			f" signed={scalar.signed})",
 		]
 
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:

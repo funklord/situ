@@ -26,7 +26,7 @@ from situc import ast
 from situc import kernels
 from situc.ast import Schema
 from situc.diagnostics import error
-from situc.types import ScalarType, pinned_shown, literal_bytes
+from situc.types import ScalarKind, ScalarType, pinned_shown, literal_bytes
 from math import lcm
 
 from situc.expr import Env
@@ -1163,6 +1163,32 @@ def version_readable_from(field: Placement) -> int:
 	"""
 	assert field.offset_bits is not None
 	return -(-(field.offset_bits + field.size_bits) // BITS_PER_BYTE)
+
+
+def located_value(placement: Placement) -> bool:
+	"""Whether a member placed by `at` gets a value getter beside its bytes.
+
+	A scalar placed by `at` was exposed by every backend as one byte run of
+	the message and never as the number its type declares (26.959). The
+	getter reads through the byte accessor, so the bounds check stays in one
+	place. It is emitted for one plain integer of 8, 16, 32 or 64 bits, big
+	or little, whose whole size is that scalar's -- `u8 blob[h.count] at
+	h.where` is a run of them, not a value -- which one load reads in every
+	backend; an
+	enum-typed one, a text number, a float, a bit field and a native-order
+	one keep their bytes alone.
+	"""
+	scalar = placement.scalar
+	return (placement.located is not None and scalar is not None
+	        and placement.type_name == scalar.name
+	        and placement.radix is None and placement.array_count is None
+	        and placement.sized_by is None and not placement.size_expr
+	        and placement.is_fixed_size and placement.size_bits == scalar.bits
+	        and not placement.delimiters and placement.marker is None
+	        and (scalar.bits == BITS_PER_BYTE
+	             or placement.endian in (ast.Endian.BIG, ast.Endian.LITTLE))
+	        and not scalar.is_bit_packed and scalar.bits in (8, 16, 32, 64)
+	        and scalar.kind in (ScalarKind.UINT, ScalarKind.SINT))
 
 
 def summed_width(placement: Placement) -> int:

@@ -111,7 +111,7 @@ from situc.diagnostics import SituError, error
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	bit_addressed_tag, covered_run, invalidating_members,
+	bit_addressed_tag, located_value, covered_run, invalidating_members,
 	Member, arm_members, arm_of, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, inside_a_nested_member,
 	is_recursive,
@@ -207,6 +207,9 @@ class Probe(Enum):
 	#: `name <- <integer>` -- a *write*, and then the buffer, which is the
 	#: half of every backend's surface nothing compared.
 	WRITE     = "write"
+	#: `name_value ok=<0|1> value=<integer>` -- a scalar placed by `at`, read
+	#: as the number its type declares through `<name>_value` (26.959).
+	LOCATED_VALUE = "located_value"
 	#: `name <- <integer> dirty=<0|1>` -- a write to a member a tag covers,
 	#: which has to leave the tag stale (14.2). The claim is the security
 	#: model's, and four backends spell the marking four ways.
@@ -636,6 +639,11 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# schema nobody compares rather than a question nobody asks.
 			if scalar is not None and scalar.bits == BITS_PER_BYTE:
 				found.append(Ask(Probe.LOCATED, local))
+			# And its value, which every backend reads since 26.959.
+			if located_value(placement):
+				assert scalar is not None
+				found.append(Ask(Probe.LOCATED_VALUE, local, bits=scalar.bits,
+				                 signed=scalar.signed))
 		elif kind in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.TLV,
 				Member.INDEXED):
 			# Every count is a walk over numbers the message chose: a run's
@@ -820,6 +828,10 @@ def writes(struct: ResolvedStruct,
 		if placement.since is not None:
 			continue
 		if placement.kind != "field" or scalar is None:
+			continue
+		# A member placed by `at` has bytes and a value to read and no
+		# setter in any backend; writing one asked for `_set` nobody emits.
+		if placement.located is not None:
 			continue
 		if placement.array_count is not None or placement.sized_by is not None:
 			continue
@@ -1711,6 +1723,22 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        "\t\t\t\t\tn == 0u ? 0LL : (long long)"
 		        f"{call.format('get')}(view, 0u));",
 		        "\t\t\t}"]
+	if ask.probe is Probe.LOCATED_VALUE:
+		# The getter's own type, which `ask.bits` carries: the out-parameter
+		# is `uint16_t *` for a `u16`, and a wider one is a pointer of
+		# another type.
+		held = f"{'int' if ask.signed else 'uint'}{ask.bits}_t"
+		form = "%lld" if ask.signed else "%llu"
+		cast = "long long" if ask.signed else "unsigned long long"
+		return ["\t\t\t{",
+		        f"\t\t\t\t{held} value = 0;",
+		        f"\t\t\t\tconst situ_err_t e = {call.format('value')}"
+		        "(&msg, view, &value);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local}_value ok=%d value={form}\\n",',
+		        "\t\t\t\t\te == SITU_OK ? 1 : 0,",
+		        f"\t\t\t\t\te == SITU_OK ? ({cast})value : 0);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.LOCATED:
 		# `&msg` as well as the view: the offset is the MESSAGE's, which is
 		# the whole of what makes this member a different kind. Every other
@@ -2156,6 +2184,18 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\tstatic_cast<std::uint32_t>(held.size()),",
 		        "\t\t\t\t\theld.empty() ? -1 : static_cast<int>(held[0]));",
 		        "\t\t\t}"]
+	if ask.probe is Probe.LOCATED_VALUE:
+		held = f"std::{'int' if ask.signed else 'uint'}{ask.bits}_t"
+		form = "%lld" if ask.signed else "%llu"
+		cast = "long long" if ask.signed else "unsigned long long"
+		return ["\t\t\t{",
+		        f"\t\t\t\t{held} value = 0;",
+		        f"\t\t\t\tconst auto e = view.{call}_value(msg.raw(), value);",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local}_value ok=%d value={form}\\n",',
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+		        f"\t\t\t\t\te == ::situ::rt::err::ok ? static_cast<{cast}>(value) : 0);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.LOCATED:
 		# `msg.raw()`: the accessor takes the C message, because the offset
 		# is the message's rather than this frame's.
@@ -2504,6 +2544,11 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        f" view.{rust_ident(ask.local + '_len')}(),"
 		        f" if view.{rust_ident(ask.local + '_terminated')}()"
 		        " { 1 } else { 0 });"]
+	if ask.probe is Probe.LOCATED_VALUE:
+		return ["\t\t\t\tmatch view." + call + "_value(&raw) {",
+		        f'\t\t\t\t\tOk(held) => println!("{ask.local}_value ok=1 value={{}}", held),',
+		        f'\t\t\t\t\tErr(_) => println!("{ask.local}_value ok=0 value=0"),',
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.LOCATED:
 		# `&raw`: the bytes are at an offset in the message, and the
 		# message is the slice this driver was handed.
@@ -2812,6 +2857,13 @@ def _python_ask(ask: Ask) -> list[str]:
 		return [f'print("{ask.local} len=%d term=%d"'
 		        f" % (view.{call}_len,"
 		        f" 1 if view.{call}_terminated else 0))"]
+	if ask.probe is Probe.LOCATED_VALUE:
+		return ["try:",
+		        f"\theld = view.{call}_value",
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local}_value ok=0 value=0")',
+		        "else:",
+		        f'\tprint("{ask.local}_value ok=1 value=%d" % held)']
 	if ask.probe is Probe.LOCATED:
 		# A property rather than a call, and it raises rather than
 		# returning an error -- the one backend where this member reads

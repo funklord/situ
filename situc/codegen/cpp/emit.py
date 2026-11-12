@@ -52,7 +52,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	summed_width, version_readable_from,
+	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
 	is_behind_a_length,
@@ -8914,6 +8914,37 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"\t\tout = ::situ::rt::bytes(msg->base + at, n);",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+			*self._located_value(placement, name),
+		]
+
+	def _located_value(self, placement: Placement, name: str) -> list[str]:
+		"""`<name>_value`: the number a placed scalar holds, read through
+		the bytes accessor above so its bounds check stays the only one
+		(26.959). C's `_located_value` says which scalars get one."""
+		if not located_value(placement):
+			return []
+		scalar = placement.scalar
+		assert scalar is not None
+		held  = self._ctype(scalar)
+		width = scalar.bits
+		order = "le" if placement.endian is ast.Endian.LITTLE else "be"
+		load  = ("bytes.data()[0]" if width == BITS_PER_BYTE
+		         else f"situ_get_{order}{width}(bytes.data())")
+		return [
+			"",
+			f"\t/* {placement.path}'s value, read where `{name}` says it is. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_value(const situ_msg_t *msg,",
+			f"\t\t\t{held} &out) const noexcept",
+			"\t{",
+			"\t\t::situ::rt::bytes bytes;",
+			f"\t\tconst ::situ::rt::err err = {name}(msg, bytes);",
+			"",
+			"\t\tif (err != ::situ::rt::err::ok) {",
+			"\t\t\treturn err;",
+			"\t\t}",
+			f"\t\tout = static_cast<{held}>({load});",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		]
