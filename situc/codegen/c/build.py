@@ -179,6 +179,10 @@ class Part:
 					# where it is not the caller's `_len`
 		self.stated: int | None = None	# a packed tag the arm decides
 		self.peeked: Placement | None = None
+		# A NESTED arm that ends the message: its extent is the caller's
+		# bytes, so they are checked by validating the struct over all of
+		# them rather than by its `_required`, which it has none of (26.973).
+		self.tail = False
 					# the discriminant an arm's first
 					# byte answers to
 		self.others    = others		# values that would make the message
@@ -856,13 +860,19 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		# At the cursor, which is the holder's: an arm's pad is measured from
 		# the struct the variant is in, as the reader measures it.
 		return Part(PAD, inner, bare_name(inner.name or "pad")), None
-	why = _arm_refusal(inner, shape.header, shape.prefix, shape.structs)
+	tail = _ends_the_message(struct, inner, shape)
+	why = None if tail else _arm_refusal(inner, shape.header, shape.prefix,
+	                                     shape.structs)
 	if why:
 		# The LOCAL name, as every other member-level message uses: this
 		# quoted the full dotted path including the struct, so one reader
 		# had two shapes to learn.
 		return None, f"`{traverse.local_name(struct, inner)}` {why}"
-	part = _arm_part(struct, inner, shape.header, shape.prefix, shape.structs)
+	part = (Part(NESTED, inner, bare_name(inner.name or "body"),
+	             inner=ident(shape.prefix, inner.type_name or ""))
+	        if tail else
+	        _arm_part(struct, inner, shape.header, shape.prefix, shape.structs))
+	part.tail = tail
 	# Where the discriminant is peeked, nothing was written for it and
 	# `_validate` cannot help: bytes beginning with another arm's kind are a
 	# VALID message of that other arm, so a caller who asked for this one
@@ -875,6 +885,62 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		part.others = claimed
 		part.peeked = disc
 	return part, None
+
+
+def _ends_the_message(struct: ResolvedStruct, inner: Placement,
+		shape: Shape) -> bool:
+	"""Whether an arm's struct may be handed over without a `_required`.
+
+	It has none because it ends where its view does -- `u8 media[remaining]`
+	-- and that is exactly where the MESSAGE ends when the variant is the
+	struct's last member: the caller's bytes are then one whole value of
+	the arm however long they are, the writer having chosen the extent.
+	fuzznet's call frames are this shape, one message a datagram, and the
+	alternative was a length field carried only so a builder could be made
+	(26.973). Anywhere else the refusal stands: a blob one byte too long
+	would swallow what follows.
+	"""
+	held = (shape.structs or {}).get(inner.type_name or "")
+	# A struct the data sizes: a fixed one's extent is its own, and one
+	# with no `_required` for some other reason keeps the refusal it had.
+	if held is None or held.layout.is_fixed_size \
+			or frames_itself(shape.header, ident(shape.prefix, held.name)):
+		return False
+	if ends_before_a_byte_it_does_not_own(held) \
+			or any(entry.placement.parameter for entry in held.entries):
+		return False
+	found = traverse.enclosing_arm(struct, inner)
+	members = traverse.own_members(struct)
+	return found is not None and bool(members) \
+		and members[-1].path == found[0].path
+
+
+def _tail_check(part: Part, local: str, held: Placement) -> list[str]:
+	"""A tail arm's bytes are one whole value however long, if they validate.
+
+	Taken as the arm's struct over all of them, which is the reading a
+	receiver makes of the datagram's end (26.973).
+	"""
+	return [
+		f"\t/* {local}: one whole `{held.type_name}`, which ends the",
+		"\t * message: its extent is the bytes the caller handed over, so",
+		"\t * they are taken as one over all of them and validated. */",
+		f"\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+		"\t\treturn SITU_ERR_BOUNDS;",
+		"\t}",
+		"\t{",
+		f"\t\tsitu_msg_t  {NEED}_msg;",
+		f"\t\tsitu_view_t {NEED}_view;",
+		"",
+		f"\t\tsitu_msg_init(&{NEED}_msg, (uint8_t *){part.local},"
+		f" {part.local}_len);",
+		f"\t\tif ({part.inner}_view(&{NEED}_msg, 0u, {part.local}_len,"
+		f" &{NEED}_view) != SITU_OK",
+		f"\t\t    || {part.inner}_validate({NEED}_view) != SITU_OK) {{",
+		"\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t}",
+		"\t}",
+	]
 
 
 def _of_no_bytes(part: Part, structs: Mapping[str, ResolvedStruct] | None
@@ -3057,6 +3123,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 					"\t\treturn SITU_ERR_CONSTRAINT;",
 					"\t}",
 				]),
+				*(_tail_check(part, local, held) if part.tail else [
 				f"\t/* {local}: one whole `{held.type_name}`, which the",
 				"\t * caller built. Its extent is its own to state, so the",
 				"\t * writer ASKS rather than trusting the length it was",
@@ -3076,6 +3143,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"\t\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t\t}",
 				"\t}",
+			]),
 				*_room(f"{part.local}_len"),
 				f"\tif ({part.local}_len != 0u) {{",
 				f"\t\tif ({part.local} == NULL) {{",

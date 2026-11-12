@@ -225,10 +225,15 @@ def _nested(part: Part) -> list[str]:
 			      + " || ".join(f"{peeked_byte(local, part)} == {v}" for v in part.others)
 			      + " {"),
 			*refuse]),
+		# An arm that ends the message: its bytes are one whole value
+		# however long, if they validate as one (26.973).
+		*([f"\tif {inner}::new({local}).and_then(|held| held.validate())"
+		   ".is_err() {",
+		   *refuse] if part.tail else [
 		f"\tmatch {inner}::required({local}) {{",
 		f"\t\tsitu_rt::Framing::Complete(n) if n == {local}.len() => {{}}",
 		"\t\t_ => return Err(Error::Constraint),",
-		"\t}",
+		"\t}"]),
 		*_room(f"{local}.len()"),
 		f"\tsitu_out[situ_at..situ_at + {local}.len()]"
 		f".copy_from_slice({local});",

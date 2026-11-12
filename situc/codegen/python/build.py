@@ -156,11 +156,18 @@ def _nested(part: Part) -> list[str]:
 			(f"\tif {peeked_byte(local, part)} != {part.value}:" if part.value >= 0
 			 else f"\tif {peeked_byte(local, part)} in {tuple(part.others)!r}:"),
 			refuse]),
+		# An arm that ends the message: its bytes are one whole value
+		# however long, if they validate as one (26.973).
+		*(["\ttry:",
+		   f"\t\t{inner}.at(situ_schema.Message(bytearray({local})), 0,"
+		   f" len({local})).validate()",
+		   "\texcept SituError:",
+		   f"\t{refuse}"] if part.tail else [
 		"\ttry:",
 		f"\t\tsitu_need = {inner}.required({local})",
 		"\texcept TruncatedError:",
 		"\t\tsitu_need = -1",
-		f"\tif situ_need != len({local}):", refuse,
+		f"\tif situ_need != len({local}):", refuse]),
 		*_room(f"len({local})", path),
 		f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
 		f"\tsitu_at += len({local})",
