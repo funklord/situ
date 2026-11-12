@@ -8551,6 +8551,10 @@ Moved to `doc/decision/26.971-validate-reads-an-enum-placed-by-at.md`.
 
 Moved to `doc/decision/26.972-the-doc-draws-no-parameter.md`.
 
+### 26.973 A builder over a tail that ends the message
+
+Moved to `doc/decision/26.973-a-builder-over-a-tail-that-ends-the-message.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
