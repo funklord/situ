@@ -1256,6 +1256,11 @@ def marker_order(view: View) -> Literal["little", "big"]:
 			"among its struct's members")
 
 	index = found[0]
+	# Handed in (`parameter magic order;`): the caller's marker as the
+	# caller read it, which is the value the argument carries.
+	if image.placements[index].parameter:
+		return "little" if argument(view, index) == image.markers[index] \
+			else "big"
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	width = size_bits(view, index) // BITS_PER_BYTE
 	if start + width > view.limit:

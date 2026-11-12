@@ -593,7 +593,7 @@ pad           = "pad_to" "(" digits ")" [ attrs ] ";"   (* section 8.4 *)
               | "pad_random" "(" digits "," digits ")" scalar_type
                 [ array_spec ] [ attrs ] ";" ;    (* 14.7, 0045 *)
 
-parameter     = "parameter" [ radix ] scalar_type ident [ array_spec ] [ attrs ] ";" ;
+parameter     = "parameter" [ radix ] ( scalar_type | ident ) ident [ array_spec ] [ attrs ] ";" ;
                                                  (* decision 0050 *)
 
 field         = [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
@@ -1073,6 +1073,30 @@ Capability consequences, which are mercifully narrow:
 - Generated getters for these fields return by value only, never by pointer.
 - A `must_eq` constraint on a field in marker scope is validated after the
   marker resolves, not before.
+
+**A struct inside a marker's struct takes the order as an argument.** A
+marker governs its own struct's members; a struct used inside it reads in
+whatever order it states for itself. Where that has to be the marker's --
+every record of a pcap file, every entry of a TIFF directory -- the struct
+takes a parameter typed by the marker and reads from it (26.961):
+
+```situ
+struct record [endian = from(order)] {
+    parameter magic order [stream];
+    u32 incl_len;
+    u8  data[incl_len];
+}
+struct pcap [endian = from(magic)] {
+    endian_marker magic;
+    record(order = magic) packets[remaining];
+}
+```
+
+The argument is the marker as the caller read it, big-endian, and is
+compared against the literal the marker declares. It must be `[stream]`:
+it decides how a length reads, so it moves members. `from(m)` naming
+neither a marker among the struct's members nor such a parameter is
+refused.
 
 ### 8.4 Alignment
 
@@ -8476,6 +8500,10 @@ Moved to `doc/decision/26.959-a-placed-scalar-reads-as-its-number.md`.
 ### 26.960 The dissector assembles a bit field by its bit order
 
 Moved to `doc/decision/26.960-the-dissector-assembles-a-bit-field-by-its-bit-order.md`.
+
+### 26.961 A struct takes its byte order from its caller's marker
+
+Moved to `doc/decision/26.961-a-struct-takes-its-byte-order-from-its-caller-s-marker.md`.
 
 ### 26.929 The offset cache counts bits
 

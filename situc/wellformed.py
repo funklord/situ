@@ -92,6 +92,7 @@ def check(schema: ast.Schema) -> None:
 	check_skips(schema)
 	check_text_numbers(schema)
 	check_encoding_from(schema)
+	check_endian_from(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
 	check_delimiters(schema)
@@ -6236,6 +6237,73 @@ def _recursion_error(cycle: list[str], structs: Structs,
 			f"`[depth = 8]` over {chain} admits eight nested structs",
 		]),
 	)
+
+
+def check_endian_from(schema: ast.Schema) -> None:
+	"""`[endian = from(m)]` names a marker its struct can read.
+
+	Two things qualify: an `endian_marker` among the struct's own members,
+	read from the message, or a `parameter` typed by a marker, which is the
+	caller's marker handed in (`parameter magic order [stream];`). Anything
+	else was accepted and meant nothing: C called an `is_little` nobody
+	emits and did not compile, and the walker refused every message, so a
+	misspelt marker surfaced as a C compiler's complaint about a name the
+	schema never wrote.
+
+	A handed marker must be `[stream]`. It decides how every multi-byte
+	member reads, a length among them, so it moves whatever follows -- the
+	rule `check_parameters` holds a size expression to, for its reason: a
+	dissector carries a `[stream]` argument as a preference, and nothing in
+	a capture carries any other.
+	"""
+	markers = {decl.name for decl in schema.markers()}
+	for struct in schema.structs():
+		members = _members_and_arms(struct)
+		read    = {member.name for member in members
+		           if isinstance(member, ast.MarkerField)}
+		handed  = {member.name: member for member in struct.members
+		           if isinstance(member, ast.Field) and member.parameter
+		           and member.type_ref.name in markers}
+		for held in handed.values():
+			if not _has(held.attrs, "stream"):
+				raise error(
+					f"`parameter {held.name}` hands a byte order, so it "
+					"must be `[stream]`",
+					held.span,
+					"every multi-byte member it governs reads in its order",
+					[
+						"a length read in the wrong order puts everything "
+						"after it somewhere else, so this argument moves "
+						"members, and one that moves members is fixed for a "
+						"stream (decision 0050)",
+						f"write `parameter {held.type_ref.name} {held.name} "
+						"[stream];`",
+					])
+		owners: list[tuple[ast.Attr, ...]] = [struct.attrs]
+		owners.extend(getattr(member, "attrs", ()) for member in members)
+		for attrs in owners:
+			for attr in attrs:
+				if attr.name != "endian" or not isinstance(attr.value, ast.Call) \
+						or attr.value.name != "from" or len(attr.value.args) != 1 \
+						or not isinstance(attr.value.args[0], ast.NameRef):
+					continue
+				named = attr.value.args[0].name
+				if named in read or named in handed:
+					continue
+				raise error(
+					f"`from({named})` names no byte-order marker of "
+					f"`{struct.name}`",
+					attr.value.span,
+					"nothing here says which order to read in",
+					[
+						"`from(m)` names an `endian_marker` among the "
+						"struct's own members, or a `parameter` typed by a "
+						"marker that the caller hands in",
+						"a struct inside a marker's struct reads in the "
+						"marker's order by taking it as an argument: "
+						"`parameter <marker> order [stream];` here, "
+						"`<type>(order = <marker>)` at the use",
+					])
 
 
 def check_encoding_from(schema: ast.Schema) -> None:

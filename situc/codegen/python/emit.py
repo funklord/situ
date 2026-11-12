@@ -4463,6 +4463,13 @@ class Emitter:
 			f"\t\telse {name.upper()}_LITTLE)",
 			"",
 			"\t@property",
+			f"\tdef {name}(self) -> int:",
+			'\t\t"""The marker as read, big-endian whatever it says: what a',
+			'\t\tmember hands a struct that takes its order as an argument."""',
+			f"\t\treturn self._read({placement.offset_bytes}, {size},"
+			f" signed=False, big=True)",
+			"",
+			"\t@property",
 			f"\tdef {name}_is_little(self) -> bool:",
 			f'\t\t"""{placement.path}: which byte order the rest of this frame',
 			"\t\tuses, read from the data (8.3). Compared as a byte sequence",
@@ -4474,6 +4481,18 @@ class Emitter:
 		]
 
 	def _marker_predicate(self, placement: Placement) -> str:
+		# Or the argument it was handed (`parameter magic order;`): the
+		# caller's marker as the caller read it, against the literal the
+		# marker declares.
+		owner = placement.path.partition(".")[0]
+		held  = self.resolved.structs.get(owner)
+		given = None if held is None else traverse.marker_argument(held, placement)
+		if given is not None:
+			marker = self.markers[given.type_name]
+			width  = given.scalar.bits if given.scalar is not None else 32
+			little = evaluate(marker.little, self.resolved.layout.env)
+			return (f"(self.{self._argument_ident(given)} == "
+			        f"0x{little:0{width // 4}X})")
 		return f"self.{py_name(placement.marker or '')}_is_little"
 
 	def _order_argument(self, placement: Placement) -> str:

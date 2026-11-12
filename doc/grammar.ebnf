@@ -117,8 +117,14 @@ pad		= "pad_to" "(" digits ")" [ attrs ] ";"
  * carry a per-message one at all. Without it, a parameter reaching a size,
  * an `at` or a scan cap is refused.
  *
- * None of the forms that ask where the bytes are: there are none. *)
-parameter	= "parameter" [ radix ] scalar_type ident [ array_spec ] [ attrs ] ";" ;
+ * None of the forms that ask where the bytes are: there are none.
+ *
+ * A parameter typed by an `endian_marker` is that marker's value as the
+ * caller read it, and `[endian = from(order)]` reads in the order it
+ * states: how a pcap record takes its file header's byte order (26.961).
+ * *)
+parameter	= "parameter" [ radix ] ( scalar_type | ident ) ident [ array_spec ]
+		  [ attrs ] ";" ;
 
 field		= [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
 		  [ skip ] [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;

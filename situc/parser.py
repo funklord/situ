@@ -467,6 +467,7 @@ class Parser:
 		namespaces.flatten(schema)
 		kernels.resolve_signatures(schema)
 		_widen_byte_enum_fields(schema)
+		_type_marker_parameters(schema)
 		wellformed.check(schema)
 		return schema
 
@@ -3493,6 +3494,41 @@ def parse(source: Source, read: set[str] | None = None) -> ast.Schema:
 
 def parse_text(text: str, path: str = "<input>") -> ast.Schema:
 	return parse(Source(path, text))
+
+
+def _type_marker_parameters(schema: ast.Schema) -> None:
+	"""A parameter typed by an `endian_marker` is its backing scalar.
+
+	`parameter magic order;` hands a struct the byte order its caller's
+	marker states, so `struct record [endian = from(order)]` can be read
+	in a pcap file's order without a marker of its own. The argument is the
+	marker as the caller read it -- big-endian, the way a marker is always
+	compared -- so it is one number of the backing type, and every reader of
+	a parameter already knows what one of those is.
+
+	The type keeps the marker's NAME, so `from(order)` can find the two
+	literals the argument is compared against; only `scalar` is filled in,
+	which is what `check_parameters` and the solver ask of a parameter.
+	Runs after `namespaces.flatten` for `_widen_byte_enum_fields`' reason.
+	"""
+	backing = {decl.name: decl.backing.scalar for decl in schema.markers()
+	           if decl.backing.scalar is not None}
+	if not backing:
+		return
+	for i, decl in enumerate(schema.decls):
+		if not isinstance(decl, ast.StructDecl):
+			continue
+		members = tuple(
+			replace(member, type_ref = replace(
+				member.type_ref,
+				scalar = backing[member.type_ref.name]))
+			if isinstance(member, ast.Field) and member.parameter
+			and member.type_ref.scalar is None
+			and member.type_ref.name in backing
+			else member
+			for member in decl.members)
+		if members != decl.members:
+			schema.decls[i] = replace(decl, members = members)
 
 
 def _widen_byte_enum_fields(schema: ast.Schema) -> None:

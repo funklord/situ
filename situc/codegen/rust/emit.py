@@ -9820,6 +9820,12 @@ class Emitter:
 			f"\t\tSelf::{name.upper()}_LITTLE",
 			"\t};",
 			"",
+			# The marker as read, big-endian whatever it says: what a member
+			# hands a struct that takes its order as an argument.
+			f"\tpub fn {_ident(name)}(&self) -> u{width} {{",
+			f"\t\tsitu_rt::read_be(self.bytes, {placement.offset_bytes},"
+			f" {width // 8}) as u{width}",
+			"\t}",
 			f"\tpub fn {_ident(name + '_is_little')}(&self) -> bool {{",
 			f"\t\tsitu_rt::read_be(self.bytes, {placement.offset_bytes},"
 			f" {width // 8}) as u{width} == Self::{name.upper()}_LITTLE",
@@ -9827,6 +9833,19 @@ class Emitter:
 		]
 
 	def _marker_predicate(self, placement: Placement) -> str:
+		# Or the argument it was handed (`parameter magic order;`): the
+		# caller's marker as the caller read it, against the literal the
+		# marker declares. `self.` first either way, which the setter's
+		# `as_ref()` rewrite below relies on.
+		owner = placement.path.partition(".")[0]
+		held  = self.resolved.structs.get(owner)
+		given = None if held is None else traverse.marker_argument(held, placement)
+		if given is not None:
+			marker = self.markers[given.type_name]
+			width  = given.scalar.bits if given.scalar is not None else 32
+			little = evaluate(marker.little, self.resolved.layout.env)
+			return (f"self.{self._argument_ident(given)} == "
+			        f"0x{little:0{width // 4}X}u{width}")
 		name = c_name(placement.marker or "")
 		return f"self.{_ident(name + '_is_little')}()"
 
@@ -9873,7 +9892,12 @@ class Emitter:
 			             f" else {{ situ_rt::read_be(self.bytes, {at},"
 			             f" {width}) }})")
 			if scalar.signed:
-				return f"situ_rt::sign_extend({raw}, {scalar.bits})"
+				# Bare as an argument: `unused_parens` refuses the
+				# parentheses the `as` cast below needs, and a signed
+				# marker-ordered member is where the two meet -- pcap's
+				# `thiszone`, the first in the corpus (26.961).
+				return (f"situ_rt::sign_extend({raw[1:-1]},"
+				        f" {scalar.bits})")
 			return raw
 
 		reader = _reader(placement.endian)

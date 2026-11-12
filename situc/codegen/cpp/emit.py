@@ -9143,6 +9143,12 @@ class Emitter:
 			f"\t\treturn situ_get_be{width}(situ_base(raw_) + {placement.offset_bytes})"
 			f" == {name}_little;",
 			"\t}",
+			# The marker as read, big-endian whatever it says: what a member
+			# hands a struct that takes its order as an argument.
+			f"\t[[nodiscard]] std::uint{width}_t {name}() const noexcept",
+			"\t{",
+			f"\t\treturn situ_get_be{width}(situ_base(raw_) + {placement.offset_bytes});",
+			"\t}",
 			f"\t[[nodiscard]] static constexpr std::uint{width}_t"
 			f" {name}_of_host() noexcept",
 			"\t{",
@@ -9156,7 +9162,21 @@ class Emitter:
 		]
 
 	def _marker_predicate(self, placement: Placement) -> str:
-		"""Whether the marker this field is governed by says little-endian."""
+		"""Whether the marker this field is governed by says little-endian.
+
+		Or the argument it was handed (`parameter magic order;`): the
+		caller's marker as the caller read it, against the literal the
+		marker declares.
+		"""
+		owner = placement.path.partition(".")[0]
+		held  = self.resolved.structs.get(owner)
+		given = None if held is None else traverse.marker_argument(held, placement)
+		if held is not None and given is not None:
+			marker = self.markers[given.type_name]
+			width  = given.scalar.bits if given.scalar is not None else 32
+			little = evaluate(marker.little, self.resolved.layout.env)
+			return (f"({self._argument_member(held, given)} == "
+			        f"0x{little:0{width // 4}X}u)")
 		return f"{c_name(placement.marker or '')}_is_little()"
 
 	def _fixed_text_number(self, struct: ResolvedStruct,

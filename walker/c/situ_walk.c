@@ -4083,6 +4083,14 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
+		/* The marker itself reads big-endian, whatever it says: it is what
+		 * decides the order, so it cannot be read in the one it is about.
+		 * `walk._order` sends an unstated order to big for the same
+		 * reason, and a struct that hands its marker to a member's
+		 * `parameter magic order;` reads it here as the argument's value. */
+		if (held.kind == 2u /* KIND_MARKER, below */) {
+			held.endian = ENDIAN_BIG;
+		}
 		if ((held.flags & FLAG_MARKER_GOVERNED) != 0u) {
 			err = order_from_marker(image, message, len, shape, &held);
 			if (err != SITU_WALK_OK) {
@@ -7469,7 +7477,8 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	if (placement.kind != KIND_MARKER) {
+	const int handed = (placement.text_flags & SITU_WALK_PARAMETER) != 0u;
+	if (placement.kind != KIND_MARKER && !handed) {
 		return SITU_WALK_UNSUPPORTED;	/* not an endian marker */
 	}
 
@@ -7489,6 +7498,18 @@ situ_walk_err situ_walk_marker(const situ_walk_image *image,
 	}
 	if (!found) {
 		return SITU_WALK_UNSUPPORTED;
+	}
+
+	/* A parameter typed by a marker (`parameter magic order;`): the
+	 * caller's marker as the caller read it, which is the argument. */
+	if (handed) {
+		uint64_t given = 0u;
+		err = argument_of(image, shape, index, &given);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*little = (given == (uint64_t)sentinel) ? 1u : 0u;
+		return SITU_WALK_OK;
 	}
 
 	uint32_t start = 0u;

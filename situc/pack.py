@@ -2775,7 +2775,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# while the code read as though it were fixed.
 
 	for at, (owner, placement) in enumerate(rows):
-		if placement.kind == "marker":
+		# And a parameter typed by a marker (`parameter magic order;`),
+		# whose argument is the caller's marker as read: the walker compares
+		# the ARGUMENT against the same constant.
+		if placement.kind == "marker" or (
+				placement.parameter and placement.type_name in marker_decls):
 			marker_decl = marker_decls.get(placement.type_name or "")
 			little = getattr(getattr(marker_decl, "little", None), "value", None)
 			if little is not None:

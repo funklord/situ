@@ -4146,6 +4146,26 @@ def handed_range(struct: "ResolvedStruct", held: Placement,
 ARGUMENT_PREFIX = "arg_"
 
 
+def marker_argument(struct: ResolvedStruct,
+		placement: Placement) -> Placement | None:
+	"""The parameter a member's byte order is handed in, or None.
+
+	`[endian = from(order)]` names either an `endian_marker` among the
+	struct's own members, read from the message, or a `parameter` typed by
+	a marker -- `parameter magic order;` -- which is that marker's value as
+	the CALLER read it: a pcap record is in the order its file header's
+	magic states, and holds no marker of its own. Every reader asks this
+	before reading a governed member, because the two are answered from
+	different places: the message, or the argument.
+	"""
+	if placement.marker is None:
+		return None
+	for held in own_members(struct):
+		if held.parameter and held.name == placement.marker:
+			return held
+	return None
+
+
 def argument_spelling(name: str,
 		spell: "Callable[[str], str]") -> str:
 	"""`arg_` on a schema's parameter name, THEN the backend's sanitiser.
