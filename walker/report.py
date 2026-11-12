@@ -146,8 +146,9 @@ def _scalars(image: Image, struct_index: int) -> list[int]:
 			continue			# `[since]`: present only from a
 						# version, which the differ probes
 						# for presence rather than value
-		if placement.marker_governed:
-			continue			# byte order the message decides
+		# A member a marker governs is reported like any other, in the
+		# order the marker states: skipped, nothing compared what a TIFF or
+		# pcap header holds (26.974).
 		if placement.size_bits == NONE or placement.size_bits > 64:
 			continue
 		chosen.append(index)

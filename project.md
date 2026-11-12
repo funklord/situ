@@ -8555,6 +8555,10 @@ Moved to `doc/decision/26.972-the-doc-draws-no-parameter.md`.
 
 Moved to `doc/decision/26.973-a-builder-over-a-tail-that-ends-the-message.md`.
 
+### 26.974 The differentials compare what a marker governs
+
+Moved to `doc/decision/26.974-the-differentials-compare-what-a-marker-governs.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

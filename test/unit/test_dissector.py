@@ -42,7 +42,7 @@ from situc.diagnostics import SituError
 from situc.dissector import _local, generate
 from situc.layout import solve
 from situc.parser import parse, parse_text
-from situc.resolve import resolve
+from situc.resolve import ResolvedStruct, resolve
 from walker import report
 from walker.image import Image, load
 
@@ -1291,6 +1291,35 @@ def _walked(image: Image, proto: str,
 	return total, values
 
 
+def _with_marker_literals(struct: ResolvedStruct,
+		packets: list[bytes]) -> list[bytes]:
+	"""`packets`, and each again with the struct's marker at each literal."""
+	markers = [entry.placement for entry in struct.entries
+	           if entry.placement.kind == "marker"
+	           and entry.placement.offset_bits is not None
+	           and entry.placement.offset_bits % 8 == 0
+	           and "." not in entry.placement.path[len(struct.name) + 1:]]
+	out = list(packets)
+	for marker in markers:
+		decl = _MARKER_DECLS.get(marker.type_name or "")
+		if decl is None:
+			continue
+		at    = (marker.offset_bits or 0) // 8
+		width = marker.size_bits // 8
+		for literal in (decl.little, decl.big):
+			value = getattr(literal, "value", None)
+			if value is None:
+				continue
+			spelled = int(value).to_bytes(width, "big")
+			out.extend(packet[:at] + spelled + packet[at + width:]
+			           for packet in packets if len(packet) >= at + width)
+	return out
+
+
+#: Every marker declaration of the schema `compare` is reading.
+_MARKER_DECLS: dict[str, ast.EndianMarkerDecl] = {}
+
+
 @lru_cache(maxsize=None)
 def compare(schema: Path) -> Comparison:
 	"""Run one schema's dissector and its walker over the same buffers.
@@ -1306,6 +1335,8 @@ def compare(schema: Path) -> Comparison:
 	"""
 	source, resolved, _ = analyse(schema)
 	parsed  = parse(source)
+	_MARKER_DECLS.clear()
+	_MARKER_DECLS.update({decl.name: decl for decl in parsed.markers()})
 	text    = generate(parsed, resolved, schema.stem)
 	blob, _ = packer.pack(parsed, resolved, metadata=True)
 	image   = load(blob)
@@ -1352,8 +1383,13 @@ def compare(schema: Path) -> Comparison:
 			if struct.layout.register is not None:
 				continue
 
-			for _ in range(8):
-				packet = dissect_bytes(rng)
+			# Each draw, and the same draw with the struct's byte-order
+			# marker set to each of its literals: random bytes almost never
+			# hold one, so every marker-governed member was compared in big-
+			# endian only, and a dissector that ignored the marker agreed
+			# with the walker on every draw (26.963, 26.974).
+			for packet in _with_marker_literals(
+					struct, [dissect_bytes(rng) for _ in range(8)]):
 				_, rows = read_back(lua, name, packet)
 
 				rows_total, said = _shown(rows, name, kinds, declined,

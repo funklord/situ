@@ -489,9 +489,14 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		if kind is Member.SCALAR:
 			if placement.type_name in ("", None) or scalar is None:
 				continue
-			# An enum is a different type in each language; a marker resolves
-			# byte order rather than holding a value.
-			if placement.marker is not None or placement.radix is not None:
+			# An enum is a different type in each language. A member a
+			# marker GOVERNS is not one: it holds a value like any scalar,
+			# read in the order the marker states. `placement.marker` names
+			# the marker on every member it governs, so this excluded all of
+			# them -- every value a TIFF header or a pcap file holds was
+			# compared by no differential, which is how a dissector that
+			# ignored the marker went unseen (26.963, 26.974).
+			if placement.radix is not None:
 				continue
 			if placement.type_name not in _SCALAR_TYPES:
 				continue

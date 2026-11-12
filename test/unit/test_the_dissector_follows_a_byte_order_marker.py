@@ -89,3 +89,33 @@ def test_wireshark_reads_a_little_endian_pcap_inside_a_capture(
 		 "-e", "situ.pcap.version_major", "-e", "situ.record.incl_len"],
 		check=True, capture_output=True, text=True, timeout=60)
 	assert ran.stdout.split() == ["2", "14,4"], ran.stdout + ran.stderr
+
+
+def test_the_differentials_compare_what_a_marker_governs(tmp_path: Path) -> None:
+	"""They compared nothing a marker governs (26.974).
+
+	The drivers excluded every member whose `placement.marker` was set,
+	under a comment about the marker itself, and the walker's listing
+	skipped them to match; the dissector's comparison drew random bytes,
+	which almost never hold a marker literal. So 26.963's fault -- every
+	governed member shown big-endian -- agreed with the walker on every
+	draw. Now each draw is repeated with the marker at each literal, and
+	the values are asked of all four backends and both walkers.
+	"""
+	from test_dissector import compare
+	import fourway
+
+	result = compare(ROOT / "example/tiff/tiff.situ")
+	assert result.compared >= 60, result.compared
+	assert not result.differ, result.differ[:3]
+
+	schema = tmp_path / "pcap.situ"
+	schema.write_text(PCAP, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for order, packet in FILES.items():
+		given = {name: fourway.answers(argv, packet, tmp_path)
+		         for name, argv in command.items()}
+		first = next(iter(given.values()))
+		assert all(answer == first for answer in given.values()), given
+		assert "version_major 2" in first.splitlines(), (order, first)
+		assert "snaplen 262144" in first.splitlines(), (order, first)
