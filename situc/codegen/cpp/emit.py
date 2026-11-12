@@ -11857,6 +11857,18 @@ class Emitter:
 			return self._pinned_run_check(struct, placement, pinned)
 
 		check = classify_check(struct, placement, self.structs)
+		# A marker states one of its two orders; anything else is a header
+		# that names none, which every read would take as big (26.964).
+		if check is Check.MARKER:
+			if "." in placement.path[len(struct.name) + 1:]:
+				return []
+			held = bare_name(local_name(struct, placement))
+			return [
+				f"\t\tif (this->{held}() != {held}_little"
+				f" && this->{held}() != {held}_big) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			]
 
 		# A RUN of structs: each element through its own validator, which
 		# C's `_element_validation` says why (26.789).

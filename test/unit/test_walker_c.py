@@ -1408,12 +1408,18 @@ def test_one_byte_has_no_byte_order_to_decline_over(tmp_path: Path) -> None:
 	both loops produce the same byte. It was unanswerable here and answered
 	everywhere else.
 
-	The marker is written both ways round and then as neither, because the
-	point is that it does not matter: nothing this struct validates depends
-	on which end anything starts at. The generated C backend was asked the
-	same six buffers separately and agrees, including that `n = 5` breaks
-	`[max = 4]` -- so the check is live rather than the comparison being two
+	The marker is written both ways round, because the point is that it
+	does not matter: nothing else this struct validates depends on which
+	end anything starts at. The generated C backend was asked the same
+	buffers separately and agrees, including that `n = 5` breaks `[max =
+	4]` -- so the check is live rather than the comparison being two
 	readers that both say OK.
+
+	These were written with markers `1234` and `3412`, neither of which is
+	`edge_order`'s, and a zero marker was the last case and validated: a
+	marker stating no order read as big everywhere. It is a constraint
+	failure now (26.964), so the cases carry the two literals and the zero
+	marker is the refusal.
 	"""
 	edges = ROOT / "test" / "schema" / "edges.situ"
 	blob  = image_for(edges)
@@ -1421,12 +1427,12 @@ def test_one_byte_has_no_byte_order_to_decline_over(tmp_path: Path) -> None:
 
 	# (message, expected verdict): 0 OK, 1 BOUNDS, 2 CONSTRAINT.
 	cases = [
-		(bytes.fromhex("1234020000000000000000"), "0"),
-		(bytes.fromhex("1234050000000000000000"), "2"),  # `n` over `[max]`
-		(bytes.fromhex("1234000000"),             "0"),  # n = 0
-		(bytes.fromhex("123404"),                 "1"),  # the frame stops
-		(bytes.fromhex("3412020000000000000000"), "0"),  # marker the other way
-		(bytes.fromhex("0000020000000000000000"), "0"),  # no marker at all
+		(bytes.fromhex("4949020000000000000000"), "0"),
+		(bytes.fromhex("4949050000000000000000"), "2"),  # `n` over `[max]`
+		(bytes.fromhex("4949000000"),             "0"),  # n = 0
+		(bytes.fromhex("494904"),                 "1"),  # the frame stops
+		(bytes.fromhex("4d4d020000000000000000"), "0"),  # marker the other way
+		(bytes.fromhex("0000020000000000000000"), "2"),  # no marker at all
 	]
 	for message, want in cases:
 		verdict = c_verdict(tmp_path, blob, message, shape=shape)

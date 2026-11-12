@@ -11081,6 +11081,18 @@ class Emitter:
 		name      = _ident(local_name(struct, placement))
 
 		check = classify_check(struct, placement, self.structs)
+		# A marker states one of its two orders; anything else is a header
+		# that names none, which every read would take as big (26.964).
+		if check is Check.MARKER:
+			if "." in placement.path[len(struct.name) + 1:]:
+				return out
+			held = c_name(local_name(struct, placement))
+			return [
+				f"\t\tif self.{_ident(held)}() != Self::{held.upper()}_LITTLE"
+				f" && self.{_ident(held)}() != Self::{held.upper()}_BIG {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			]
 
 		# The bounds question first, and it does not replace the rest: a
 		# member can be both outside the frame and constrained, and

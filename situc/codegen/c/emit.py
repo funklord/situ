@@ -12989,6 +12989,21 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
+		# A marker states one of its two orders; anything else is a header
+		# that names none, which every read below would take as big
+		# (26.964).
+		if placement.kind == "marker" \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			base  = macro(self.prefix, struct.name, placement.name)
+			held  = (f"{ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'get')}"
+			         "(view)")
+			return [
+				f"\t/* {placement.path}: one of its two literals */",
+				f"\tif ({held} != {base}_LITTLE && {held} != {base}_BIG) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			]
+
 		# An element's own members are checked under the element's struct, not
 		# here -- the same rule the delimiter case applies below, and the same
 		# reason: the discriminant is a field of `label`, not of the struct

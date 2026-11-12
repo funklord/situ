@@ -41,6 +41,10 @@ class ResolvedSchema:
 	#: from the AST, and a fixture a rule refuses asserts the wrong thing
 	#: (26.949).
 	refusals: dict[str, tuple[ast.Expr, ...]] = field(default_factory=dict)
+	#: Each `endian_marker`'s two literals, `(little, big)`, for the same
+	#: readers: a fixture's marker has to be one of them, or `validate`
+	#: refuses it before any check has broken anything (26.964).
+	markers: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 	def find(self, path: str) -> Resolved | None:
 		head, _, _ = path.partition(".")
@@ -120,6 +124,11 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 		result.refusals[name] = tuple(
 			when.expr for when in messages(schema, name)
 			if when.severity is ast.Severity.REFUSE)
+	for marker in schema.markers():
+		little = getattr(marker.little, "value", None)
+		big    = getattr(marker.big, "value", None)
+		if isinstance(little, int) and isinstance(big, int):
+			result.markers[marker.name] = (little, big)
 
 	return result
 

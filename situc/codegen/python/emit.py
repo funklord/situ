@@ -9828,6 +9828,17 @@ class Emitter:
 		name      = py_name(local_name(struct, placement))
 
 		check = classify_check(struct, placement, self.structs)
+		# A marker states one of its two orders; anything else is a header
+		# that names none, which every read would take as big (26.964).
+		if check is Check.MARKER:
+			if "." in placement.path[len(struct.name) + 1:]:
+				return []
+			return [
+				f"\t\tif self.{name} not in (self.{name.upper()}_LITTLE,"
+				f" self.{name.upper()}_BIG):",
+				f"\t\t\traise ConstraintError(f\"{placement.path} is"
+				f" {{self.{name}:#x}}, neither byte order\")",
+			]
 
 		# 0052: a byte run pinned to a literal is one comparison. Above the
 		# dispatch because `classify_check` calls such a member an array, and

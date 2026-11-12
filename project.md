@@ -1073,6 +1073,8 @@ Capability consequences, which are mercifully narrow:
 - Generated getters for these fields return by value only, never by pointer.
 - A `must_eq` constraint on a field in marker scope is validated after the
   marker resolves, not before.
+- A marker equal to neither literal is refused by `validate` as a
+  constraint (26.964). Reads still take it as big; a read is not a verdict.
 
 **A struct inside a marker's struct takes the order as an argument.** A
 marker governs its own struct's members; a struct used inside it reads in
@@ -8512,6 +8514,10 @@ Moved to `doc/decision/26.962-a-region-whose-codec-adds-a-count-has-a-length.md`
 ### 26.963 The dissector follows a byte-order marker
 
 Moved to `doc/decision/26.963-the-dissector-follows-a-byte-order-marker.md`.
+
+### 26.964 A marker that states neither order is refused
+
+Moved to `doc/decision/26.964-a-marker-that-states-neither-order-is-refused.md`.
 
 ### 26.929 The offset cache counts bits
 

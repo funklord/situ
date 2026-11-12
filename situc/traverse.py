@@ -527,6 +527,8 @@ class Check(Enum):
 	DELIMITED  = "delimited"
 	#: The discriminant selects an arm that exists (`default: error`).
 	DISCRIMINANT = "discriminant"
+	#: An `endian_marker` states one of its two literals (26.964).
+	MARKER     = "marker"
 	#: Nothing to check.
 	NOTHING    = "nothing"
 
@@ -622,6 +624,12 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 	# the other three was found by asking this module the wrong question.
 	if placement.kind == "reserved":
 		return Check.RESERVED
+	# Before the `field` test, which a marker is not. A marker that states
+	# neither literal was read as big-endian by every reader -- the walkers
+	# and the backends all ask "is it the little one?" and nothing else --
+	# so a header naming no order at all read as one (26.964).
+	if placement.kind == "marker":
+		return Check.MARKER
 	if placement.kind != "field":
 		return Check.NOTHING
 	return Check.CONSTRAINED

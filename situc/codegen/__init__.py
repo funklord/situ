@@ -587,6 +587,13 @@ def required_run(placement: Placement, every: bool = False):	# type: ignore[no-u
 def required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> int | None:
 	"""The value this member must hold for the struct to validate, if any."""
+	# A marker is one of its two literals (26.964). The big one, because
+	# a zeroed buffer read big-endian is what every other member's pattern
+	# below is placed for: a marker's own `endian` is None, which
+	# `placed_bytes` writes big.
+	if placement.kind == "marker":
+		held = resolved.markers.get(placement.type_name or "")
+		return None if held is None else held[1]
 	policy = reserved_policy(placement)
 	if policy == "must_be_one":
 		return (1 << placement.size_bits) - 1

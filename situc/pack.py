@@ -1796,6 +1796,31 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
 			if kind is traverse.Check.NOTHING and placement.kind != "variant":
 				continue
+			# A marker states one of its two literals (26.964): membership
+			# in a set of two, which is the row an enum that rejects an
+			# unknown value already writes, so neither walker learns
+			# anything new. Keyed apart from the enums, whose names a
+			# marker's may share.
+			if kind is traverse.Check.MARKER:
+				marker_decl = next((decl for decl in schema.decls
+				                    if isinstance(decl, ast.EndianMarkerDecl)
+				                    and decl.name == placement.type_name), None)
+				literals = [getattr(getattr(marker_decl, side, None),
+				                    "value", None)
+				            for side in ("little", "big")]
+				if any(one is None or not fits_q(int(one))
+				       for one in literals):
+					whole = False
+					continue
+				key = f"\0marker {placement.type_name}"
+				if key not in enum_ids:
+					enum_ids[key] = len(enum_ids)
+					for one in literals:
+						enum_blob += _struct.pack(
+							"<IqI", enum_ids[key], int(one or 0), 0)
+				constraints_blob += _struct.pack(
+					"<IqBxxx", at, enum_ids[key], 5)
+				continue
 			if kind is traverse.Check.RESERVED:
 				# Four policies (8.8), and only two are checks.
 				# `preserve` says copy the bits, `unknown` says they mean

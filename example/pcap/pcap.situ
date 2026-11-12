@@ -10,10 +10,8 @@
 //
 // The nanosecond variant (`a1 b2 3c 4d`) is a second pair of literals for
 // the same two orders, which one marker cannot state, and it is not
-// described here. A marker is read as big-endian whenever it is not the
-// `little` literal, so a little-endian nanosecond file is refused at
-// `version_major` and a big-endian one reads, with `ts_usec` holding
-// nanoseconds.
+// described here, and `validate` refuses a file carrying it: a marker is one
+// of its two literals or no marker at all (26.964).
 //
 // Reference: the pcap file format, draft-ietf-opsawg-pcap.
 
