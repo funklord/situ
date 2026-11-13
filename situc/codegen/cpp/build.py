@@ -406,6 +406,18 @@ def _ended(part: Part) -> list[str]:
 	"""
 	if part.code:
 		return _encoded(part)
+	if part.trim:
+		# C's: content its reader would trim is refused (26.1014).
+		edge = " || ".join(f"{{0}} == 0x{one:02X}u" for one in part.trim)
+		trim = [f"\tif ({part.local}_len != 0u && {part.local} != nullptr && (",
+		        f"\t    {edge.format(part.local + '[0]')} ||",
+		        f"\t    {edge.format(part.local + '[' + part.local + '_len - 1u]')})) {{",
+		        "\t\treturn ::situ::rt::err::constraint;", "\t}"]
+		saved, part.trim = part.trim, ()
+		try:
+			return [*trim, *_ended(part)]
+		finally:
+			part.trim = saved
 	local  = part.local
 	wide   = len(part.delimiter)
 	spelt  = ", ".join(f"0x{byte:02X}u" for byte in part.delimiter)

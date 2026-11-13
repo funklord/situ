@@ -261,6 +261,18 @@ def _ended(part: Part) -> list[str]:
 	"""
 	if part.code:
 		return _encoded(part)
+	if part.trim:
+		# C's: content its reader would trim is refused (26.1014).
+		name = py_name(part.local)
+		trim = [f"\tif {name} and ({name}[0] in {bytes(part.trim)!r}"
+		        f" or {name}[-1] in {bytes(part.trim)!r}):",
+		        f'\t\traise ConstraintError("{part.placement.path}: starts or'
+		        ' ends with a byte its reader trims")']
+		saved, part.trim = part.trim, ()
+		try:
+			return [*trim, *_ended(part)]
+		finally:
+			part.trim = saved
 	local  = py_name(part.local)
 	path   = part.placement.path
 	wide   = len(part.delimiter)

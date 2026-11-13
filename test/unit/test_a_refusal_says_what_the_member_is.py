@@ -67,7 +67,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("is reserved and has no stated length",
 	 lambda pl, res: pl.kind in ("reserved", "preamble")),
 	("names the varint type", lambda pl, res: pl.varint is not None),
-	("is trimmed", lambda pl, res: bool(pl.trim_set)),
 	("is quoted", lambda pl, res: bool(pl.delimiter_quote)),
 	("delimiters, so which byte to write after it is not stated",
 	 lambda pl, res: len(pl.delimiters) > 1),

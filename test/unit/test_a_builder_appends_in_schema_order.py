@@ -680,9 +680,8 @@ def test_a_delimited_member_is_a_run_and_not_a_one_byte_scalar() -> None:
 	# The escape row went the way the `\r\n` one did: escaping is
 	# written now, so there is no refusal left to assert. It moved to
 	# `test_an_escaped_run_writes_the_encoding_its_reader_scans`, which
-	# asserts the bytes.
-	# Trimming is the same: the bytes it holds are not the bytes given.
-	('u8 x[] until " " [trim = " "]', "is trimmed"),
+	# asserts the bytes. Trimming went too (26.1014): the writer refuses
+	# content its reader would trim, so what it holds is what was given.
 ])
 def test_a_delimiter_the_writer_cannot_place_is_refused(
 		member: str, wanted: str) -> None:
@@ -691,8 +690,7 @@ def test_a_delimiter_the_writer_cannot_place_is_refused(
 	`\r\n` was in this list and is not any more: a multi-byte delimiter
 	is written now, and the row was removed rather than reworded because
 	there is no refusal left to assert. What remains is an ambiguity the
-	schema has (several delimiters) and two transformations of the
-	caller's bytes (escaping, trimming).
+	schema has (several delimiters).
 	"""
 	_, resolved = _inline("struct one {\n\t%s;\n\tu8 rest[2];\n}\n"
 	                      % member)

@@ -351,6 +351,18 @@ def _ended(part: Part) -> list[str]:
 	"""
 	if part.code:
 		return _encoded(part)
+	if part.trim:
+		# C's: content its reader would trim is refused (26.1014).
+		set_ = ", ".join(f"{one:#04x}" for one in part.trim)
+		name = _ident(part.local)
+		trim = [f"\tif let (Some(first), Some(last)) = ({name}.first(), {name}.last()) {{",
+		        f"\t\tif [{set_}].contains(first) || [{set_}].contains(last) {{",
+		        "\t\t\treturn Err(Error::Constraint);", "\t\t}", "\t}"]
+		saved, part.trim = part.trim, ()
+		try:
+			return [*trim, *_ended(part)]
+		finally:
+			part.trim = saved
 	local  = _ident(part.local)
 	spelt  = ", ".join(f"{byte:#04x}" for byte in part.delimiter)
 	escape = part.placement.delimiter_escape

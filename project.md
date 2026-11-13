@@ -8735,6 +8735,10 @@ Moved to `doc/decision/26.1012-an-arm-sized-by-its-argument-is-written.md`.
 
 Moved to `doc/decision/26.1013-an-enum-array-is-read-element-by-element.md`.
 
+### 26.1014 A builder writes a trimmed run
+
+Moved to `doc/decision/26.1014-a-builder-writes-a-trimmed-run.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

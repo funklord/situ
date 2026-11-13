@@ -222,6 +222,9 @@ class Part:
 		#: An argued arm's length field, by its local: the caller's bytes
 		#: must be as long as it says (26.1012).
 		self.equals = ""
+		#: The bytes a trimmed run's reader strips from either end, which
+		#: the writer therefore refuses there (26.1014).
+		self.trim: tuple[int, ...] = ()
 		#: A MARKER's literals for each order (26.1007).
 		self.little: tuple[int, ...] = ()
 		self.big: tuple[int, ...] = ()
@@ -546,9 +549,9 @@ def _delimited_refusal(placement: Placement) -> str | None:
 	if placement.delimiter_quote:
 		return "is quoted, so where it ends depends on a quote this " \
 		       "writer does not place"
-	if placement.trim_set:
-		return "is trimmed, so the bytes it holds are not the bytes it " \
-		       "was given"
+	# Trimmed is writable (26.1014): the writer refuses content that starts
+	# or ends with a byte the reader would trim, so what it puts down reads
+	# back as given -- SMTP's command argument.
 	return None
 
 
@@ -1893,6 +1896,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			parts.append(Part(ENDED, held, local,
 			                  delimiter=held.delimiters[0],
 			                  digits=held.delimiter_cap or 0))
+			parts[-1].trim = tuple(held.trim_set)
 			continue
 		return [], f"`{traverse.local_name(struct, held)}` has no stated " \
 		           "length, so nothing says when the writer should stop"
@@ -2854,6 +2858,16 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 	for part in writing:
 		held  = part.placement
 		local = traverse.local_name(struct, held)
+		if part.trim:
+			edge = " || ".join(f"{{0}} == 0x{one:02X}u" for one in part.trim)
+			lines += [f"\t/* {local}: its reader trims these bytes from either",
+			          "\t * end, so content starting or ending with one would",
+			          "\t * read back as something else (26.1014). */",
+			          f"\tif ({part.local}_len != 0u && {part.local} != NULL && (",
+			          f"\t    {edge.format(part.local + '[0]')} ||",
+			          f"\t    {edge.format(part.local + '[' + part.local + '_len - 1u]')})) {{",
+			          "\t\treturn SITU_ERR_CONSTRAINT;",
+			          "\t}"]
 		if part.twin:
 			lines += [f"\t/* {local}: as long as `{part.twin}`, whose size "
 			          "field states both. */",
