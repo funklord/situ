@@ -84,6 +84,8 @@ OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
 HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
 ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
 CHOSEN  = "chosen"	# a variant whose arm is a value the caller hands over
+LOCATED = "located"	# a trailing byte run where an offset already written
+			# puts it, read through the reader (26.1015)
 MARKER  = "marker"	# an endian marker: the caller's literal, whose value
 			# says the order of every field in its scope (26.1007)
 FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
@@ -95,13 +97,13 @@ FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
                              BITS, WIDE, OPAQUE, HIDDEN, VARINT, VARRUN,
-                             ARG, CHOSEN, MARKER})
+                             ARG, CHOSEN, MARKER, LOCATED})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
 #: pad is measured and may have no pointer at all, which is why the signature
 #: asks `_supplies_bytes` rather than reading this set twice.
-MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT, HIDDEN})
+MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT, HIDDEN, LOCATED})
 ZERO    = "zero"	# reserved bytes, which no caller names
 
 
@@ -1687,6 +1689,12 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				parts.append(Part(OPAQUE, held, local, size))
 				continue
 			parts.append(Part(ZERO, held, local, size))
+			continue
+
+		if held.located:
+			# `late_position_refusals` let it through: the struct's last
+			# member, a byte run (26.1015).
+			parts.append(Part(LOCATED, held, local))
 			continue
 
 		if held.kind == "marker":
@@ -3479,6 +3487,43 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				   f"(uint{bits}_t){part.local});"]),
 				f"\t{AT} += {part.bytes}u;",
 				f"\tconst int situ_little_{held.name} = ({little});",
+				"",
+			]
+		elif part.role == LOCATED:
+			struct_view = ident(prefix, struct.name, "view")
+			run_view = ident(prefix, struct.name, local, "view")
+			lines += [
+				f"\t/* {local}: where the offset already written puts it, as",
+				"\t * the reader finds it -- asked over the whole backing, so",
+				"\t * a run past it is BOUNDS. Behind the cursor is a message",
+				"\t * whose bytes overlap; a gap before it is zeros (26.1015). */",
+				"\t{",
+				f"\t\tsitu_msg_t  {NEED}_msg;",
+				f"\t\tsitu_view_t {NEED}_whole;",
+				f"\t\tsitu_view_t {NEED}_run;",
+				f"\t\tuint32_t    {NEED}_at;",
+				"",
+				f"\t\tsitu_msg_init(&{NEED}_msg, {OUT}, {CAP});",
+				f"\t\tif ({struct_view}(&{NEED}_msg, 0, "
+				+ ("" if struct.layout.is_fixed_size else f"{CAP}, ")
+				+ f"&{NEED}_whole) != SITU_OK",
+				f"\t\t    || {run_view}(&{NEED}_msg, {NEED}_whole, &{NEED}_run)"
+				" != SITU_OK) {",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\t{NEED}_at = (uint32_t)({NEED}_run.base - {OUT});",
+				f"\t\tif ({NEED}_at < {AT} || {NEED}_run.limit != {part.local}_len) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				f"\t\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemset({OUT} + {AT}, 0, {NEED}_at - {AT});",
+				f"\t\tif ({part.local}_len != 0u) {{",
+				f"\t\t\tmemcpy({OUT} + {NEED}_at, {part.local}, {part.local}_len);",
+				"\t\t}",
+				f"\t\t{AT} = {NEED}_at + {part.local}_len;",
+				"\t}",
 				"",
 			]
 		elif part.role == FRAMED:

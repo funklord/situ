@@ -1724,7 +1724,15 @@ def late_position_refusals(struct: "ResolvedStruct") -> list[str]:
 	`tags_covering_later` answers that question separately.
 	"""
 	bad: list[str] = []
-	for held in own_members(struct):
+	members = own_members(struct)
+	for held in members:
+		# Except the struct's LAST member, a byte run (26.1015): BMP's
+		# pixels at `file.pixel_offset`. Every byte before it is down when
+		# the writer reaches it, so the offset is READ, not predicted -- a
+		# writer refuses one behind its cursor and fills any gap before it.
+		if held.located and held is members[-1] \
+				and held.element_bits == 8 and held.scalar is not None:
+			continue
 		if held.located:
 			bad.append(f"`{local_name(struct, held)}` is located by an "
 			           f"expression, so where it lands is not where the "

@@ -180,8 +180,10 @@ def test_the_writer_s_own_locals_are_out_of_the_schema_s_namespace() -> None:
 	# An index table holds the offsets of elements that come after it.
 	("sqlite/sqlite.situ", "btree_leaf_page", "index table"),
 	# A located member lands where an expression says, not where the
-	# writer had reached.
-	("bmp/bmp.situ", "bitmap_file", "located by an expression"),
+	# writer had reached. BMP's pixels were the example until 26.1015
+	# wrote a trailing located byte run; TIFF's first directory is a
+	# located STRUCT, which still is not written.
+	("tiff/tiff.situ", "tiff_file", "located by an expression"),
 ])
 def test_a_layout_that_cannot_be_written_forward_is_refused(
 		schema: str, name: str, wanted: str) -> None:

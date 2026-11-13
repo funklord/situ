@@ -8739,6 +8739,10 @@ Moved to `doc/decision/26.1013-an-enum-array-is-read-element-by-element.md`.
 
 Moved to `doc/decision/26.1014-a-builder-writes-a-trimmed-run.md`.
 
+### 26.1015 A builder writes where an offset puts it
+
+Moved to `doc/decision/26.1015-a-builder-writes-where-an-offset-puts-it.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
