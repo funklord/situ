@@ -8626,6 +8626,10 @@ Moved to `doc/decision/26.985-a-run-holds-its-keys-in-order.md`.
 
 Moved to `doc/decision/26.986-a-size-reads-remaining.md`.
 
+### 26.987 gen-checks places a fixed wide run
+
+Moved to `doc/decision/26.987-gen-checks-places-a-fixed-wide-run.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

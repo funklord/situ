@@ -860,7 +860,11 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 		# type is what separates them, not the delimiter.
 		# A run of wider values has an indexed getter and no pointer, so it
 		# has no answer to where it starts, and what follows it is asked.
-		if placement.array_count is None and placement.scalar is not None \
+		# A FIXED count too: `u32 fanout[255]` in git's pack index asked a
+		# `_ptr` nothing emits, the first fixed run of wider values in a
+		# struct with a variable member, which is the only kind this check
+		# visits (26.987).
+		if placement.scalar is not None \
 				and (placement.element_bits or BITS_PER_BYTE) != BITS_PER_BYTE:
 			return []
 		if placement.scalar is not None:
