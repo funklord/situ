@@ -226,16 +226,19 @@ codec nrzi {
 // inward.
 // ---------------------------------------------------------------------------
 
-// The `+ 1` is the frame delimiter the encoder appends after expanding
-// (0048). A COBS block in the literature does not carry one, and the
+// The `+ 2` is the code byte every COBS block opens with and the frame
+// delimiter the encoder appends after expanding (0048). It said `+ 1`, the
+// delimiter alone, until 2026-11-13: the ratio's floor adds nothing below 254
+// bytes, and a block still has its first code byte, so an empty payload
+// encodes to 2 bytes and every short one ran a byte past `len * 255 / 254 + 1`. A COBS block in the literature does not carry one, and the
 // alternative reading -- that the delimiter is framing and belongs a rung
 // above the codec -- was considered and refused: a COBS decoder finds the
 // end of a frame by that byte, so an encoder omitting it would produce
 // output its own decoder cannot bound. A consumer sizes a buffer as
-// `len * 255 / 254 + 1`, and for as long as this said only the ratio it
-// sized one byte short on every encode.
+// `len * 255 / 254 + 2`, and for as long as this said only the ratio it
+// sized two bytes short on every encode.
 codec cobs {
-	expansion = ratio_bounded(255, 254) + 1;
+	expansion = ratio_bounded(255, 254) + 2;
 	granularity = stream;
 	not seekable;
 	invertible;

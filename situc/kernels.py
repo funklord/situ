@@ -872,7 +872,7 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 #: It is the CODE's rather than the schema's, exactly as the ratio is: a
 #: schema names a code and the overhead comes with it.
 STUFFING_BOUNDS: dict[str, tuple[int, int, int]] = {
-	"cobs":      (255, 254, 1),
+	"cobs":      (255, 254, 2),
 	"hdlc":      (6, 5, 0),
 	"json_string": (6, 1, 0),
 	"ppp_async": (2, 1, 1),

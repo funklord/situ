@@ -45,8 +45,9 @@ DOC = Path(__file__).resolve().parent.parent / "project.md"
 HEADING = re.compile(r"^#{1,4} ")
 ENTRY = re.compile(r"^#{2,4} (\d+(?:\.\d+)?)\s")
 #: A reference to an entry by number, as the prose spells it: `26.144`,
-#: optionally in backticks. Bounded so `26.14` does not match `26.144`.
-REFERENCE = re.compile(r"(?<![\w.])(\d{1,2}\.\d{1,3})(?![\w.])")
+#: optionally in backticks. Bounded so `26.14` does not match `26.144`,
+#: and four digits since section 26 passed 26.999.
+REFERENCE = re.compile(r"(?<![\w.])(\d{1,2}\.\d{1,4})(?![\w.])")
 
 
 def paragraphs(lines: list[str], start: int, end: int) -> list[tuple[int, int]]:

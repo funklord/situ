@@ -19,7 +19,7 @@ codec base32 derived expansion=ratio_padded(8,5) seekable=linear granularity=blo
 codec base64 derived expansion=ratio_padded(8,6) seekable=linear granularity=block(3) invertible deterministic
 codec base64url derived expansion=ratio_padded(8,6) seekable=linear granularity=block(3) invertible deterministic
 codec checksum8 derived expansion=+1 seekable=linear granularity=block systematic deterministic
-codec cobs derived expansion=ratio_bounded(255,254)+1 seekable=none granularity=stream invertible deterministic
+codec cobs derived expansion=ratio_bounded(255,254)+2 seekable=none granularity=stream invertible deterministic
 codec code_4b5b derived expansion=ratio_exact(5,4) seekable=linear granularity=symbol(4) invertible deterministic
 codec crc15_can derived expansion=+15 bits seekable=linear granularity=block systematic deterministic
 codec crc16_ccitt derived expansion=+2 seekable=linear granularity=block systematic deterministic

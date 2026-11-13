@@ -919,7 +919,9 @@ def test_usb_nrzi_transitions_on_a_zero_and_holds_on_a_one(
 #: payload of nothing but the delimiter, a run with no zero to point past, a
 #: body of nothing but dot lines.
 STUFFING_MEASURED: dict[str, tuple[bytes, int, tuple[int, int], int]] = {
-	"cobs":      (b"\x01" * 254, 254, (255, 254), 1),
+	# 253, not 254: a block that fills exactly needs no further code byte,
+	# so 254 sits one under the bound and could not tell `+ 1` from `+ 2`.
+	"cobs":      (b"\x01" * 253, 253, (255, 254), 2),
 	"hdlc":      (b"\xff" * 5,    40, (6, 5),     0),
 	"ppp_async": (b"\x7e" * 16,   16, (2, 1),     1),
 	"slip":      (b"\xc0" * 16,   16, (2, 1),     1),
