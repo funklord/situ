@@ -21,6 +21,7 @@ from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
+from test_dissector import LUA, read_back_experts
 from test_walker_c import (COMPILER, _inline_image, c_verdict, python_verdict,
                            shape_named_text)
 
@@ -127,3 +128,18 @@ def test_rust_holds_it_without_a_warning(tmp_path: Path) -> None:
 	from test_codegen_rust import build
 	built = build(tmp_path, SCHEMA, preamble = "")
 	assert built.returncode == 0, built.stderr
+
+
+@pytest.mark.skipif(LUA is None, reason = "needs lua")
+def test_the_dissector_says_a_run_is_out_of_order(tmp_path: Path) -> None:
+	"""Expert info where the six other readers refuse, and only there (26.989)."""
+	from situc.dissector import generate
+	schema = parse_text(SCHEMA, path = "o.situ")
+	lua = tmp_path / "o.lua"
+	lua.write_text(generate(schema, resolve(schema, solve(schema)), "o"),
+	               encoding = "ascii")
+	for struct, data, verdict in CASES:
+		said = [one[0] for one in read_back_experts(lua, struct, data)]
+		run = "values" if struct in ("by_signed", "by_byte") else "index"
+		expected = [f"{struct}.{run}_out_of_order"] if verdict == "2" else []
+		assert said == expected, (struct, data.hex(), said)

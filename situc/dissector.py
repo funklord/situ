@@ -56,7 +56,7 @@ from situc.traverse import (
 	extent_parts, fixed_span_bits, is_counted_run, is_recursive, local_name,
 	nest_of,
 	nests_one_struct, occupies_fixed_bytes, own_members, pinned_bytes,
-	span_bits,
+	RunOrdering, run_ordering, span_bits,
 	version_steps, versioned_tail,
 )
 from situc.traverse import messages as messages_of
@@ -1151,6 +1151,12 @@ def _refuse_per_message_parameters(schema: ast.Schema) -> None:
 		])
 
 
+#: struct name -> its ordered runs, by placement path (26.989). Filled by
+#: `_message_setup` beside `_MESSAGES`, for the same reason: a struct's
+#: experts are declared in one place and raised in another.
+_ORDERED: dict[str, dict[str, RunOrdering]] = {}
+
+
 def _message_setup(schema: ast.Schema, resolved: ResolvedSchema) -> None:
 	"""Sort the schema's `when`s under the struct each one reads.
 
@@ -1164,10 +1170,18 @@ def _message_setup(schema: ast.Schema, resolved: ResolvedSchema) -> None:
 	`situc gen-dissector` emitted none.
 	"""
 	_MESSAGES.clear()
-	for name in resolved.structs:
+	_ORDERED.clear()
+	for name, struct in resolved.structs.items():
 		held = messages_of(schema, name)
 		if held:
 			_MESSAGES[name] = held
+		ordered = {}
+		for entry in struct.entries:
+			order = run_ordering(resolved.structs, entry.placement)
+			if isinstance(order, RunOrdering):
+				ordered[entry.placement.path] = order
+		if ordered:
+			_ORDERED[name] = ordered
 
 
 def _conversation_setup(schema: ast.Schema,
@@ -1763,8 +1777,13 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 			continue
 
 		body = _member(resolved, struct, placement)
+		order = _ORDERED.get(struct.name, {}).get(placement.path)
+		if order is not None and _LOST not in body:
+			lines.append(f"\tlocal {_lua(_local(struct, placement))}_first = at")
 		lines.extend(line for line in body if line != _LOST)
 		lost = _LOST in body
+		if order is not None and not lost:
+			lines.extend(_order_check(struct, placement, order))
 
 	lines.extend(_conversation_calls(resolved, struct))
 	lines.extend(_message_calls(struct, lost))
@@ -1842,13 +1861,23 @@ def _experts(struct: ResolvedStruct) -> list[str]:
 	the NAME the schema gave -- which is the identity 0051 makes the contract
 	-- and the text is the default rendering registered beside it.
 	"""
-	held = _MESSAGES.get(struct.name)
-	if not held:
+	held    = _MESSAGES.get(struct.name, [])
+	ordered = _ORDERED.get(struct.name, {})
+	if not held and not ordered:
 		return []
 
 	proto = _lua(struct.name)
 	lines = [f"{proto}.experts = {{}}",
 	         f"local {proto}_e = {proto}.experts"]
+	# A run held in order and out of it is malformed, as a `refuse` is: the
+	# six other readers refuse it (26.985, 26.988).
+	for path in ordered:
+		run = _local(struct, _placement_at(struct, path))
+		lines.append(
+			f"{proto}_e.{_lua(run)}_out_of_order = ProtoExpert.new("
+			f'"{struct.name}.{run}_out_of_order", '
+			f'"`{run}` is not in ascending order", '
+			"expert.group.MALFORMED, expert.severity.ERROR)")
 	for when in held:
 		group, severity = _EXPERT[when.severity]
 		lines.append(
@@ -1856,6 +1885,67 @@ def _experts(struct: ResolvedStruct) -> list[str]:
 			f'"{struct.name}.{when.name}", "{_lua_string(when.text)}", '
 			f"{group}, {severity})")
 	return lines
+
+
+def _placement_at(struct: ResolvedStruct, path: str) -> Placement:
+	return next(entry.placement for entry in struct.entries
+	            if entry.placement.path == path)
+
+
+def _order_check(struct: ResolvedStruct, placement: Placement,
+		order: RunOrdering) -> list[str]:
+	"""The run just dissected, its keys compared as the other six compare
+	them, and expert info where one is not above the one before (26.989).
+
+	Byte by byte from the most significant, which is the comparison for
+	every kind: a run of bytes first byte first, an integer in the order
+	its bytes are significant -- reversed for little-endian -- and a signed
+	integer with its first such byte's sign bit flipped, so that bytes
+	compare as the numbers do. One loop, and no 64-bit arithmetic for a Lua
+	without it.
+	"""
+	run    = _lua(_local(struct, placement))
+	proto  = _lua(struct.name)
+	key    = order.key
+	little = key is not None and key.endian is ast.Endian.LITTLE
+	signed = key is not None and key.scalar is not None and key.scalar.signed
+	width  = order.key_bytes
+	index  = f"({width - 1} - k)" if little else "k"
+	# No bare `do ... end` around it: a dissector's blocks are counted by
+	# their opening keyword, and `do` is not one (the `for ... do` form
+	# would count twice). The locals are named for the run instead.
+	return [
+		f"\t-- {placement.path}: each key above the one before (26.989)",
+		f"\tlocal {run}_count = math.floor((at - {run}_first) / {order.stride})",
+		f"\tlocal {run}_i = 1",
+		f"\twhile {run}_i < {run}_count do",
+		f"\t\tlocal a = {run}_first + ({run}_i - 1) * {order.stride}"
+		f" + {order.key_at}",
+		f"\t\tlocal b = a + {order.stride}",
+		f"\t\tif b + {width} > tvb:len() then",
+		"\t\t\tbreak",
+		"\t\tend",
+		"\t\tlocal rank = 0",
+		"\t\tlocal k = 0",
+		f"\t\twhile k < {width} and rank == 0 do",
+		f"\t\t\tlocal x = tvb(a + {index}, 1):uint()",
+		f"\t\t\tlocal y = tvb(b + {index}, 1):uint()",
+		*([
+			"\t\t\tif k == 0 then",
+			"\t\t\t\tx = (x + 128) % 256",
+			"\t\t\t\ty = (y + 128) % 256",
+			"\t\t\tend",
+		] if signed else []),
+		"\t\t\trank = y - x",
+		"\t\t\tk = k + 1",
+		"\t\tend",
+		"\t\tif rank <= 0 then",
+		f"\t\t\tsubtree:add_proto_expert_info({proto}_e.{run}_out_of_order)",
+		"\t\t\tbreak",
+		"\t\tend",
+		f"\t\t{run}_i = {run}_i + 1",
+		"\tend",
+	]
 
 
 def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
