@@ -5752,7 +5752,7 @@ class Emitter:
 
 	@staticmethod
 	def _record_match(placement: Placement, at: str = "at",
-			only: int | None = None) -> str:
+			only: int | None = None, lead: tuple[int, ...] = ()) -> str:
 		"""Whether one of the terminators stands at `at`, or the `only`th.
 
 		Parenthesised only inside an `||`: rustc's `unused_parens` refuses a
@@ -5763,6 +5763,21 @@ class Emitter:
 			return "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
 		def test(delim: bytes) -> str:
 			return f"&self.bytes[{at}..{at} + {len(delim)}] == {spelt(delim)}"
+		if lead:
+			# Past the element's lead, stepping over it on a match: see
+			# C's (26.995). A block, so the lead is measured once.
+			set_ = ", ".join(f"0x{one:02x}" for one in lead)
+			# Each alternative parenthesised only among several: rustc's
+			# `unused_parens` refuses a condition wrapped whole.
+			alternatives = [
+				f"{at} + lead + {len(one)} <= self.bytes.len() && "
+				f"&self.bytes[{at} + lead..{at} + lead + {len(one)}] == "
+				f"{spelt(one)}" for one in delims]
+			past = (alternatives[0] if len(alternatives) == 1 else
+			        " || ".join(f"({one})" for one in alternatives))
+			return (f"{{ let lead = situ_rt::skip_run(&self.bytes[{at}..], "
+			        f"&[{set_}]); if {past} {{ {at} += lead; true }} "
+			        "else { false } }")
 		if record_simple(delims, record_open(placement)) and only is None:
 			return test(delims[0])
 		chosen = range(len(delims)) if only is None else [only]
@@ -5824,7 +5839,7 @@ class Emitter:
 			"\t\tlet mut n  = 0usize;",
 			"",
 			f"\t\twhile {self._record_guard(placement)} {{",
-			f"\t\t\tif {self._record_match(placement)} {{",
+			f"\t\t\tif {self._record_match(placement, lead = traverse.element_lead(self.resolved.structs, placement))} {{",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
@@ -8278,7 +8293,7 @@ class Emitter:
 		elif placement.delimiters:
 			head = [f"\t\twhile {self._record_guard(placement)} {{"]
 			scan = [
-				f"\t\t\tif {self._record_match(placement)} {{",
+				f"\t\t\tif {self._record_match(placement, lead = traverse.element_lead(self.resolved.structs, placement))} {{",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 			]
@@ -8360,7 +8375,7 @@ class Emitter:
 		else:
 			loop   = f"\t\t\twhile {self._record_guard(member)} {{"
 			scan   = [
-				f"\t\t\t\tif {self._record_match(member)} {{",
+				f"\t\t\t\tif {self._record_match(member, lead = traverse.element_lead(self.resolved.structs, member))} {{",
 				*(["\t\t\t\t\tfound = true;"] if ended else []),
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",

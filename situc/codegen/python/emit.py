@@ -6255,8 +6255,21 @@ class Emitter:
 
 	@staticmethod
 	def _record_match(at: str, delims: tuple[bytes, ...],
-			simple: bool) -> str:
-		"""Whether one of the terminators stands at `at`."""
+			simple: bool, lead: tuple[int, ...] = ()) -> str:
+		"""Whether one of the terminators stands at `at`.
+
+		Past the element's lead where it has one, stepping `at` over it on
+		a match: see C's (26.995).
+		"""
+		if lead:
+			skip = (f"(_lead := skip_run(self._msg.buffer[self._at + {at}:],"
+			        f" max(0, self._len - {at}), {lead!r}))")
+			past = " or ".join(
+				f"({at} + _lead + {len(delim)} <= self._len and bytes("
+				f"self._msg.buffer[self._at + {at} + _lead:self._at + {at}"
+				f" + _lead + {len(delim)}]) == {delim!r})" for delim in delims)
+			return (f"({skip} >= 0 and ({past}) and "
+			        f"(({at} := {at} + _lead) >= 0))")
 		def one(delim: bytes, guarded: bool) -> str:
 			test = (f"bytes(self._msg.buffer[self._at + {at}:"
 			        f"self._at + {at} + {len(delim)}]) == {delim!r}")
@@ -6331,7 +6344,7 @@ class Emitter:
 			"\t\tstarts: _situ_list[int] = []",
 			"",
 			f"\t\twhile {self._record_guard('at', delims, simple)}:",
-			f"\t\t\tif {self._record_match('at', delims, simple)}:",
+			f"\t\t\tif {self._record_match('at', delims, simple, traverse.element_lead(self.resolved.structs, placement))}:",
 			"\t\t\t\tbreak",
 			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg, self._at + at, self._len - at)",
 			("\t\t\tsize    = _element._extent" if not deep else
@@ -6360,7 +6373,7 @@ class Emitter:
 			'\t\truns out first was cut short, as for any delimited member."""',
 			f"\t\tat = {start}",
 			f"\t\twhile {self._record_guard('at', delims, simple)}:",
-			f"\t\t\tif {self._record_match('at', delims, simple)}:",
+			f"\t\t\tif {self._record_match('at', delims, simple, traverse.element_lead(self.resolved.structs, placement))}:",
 			"\t\t\t\treturn True",
 			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg,"
 			" self._at + at, self._len - at)",
@@ -8092,7 +8105,7 @@ class Emitter:
 			simple = record_simple(delims, record_open(placement))
 			head   = [f"\t\twhile {self._record_guard(at, delims, simple)}:"]
 			scan   = [
-				f"\t\t\tif {self._record_match(at, delims, simple)}:",
+				f"\t\t\tif {self._record_match(at, delims, simple, traverse.element_lead(self.resolved.structs, placement))}:",
 				"\t\t\t\tbreak",
 			]
 		elif placement.sized_by == "remaining":
@@ -8163,7 +8176,7 @@ class Emitter:
 			simple = record_simple(delims, record_open(member))
 			loop   = f"\t\t\twhile {self._record_guard(at, delims, simple)}:"
 			scan   = [
-				f"\t\t\t\tif {self._record_match(at, delims, simple)}:",
+				f"\t\t\t\tif {self._record_match(at, delims, simple, traverse.element_lead(self.resolved.structs, member))}:",
 				*([f"\t\t\t\t\t{at}_ended = True"] if ended else []),
 				"\t\t\t\t\tbreak",
 			]

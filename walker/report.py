@@ -33,7 +33,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          _arm_predates, _ceiling, _evaluate, _read_at,
                          _sizes_in_bytes,
                          counted_run_fits,
-                         offset_bits, record_run_count, record_run_ended,
+                         element_lead, offset_bits, record_run_count,
+                         record_run_ended,
                          TERMINATED_ROW,
                          chosen_arm, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
@@ -2312,8 +2313,10 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 			room = len(delims[0]) if len(delims) == 1 \
 				and (not open_end or len(delims[0]) == 1) else 1
 			while at + room <= view.limit:
-				if any(at + len(one) <= view.limit
-				       and view.buffer[at:at + len(one)] == one
+				past = element_lead(image, view.buffer, element, at,
+				                    view.limit)
+				if any(at + past + len(one) <= view.limit
+				       and view.buffer[at + past:at + past + len(one)] == one
 				       for one in delims):
 					break
 				size = measure(at)

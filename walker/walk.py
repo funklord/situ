@@ -2461,6 +2461,26 @@ def _varint_run_fits(view: View, index: int) -> bool:
 	return True
 
 
+def element_lead(image: Image, buffer: Bytes, element: int,
+		at: int, limit: int) -> int:
+	"""How many bytes of an element's lead stand at `at`, where its first
+	member has one: what a run's terminator is looked for past (26.995).
+
+	The terminator ends the run where an element's own bytes would begin,
+	so the whitespace before `)` is the lead of an element that turned out
+	to be the terminator, and a walk steps over it. `element_lead` in the
+	generator; the first member's is the only lead visible from outside.
+	"""
+	struct = image.structs[element]
+	lead   = (image.skip.get(struct.first_placement, ())
+	          if struct.placement_count else ())
+	end    = min(limit, len(buffer))
+	n      = 0
+	while lead and at + n < end and buffer[at + n] in lead:
+		n += 1
+	return n
+
+
 def _record_run_walk(view: View, index: int,
 		depth: int = 0) -> tuple[int, int, int]:
 	"""One walk of a delimited run of records, answering all three questions.
@@ -2518,7 +2538,9 @@ def _record_run_walk(view: View, index: int,
 		            and view.buffer[here:here + len(one)] == one), default=0)
 
 	while at + room <= view.limit:
-		if stands(at):
+		past = element_lead(view.image, view.buffer, element, at, view.limit)
+		if stands(at + past):
+			at += past
 			break			# the terminator stands here
 		sub = View(view.image, view.buffer, element, at, view.limit,
 		           child_args(view, index))

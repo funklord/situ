@@ -2208,10 +2208,26 @@ class Emitter:
 		return f"{at} < raw_.limit"
 
 	def _record_match(self, placement: Placement, at: str = "at",
-			only: int | None = None) -> str:
-		"""Whether one of the terminators stands at `at`, or the `only`th."""
+			only: int | None = None, lead: tuple[int, ...] = ()) -> str:
+		"""Whether one of the terminators stands at `at`, or the `only`th.
+
+		Past the element's lead where it has one, stepping `at` over it on
+		a match: see C's (26.995).
+		"""
 		delims = tuple(placement.delimiters)
 		names  = self._record_names(placement)
+		if lead:
+			set_ = ", ".join(f"0x{one:02X}u" for one in lead)
+			test = " || ".join(
+				f"({at} + lead + {len(delims[i])}u <= raw_.limit && situ_scan("
+				f"situ_base(raw_) + {at} + lead, {len(delims[i])}u,"
+				f" {names[i]}, {len(delims[i])}u) == 0u)"
+				for i in range(len(delims)))
+			return (f"[&]() noexcept {{ static constexpr std::uint8_t set[] = "
+			        f"{{{set_}}}; const std::uint32_t lead = situ_skip("
+			        f"situ_base(raw_) + {at}, situ_remaining_u32(raw_.limit,"
+			        f" {at}), set, {len(lead)}u); if ({test}) {{ {at} += lead;"
+			        " return true; } return false; }()")
 		simple = record_simple(delims, record_open(placement))
 		if simple and only is None:
 			width = len(delims[0])
@@ -2923,6 +2939,7 @@ class Emitter:
 		# `{name}_span_at` nothing declared and the generated C++ did not
 		# compile at all. Rust had the same hole for the same reason.
 		deep = descends(self.resolved.structs, struct, placement.type_name or "")
+		lead = traverse.element_lead(self.resolved.structs, placement)
 
 		def walk_from(base: str, depth: str | None = None) -> list[str]:
 			return [
@@ -2931,7 +2948,7 @@ class Emitter:
 			"\t\tstd::uint32_t n  = 0;",
 			"",
 			f"\t\twhile ({self._record_guard(placement)}) {{",
-			f"\t\t\tif ({self._record_match(placement)}) {{",
+			f"\t\t\tif ({self._record_match(placement, lead = lead)}) {{",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			"",
@@ -4825,7 +4842,7 @@ class Emitter:
 			head  = [self._record_decl(member, "\t\t\t")]
 			loop  = f"\t\t\twhile ({self._record_guard(member)}) {{"
 			scan  = [
-				f"\t\t\t\tif ({self._record_match(member)}) {{",
+				f"\t\t\t\tif ({self._record_match(member, lead = traverse.element_lead(self.resolved.structs, member))}) {{",
 				*(["\t\t\t\t\tfound = true;"] if ended else []),
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
@@ -11908,7 +11925,7 @@ class Emitter:
 			head  = [self._record_decl(placement, "\t\t\t"),
 			         f"\t\t\twhile ({self._record_guard(placement)}) {{"]
 			scan  = [
-				f"\t\t\t\tif ({self._record_match(placement)}) {{",
+				f"\t\t\t\tif ({self._record_match(placement, lead = traverse.element_lead(self.resolved.structs, placement))}) {{",
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 			]

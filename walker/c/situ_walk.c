@@ -2726,6 +2726,26 @@ static uint32_t terminator_at(const situ_walk_image *image,
 	return found;
 }
 
+/* The lead in front of an element of a struct, where its first member has
+ * one: the bytes a run's terminator is looked for past (26.995). The
+ * terminator ends the run where an element's own bytes would begin, so the
+ * whitespace before `)` is the lead of an element that turned out to be the
+ * terminator. `element_lead` in the generator, `ahead` in `walk.py`. */
+static uint32_t element_lead(const situ_walk_image *image, uint32_t type,
+                             const uint8_t *message, uint32_t len,
+                             uint32_t at)
+{
+	if (type >= image->struct_count) {
+		return 0u;
+	}
+	const uint8_t *row = image->structs + (size_t)type * image->struct_stride;
+
+	if (u32_at(row + 4) == 0u) {
+		return 0u;
+	}
+	return lead_bytes(image, message, len, u32_at(row), at);
+}
+
 /* Whether a check row requires the terminator, which says, beside a
  * consumed one, that the frame may not end the run: below, after the check
  * kinds it reads. */
@@ -2821,9 +2841,13 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 	hold_sizes(&elements, &sizes, held.type_struct);
 
 	while (room <= len - at) {
-		uint32_t extent = 0u;
+		uint32_t       extent = 0u;
+		const uint32_t past   = element_lead(image, held.type_struct,
+		                                     message, len, at);
 
-		if (terminator_at(image, rules, alts, message, len, at) != 0u) {
+		if (terminator_at(image, rules, alts, message, len, at + past)
+		    != 0u) {
+			at += past;
 			break;
 		}
 		err = struct_extent(&elements, message + at, len - at,
@@ -6066,9 +6090,14 @@ static situ_walk_err nesting_within(const situ_walk_image *image,
 		for (int64_t n = 0; at < end && (count < 0 || n < count); n++) {
 			uint32_t extent = 0u;
 
-			if (rules != NULL
-			    && terminator_at(image, rules, alts, message, end, at)) {
-				break;
+			if (rules != NULL) {
+				const uint32_t past = element_lead(image, child, message,
+				                                   end, at);
+
+				if (terminator_at(image, rules, alts, message, end,
+				                  at + past)) {
+					break;
+				}
 			}
 			err = nesting_within(&bound, message + at, end - at, child,
 			                     depth + 1u);
@@ -6214,9 +6243,15 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 			break;
 		}
 		if (rules != NULL) {
-			if (room > len - at
-			    || terminator_at(image, rules, alts, message, len, at)
-			       != 0u) {
+			if (room > len - at) {
+				break;
+			}
+			const uint32_t past = element_lead(image, held.type_struct,
+			                                   message, len, at);
+
+			if (terminator_at(image, rules, alts, message, len, at + past)
+			    != 0u) {
+				at += past;
 				break;
 			}
 		}

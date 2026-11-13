@@ -2626,10 +2626,19 @@ def _record_walk(resolved: ResolvedSchema, placement: Placement,
 	call. An element of no extent or one the frame does not hold ends the
 	walk, the two bounds every generated walk carries (invariant 24).
 	"""
+	# Past the element's lead, where it has one (26.995): the whitespace
+	# before `)` is the lead of an element that turned out to be the
+	# terminator. See `traverse.element_lead`.
+	lead = traverse.element_lead(resolved.structs, placement)
+	past = ([f"\t\tlocal past = situ_skip(tvb, at, {{"
+	         + ", ".join(str(one) for one in lead) + "})"] if lead else [])
 	return [
 		"\twhile at < tvb:len() do",
-		f"\t\tlocal took = situ_stands(tvb, at, {_terminators(placement)})",
+		*past,
+		f"\t\tlocal took = situ_stands(tvb, at{' + past' if lead else ''},"
+		f" {_terminators(placement)})",
 		"\t\tif took > 0 then",
+		*(["\t\t\tat = at + past"] if lead else []),
 		*(["\t\t\tat = at + took"] if placement.delimiter_consumed else
 		  ["\t\t\t-- `before`: the terminator is the next member's"]),
 		"\t\t\tbreak",

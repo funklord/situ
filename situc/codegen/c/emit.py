@@ -7003,7 +7003,8 @@ class Emitter:
 				tuple(placement.delimiters))
 			walk = self._record_prologue(
 				base, tuple(placement.delimiters), syms, extent,
-				record_open(placement))
+				record_open(placement),
+				traverse.element_lead(self.resolved.structs, placement))
 
 		local  = c_name(self._local(struct, placement))
 		kind   = ident(self.prefix, struct.name, local, "index_t")
@@ -7642,7 +7643,8 @@ class Emitter:
 			c_spelling)
 
 	def _record_prologue(self, base: str, delims: tuple[bytes, ...],
-			syms: list[str], extent: str, open_end: bool) -> list[str]:
+			syms: list[str], extent: str, open_end: bool,
+			lead: tuple[int, ...] = ()) -> list[str]:
 		"""The head of a record run's loop, shared with its index.
 
 		The `while` run's equivalent is `_walk_prologue`; the difference is
@@ -7668,9 +7670,20 @@ class Emitter:
 			"",
 			"\t\t/* The terminator only terminates where an element would",
 			"\t\t * start. Inside one it is that element's own byte. */",
-			f"\t\tif ({self._record_match(delims, syms, simple)}) {{",
-			"\t\t\tbreak;",
-			"\t\t}",
+			*([f"\t\tif ({self._record_match(delims, syms, simple)}) {{",
+			   "\t\t\tbreak;",
+			   "\t\t}"] if not lead else [
+			   "\t\t/* Past the element's lead (26.995): the whitespace before",
+			   "\t\t * the terminator is the lead of an element that turned",
+			   "\t\t * out to be the terminator, and the walk steps over it. */",
+			   "\t\tstatic const uint8_t lead_set[] = {"
+			   + ", ".join(f"0x{one:02X}u" for one in lead) + "};",
+			   "\t\tconst uint32_t lead = situ_skip(situ_base(view) + at,"
+			   f" situ_remaining_u32(view.limit, at), lead_set, {len(lead)}u);",
+			   f"\t\tif ({self._record_match(delims, syms, simple, True)}) {{",
+			   "\t\t\tat += lead;",
+			   "\t\t\tbreak;",
+			   "\t\t}"]),
 			f"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
 			" != SITU_OK) {",
 			"\t\t\tbreak;",
@@ -7685,8 +7698,15 @@ class Emitter:
 
 	@staticmethod
 	def _record_match(delims: tuple[bytes, ...], syms: list[str],
-			simple: bool) -> str:
-		"""Whether one of the terminators stands at `at`."""
+			simple: bool, past_lead: bool = False) -> str:
+		"""Whether one of the terminators stands at `at`, or at `at + lead`
+		where the caller has measured an element's lead (26.995)."""
+		if past_lead:
+			return " || ".join(
+				f"(at + lead + {len(one)}u <= view.limit && situ_scan("
+				f"situ_base(view) + at + lead, {len(one)}u, {sym},"
+				f" {len(one)}u) == 0u)"
+				for one, sym in zip(delims, syms))
 		if simple:
 			width = len(delims[0])
 			return (f"situ_scan(situ_base(view) + at, {width}u, {syms[0]}, "
@@ -7792,9 +7812,11 @@ class Emitter:
 		reached = self._reaching_call(struct, placement)
 
 		syms, tables = self._record_symbols(sym, delims)
-		walk = self._record_prologue(base, delims, syms, extent, open_)
+		lead  = traverse.element_lead(self.resolved.structs, placement)
+		walk = self._record_prologue(base, delims, syms, extent, open_, lead)
 		from_ = self._record_prologue("start", delims, syms,
-		                              deeper if deep else extent, open_)
+		                              deeper if deep else extent, open_,
+		                              lead)
 		spans = [
 			f"static inline uint32_t {span}_from"
 			+ (f"_at(situ_view_t view, uint32_t start, uint32_t depth{reach})"
@@ -9699,8 +9721,9 @@ class Emitter:
 			delims = tuple(member.delimiters)
 			open_  = record_open(member)
 			syms, tables = self._record_symbols("terminator", delims)
-			prologue = self._record_prologue(base, delims, syms, extent,
-			                                 open_)
+			prologue = self._record_prologue(
+				base, delims, syms, extent, open_,
+				traverse.element_lead(self.resolved.structs, member))
 			body = [
 				*[f"\t{line}" for line in tables],
 				*(["\tint found = 0;"] if ended else []),
@@ -15215,8 +15238,9 @@ class Emitter:
 			syms, tables = self._record_symbols("terminator", delims)
 			head = [
 				*[f"\t{line}" for line in tables],
-				*self._record_prologue(base, delims, syms, extent,
-				                       record_open(placement)),
+				*self._record_prologue(
+					base, delims, syms, extent, record_open(placement),
+					traverse.element_lead(self.resolved.structs, placement)),
 			]
 		else:
 			to_end = placement.sized_by == "remaining"

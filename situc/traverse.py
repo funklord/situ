@@ -2678,6 +2678,27 @@ def run_ordering(structs: dict[str, ResolvedStruct],
 	        "has no order")
 
 
+def element_lead(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> tuple[int, ...]:
+	"""The whitespace an element of this terminator-ended run would skip
+	before its own bytes, or () where it skips none (26.995).
+
+	The holder's answer to 26.606's first finding: a run ends where its
+	terminator would be an element, and an element's bytes begin past its
+	lead -- so `(a )` is one item, the space before `)` being the lead of
+	an element that turned out to be the terminator. A lead that is the
+	element's first member's `skip` is the only one the run can see from
+	outside; a nested one is the element's own business.
+	"""
+	if not placement.delimiters:
+		return ()
+	element = structs.get(placement.type_name or "")
+	if element is None:
+		return ()
+	members = own_members(element)
+	return tuple(members[0].skip) if members else ()
+
+
 def nests_one_struct(structs: dict[str, ResolvedStruct],
 		placement: Placement) -> bool:
 	"""Whether a placement is ONE nested struct, framed by its own
