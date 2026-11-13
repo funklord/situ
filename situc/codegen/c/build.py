@@ -219,6 +219,9 @@ class Part:
 		#: The run whose size field this one shares, by its local, which
 		#: this one's length must equal (26.1006).
 		self.twin = ""
+		#: An argued arm's length field, by its local: the caller's bytes
+		#: must be as long as it says (26.1012).
+		self.equals = ""
 		#: A MARKER's literals for each order (26.1007).
 		self.little: tuple[int, ...] = ()
 		self.big: tuple[int, ...] = ()
@@ -953,8 +956,9 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		# the struct the variant is in, as the reader measures it.
 		return Part(PAD, inner, bare_name(inner.name or "pad")), None
 	tail = _ends_the_message(struct, inner, shape)
-	why = None if tail else _arm_refusal(inner, shape.header, shape.prefix,
-	                                     shape.structs)
+	argued = None if tail else argued_bytes(struct, inner, shape)
+	why = None if tail or argued else _arm_refusal(inner, shape.header,
+	                                               shape.prefix, shape.structs)
 	if why:
 		# The LOCAL name, as every other member-level message uses: this
 		# quoted the full dotted path including the struct, so one reader
@@ -962,9 +966,11 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		return None, f"`{traverse.local_name(struct, inner)}` {why}"
 	part = (Part(NESTED, inner, bare_name(inner.name or "body"),
 	             inner=ident(shape.prefix, inner.type_name or ""))
-	        if tail else
+	        if tail or argued else
 	        _arm_part(struct, inner, shape.header, shape.prefix, shape.structs))
 	part.tail = tail
+	if argued is not None:
+		part.equals = _local(struct, argued)
 	# Where the discriminant is peeked, nothing was written for it and
 	# `_validate` cannot help: bytes beginning with another arm's kind are a
 	# VALID message of that other arm, so a caller who asked for this one
@@ -1005,6 +1011,40 @@ def _ends_the_message(struct: ResolvedStruct, inner: Placement,
 	members = traverse.own_members(struct)
 	return found is not None and bool(members) \
 		and members[-1].path == found[0].path
+
+
+def argued_bytes(struct: ResolvedStruct, inner: Placement,
+		shape: Shape) -> Placement | None:
+	"""The length field an arm's struct is sized by, where it is nothing
+	but one byte run that long (26.1012).
+
+	`case 1: a_data(size = rdlength) a;` with `a_data { parameter u16 size;
+	u8 data[size] [holds = ipv4_address]; }` -- DNS's RDATA, wasm's section
+	bodies. The struct states no extent of its own, so it has no
+	`_required`; but its extent IS its argument, a field this struct carries
+	and the caller passes, so the caller's bytes are one of it exactly when
+	they are that long. Their content is checked by the closing `validate`,
+	which hands the arm the same argument a reader does.
+	"""
+	held = (shape.structs or {}).get(inner.type_name or "")
+	if held is None or len(inner.arguments) != 1:
+		return None
+	param, expr = inner.arguments[0]
+	members = [entry.placement for entry in held.entries
+	           if "." not in entry.placement.path[len(held.name) + 1:]]
+	params = [one for one in members if one.parameter]
+	body = [one for one in members if not one.parameter]
+	if len(params) != 1 or params[0].name != param or len(body) != 1:
+		return None
+	run = body[0]
+	if run.sized_by != param or run.element_bits != BITS_PER_BYTE \
+			or run.type_name in (shape.structs or {}):
+		return None
+	field = next((one for one in traverse.own_members(struct)
+	              if one.name == expr
+	              and (one.scalar is not None or one.varint is not None)),
+	             None)
+	return field
 
 
 def _tail_check(part: Part, local: str, held: Placement) -> list[str]:
@@ -3367,6 +3407,14 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 					"\t}",
 				]),
 				*(_tail_check(part, local, held) if part.tail else [
+				f"\t/* {local}: one whole `{held.type_name}`, as long as",
+				f"\t * `{part.equals}` says -- its argument, and so its",
+				"\t * extent (26.1012). Its content is validated with the",
+				"\t * message, which hands it that argument. */",
+				f"\tif ((uint64_t){part.local}_len != (uint64_t){part.equals}) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			] if part.equals else [
 				f"\t/* {local}: one whole `{held.type_name}`, which the",
 				"\t * caller built. Its extent is its own to state, so the",
 				"\t * writer ASKS rather than trusting the length it was",
