@@ -84,6 +84,8 @@ OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
 HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
 ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
 CHOSEN  = "chosen"	# a variant whose arm is a value the caller hands over
+FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
+			# computes from what is already written (26.1004)
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
@@ -1574,6 +1576,20 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					# every reserved run nobody measures, and the field is
 					# computed from it.
 					parts.append(Part(HIDDEN, held, local))
+					continue
+				if held is members[-1] and held.size_ast is not None \
+						and traverse.reserved_policy(held.attrs) \
+						in (None, "must_be_zero", "ignore") \
+						and frames_itself(header, ident(prefix, struct.name)):
+					# `align_up(nla_len, 4) - nla_len`: no field to solve
+					# for, and none needed. Every byte before it is down
+					# when the writer reaches it, so the struct's own
+					# `_required` computes its length from them -- the
+					# reader's framing, not a second copy of the
+					# expression (26.1004). Last only: `_required` measures
+					# the whole struct, so its answer is this pad's end
+					# only where nothing follows it.
+					parts.append(Part(FRAMED, held, local))
 					continue
 				why = _member_refusal(held, None,
 				                      declined.get(held.path))
@@ -3296,6 +3312,27 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"{part.local}_len);",
 				"\t}",
 				f"\t{AT} += {part.local}_len;",
+				"",
+			]
+		elif part.role == FRAMED:
+			lines += [
+				f"\t/* {local}: zeros to where the struct's own framing ends",
+				"\t * it, measured over the bytes already written. */",
+				"\t{",
+				f"\t\tuint32_t {NEED} = 0u;",
+				f"\t\tconst situ_err_t {ERR}2 = {ident(prefix, struct.name)}"
+				f"_required({OUT}, {AT}, &{NEED});",
+				"",
+				f"\t\tif (({ERR}2 != SITU_OK && {ERR}2 != SITU_ERR_TRUNCATED)"
+				f" || {NEED} < {AT}) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				f"\t\tif ({CAP} - {AT} < {NEED} - {AT}) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemset({OUT} + {AT}, 0, {NEED} - {AT});",
+				f"\t\t{AT} = {NEED};",
+				"\t}",
 				"",
 			]
 		elif part.role == ENDED and part.code:

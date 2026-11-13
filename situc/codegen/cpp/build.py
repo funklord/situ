@@ -21,7 +21,7 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.c.names import bare_name, c_name
@@ -582,6 +582,21 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == FRAMED:
+		# C's: zeros to where the struct's own framing ends it (26.1004).
+		return ["\t{",
+		        "\t\tstd::uint32_t situ_end = 0u;",
+		        f"\t\tconst ::situ::rt::err situ_framed = ::situ::"
+		        f"{class_name(struct)}::required(situ_out, situ_at, situ_end);",
+		        "\t\tif ((situ_framed != ::situ::rt::err::ok",
+		        "\t\t     && situ_framed != ::situ::rt::err::truncated)"
+		        " || situ_end < situ_at) {",
+		        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+		        "\t\tif (situ_cap - situ_at < situ_end - situ_at) {",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        "\t\tstd::memset(situ_out + situ_at, 0, situ_end - situ_at);",
+		        "\t\tsitu_at = situ_end;",
+		        "\t}"]
 	if part.role == CHOSEN:
 		return _chosen(struct, structs, part, parts)
 	if part.role == BITS:

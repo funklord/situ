@@ -22,7 +22,7 @@ import re
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
@@ -529,6 +529,18 @@ def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part]
 def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == FRAMED:
+		# C's: zeros to where the struct's own framing ends it (26.1004).
+		return [f"\tlet situ_end = match {_pascal(struct.name)}::required("
+		        "&situ_out[..situ_at]) {",
+		        "\t\tsitu_rt::Framing::Complete(n) | situ_rt::Framing::Need(n)"
+		        " => n,",
+		        "\t};",
+		        "\tif situ_end < situ_at {",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        *_room("situ_end - situ_at"),
+		        "\tsitu_out[situ_at..situ_end].fill(0);",
+		        "\tsitu_at = situ_end;"]
 	if part.role == BITS:
 		return _bits(part, parts)
 	if part.role == NESTED:

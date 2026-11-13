@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -508,6 +508,19 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == FRAMED:
+		# C's: zeros to where the struct's own framing ends it (26.1004).
+		return ["\ttry:",
+		        f"\t\tsitu_end = situ_schema.{py_name(struct.name)}.required("
+		        "memoryview(situ_out)[:situ_at])",
+		        "\texcept TruncatedError as situ_short:",
+		        "\t\tsitu_end = situ_short.needed",
+		        "\tif situ_end < situ_at:",
+		        f'\t\traise ConstraintError("{part.placement.path}: the '
+		        'framing ends before what is written")',
+		        *_room("situ_end - situ_at", part.placement.path),
+		        "\tsitu_out[situ_at:situ_end] = bytes(situ_end - situ_at)",
+		        "\tsitu_at = situ_end"]
 	if part.role == CHOSEN:
 		return _chosen(struct, structs, part, parts)
 	path = part.placement.path
