@@ -44,7 +44,18 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.wellformed import _encoding_source
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 9
+FORMAT_VERSION	= 10
+
+#: A directory entry's kind is a `u16` tag and a `u16` of flags, in that
+#: order -- one little-endian `u32`, so a tag below 65536 reads the same
+#: either way. Bit 0 of the flags marks a section ANCILLARY: a walker that
+#: does not know its tag skips it. Every other section is CRITICAL, and a
+#: walker that does not know a critical tag refuses the image, as a PNG
+#: decoder refuses an unknown chunk whose name says it is critical (26.991).
+#: Version 10 is the version that says this: a version-9 walker skipped
+#: every kind it did not know, so a section that carries a check --
+#: `image_ordering` -- passed its refusals as clean in an older walker.
+SECTION_ANCILLARY = 1 << 16
 
 #: The check a bound over a field makes: its row holds a program (26.902).
 BOUND_BY = {"must_eq": 19, "min": 20, "max": 21}
@@ -147,6 +158,9 @@ SECTION_RELATION_MUSTS	= 19
 SECTION_PINNED_RUNS	= 20
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
+#: Read only to print -- names and capability vectors, under `--metadata`.
+#: A walker that cannot print them walks the same.
+ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS})
 #: A tag and what computes it (26.579), and the kernel tables a polynomial
 #: codec needs. Both are additive: a reader that does not know them reads
 #: every other section exactly as before.
@@ -1018,7 +1032,9 @@ def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
 	directory, bodies, at = bytearray(), bytearray(), body_at
 	for kind, blob, stride in live:
 		count = len(blob) // stride if stride else 0
-		directory += _struct.pack("<IIII", kind, at, count, stride)
+		flagged    = kind | (SECTION_ANCILLARY if kind in ANCILLARY_SECTIONS
+		                     else 0)
+		directory += _struct.pack("<IIII", flagged, at, count, stride)
 		bodies    += blob
 		at        += len(blob)
 

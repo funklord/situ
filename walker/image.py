@@ -19,13 +19,13 @@ import sys
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 9
+FORMAT_VERSION	= 10
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
 
-#: `image_section_tag`. A kind this walker predates is skipped rather than
-#: refused, which is the property the directory exists for.
+#: `image_section_tag`. A kind this walker predates is skipped where the
+#: image marks it ancillary and refused where it is critical (26.991).
 STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 TAGS, KERNEL_TABLES                = 26, 27
@@ -43,6 +43,20 @@ HOLDS = 29
 #: `[ascending]` (26.985): placement, stride, key offset and width, kind, order.
 ORDERINGS = 30
 PINNED_RUNS = 20
+
+#: Every section kind this walker knows. A directory entry's kind is a
+#: `u16` tag and a `u16` of flags; bit 0 of the flags marks the section
+#: ANCILLARY. An unknown ancillary tag is skipped and an unknown critical
+#: one refuses the image, as PNG does with chunks (26.991): skipping a
+#: section that carries a check would pass what it refuses.
+KNOWN_SECTIONS = frozenset({
+	STRUCTS, PLACEMENTS, CODE, STRINGS, ARMS, DELIMITERS, REGIONS, CODECS,
+	VARINTS, TLVS, INDEXES, NAMES, VECTORS, MARKERS, CONSTRAINTS,
+	ENUM_VALUES, VERSIONS, RELATIONS, RELATION_MUSTS, PINNED_RUNS, DEPTHS,
+	SKIPS, WHITESPACE, TLV_RULES, MESSAGES, TAGS, KERNEL_TABLES, ARGUMENTS,
+	HOLDS, ORDERINGS,
+})
+SECTION_ANCILLARY = 1
 
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
@@ -575,8 +589,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 
 	found: dict[int, tuple[int, int, int]] = {}
 	for i in range(count):
-		kind, offset, records, stride = _struct.unpack_from(
-			"<IIII", blob, directory + i * SECTION_BYTES)
+		kind, flags, offset, records, stride = _struct.unpack_from(
+			"<HHIII", blob, directory + i * SECTION_BYTES)
+		if kind not in KNOWN_SECTIONS:
+			if flags & SECTION_ANCILLARY:
+				continue
+			raise ImageError(f"section {kind} is critical and this walker "
+			                 "does not know it")
 		if offset + records * stride > len(blob):
 			raise ImageError(f"section {kind} runs past the image")
 		found[kind] = (offset, records, stride)

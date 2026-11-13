@@ -42,11 +42,12 @@ const none = 0xffffffff;
 
 // -- section kinds -----------------------------------------------------------
 
-// A walker reads the directory, keeps the sections it understands and skips
-// the rest. `default = pass` rather than `error`: an image from a later
-// `situc` carrying a section this walker predates is readable, not a refusal,
-// which is the whole point of a directory.
-enum image_section_tag : u32 {
+// A walker reads the directory and keeps the sections it understands. One it
+// does not know is skipped where the entry marks it ancillary and refuses the
+// image where it is critical, as a PNG decoder treats a chunk (26.991).
+// `default = pass` rather than `error`: the tag is a number this schema need
+// not list, and whether skipping it is safe is the entry's flags' to say.
+enum image_section_tag : u16 {
 	structs      = 1,
 	placements   = 2,
 	code         = 3,
@@ -125,7 +126,7 @@ struct image_header {
 	// checked them, which is 14.5 in the schema that describes situ's own
 	// artifact.
 	u8   magic[4] [must_eq = "SITU"];
-	u16  format_version [must_eq = 9];
+	u16  format_version [must_eq = 10];
 	u16  flags;                       // bit 0: the metadata sections are present
 	u32  image_bytes;                 // the whole image, header included
 	u32  section_count;
@@ -137,6 +138,11 @@ struct image_header {
 // a record extensible without a format version.
 struct image_section {
 	image_section_tag kind;
+	// Bit 0: ANCILLARY, a section a walker that does not know it may skip --
+	// the print-only names and vectors. Clear, it is critical: a walker that
+	// does not know the tag refuses the image rather than walk without a
+	// check the section carries (26.991).
+	u16  section_flags [max = 1];
 	u32  offset;                      // from the start of the image
 	u32  count;                       // records, not bytes
 	u32  stride;                      // bytes per record

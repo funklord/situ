@@ -379,7 +379,10 @@ typedef struct {
 
 /* Bind an image. Every table it names is bounds-checked against the whole
  * before anything reads one, because the image is the least trusted input
- * this component has. */
+ * this component has. A section this build does not know is skipped where
+ * the image marks it ancillary; one marked critical makes this return
+ * `SITU_WALK_UNSUPPORTED`, since walking without it would pass what it
+ * checks (26.991). */
 situ_walk_err situ_walk_open(situ_walk_image *out,
                                  const uint8_t *image, uint32_t len);
 

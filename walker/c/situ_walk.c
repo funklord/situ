@@ -24,6 +24,14 @@
 #define TAG_ARGUMENTS  28u
 #define TAG_HOLDS      29u
 #define TAG_ORDERINGS  30u
+/* Known kinds this walker does not read (see the loader). */
+#define TAG_STRINGS        4u
+#define TAG_CODECS         8u
+#define TAG_WHITESPACE    23u
+#define TAG_TAGS          26u
+#define TAG_KERNEL_TABLES 27u
+/* Bit 0 of a directory entry's flags: a tag a walker may skip (26.991). */
+#define SECTION_ANCILLARY  1u
 #define TAG_RELATIONS  18u
 #define TAG_RELATION_MUSTS 19u
 
@@ -108,7 +116,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 9u) {
+	if (u16_at(image + 4) != 10u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -135,7 +143,10 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 
 	for (uint32_t i = 0u; i < count; i++) {
 		const uint8_t *entry = image + directory + i * SECTION_BYTES;
-		const uint32_t kind   = u32_at(entry);
+		/* A `u16` tag and a `u16` of flags, read as one little-endian word
+		 * as they were written (26.991). */
+		const uint32_t kind   = u32_at(entry) & 0xFFFFu;
+		const int      spare  = (u32_at(entry) >> 16 & SECTION_ANCILLARY) != 0u;
 		const uint32_t offset = u32_at(entry + 4);
 		const uint32_t items  = u32_at(entry + 8);
 		const uint32_t stride = u32_at(entry + 12);
@@ -144,9 +155,11 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			return SITU_WALK_MALFORMED;
 		}
 
-		/* A tag this build does not know is skipped rather than refused.
-		 * That is the whole point of a directory: an image from a later
-		 * situc is readable, not an error.
+		/* A tag this build does not know is skipped where the image marks
+		 * it ancillary and refused where it is critical, as PNG treats a
+		 * chunk (26.991). Skipping every unknown tag was the first rule, and
+		 * a section that carries a check -- `image_ordering` -- then passed
+		 * its refusals as clean in a walker that predated it.
 		 *
 		 * A tag it *does* know is checked against the width this build reads
 		 * out of a row, which `fits` cannot do for it: that bounds the table,
@@ -312,6 +325,14 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->delimiters       = image + offset;
 			out->delimiter_count  = items;
 			out->delimiter_stride = stride;
+		} else if (kind == TAG_STRINGS || kind == TAG_CODECS
+		           || kind == TAG_WHITESPACE || kind == TAG_TAGS
+		           || kind == TAG_KERNEL_TABLES) {
+			/* Known, and not read by this walker: a member that needs one
+			 * of these is declined where it is reached, as it always was.
+			 * Not an unknown tag, so the rule below does not apply. */
+		} else if (!spare) {
+			return SITU_WALK_UNSUPPORTED;	/* critical, and not known here */
 		}
 	}
 

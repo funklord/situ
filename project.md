@@ -8643,6 +8643,10 @@ Moved to `doc/decision/26.989-wireshark-says-a-run-is-out-of-order.md`.
 
 Moved to `doc/decision/26.990-a-member-called-offsets.md`.
 
+### 26.991 Critical sections, as PNG does
+
+Moved to `doc/decision/26.991-critical-sections-as-png-does.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
