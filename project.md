@@ -8647,6 +8647,10 @@ Moved to `doc/decision/26.990-a-member-called-offsets.md`.
 
 Moved to `doc/decision/26.991-critical-sections-as-png-does.md`.
 
+### 26.992 hull's agent protocol under verify
+
+Moved to `doc/decision/26.992-hull-s-agent-protocol-under-verify.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

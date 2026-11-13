@@ -7222,7 +7222,14 @@ class Emitter:
 				continue
 			if step.kind == "loose":
 				continue
-			rendered = self._length_expression(struct, member, "at")
+			# A variant's arms from the cursor, as every other step is: an
+			# arm measured through its own extent derives its start, which
+			# reads the discriminants this pass exists to find, so the walk
+			# asked itself again -- a stack overflow in all four backends
+			# (26.992). Python's copy says how hull met it.
+			rendered = (self._variant_length(struct, member, None, "at")
+			            if member.kind == "variant"
+			            else self._length_expression(struct, member, "at"))
 			assert rendered is not None, "`_walk` asked"
 			length = self._reading_marks(struct, rendered).replace(
 				"_marked(marks", "_marked(&marks")

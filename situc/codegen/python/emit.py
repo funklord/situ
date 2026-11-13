@@ -513,8 +513,8 @@ class Emitter:
 		lines.extend(["]", ""])
 		lines.extend(body)
 
-		return self._refuse_collisions(self._unshadow_runtime(
-			self._unshadow("\n".join(lines) + "\n")))
+		return self._unshadow_classes(self._refuse_collisions(
+			self._unshadow_runtime(self._unshadow("\n".join(lines) + "\n"))))
 
 	def _unshadow_runtime(self, text: str) -> str:
 		"""Point what means the runtime past a struct of its name.
@@ -796,6 +796,69 @@ class Emitter:
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries}
 		return [name for name in self.SHADOWABLE if name in members]
+
+	#: What a generated method reads off a struct or enum CLASS rather than
+	#: off a view of one. An attribute of a local is never one of these.
+	_CLASS_ATTRIBUTES = frozenset({"SIZE_BYTES", "SIZE_MIN", "required", "_over",
+	                               "KNOWN", "ARMS", "UNKNOWN"})
+
+	def _unshadow_classes(self, text: str) -> str:
+		"""A class named like a local of the method that builds it, called
+		through an alias the local cannot hide (26.992).
+
+		Every method here binds locals -- `start`, `size`, `data`, `value`,
+		`view` and some forty more -- and Python makes a name local to the
+		whole function if it is assigned anywhere in it. So a struct named
+		`start`, which hull's agent protocol has, met `start = 1` in the
+		property measuring its own arm and was called as the integer: "'int'
+		object is not callable". Decision 0025's move, as `_unshadow` makes
+		it for a builtin: rename the reference, not the name the schema
+		chose, so the class keeps its name and `_situ_start` reaches it.
+
+		Asked of the module itself with `ast`, which knows exactly which
+		names each function binds; only a CALL of such a name and a read of
+		a class-only attribute are rewritten, since a local is never called
+		and never has those.
+		"""
+		import ast as pyast
+
+		classes = ({py_name(name) for name in self.structs}
+		           | {py_name(decl.name) for decl in self.schema.enums()})
+		tree    = pyast.parse(text)
+		spans: dict[tuple[int, int], tuple[int, str]] = {}
+		for fn in pyast.walk(tree):
+			if not isinstance(fn, pyast.FunctionDef):
+				continue
+			bound = {node.id for node in pyast.walk(fn)
+			         if isinstance(node, pyast.Name)
+			         and isinstance(node.ctx, pyast.Store)}
+			bound |= {arg.arg for arg in (*fn.args.args, *fn.args.kwonlyargs)}
+			clash = bound & classes
+			if not clash:
+				continue
+			for node in pyast.walk(fn):
+				target: pyast.expr | None = None
+				if isinstance(node, pyast.Call):
+					target = node.func
+				elif isinstance(node, pyast.Attribute) \
+						and node.attr in self._CLASS_ATTRIBUTES:
+					target = node.value
+				if isinstance(target, pyast.Name) and target.id in clash \
+						and target.end_col_offset is not None:
+					spans[(target.lineno, target.col_offset)] = (
+						target.end_col_offset, target.id)
+		if not spans:
+			return text
+
+		lines = text.split("\n")
+		for (row, col), (end, name) in sorted(spans.items(), reverse=True):
+			line = lines[row - 1]
+			lines[row - 1] = line[:col] + f"_situ_{name}" + line[end:]
+		named = sorted({name for _end, name in spans.values()})
+		lines.extend(["#: Classes some method here also binds as a local, for",
+		              "#: that method to call (26.992).",
+		              *(f"_situ_{name} = {name}" for name in named), ""])
+		return "\n".join(lines)
 
 	def _unshadow(self, text: str) -> str:
 		"""Point the annotations at an alias no member can hide.
@@ -7281,7 +7344,16 @@ class Emitter:
 				continue
 			if step.kind == "loose":
 				continue
-			rendered = self._length_expression(struct, member, "at")
+			# A variant's arms from the cursor, as every other step is: an
+			# arm's property derives its own start, and that start reads the
+			# discriminants this pass exists to find, so `_walked` asked
+			# itself again. hull's `exec` -- `peek u32 after_ch` choosing an
+			# arm, a second variant after it -- recursed until Python gave up
+			# (26.992). `_passes` holds wherever this is emitted, so every
+			# arm that needs one has its `_from`.
+			rendered = (self._variant_length(struct, member, None, "at")
+			            if member.kind == "variant"
+			            else self._length_expression(struct, member, "at"))
 			assert rendered is not None, "`_walk` asked"
 			length = self._reading_marks(struct, rendered)
 			if member.offset_bits is None:
