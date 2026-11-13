@@ -114,6 +114,17 @@ def _store(part: Part, value: str) -> list[str]:
 		return _digits(part, value)
 	bits  = part.placement.scalar.bits
 	width = bits // BITS_PER_BYTE
+	if bits not in (8, 16, 32, 64):
+		# C's `_store_bytes`: a byte at a time, refused where too wide.
+		end = _order_suffix(part.placement.endian)
+		return [*_room(f"{width}u"),
+		        f"\tif (static_cast<std::uint64_t>({value}) > {(1 << bits) - 1:#x}u) {{",
+		        "\t\treturn ::situ::rt::err::constraint;", "\t}",
+		        *(f"\tsitu_out[situ_at + {i}u] = static_cast<std::uint8_t>("
+		          f"static_cast<std::uint64_t>({value}) >> "
+		          f"{8 * (width - 1 - i) if end == 'be' else 8 * i}u);"
+		          for i in range(width)),
+		        f"\tsitu_at += {width}u;"]
 	return [
 		*_room(f"{width}u"),
 		(f"\tsitu_out[situ_at] = static_cast<std::uint8_t>({value});"

@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT / "test" / "unit"))
 import pytest					# noqa: E402
 from collections.abc import Callable		# noqa: E402
 from every_schema import SCHEMAS, load_schema	# noqa: E402
-from situc import traverse			# noqa: E402
+from situc import ast, traverse		# noqa: E402
 from situc.codegen.c import build		# noqa: E402
 from situc.codegen.c import generate as generate_c	# noqa: E402
 from situc.layout import Placement, solve		# noqa: E402
@@ -86,9 +86,11 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("bits wide, so it shares a byte",
 	 lambda pl, res: (pl.scalar is not None
 	                  and pl.scalar.bits % 8 != 0)),
-	("which is whole bytes and not a width the runtime stores",
+	("is written a byte at a time -- 8, 16, 32 and 64 bits are words",
 	 lambda pl, res: (pl.scalar is not None and pl.scalar.bits % 8 == 0
-	                  and pl.scalar.bits not in (8, 16, 32, 64))),
+	                  and pl.scalar.bits not in (8, 16, 32, 64)
+	                  and (pl.scalar.signed
+	                       or pl.endian is ast.Endian.NATIVE))),
 	("is located by an expression", lambda pl, res: bool(pl.located)),
 	("is an index table", lambda pl, res: pl.index_table is not None),
 	("takes whatever is left", lambda pl, res: bool(pl.remaining_cap)),

@@ -112,9 +112,16 @@ def _store(part: Part, value: str) -> list[str]:
 		return _bit_store(part, value)
 	if part.radix:
 		return _digits(part, value)
-	width = part.placement.scalar.bits // BITS_PER_BYTE
+	bits  = part.placement.scalar.bits
+	width = bits // BITS_PER_BYTE
+	# A width with no word of its own arrives in the next one up, so a
+	# value too wide for it is refused rather than truncated (26.1003).
+	wide  = ([f"\tif {value} as u64 > {(1 << bits) - 1:#x} {{",
+	          "\t\treturn Err(Error::Constraint);", "\t}"]
+	         if bits not in (8, 16, 32, 64) else [])
 	return [
 		*_room(str(width)),
+		*wide,
 		f"\tsitu_rt::{_writer(part.placement.endian)}(situ_out, situ_at,"
 		f" {width}, {value} as u64);",
 		f"\tsitu_at += {width};",

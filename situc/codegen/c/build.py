@@ -620,13 +620,16 @@ def _scalar_refusal(placement: Placement) -> str | None:
 	if scalar.bits % BITS_PER_BYTE:
 		return f"is {scalar.bits} bits wide, so it shares a byte with its " \
 		       "neighbours and cannot be appended on its own"
-	if scalar.bits not in WORD_WIDTHS:
-		# Whole bytes and still not writable: the runtime stores 8, 16, 32
-		# and 64, so a `u24` needs an assembly this does not do. It was
-		# being told it shares a byte with its neighbours, which a u24 at
-		# offset 0 does not.
-		return f"is {scalar.bits} bits wide, which is whole bytes and not " \
-		       "a width the runtime stores -- 8, 16, 32 and 64 are"
+	if scalar.bits not in WORD_WIDTHS and (
+			scalar.signed or placement.endian is ast.Endian.NATIVE):
+		# Whole bytes and written a byte at a time (26.1003) -- unsigned,
+		# and in an order the schema names. A signed one needs its sign
+		# carried from a wider word, and a native one the host's order,
+		# which situc running elsewhere cannot know.
+		return f"is {scalar.bits} bits wide, " + \
+		       ("signed" if scalar.signed else "in native order") + \
+		       ", and only an unsigned one in a stated order is written a " \
+		       "byte at a time -- 8, 16, 32 and 64 bits are words"
 	if placement.offset_bits is not None \
 			and placement.offset_bits % BITS_PER_BYTE:
 		return "does not start on a byte boundary"
@@ -1935,8 +1938,28 @@ def _store(part: Part, value: str) -> list[str]:
 	# netlink header read back byte-swapped through the view beside it
 	# (26.857).
 	end = order_suffix(part.placement.endian)
+	if scalar.bits not in WORD_WIDTHS:
+		return _store_bytes(scalar.bits, end, value, f"{OUT} + {AT}")
 	return [f"\tsitu_put_{end}{scalar.bits}({OUT} + {AT},",
 	        f"\t              (uint{width}_t){value});"]
+
+
+def _store_bytes(bits: int, end: str, value: str, at: str) -> list[str]:
+	"""A whole-byte width the runtime has no `put` for -- a TLS handshake's
+	or a FLAC block's 24-bit length -- a byte at a time (26.1003).
+
+	Refused rather than truncated where the value is wider than the field:
+	the parameter is the next word up, so `0x1000000` would otherwise
+	write as zero and the message would say something the caller did not.
+	"""
+	count = bits // BITS_PER_BYTE
+	most  = (1 << bits) - 1
+	return [f"\tif ((uint64_t)({value}) > {most:#x}u) {{",
+	        "\t\treturn SITU_ERR_CONSTRAINT;",
+	        "\t}",
+	        *(f"\t({at})[{i}] = (uint8_t)((uint64_t)({value}) >> "
+	          f"{8 * (count - 1 - i) if end == 'be' else 8 * i}u);"
+	          for i in range(count))]
 
 
 def _value(part: Part, value: str, local: str) -> list[str]:

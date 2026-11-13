@@ -8691,6 +8691,10 @@ Moved to `doc/decision/26.1001-a-builder-writes-cobs.md`.
 
 Moved to `doc/decision/26.1002-six-rust-builders-did-not-compile-with-warnings-denied.md`.
 
+### 26.1003 A builder writes a 24-bit field
+
+Moved to `doc/decision/26.1003-a-builder-writes-a-24-bit-field.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
