@@ -366,8 +366,8 @@ def _encoded(part: Part) -> list[str]:
 	local = part.local
 	return [f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS, "\t}",
 	        f"\tif (static_cast<std::uint64_t>(situ_cap - situ_at)"
-	        f" < (static_cast<std::uint64_t>({local}_len) + {per - 1}u)"
-	        f" / {per}u * {worst}u + {over + tail}u) {{", BOUNDS, "\t}",
+	        f" < (static_cast<std::uint64_t>({local}_len) * {worst}u"
+	        f" + {per - 1}u) / {per}u + {over + tail}u) {{", BOUNDS, "\t}",
 	        f"\tsitu_at += situ_{part.placement.codec}_encode({local},"
 	        f" {local}_len, situ_out + situ_at);",
 	        *([] if own else _needle(part.delimiter))]

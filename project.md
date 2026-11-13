@@ -8683,6 +8683,10 @@ Moved to `doc/decision/26.999-dot-stuffing-grows-three-for-two.md`.
 
 Moved to `doc/decision/26.1000-cobs-adds-two-not-one.md`.
 
+### 26.1001 A builder writes COBS
+
+Moved to `doc/decision/26.1001-a-builder-writes-cobs.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

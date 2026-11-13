@@ -242,7 +242,7 @@ def _encoded(part: Part) -> list[str]:
 	tail = 0 if own else len(part.delimiter)
 	local = py_name(part.local)
 	codec = (part.placement.codec or "").lower()
-	return [*_room(f"(len({local}) + {per - 1}) // {per} * {worst}"
+	return [*_room(f"(len({local}) * {worst} + {per - 1}) // {per}"
 	               f" + {over + tail}", part.placement.path),
 	        # Into the caller's buffer through a view, as everything here
 	        # writes: nothing allocates.

@@ -542,7 +542,7 @@ def _delimited_refusal(placement: Placement) -> str | None:
 #: delimiter inside the body: that is what stuffing is for, but it holds
 #: only for the delimiter the code protects, which `coded_refusal` checks.
 WRITABLE_CODES: dict[str, bool] = {"slip": True, "ppp_async": True,
-                                   "smtp_dot": False}
+                                   "smtp_dot": False, "cobs": True}
 
 
 def coded_code(shape: "Shape", placement: Placement) -> str | None:
@@ -582,6 +582,8 @@ def coded_refusal(struct: ResolvedStruct, placement: Placement,
 			       "encoded body could contain it"
 	elif code == "smtp_dot" and ends != b"\r\n.\r\n":
 		return "ends at a delimiter dot-stuffing does not protect"
+	elif code == "cobs" and ends != b"\x00":
+		return "ends at a delimiter other than the zero COBS keeps out"
 	prefix   = placement.path + "."
 	interior = [entry.placement for entry in struct.entries
 	            if entry.placement.path.startswith(prefix)]
@@ -2170,7 +2172,7 @@ def _needle(local: str, at: str, delim: bytes) -> str:
 def _encoded(part: Part, local: str) -> list[str]:
 	"""Write a coded region from its content, through its codec (26.998).
 
-	Room is the code's worst case, `ceil(len / per) * worst + overhead`,
+	Room is the code's worst case, `ceil(len * worst / per) + overhead`,
 	in 64 bits so a length near `UINT32_MAX` cannot wrap past the check: a
 	body that would fit after encoding can be refused, and none can
 	overrun. The builder validates the message before returning, which is
@@ -2189,7 +2191,7 @@ def _encoded(part: Part, local: str) -> list[str]:
 		 else "\t * then the delimiter that ends it. */"),
 		"\t{",
 		f"\t\tconst uint64_t {NEED}64 = ((uint64_t){part.local}_len"
-		f" + {per - 1}u) / {per}u * {worst}u + {over + tail}u;",
+		f" * {worst}u + {per - 1}u) / {per}u + {over + tail}u;",
 		"",
 		f"\t\tif ((uint64_t)({CAP} - {AT}) < {NEED}64) {{",
 		"\t\t\treturn SITU_ERR_BOUNDS;",

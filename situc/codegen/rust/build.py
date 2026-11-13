@@ -304,7 +304,7 @@ def _encoded(part: Part) -> list[str]:
 	tail = 0 if own else len(part.delimiter)
 	local = _ident(part.local)
 	codec = (part.placement.codec or "").lower()
-	return [*_room(f"({local}.len() + {per - 1}) / {per} * {worst}"
+	return [*_room(f"({local}.len() * {worst} + {per - 1}) / {per}"
 	               f" + {over + tail}"),
 	        f"\tsitu_at += {codec}_encode({local}, {local}.len(),"
 	        " &mut situ_out[situ_at..]);",
@@ -709,4 +709,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"}",
 		])
 
-	return {f"{basename}_build.rs": "\n".join(lines) + "\n"}
+	text = "\n".join(lines) + "\n"
+	# `self` only where something here names `situ_rt::`: a builder of
+	# nothing but a coded region calls the module's own kernel, and an
+	# unused import is an error under `-D warnings` (26.998).
+	if "situ_rt::" not in text.replace("use crate::situ_rt::", ""):
+		text = text.replace("use crate::situ_rt::{self, Error, Result};",
+		                    "use crate::situ_rt::{Error, Result};", 1)
+	return {f"{basename}_build.rs": text}

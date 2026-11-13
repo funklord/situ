@@ -43,8 +43,35 @@ SMTP = [
 ]
 
 
+#: Content, and the COBS frame for it, from the encoding's published
+#: examples: a zero becomes a pointer to the next, and the zero that ends the
+#: frame is the only one left.
+COBS = [
+	(b"\x00", b"\x01\x01\x00"),
+	(b"\x00\x00", b"\x01\x01\x01\x00"),
+	(b"\x11\x22\x00\x33", b"\x03\x11\x22\x02\x33\x00"),
+	(b"\x11\x22\x33\x44", b"\x05\x11\x22\x33\x44\x00"),
+	(b"\x11\x00\x00\x00", b"\x02\x11\x01\x01\x01\x00"),
+	(bytes(range(1, 255)), b"\xff" + bytes(range(1, 255)) + b"\x00"),
+]
+
+COBS_SCHEMA = """target buffer;
+endian big;
+codec cobs { kernel = stuffing(worst_case = 255, per = 254, code = cobs); }
+impl cobs derived;
+struct cobs_packet {
+	coded body(cobs) until "\\x00" {
+		u8 content[remaining];
+	}
+}
+"""
+
+
 def _module(tmp_path: Path, schema: str) -> tuple[Any, Any]:
 	out = tmp_path / "gen"
+	if not (ROOT / schema).exists():
+		(tmp_path / "cobs_frame.situ").write_text(schema, encoding = "ascii")
+		schema = str(tmp_path / "cobs_frame.situ")
 	done = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(ROOT / schema),
 		 "--target", "python", "--layer", "edit", "--out", str(out)],
@@ -59,6 +86,12 @@ def _module(tmp_path: Path, schema: str) -> tuple[Any, Any]:
 		        importlib.import_module(f"{stem}_build"))
 	finally:
 		del sys.path[:2]
+		# Out of the import cache again: another test in this process
+		# imports the module of the same name for a different schema --
+		# `test_the_four_builders_agree` builds `example/packet` -- and
+		# would be handed this one.
+		for name in (stem, f"{stem}_build"):
+			sys.modules.pop(name, None)
 
 
 def test_python_writes_slip_as_rfc_1055_says(tmp_path: Path) -> None:
@@ -78,6 +111,17 @@ def test_python_writes_dot_stuffing_as_rfc_5321_says(tmp_path: Path) -> None:
 		n = build.build_data_block(out, content)
 		assert bytes(out[:n]) == wire, content
 		held = base.acquire(base.data_block, base.Message(bytearray(wire)),
+		                    0, n)
+		assert held.body_decode() == content
+
+
+def test_python_writes_cobs_as_published(tmp_path: Path) -> None:
+	base, build = _module(tmp_path, COBS_SCHEMA)
+	for content, wire in COBS:
+		out = bytearray(len(content) * 2 + 8)
+		n = build.build_cobs_packet(out, content)
+		assert bytes(out[:n]) == wire, content.hex()
+		held = base.acquire(base.cobs_packet, base.Message(bytearray(wire)),
 		                    0, n)
 		assert held.body_decode() == content
 
@@ -158,6 +202,52 @@ int main(void)
 	ran = subprocess.run([str(tmp_path / "drive")], capture_output = True,
 	                     text = True)
 	assert ran.returncode == 0, ran.stdout
+
+
+RUSTC = shutil.which("rustc")
+
+
+@pytest.mark.skipif(RUSTC is None, reason = "needs rustc")
+def test_the_rust_builder_compiles_with_warnings_denied(
+		tmp_path: Path) -> None:
+	"""A builder of nothing but a coded region names no `situ_rt::`, so
+	importing its `self` was an error under `-D warnings` (26.1001), and
+	the four-way test compiles with `-A warnings`. Builds slip's, writes
+	RFC 1055's frame, and reads it back through the module."""
+	src = tmp_path / "src"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build",
+		 str(ROOT / "example/slip/slip.situ"), "--target", "rust",
+		 "--layer", "edit", "--out", str(src)],
+		cwd = ROOT, capture_output = True, text = True)
+	assert done.returncode == 0, done.stderr
+	runtime = (ROOT / "runtime" / "rust" / "situ_rt.rs").read_text(
+		encoding = "ascii")
+	(src / "situ_rt.rs").write_text(runtime.replace("#![no_std]\n", ""),
+	                                encoding = "ascii")
+	(src / "main.rs").write_text("""mod situ_rt;
+mod slip;
+mod slip_build;
+
+fn main() {
+	let content = [0x61u8, 0xC0, 0xDB, 0x00, 0x62];
+	let mut out = [0u8; 16];
+	let n = slip_build::build_frame(&mut out, &content).unwrap();
+	assert_eq!(&out[..n], &[0x61, 0xDB, 0xDC, 0xDB, 0xDD, 0x00, 0x62, 0xC0]);
+	let view = slip::Frame::new(&out[..n]).unwrap();
+	let mut back = [0u8; 16];
+	let m = view.datagram_decode(&mut back).unwrap();
+	assert_eq!(&back[..m], &content);
+}
+""", encoding = "ascii")
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-D", "warnings",
+		 str(src / "main.rs"), "-o", str(tmp_path / "run")],
+		capture_output = True, text = True, cwd = tmp_path)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(tmp_path / "run")], capture_output = True,
+	                     text = True)
+	assert ran.returncode == 0, ran.stderr
 
 
 def test_an_interior_with_fields_is_still_refused() -> None:
