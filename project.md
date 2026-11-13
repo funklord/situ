@@ -8599,6 +8599,10 @@ Moved to `doc/decision/26.981-a-struct-its-frame-holds-exactly.md`.
 
 Moved to `doc/decision/26.982-a-derived-field-the-data-places.md`.
 
+### 26.983 A bound every command reads alike
+
+Moved to `doc/decision/26.983-a-bound-every-command-reads-alike.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

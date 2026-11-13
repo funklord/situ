@@ -16,6 +16,7 @@ types, which is the shape `traverse.py` already exists to prevent.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol
 
 from situc import ast
@@ -203,6 +204,17 @@ def bound(struct: "ResolvedStruct", expr: ast.Expr,
 		if left is None or right is None:
 			return None
 		return terms.binary(expr.op, left, right)
+
+	# `size(v)` beside the member it bounds, named as a value is: `member()`
+	# reads past the struct's name and found nothing in a bare one, so
+	# `[max = size(v)]` was refused where `size(s.v)` built, and the walkers
+	# and the dissector read both (26.983).
+	if isinstance(expr, ast.Call) and len(expr.args) == 1 \
+			and isinstance(expr.args[0], ast.NameRef) \
+			and "." not in expr.args[0].name:
+		span = expr.args[0].span
+		expr = replace(expr, args=(ast.Access(
+			span, ast.NameRef(span, struct.name), expr.args[0].name),))
 
 	return expression(struct, expr, terms)
 

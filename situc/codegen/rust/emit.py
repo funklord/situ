@@ -358,6 +358,47 @@ def _byte_string(run: bytes) -> str:
 	return "".join(out)
 
 
+class _SignedTerms:
+	"""The emitter's terms, with a layout fact as the `i64` a bound compares.
+
+	`size`, `count` and `offset` answer `usize`, which an invariant stores
+	and a bound cannot compare against: `[max = size(v)]` over a member the
+	data sizes did not compile (26.983). A literal and a sibling's value are
+	already the bound's type, so only these three are wrapped.
+	"""
+
+	def __init__(self, inner: "Emitter") -> None:
+		self._inner = inner
+
+	def literal(self, value: int) -> str:
+		return self._inner.literal(value)
+
+	def binary(self, op: str, left: str, right: str) -> str:
+		return self._inner.binary(op, left, right)
+
+	def bound_literal(self, value: int) -> str:
+		return self._inner.bound_literal(value)
+
+	def value(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._inner.value(struct, placement)
+
+	def element_value(self, struct: ResolvedStruct, run: Placement,
+			index: int, member: Placement) -> str | None:
+		return self._inner.element_value(struct, run, index, member)
+
+	def _signed(self, text: str | None) -> str | None:
+		return None if text is None else f"({text} as i64)"
+
+	def size(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._signed(self._inner.size(struct, placement))
+
+	def count(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._signed(self._inner.count(struct, placement))
+
+	def offset(self, struct: ResolvedStruct, placement: Placement) -> str | None:
+		return self._signed(self._inner.offset(struct, placement))
+
+
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
 			basename: str, materialize: bool = False,
@@ -6154,7 +6195,8 @@ class Emitter:
 			except SituError as why:
 				# A bound naming a sibling is checked against a message that
 				# is in front of you, so the value is there to read.
-				rendered = bound_expression(struct, attr.value, self)
+				rendered = bound_expression(struct, attr.value,
+				                            _SignedTerms(self))
 				if rendered is None:
 					raise bound_refusal(struct, attr.value, why) from why
 				too_wide = bound_widening(struct, placement, attr.value)

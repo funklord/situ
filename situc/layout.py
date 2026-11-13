@@ -1120,6 +1120,63 @@ def solve(schema: ast.Schema) -> SchemaLayout:
 	return result
 
 
+def _check_bound_shape(name: str, value: ast.Expr, env: Env) -> None:
+	"""Refuse a bound no backend can render, here where `map` sees it (26.983).
+
+	`invariant.bound` renders a bound that is not a constant from a closed set
+	of shapes -- a sibling's value, one element of a run, `size`, `offset` or
+	`count` of a member, and `+ - * / %` over those -- and the four backends
+	refused anything else from `_attr_checks`. That is the emitters, so `map`,
+	`wire`, `pack` and the dissector published artifacts for `[max =
+	remaining]`, `[max = popcount(n)]` and `[max = lens[0]]` where `build`
+	exited 1: the class 26.233 closed for a string and `invariant.OPERATORS`
+	for `%`, one shape at a time. This is the whole set, stated once.
+	"""
+	from situc.invariant import BUILTINS, OPERATORS
+
+	try:
+		evaluate(value, env)
+		return				# a constant: folded, nothing to render
+	except SituError:
+		pass
+
+	def fault(expr: ast.Expr) -> ast.Expr | None:
+		if isinstance(expr, (ast.IntLiteral, ast.CharLiteral, ast.NameRef)):
+			return None
+		if isinstance(expr, ast.Access):
+			# A path, or one element of a run: `a[0].n`.
+			base = expr.base
+			while isinstance(base, ast.Access):
+				base = base.base
+			return None if isinstance(base, (ast.NameRef, ast.Index)) \
+				else expr
+		if isinstance(expr, ast.Binary):
+			if expr.op not in OPERATORS:
+				return expr
+			return fault(expr.left) or fault(expr.right)
+		if isinstance(expr, ast.Call) and expr.name in BUILTINS \
+				and len(expr.args) == 1 \
+				and isinstance(expr.args[0], (ast.NameRef, ast.Access)):
+			return None
+		return expr
+
+	held = fault(value)
+	if held is None:
+		return
+	from situc.unparse import expr_to_source
+	raise error(
+		f"`[{name}]` reads `{expr_to_source(held)}`, which no reader "
+		"compares against",
+		held.span,
+		label = "not a bound a message can be checked against",
+		notes = ["a bound is a constant, a sibling's value, one element of "
+		         "a run (`a[0].n`), `size`, `offset` or `count` of a "
+		         "member, or `+ - * / %` over those",
+		         "a condition over the message is a `when`, which reads "
+		         "more (0051)"],
+	)
+
+
 def _divides(expr: ast.Expr) -> bool:
 	"""Whether an expression contains `/` or `%` anywhere.
 
@@ -3078,6 +3135,7 @@ class Solver:
 		for attr in attrs:
 			if attr.name not in NUMERIC_BOUNDS or attr.value is None:
 				continue
+			_check_bound_shape(attr.name, attr.value, self.result.env)
 			if not _divides(attr.value):
 				continue
 			# A bound may name a field declared LATER in the struct, and
