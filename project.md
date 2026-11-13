@@ -8603,6 +8603,10 @@ Moved to `doc/decision/26.982-a-derived-field-the-data-places.md`.
 
 Moved to `doc/decision/26.983-a-bound-every-command-reads-alike.md`.
 
+### 26.984 A relation names a constant
+
+Moved to `doc/decision/26.984-a-relation-names-a-constant.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

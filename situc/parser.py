@@ -20,7 +20,8 @@ from situc import ast, kernels, namespaces, wellformed
 from situc.expr import Env, evaluate
 from situc.invariant import paths_in
 from situc.types import BITS_PER_BYTE
-from situc.diagnostics import Source, Span, error, not_yet_implemented
+from situc.diagnostics import (SituError, Source, Span, error,
+                               not_yet_implemented)
 from situc.lexer import Token, TokenKind, tokenize
 from situc.types import TEXT_ENCODINGS, WidthError, lookup, literal_bytes
 
@@ -470,6 +471,7 @@ class Parser:
 		kernels.resolve_signatures(schema)
 		_widen_byte_enum_fields(schema)
 		_type_marker_parameters(schema)
+		_fold_relation_constants(schema)
 		wellformed.check(schema)
 		return schema
 
@@ -3517,6 +3519,58 @@ def parse(source: Source, read: set[str] | None = None) -> ast.Schema:
 
 def parse_text(text: str, path: str = "<input>") -> ast.Schema:
 	return parse(Source(path, text))
+
+
+def _fold_relation_constants(schema: ast.Schema) -> None:
+	"""A relation's `const` and enum member, as the numbers they are (26.984).
+
+	`must reply.kind == kind.ack` was "`kind` is not a message this relation
+	was given": every name in a relation was read as a path into one of its
+	two messages, so a reply's kind could be compared with the request's and
+	not with the constant naming it. A `when`, a bound and a size all fold
+	both; folding here, before anything reads a relation, gives the 26
+	readers of `relations()` numbers rather than teaching each of them.
+
+	A name a parameter shadows stays the parameter's: `a.n` is a path when
+	`a` is one, whatever else is called `a`. A schema whose constants do not
+	fold is left for `wellformed`, which says why.
+	"""
+	from dataclasses import replace
+	from situc.expr import build_env
+
+	relations = [index for index, decl in enumerate(schema.decls)
+	             if isinstance(decl, ast.Relation)]
+	if not relations:
+		return
+	try:
+		env = build_env(schema)
+	except SituError:
+		return
+
+	def fold(expr: ast.Expr, params: set[str]) -> ast.Expr:
+		if isinstance(expr, ast.NameRef) and expr.name not in params \
+				and expr.name in env.consts:
+			value = env.consts[expr.name]
+			return ast.IntLiteral(expr.span, value, str(value))
+		if isinstance(expr, ast.Access) and isinstance(expr.base, ast.NameRef) \
+				and expr.base.name not in params \
+				and expr.name in env.enums.get(expr.base.name, {}):
+			value = env.enums[expr.base.name][expr.name]
+			return ast.IntLiteral(expr.span, value, str(value))
+		if isinstance(expr, ast.Binary):
+			return replace(expr, left=fold(expr.left, params),
+			               right=fold(expr.right, params))
+		if isinstance(expr, ast.Unary):
+			return replace(expr, operand=fold(expr.operand, params))
+		return expr
+
+	for index in relations:
+		relation = schema.decls[index]
+		assert isinstance(relation, ast.Relation)
+		params = {param.name for param in relation.params}
+		schema.decls[index] = replace(relation, body=tuple(
+			replace(must, expr=fold(must.expr, params))
+			for must in relation.body))
 
 
 def _type_marker_parameters(schema: ast.Schema) -> None:
