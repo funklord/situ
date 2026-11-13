@@ -38,7 +38,6 @@ from situc import ast
 from situc import pack as packer
 from situc import traverse
 from situc.cli import analyse
-from situc.diagnostics import SituError
 from situc.dissector import _local, generate
 from situc.layout import solve
 from situc.parser import parse, parse_text
@@ -2102,18 +2101,16 @@ def test_the_parameter_is_not_a_row(tmp_path: Path) -> None:
 	assert not any(one[0] == "frame.n" for one in rows)
 
 
-def test_a_per_message_parameter_is_refused() -> None:
-	"""0050's decision, from the dissector's side: nothing in a capture
-	carries a per-message argument and no preference varies packet to
-	packet, so there is nowhere to read one from.
+def test_a_per_message_parameter_is_a_preference_its_parent_overrides() -> None:
+	"""This was refused, on 0050's ground that nothing in a capture carries
+	a per-message argument. A parent does: it reads the value out of the
+	bytes and hands it (0068), so the refusal went (26.994). Alone -- by
+	Decode As -- the struct reads a preference, zero by default, and says
+	so; `test_an_argument_may_read_remaining` has the handed case."""
+	source = emit("struct frame { parameter u8 mode; u8 a [max = 3]; }")
 
-	`wellformed` already refuses one that MOVES a member; this refuses one
-	that would be READ at all, which is the wider rule the dissector needs.
-	"""
-	with pytest.raises(SituError) as refused:
-		emit("struct frame { parameter u8 mode; u8 a [max = 3]; }")
-
-	assert "mode" in str(refused.value)
+	assert 'frame.prefs.mode = Pref.uint("mode", 0,' in source
+	assert "only where it is dissected alone" in source
 
 
 VERSIONED = """target buffer;

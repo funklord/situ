@@ -90,3 +90,22 @@ def test_both_walkers_hold_them(tmp_path: Path) -> None:
 	for label, data, verdict in CASES:
 		assert python_verdict(image, data, shape) == verdict, label
 		assert c_verdict(tmp_path, image, data, shape) == verdict, label
+
+
+def test_the_dissector_takes_a_handed_argument(tmp_path: Path) -> None:
+	"""A per-message parameter was refused outright by the dissector, as
+	though no capture could carry one; a parent hands it from the bytes
+	it reads (26.994). Expert info exactly where the others refuse."""
+	from situc.dissector import generate
+	from situc.resolve import resolve
+	from test_dissector import LUA, read_back, read_back_experts
+	if LUA is None:
+		pytest.skip("needs lua")
+	schema = parse_text(SCHEMA, path = "p.situ")
+	lua = tmp_path / "p.lua"
+	lua.write_text(generate(schema, resolve(schema, solve(schema)), "p"),
+	               encoding = "ascii")
+	for label, data, verdict in CASES:
+		said = [one[0] for one in read_back_experts(lua, "pack", data)]
+		assert said == (["entry.outside"] if verdict == "2" else []), label
+		assert read_back(lua, "pack", data)[0] == len(data), label

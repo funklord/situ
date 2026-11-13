@@ -34,7 +34,6 @@ import dataclasses
 from typing import Iterator
 
 from situc import traverse
-from situc.diagnostics import not_yet_implemented
 from situc import __version__
 
 import re
@@ -117,7 +116,6 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	# what would be emitted is `situ_uint(tvb, 0, 1, false)`: a parameter
 	# occupies nothing, so it sits at the offset of the member after it and
 	# the read measures that member's own first byte.
-	_refuse_per_message_parameters(schema)
 
 	_CONSTS.clear()
 	_CONSTS.update(resolved.layout.env.consts)
@@ -1124,33 +1122,6 @@ _CONVERSATIONS: list[tuple[str, str, str, list[tuple[str, str]]]] = []
 _MESSAGES: dict[str, list[ast.When]] = {}
 
 
-def _refuse_per_message_parameters(schema: ast.Schema) -> None:
-	"""Refuse an argument a capture cannot carry (0050).
-
-	A `[stream]` parameter is fine here and becomes a preference. One
-	without it varies per message, and nothing in a capture says what it
-	was -- so a dissector reading it would be reading the buffer at the
-	offset of the member after it, which is where a parameter sits because
-	it occupies nothing.
-	"""
-	held = [(struct, member) for struct, member in traverse.parameters(schema)
-	        if not any(one.name == "stream" for one in member.attrs)]
-	if not held:
-		return
-
-	struct, member = held[0]
-	raise not_yet_implemented(
-		f"`parameter {member.name}` in `{struct}` without `[stream]`",
-		member.span, 12,
-		[
-			"a dissector takes a `[stream]` argument from a preference, "
-			"which is per-dissector rather than per-packet -- and nothing "
-			"in a capture carries a per-message one (decision 0050)",
-			f"write `parameter {member.type_ref.name} {member.name} "
-			"[stream];` where the argument is fixed for a stream",
-		])
-
-
 #: struct name -> its ordered runs, by placement path (26.989). Filled by
 #: `_message_setup` beside `_MESSAGES`, for the same reason: a struct's
 #: experts are declared in one place and raised in another.
@@ -1664,7 +1635,7 @@ def _argument_tables(resolved: ResolvedSchema, roots: list[str]) -> list[str]:
 
 
 def _handed(struct: ResolvedStruct, placement: Placement,
-		base: str) -> str | None:
+		base: str, remaining: str | None = None) -> str | None:
 	"""What a member hands its child, as a Lua table over `base` (0068).
 
 	None where an argument reads something this file cannot, and the
@@ -1674,7 +1645,11 @@ def _handed(struct: ResolvedStruct, placement: Placement,
 	inner = {one.name: one for one in traverse.arguments(
 		_STRUCTS[placement.type_name or ""])}
 	for name, source in placement.arguments:
-		value = _over_fields(struct, source, base)
+		# `remaining` from the member's start, where the caller knows it
+		# (26.993): elsewhere the argument declines as any unread name does.
+		value = _over_fields(struct, source, base,
+		                     extra = (None if remaining is None
+		                              else {"remaining": remaining}))
 		if value is None:
 			return None
 		# Held as the backends hold it (`traverse.handed_range`, 26.904).
@@ -1705,7 +1680,7 @@ def _handing_run(resolved: ResolvedSchema, struct: ResolvedStruct,
 	values there. `at` is the enclosing function's, so the closure moves
 	it as the lines would have.
 	"""
-	values = _handed(struct, placement, "0")
+	values = _handed(struct, placement, "0", "math.max(0, tvb:len() - at)")
 	if values is None:
 		return _uncomputable(placement.path, "an argument it is handed"
 		                     " reads what this dissector cannot")
@@ -1845,11 +1820,21 @@ def _preferences(struct: ResolvedStruct) -> list[str]:
 	         "-- the fact is negotiated once and fixed for a stream, and",
 	         "-- nothing in a capture says what it was."]
 	for placement in held:
+		# A per-message argument is HANDED by the parent that reads it out
+		# of the capture (0068), and `handing` sets it for the length of the
+		# child's call; the preference is only what a struct dissected on
+		# its own -- by Decode As -- reads in its place, zero by default
+		# for the reason above. It was refused outright before 26.994, as
+		# though no capture could carry one: a parent's always can.
+		stream = any(one.name == "stream" for one in placement.attrs)
 		lines.append(
 			f"{proto}.prefs.{_lua(placement.name)} = Pref.uint("
 			f'"{placement.name}", 0, '
-			f'"{struct.name}.{placement.name}: an argument the layout '
-			f'follows")')
+			f'"{struct.name}.{placement.name}: '
+			+ ("an argument the layout follows" if stream else
+			   "handed by the message around it; this value only where "
+			   "it is dissected alone")
+			+ '")')
 	return lines
 
 

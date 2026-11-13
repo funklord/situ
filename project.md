@@ -8655,6 +8655,10 @@ Moved to `doc/decision/26.992-hull-s-agent-protocol-under-verify.md`.
 
 Moved to `doc/decision/26.993-an-argument-may-read-remaining.md`.
 
+### 26.994 The dissector takes a handed argument
+
+Moved to `doc/decision/26.994-the-dissector-takes-a-handed-argument.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
