@@ -8234,8 +8234,13 @@ class Emitter:
 		memo = self._refuses_memo
 		if element.name not in memo:
 			memo[element.name] = True
+			# A `refuse` too, which `check` raises after every member: an
+			# element refusing only by a rule was never walked, and a run of
+			# hull's index entries passed one the walkers refuse (26.993).
 			memo[element.name] = any(
-				name for name, _ in self._check_groups(element))
+				name for name, _ in self._check_groups(element)) or any(
+				when.severity is ast.Severity.REFUSE
+				for when in traverse.messages(self.schema, element.name))
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,
@@ -10491,10 +10496,19 @@ class Emitter:
 			# say it fits (26.904). In `i64`, or `length - 4` panics in a
 			# debug build on the message whose `[min]` it reads.
 			bounds = handed_range(struct, one, source)
+			# `remaining` from the member's start, signed: C's copy says why
+			# (26.993).
+			extra  = None
+			start  = self._offset_expression(struct, placement)
+			if start is not None and held == "self" \
+					and re.search(r"\bremaining\b", source):
+				extra = {"remaining": "(situ_rt::remaining(self.bytes.len(),"
+				         f" {start}) as i64)"}
 			value  = (self._over_fields(struct, source, held,
-			                            cast=self._rust_type(one.scalar))
+			                            cast=self._rust_type(one.scalar),
+			                            extra=extra)
 			          if bounds is None else
-			          f"({self._over_fields(struct, source, held, cast='i64', bounded=True)})"
+			          f"({self._over_fields(struct, source, held, cast='i64', bounded=True, extra=extra)})"
 			          f".clamp({bounds[0]}, {bounds[1]}) as"
 			          f" {self._rust_type(one.scalar)}")
 			found.append((self._argument_ident(one), self._unparen(value)))

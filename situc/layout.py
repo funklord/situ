@@ -1120,6 +1120,11 @@ def solve(schema: ast.Schema) -> SchemaLayout:
 	return result
 
 
+#: The longest frame a runtime's view can describe: its length is a 32-bit
+#: count in C, C++ and Rust (26.993).
+VIEW_BYTES_MAX = (1 << 32) - 1
+
+
 def _check_bound_shape(name: str, value: ast.Expr, env: Env) -> None:
 	"""Refuse a bound no backend can render, here where `map` sees it (26.983).
 
@@ -3260,8 +3265,14 @@ class Solver:
 		wanted = {held.name: held for held in decl.members
 		          if isinstance(held, ast.Field) and held.argument}
 
-		env = self.result.env.with_layout(
-			self.result.lookup, self.result.explain).with_fields(state.fields)
+		# `remaining` as no view can exceed: every runtime's view length is a
+		# 32-bit count, and an argument -- unlike a capability -- is a value
+		# a parameter must hold. Here only, set by the holder (26.993): a
+		# member's capability still measures `remaining` as unbounded.
+		from dataclasses import replace as _replace
+		env = _replace(self.result.env.with_layout(
+			self.result.lookup, self.result.explain).with_fields(state.fields),
+			remaining_max = VIEW_BYTES_MAX)
 		found: list[tuple[str, str]] = []
 		for arg in given:
 			assert arg.value is not None

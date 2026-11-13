@@ -7463,7 +7463,7 @@ class Emitter:
 			assert held.scalar is not None
 			handed[self._argument_name(held)] = \
 				f"(({self._ctype(held.scalar)})" \
-				f"({self._handed_value(struct, held, given[held.name])}))"
+				f"({self._handed_value(struct, held, given[held.name], member=placement)}))"
 		return re.sub(r"\b(" + "|".join(map(re.escape, handed)) + r")\b",
 		              lambda found: handed[found.group(1)], rendered)
 
@@ -12538,7 +12538,7 @@ class Emitter:
 			" * cares about truncation compares the two rather than",
 			" * trusting that its buffer was big enough (0051). */",
 			f"void {named}(situ_view_t view, uint32_t *ids, size_t cap,",
-			"\t\tsize_t *count);",
+			f"\t\tsize_t *count{self._argument_tail(struct)});",
 		]
 		lines.extend(
 			f"#define {macro(self.prefix, struct.name, when.name, 'MSG')} {at}u"
@@ -12563,11 +12563,15 @@ class Emitter:
 			return []
 
 		named = ident(self.prefix, struct.name, "messages")
+		# The arguments `check` takes, which a `when` may read: `messages`
+		# named `arg_room` and took none, so a struct whose rule reads its
+		# parameter did not compile (26.993).
+		taken = self._argument_tail(struct)
 		lines = [
 			"",
 			f"{linkage}void {named}(situ_view_t view, uint32_t *ids,"
 			" size_t cap,",
-			"\t\tsize_t *count)",
+			f"\t\tsize_t *count{taken})",
 			"{",
 			"	size_t held = 0;",
 			"",
@@ -12585,7 +12589,13 @@ class Emitter:
 				"		held++;",
 				"	}",
 			])
-		lines.extend(["", "	*count = held;", "}"])
+		lines.extend(["", "	*count = held;"])
+		# Not every rule reads every argument, and an unread parameter is an
+		# error under this project's flags.
+		start = lines.index("	size_t held = 0;") + 1
+		lines[start:start] = self._argument_unused(struct, taken,
+		                                           *lines[start:])
+		lines.append("}")
 
 		if self.messages:
 			text = ident(self.prefix, struct.name, "message_text")
@@ -14491,7 +14501,8 @@ class Emitter:
 			for name, source in placement.arguments:
 				scalar = wanted[name].scalar
 				assert scalar is not None
-				value = self._handed_value(struct, wanted[name], source)
+				value = self._handed_value(struct, wanted[name], source,
+				                           member=placement)
 				tail  = self._argument_tail_in(struct, value)
 				lines.extend([
 					"",
@@ -14521,21 +14532,34 @@ class Emitter:
 		inner = self.resolved.structs[placement.type_name or ""]
 		given = dict(placement.arguments)
 		return "".join(
-			f", {self._handed_value(struct, held_at, given[held_at.name], held)}"
+			f", {self._handed_value(struct, held_at, given[held_at.name], held, placement)}"
 			for held_at in self._arguments(inner))
 
 	def _handed_value(self, struct: ResolvedStruct, parameter: Placement,
-			source: str, held: str = "view") -> str:
+			source: str, held: str = "view",
+			member: Placement | None = None) -> str:
 		"""One value handed to `parameter`, read in the parent over `held`.
 
 		Held to the parameter's range where the type alone does not say it
 		fits (`traverse.handed_range`, 26.904).
+
+		`remaining` is the bytes from the member's start to the view's end,
+		as in a size (26.986), and SIGNED: `remaining - count * 57` is how
+		much room is left, and below zero is an answer, where `uint32_t`
+		arithmetic would wrap it to four billion (26.993).
 		"""
+		extra = None
+		if member is not None and held == "view" \
+				and re.search(r"\bremaining\b", source):
+			start = self._base_expression(struct, member)
+			extra = {"remaining":
+			         f"(int64_t)situ_remaining_u32(view.limit, {start})"}
 		bounds = traverse.handed_range(struct, parameter, source)
 		if bounds is None:
-			return self._over_fields(struct, source, held)
+			return self._over_fields(struct, source, held, extra=extra)
 		assert parameter.scalar is not None
-		value = self._over_fields(struct, source, held, bounded=True)
+		value = self._over_fields(struct, source, held, bounded=True,
+		                          extra=extra)
 		return (f"({self._ctype(parameter.scalar)})situ_clamp_i64({value},"
 		        f" {bounds[0]}, {bounds[1]})")
 
@@ -15124,8 +15148,13 @@ class Emitter:
 		memo = self._refuses_memo
 		if element.name not in memo:
 			memo[element.name] = True
+			# A `refuse` too, which `check` raises after every member: an
+			# element refusing only by a rule was never walked, and a run of
+			# hull's index entries passed one the walkers refuse (26.993).
 			memo[element.name] = any(
-				name for name, _ in self._check_groups(element))
+				name for name, _ in self._check_groups(element)) or any(
+				when.severity is ast.Severity.REFUSE
+				for when in traverse.messages(self.schema, element.name))
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,

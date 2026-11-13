@@ -1717,10 +1717,16 @@ class Emitter:
 			# Held to the parameter's range where the type alone does not
 			# say it fits (26.904).
 			bounds = handed_range(struct, one, source)
-			value  = (self._over_fields(struct, source, held)
+			# `remaining` from the member's start (26.993).
+			extra  = None
+			start  = self._offset_expression(struct, placement)
+			if start is not None and held == "self" \
+					and re.search(r"\bremaining\b", source):
+				extra = {"remaining": f"max(0, self._len - ({start}))"}
+			value  = (self._over_fields(struct, source, held, extra=extra)
 			          if bounds is None else
 			          f"max({bounds[0]}, min({bounds[1]},"
-			          f" {self._over_fields(struct, source, held, bounded=True)}))")
+			          f" {self._over_fields(struct, source, held, bounded=True, extra=extra)}))")
 			handed += f", {self._argument_ident(one)}={value}"
 		return f"{nested}._over", handed
 
@@ -8035,8 +8041,13 @@ class Emitter:
 		memo = self._refuses_memo
 		if element.name not in memo:
 			memo[element.name] = True
+			# A `refuse` too, which `check` raises after every member: an
+			# element refusing only by a rule was never walked, and a run of
+			# hull's index entries passed one the walkers refuse (26.993).
 			memo[element.name] = any(
-				name for name, _ in self._check_groups(element))
+				name for name, _ in self._check_groups(element)) or any(
+				when.severity is ast.Severity.REFUSE
+				for when in traverse.messages(self.schema, element.name))
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,

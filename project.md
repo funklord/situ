@@ -8651,6 +8651,10 @@ Moved to `doc/decision/26.991-critical-sections-as-png-does.md`.
 
 Moved to `doc/decision/26.992-hull-s-agent-protocol-under-verify.md`.
 
+### 26.993 An argument may read remaining
+
+Moved to `doc/decision/26.993-an-argument-may-read-remaining.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

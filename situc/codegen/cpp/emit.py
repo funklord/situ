@@ -1217,10 +1217,18 @@ class Emitter:
 			# Held to the parameter's range where the type alone does not
 			# say it fits (26.904).
 			bounds = handed_range(struct, held, source)
+			# `remaining` from the member's start, signed: C's copy says why
+			# (26.993).
+			extra  = None
+			start  = self._offset_expression(struct, placement)
+			if start is not None and re.search(r"\bremaining\b", source):
+				extra = {"remaining": "static_cast<std::int64_t>("
+				         f"situ_remaining_u32(raw_.limit, {start}))"}
 			found += ", " + (
-				self._over_fields(struct, source) if bounds is None else
+				self._over_fields(struct, source, extra=extra)
+				if bounds is None else
 				f"static_cast<{self._ctype(held.scalar)}>(situ_clamp_i64("
-				f"{self._over_fields(struct, source, bounded=True)},"
+				f"{self._over_fields(struct, source, bounded=True, extra=extra)},"
 				f" {bounds[0]}, {bounds[1]}))")
 		return found
 
@@ -11857,8 +11865,13 @@ class Emitter:
 		memo = self._refuses_memo
 		if element.name not in memo:
 			memo[element.name] = True
+			# A `refuse` too, which `check` raises after every member: an
+			# element refusing only by a rule was never walked, and a run of
+			# hull's index entries passed one the walkers refuse (26.993).
 			memo[element.name] = any(
-				name for name, _ in self._check_groups(element))
+				name for name, _ in self._check_groups(element)) or any(
+				when.severity is ast.Severity.REFUSE
+				for when in traverse.messages(self.schema, element.name))
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,

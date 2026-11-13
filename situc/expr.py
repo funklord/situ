@@ -422,8 +422,10 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 		return _call_interval(expr, env)
 
 	if isinstance(expr, ast.Remaining):
-		# Resolved by the solver against the enclosing frame, not here.
-		return Interval(0, UNBOUNDED)
+		# Resolved by the solver against the enclosing frame, not here --
+		# unbounded, unless the caller knows the frame is a 32-bit view.
+		return Interval(0, UNBOUNDED if env.remaining_max is None
+		                else env.remaining_max)
 
 	raise error("expression is not usable as a size or bound", expr.span)
 
@@ -703,6 +705,10 @@ class Env:
 	#: Why a `lookup` came back empty, for the diagnostic. Optional because
 	#: only the solver has it and every other caller wants the value alone.
 	explain: Callable[[str, str], tuple[str, str]] | None = None
+	#: The most `remaining` can be, where a caller says. None is unbounded,
+	#: which is what a capability is measured against; an argument's range
+	#: check bounds it by the 32-bit view every runtime has (26.993).
+	remaining_max: int | None = None
 
 	@property
 	def named_constants(self) -> dict[str, int]:
@@ -735,12 +741,14 @@ class Env:
 		# nobody should have to count.
 		return Env(consts = self.consts, enums = self.enums,
 		           byte_enums = self.byte_enums, layout = resolver,
-		           fields = self.fields, explain = explain)
+		           fields = self.fields, explain = explain,
+		           remaining_max = self.remaining_max)
 
 	def with_fields(self, fields: dict[str, Interval]) -> Env:
 		return Env(consts = self.consts, enums = self.enums,
 		           byte_enums = self.byte_enums, layout = self.layout,
-		           fields = fields, explain = self.explain)
+		           fields = fields, explain = self.explain,
+		           remaining_max = self.remaining_max)
 
 
 def evaluate(expr: ast.Expr, env: Env) -> int:
