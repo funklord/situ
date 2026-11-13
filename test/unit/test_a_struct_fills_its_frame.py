@@ -19,6 +19,7 @@ from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
+from test_dissector import LUA, read_back, read_back_experts
 from test_walker_c import (COMPILER, _inline_image, c_verdict, python_verdict,
                            shape_named_text)
 
@@ -72,6 +73,37 @@ def test_both_walkers_refuse_bytes_after_it(tmp_path: Path) -> None:
 	for label, (data, verdict) in MESSAGES.items():
 		assert python_verdict(image, data, shape) == verdict, label
 		assert c_verdict(tmp_path, image, data, shape) == verdict, label
+
+
+@pytest.mark.skipif(LUA is None, reason = "needs lua")
+def test_the_dissector_says_bytes_follow(tmp_path: Path) -> None:
+	"""Its expert info where `validate` refuses for this alone, and nowhere
+	else: a short frame is cut off, not followed by anything."""
+	from situc.dissector import generate
+	schema = parse_text(SCHEMA, path = "m.situ")
+	lua = tmp_path / "m.lua"
+	lua.write_text(generate(schema, resolve(schema, solve(schema)), "m"),
+	               encoding = "ascii")
+	for label, (data, verdict) in MESSAGES.items():
+		said = [one[0] for one in read_back_experts(lua, "m", data)]
+		assert said == (["m.m_bytes_after"] if verdict == "2" else []), label
+
+
+@pytest.mark.skipif(LUA is None, reason = "needs lua")
+def test_the_dissector_shows_the_arm_that_runs_to_the_end(
+		tmp_path: Path) -> None:
+	"""An arm whose length is the rest of the frame, where nothing follows
+	the variant: the whole variant was declined for it, and fuzznet's call
+	messages showed their kind and nothing of their body."""
+	from situc.dissector import generate
+	schema = parse_text(SCHEMA, path = "m.situ")
+	lua = tmp_path / "m.lua"
+	lua.write_text(generate(schema, resolve(schema, solve(schema)), "m"),
+	               encoding = "ascii")
+	consumed, rows = read_back(lua, "m", bytes([3, 1, 2, 3, 4]))
+	assert consumed == 5
+	assert rows == [("m.kind", 0, 1, "3"), ("tail.n", 1, 1, "1"),
+	                ("tail.rest", 2, 3, "020304")]
 
 
 def test_it_is_a_refusal_in_the_signature() -> None:

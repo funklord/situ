@@ -52,6 +52,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	summed_width,
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
+	ends_in_the_frame,
 	extent_parts, fixed_span_bits, is_counted_run, is_recursive, local_name,
 	nest_of,
 	nests_one_struct, occupies_fixed_bytes, own_members, pinned_bytes,
@@ -1766,7 +1767,7 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		lost = _LOST in body
 
 	lines.extend(_conversation_calls(resolved, struct))
-	lines.extend(_message_calls(struct))
+	lines.extend(_message_calls(struct, lost))
 	lines.extend(["", "\treturn at", "end"])
 	_captured.clear()
 	return lines
@@ -1857,7 +1858,7 @@ def _experts(struct: ResolvedStruct) -> list[str]:
 	return lines
 
 
-def _message_calls(struct: ResolvedStruct) -> list[str]:
+def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 	"""Add the expert info for every message whose predicate holds.
 
 	At the end of the dissection rather than beside a member, because a
@@ -1872,6 +1873,11 @@ def _message_calls(struct: ResolvedStruct) -> list[str]:
 	expert is still registered, so a filter on its name is valid and simply
 	never matches -- the alternative, a name that does not exist, is an error
 	in the user's filter rather than an honest silence.
+
+	`size(s)`, the struct's own extent, is the cursor here: every member
+	above has advanced `at` past itself, and a located one leaves it alone
+	(9.8). Unless a member above had no extent and `lost` the cursor, when
+	it declines with the rest (26.981).
 	"""
 	held = _MESSAGES.get(struct.name)
 	if not held:
@@ -1882,10 +1888,14 @@ def _message_calls(struct: ResolvedStruct) -> list[str]:
 	for when in held:
 		source = expr_to_source(when.expr, explicit=True)
 		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+		extra  = {"remaining": "tvb:len()"}
+		if not lost:
+			local = re.sub(rf"\bsize\(\s*{re.escape(struct.name)}\s*\)",
+			               "situ_struct_extent", local)
+			extra["situ_struct_extent"] = "at"
 		# `remaining` from the struct's start is its whole frame, as both
 		# walkers and the four backends read it in a `when`.
-		shown  = _over_fields(struct, local, "0",
-		                      extra = {"remaining": "tvb:len()"})
+		shown  = _over_fields(struct, local, "0", extra = extra)
 		if shown is None:
 			lines.append(f"\t-- {when.name}: {_unreadable(struct, local)}")
 			continue
@@ -3600,12 +3610,22 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	lines = [f"\t-- {placement.path}: whichever arm"
 	         f" `{placement.discriminant}` selects", *seek,
 	         f"\tlocal arm = {held}"]
+	last = own_members(struct)[-1] is placement
 
 	first = True
 	for arm, member in arm_members(struct, placement):
 		if member is None:
 			continue		# `default: error`; nothing to show
 		length = _length(resolved, struct, member, "0", "at")
+		# An arm that runs to the frame's end has the rest of the buffer,
+		# where nothing follows the variant -- fuzznet's call `frame`, whose
+		# body ends in `u8 media[remaining]`, and with it the whole variant
+		# was declined (26.981).
+		if length is None and last \
+				and member.type_name in resolved.structs \
+				and ends_in_the_frame(resolved.structs,
+				                      resolved.structs[member.type_name]):
+			length = "math.max(0, tvb:len() - at)"
 		if length is None:
 			return _uncomputable(placement.path, "one arm has no length"
 			                     " this dissector can compute")
