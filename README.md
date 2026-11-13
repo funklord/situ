@@ -845,6 +845,7 @@ The ones whose placement rule is the interesting part:
 | `[self_as = 0]` | on a `tag` or `checksum` inside its own coverage: what its bytes read as while the algorithm runs |
 | `[allow_host_dependent]` | on a struct whose layout the *host* decides -- netlink's, where every field is a plain dereference |
 | `[fills_frame]` | on a struct its frame holds exactly: a byte after it is refused by every reader, measured as `size(s)` against `remaining` |
+| `[ascending = key]` / `[ascending]` | on a counted run: each element's key, or each element, above the one before -- a sorted index, held by `validate` |
 | `[must_be_zero]` / `[must_be_one]` | on a `reserved` run: which way it is reserved, and it is checked |
 | `[preserve]` / `[unknown]` | on a `reserved` run: carry the bits through, or accept them, rather than demanding a value |
 | `[on_read = clear]` / `[on_write = ...]` | on an `mmio` register field: the side effect access has, which is why `effect` is an axis |

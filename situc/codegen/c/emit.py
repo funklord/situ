@@ -12616,12 +12616,70 @@ class Emitter:
 			groups.append(("", depth))
 		for entry in struct.entries:
 			lines = [*self._checks_for(struct, entry),
-			         *self._holds_check(struct, entry.placement)]
+			         *self._holds_check(struct, entry.placement),
+			         *self._ordering_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue
 			groups.append((c_name(self._local(struct, entry.placement)), lines))
 		return groups
+
+	def _ordering_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[ascending]`: each element's key above the one before (26.985).
+
+		After the run's own checks, which have established that the run is
+		inside the frame, so every key read here is one the message holds.
+		A byte key is compared byte by byte, highest first -- a digest or a
+		name sorts that way -- and a number as the number it is, in the order
+		its bytes are written. No `memcmp`: the runtime header includes no
+		`string.h`, and a generated file should need nothing it does not.
+		"""
+		held = traverse.run_ordering(self.resolved.structs, placement)
+		if not isinstance(held, traverse.RunOrdering) \
+				or "." in self._local(struct, placement):
+			return []
+		base  = self._base_expression(struct, placement, gated=False)
+		count = self._count_expression(struct, placement)
+		if held.key is None:
+			compare = [
+				"\t\t\tint      order = 0;",
+				"\t\t\tuint32_t k;",
+				"",
+				f"\t\t\tfor (k = 0u; k < {held.key_bytes}u && order == 0; k++) {{",
+				"\t\t\t\torder = (int)next[k] - (int)prev[k];",
+				"\t\t\t}",
+				"\t\t\tif (order <= 0) {",
+			]
+		else:
+			assert held.key.scalar is not None
+			bits  = held.key.scalar.bits
+			order = "be" if held.key.endian is ast.Endian.BIG else "le"
+			read  = ("{}[0]" if bits == BITS_PER_BYTE
+			         else f"situ_get_{order}{bits}({{}})")
+			if held.key.scalar.signed:
+				read = f"(int{bits}_t){read}"
+			compare = [f"\t\t\tif ({read.format('next')} <= "
+			           f"{read.format('prev')}) {{"]
+		return [
+			f"\t/* {placement.path}: each key above the one before"
+			" (26.985). */",
+			"\t{",
+			f"\t\tconst uint32_t total = {count};",
+			f"\t\tconst uint32_t first = {base};",
+			"\t\tuint32_t       i;",
+			"",
+			"\t\tfor (i = 1u; i < total; i++) {",
+			"\t\t\tconst uint8_t *prev = situ_base(view) + first"
+			f" + (i - 1u) * {held.stride}u + {held.key_at}u;",
+			f"\t\t\tconst uint8_t *next = prev + {held.stride}u;",
+			"",
+			*compare,
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _validate_body(self, struct: ResolvedStruct,
 			linkage: str = "") -> list[str]:

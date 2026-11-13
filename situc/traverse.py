@@ -2580,6 +2580,104 @@ def size_term(resolved: ResolvedSchema, struct: ResolvedStruct, path: str,
 	return None if found is None else size(struct, found.placement)
 
 
+@dataclass(frozen=True)
+class RunOrdering:
+	"""How a run's elements are held to ascend (26.985).
+
+	`stride` is one element's bytes and `key_at` where its key sits inside
+	it, both constant; `key` is the key's placement, a byte-aligned scalar
+	compared as a number, or None for a run of bytes compared byte by byte
+	-- `key_bytes` wide either way. For a run of scalars the key is the
+	element itself.
+	"""
+	stride: int
+	key_at: int
+	key_bytes: int
+	key: Placement | None
+
+
+def _unorderable(placement: Placement) -> str | None:
+	"""Why a scalar cannot be an ordering key, or None (26.985).
+
+	An integer of one, two, four or eight bytes in a stated byte order: what
+	every backend reads at a computed offset with a getter it already has.
+	"""
+	scalar = placement.scalar
+	if scalar is None or placement.varint is not None \
+			or placement.radix is not None \
+			or scalar.kind not in (ScalarKind.UINT, ScalarKind.SINT):
+		return "is not an integer to compare"
+	if scalar.bits not in (8, 16, 32, 64):
+		return "is not an integer of 1, 2, 4 or 8 bytes"
+	if scalar.bits > BITS_PER_BYTE and (
+			placement.marker is not None
+			or placement.endian not in (ast.Endian.BIG, ast.Endian.LITTLE)):
+		return "has no byte order of its own to compare in"
+	return None
+
+
+def run_ordering(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> RunOrdering | str | None:
+	"""`[ascending]` on a run: how it is held, or why it cannot be (26.985).
+
+	None where the member asks for no order. A string is the refusal
+	`resolve` raises: the first version holds a COUNTED run of FIXED-SIZE
+	elements, the shape a sorted index takes -- one stride, and the key at
+	one place in each element -- and says so for any other.
+	"""
+	attr = next((one for one in placement.attrs if one.name == "ascending"),
+	            None)
+	if attr is None:
+		return None
+	counted = (placement.array_count is not None
+	           or (placement.sized_by is not None
+	               and placement.sized_by != "remaining")
+	           or placement.size_expr is not None)
+	if not counted or placement.repeat_while is not None \
+			or placement.delimiters or placement.element_bits is None \
+			or placement.element_bits % BITS_PER_BYTE \
+			or is_counted_run(structs, placement):
+		return ("an ordered run is a counted run of elements of one size: "
+		        "each key is compared with the one a stride before it")
+	stride = placement.element_bits // BITS_PER_BYTE
+	element = structs.get(placement.type_name or "")
+
+	if element is None:
+		if attr.value is not None:
+			return ("a run of scalars is ordered by its elements: "
+			        "`[ascending]` names no key")
+		fault = _unorderable(placement)
+		if fault is not None:
+			return f"its elements: {fault}"
+		return RunOrdering(stride, 0, stride, placement)
+
+	if attr.value is None or not isinstance(attr.value, ast.NameRef):
+		return ("a run of structs is ordered by one of its members: "
+		        "`[ascending = key]`")
+	key = next((entry.placement for entry in element.entries
+	            if entry.placement.path == f"{element.name}.{attr.value.name}"),
+	           None)
+	if key is None:
+		return f"`{element.name}` has no member `{attr.value.name}`"
+	if key.offset_bits is None or key.offset_bits % BITS_PER_BYTE \
+			or not key.is_fixed_size or key.size_bits % BITS_PER_BYTE:
+		return (f"`{key.path}` is not whole bytes at one place in every "
+		        "element")
+	width = key.size_bits // BITS_PER_BYTE
+	if key.scalar is not None and key.array_count is None:
+		fault = _unorderable(key)
+		if fault is not None:
+			return f"`{key.path}` {fault}"
+		return RunOrdering(stride, key.offset_bits // BITS_PER_BYTE, width,
+		                   key)
+	if key.scalar is not None and key.scalar.bits == BITS_PER_BYTE \
+			and not key.scalar.signed and key.array_count is not None:
+		return RunOrdering(stride, key.offset_bits // BITS_PER_BYTE, width,
+		                   None)
+	return (f"`{key.path}` is neither an integer nor a run of bytes, so it "
+	        "has no order")
+
+
 def nests_one_struct(structs: dict[str, ResolvedStruct],
 		placement: Placement) -> bool:
 	"""Whether a placement is ONE nested struct, framed by its own

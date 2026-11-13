@@ -9447,13 +9447,52 @@ class Emitter:
 		groups: list[tuple[str, list[str]]] = []
 		for entry in own_entries(struct):
 			lines = [*self._check(struct, entry),
-			         *self._holds_check(struct, entry.placement)]
+			         *self._holds_check(struct, entry.placement),
+			         *self._ordering_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) or _PROPAGATES.match(one)
 			           for one in lines):
 				groups.append(("", lines))
 				continue
 			groups.append((c_name(local_name(struct, entry.placement)), lines))
 		return groups
+
+	def _ordering_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[ascending]`: each element's key above the one before (26.985).
+
+		After the run's own checks, which have established that the run is
+		inside the frame, so every key read here is a key the message holds.
+		C's copy is the one the other two follow.
+		"""
+		held = traverse.run_ordering(self.resolved.structs, placement)
+		if not isinstance(held, traverse.RunOrdering) \
+				or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		base  = self._offset_expression(struct, placement)
+		count = self._count_expression(struct, placement)
+		if base is None or count is None:
+			return []
+		local = "_" + py_name(local_name(struct, placement)).replace(".", "_")
+
+		def key(index: str) -> str:
+			start = (f"self._at + {local}_base + ({index}) * {held.stride}"
+			         f" + {held.key_at}")
+			raw   = f"bytes(self._msg.buffer[{start}:{start} + {held.key_bytes}])"
+			if held.key is None:
+				return raw
+			assert held.key.scalar is not None
+			order = "big" if held.key.endian is ast.Endian.BIG else "little"
+			return (f'int.from_bytes({raw}, "{order}",'
+			        f" signed={held.key.scalar.signed})")
+
+		return [
+			f"\t\t# {placement.path}: each key above the one before (26.985).",
+			f"\t\t{local}_base = {base}",
+			f"\t\tfor {local}_i in range(1, {count}):",
+			f"\t\t\tif not ({key(f'{local}_i')} > {key(f'{local}_i - 1')}):",
+			f'\t\t\t\traise ConstraintError(f"{placement.path}: element'
+			f' {{{local}_i}} is not above the one before")',
+		]
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""Everything `validate` says about one member.

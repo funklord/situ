@@ -1132,6 +1132,17 @@ Element type must have a fixed size for indexed access to be O(1). If the
 element size is dynamic, the array is sequential-access only and the compiler
 says so.
 
+**A run may be held in order.** `entry index[count] [ascending = digest]`
+says each element's `digest` is above the one before -- so none appears
+twice, which is what `ordering = ascending` asks of a `tlv` region's items
+under its default (9.5) -- and `u32 offsets[n] [ascending]` says it of the
+elements themselves. A byte key compares byte by byte, first byte first; an
+integer key as the number its bytes say. `validate` refuses a run out of
+order in all four backends; the walkers, whose image carries no ordering
+program, say they cannot answer for such a struct. It holds a counted run
+of elements of one size, the key at one place in each, which is the shape a
+sorted index takes, and is refused with that reason on any other (26.985).
+
 The last two rows read `T x[] until (cond)` here, marked OPEN and deferred to
 phase 6, until long after phase 6 delivered them -- as two constructs rather
 than one, and with `while` for the predicate because `until` had been given to
@@ -8606,6 +8617,10 @@ Moved to `doc/decision/26.983-a-bound-every-command-reads-alike.md`.
 ### 26.984 A relation names a constant
 
 Moved to `doc/decision/26.984-a-relation-names-a-constant.md`.
+
+### 26.985 A run holds its keys in order
+
+Moved to `doc/decision/26.985-a-run-holds-its-keys-in-order.md`.
 
 ### 26.929 The offset cache counts bits
 

@@ -10507,13 +10507,64 @@ class Emitter:
 			groups.append(("", depth))
 		for entry in own_entries(struct):
 			lines = [*self._check(struct, entry),
-			         *self._holds_check(struct, entry.placement)]
+			         *self._holds_check(struct, entry.placement),
+			         *self._ordering_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue
 			groups.append((bare_name(local_name(struct, entry.placement)),
 			               lines))
 		return groups
+
+	def _ordering_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[ascending]`: each element's key above the one before (26.985).
+
+		C's copy says why it compares bytes by hand and where it sits."""
+		held = traverse.run_ordering(self.resolved.structs, placement)
+		if not isinstance(held, traverse.RunOrdering) \
+				or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		base  = self._offset_expression(struct, placement)
+		count = self._count_expression(struct, placement)
+		if base is None or count is None:
+			return []
+		if held.key is None:
+			compare = [
+				"\t\t\t\tint order = 0;",
+				f"\t\t\t\tfor (std::uint32_t k = 0u; k < {held.key_bytes}u"
+				" && order == 0; k++) {",
+				"\t\t\t\t\torder = static_cast<int>(next[k])"
+				" - static_cast<int>(prev[k]);",
+				"\t\t\t\t}",
+				"\t\t\t\tif (order <= 0) {",
+			]
+		else:
+			assert held.key.scalar is not None
+			bits  = held.key.scalar.bits
+			order = "be" if held.key.endian is ast.Endian.BIG else "le"
+			read  = ("{}[0]" if bits == BITS_PER_BYTE
+			         else f"situ_get_{order}{bits}({{}})")
+			if held.key.scalar.signed:
+				read = f"static_cast<std::int{bits}_t>({read})"
+			compare = [f"\t\t\t\tif ({read.format('next')} <= "
+			           f"{read.format('prev')}) {{"]
+		return [
+			f"\t\t/* {placement.path}: each key above the one before"
+			" (26.985). */",
+			"\t\t{",
+			f"\t\t\tconst std::uint32_t total = {count};",
+			f"\t\t\tconst std::uint32_t first = {base};",
+			"\t\t\tfor (std::uint32_t i = 1u; i < total; i++) {",
+			"\t\t\t\tconst std::uint8_t *prev = situ_base(raw_) + first"
+			f" + (i - 1u) * {held.stride}u + {held.key_at}u;",
+			f"\t\t\t\tconst std::uint8_t *next = prev + {held.stride}u;",
+			*compare,
+			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t\t}",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _validate(self, struct: ResolvedStruct) -> list[str]:
 		groups = self._check_groups(struct)

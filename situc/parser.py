@@ -201,6 +201,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"since", "version",
 	# 26.981: a struct its frame holds exactly, nothing after it
 	"fills_frame",
+	# 26.985: a run whose keys ascend, each above the one before
+	"ascending",
 	# decision 0050: a `parameter` fixed for a stream rather than varying
 	# per message, which is what lets it reach an expression that moves a
 	# member -- a dissector can carry a per-stream fact as a preference and

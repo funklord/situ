@@ -1786,6 +1786,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					and not placement.delimiters:
 				whole = False
 				continue
+			# `[ascending]` compares each element's key with the one before,
+			# and the image carries no such program: the walkers say they
+			# cannot answer rather than pass a run out of order (26.985),
+			# as they do for a `tlv` region's `ordering = ascending`.
+			if any(attr.name == "ascending" for attr in placement.attrs):
+				whole = False
+				continue
 			# A `[since]` member is checked only where the message's own
 			# version admits it, and the image now names the member that
 			# says so. Without one there is nothing to ask -- checking

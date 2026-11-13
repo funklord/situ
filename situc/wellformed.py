@@ -2552,6 +2552,7 @@ READ_ONLY_ON = {
 	"quoted":    (("Field",), "a delimited run, whose delimiter it makes inert"),
 	"escape":    (("Field",), "a delimited run, whose delimiter it makes inert"),
 	"tag_order": (("Coded",), "a `coded` region that a tag covers"),
+	"ascending": (("Field",), "a run, whose keys it holds to ascend"),
 }
 
 
@@ -2949,7 +2950,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 	"no_rmw", "truncated", "size", "trim", "case_insensitive",
-	"nul_terminated", "must_be_zero", "holds",
+	"nul_terminated", "must_be_zero", "holds", "ascending",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here

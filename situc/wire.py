@@ -525,6 +525,9 @@ WIRE_ATTRS = (
 	"must_eq", "min", "max", "must_be_zero", "must_be_one",
 	"preserve", "unknown",
 	"encoding", "nul_terminated", "self_as",
+	# A run its keys must ascend through refuses what an unordered one
+	# takes, which is a receiver's whole question (26.985).
+	"ascending",
 )
 
 

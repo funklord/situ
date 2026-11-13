@@ -10546,7 +10546,8 @@ class Emitter:
 		groups: list[tuple[str, list[str]]] = []
 		for entry in own_entries(struct):
 			lines = [*self._member_checks(struct, entry),
-			         *self._holds_check(struct, entry.placement)]
+			         *self._holds_check(struct, entry.placement),
+			         *self._ordering_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue
@@ -10558,6 +10559,51 @@ class Emitter:
 			# brackets rustc read as chained comparisons.
 			groups.append((c_name(local_name(struct, entry.placement)), lines))
 		return groups
+
+	def _ordering_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[ascending]`: each element's key above the one before (26.985).
+
+		C's copy says where it sits. A slice compares as bytes, highest
+		first, which is the order a byte key is held to; `read_be` answers
+		zero past the end rather than panicking, though the run's own check
+		has already held it inside the frame."""
+		held = traverse.run_ordering(self.resolved.structs, placement)
+		if not isinstance(held, traverse.RunOrdering) \
+				or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		base  = self._offset_expression(struct, placement)
+		count = self._count_expression(struct, placement)
+		if base is None or count is None:
+			return []
+		if held.key is None:
+			width = held.key_bytes
+			test  = (f"self.bytes.get(next..next + {width}) <= "
+			         f"self.bytes.get(prev..prev + {width})")
+		else:
+			assert held.key.scalar is not None
+			bits  = held.key.scalar.bits
+			order = "be" if held.key.endian is ast.Endian.BIG else "le"
+			read  = f"situ_rt::read_{order}(self.bytes, {{}}, {bits // BITS_PER_BYTE})"
+			if held.key.scalar.signed:
+				read = f"situ_rt::sign_extend({read}, {bits})"
+			test  = f"{read.format('next')} <= {read.format('prev')}"
+		return [
+			f"\t\t// {placement.path}: each key above the one before (26.985).",
+			"\t\t{",
+			f"\t\t\tlet total: usize = {count};",
+			f"\t\t\tlet first: usize = {self._unparen(base)};",
+			"\t\t\tlet mut i = 1usize;",
+			"\t\t\twhile i < total {",
+			f"\t\t\t\tlet prev = first + (i - 1) * {held.stride} + {held.key_at};",
+			f"\t\t\t\tlet next = prev + {held.stride};",
+			f"\t\t\t\tif {test} {{",
+			"\t\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t\t}",
+			"\t\t\t\ti += 1;",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _validate(self, struct: ResolvedStruct) -> list[str]:
 		groups = self._check_groups(struct)

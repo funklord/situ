@@ -121,6 +121,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	from situc.traverse import messages
 	_check_when_arithmetic(schema, layout, result)
 	_check_when_extents(schema, result)
+	_check_orderings(result)
 	for name in result.structs:
 		result.refusals[name] = tuple(
 			when.expr for when in messages(schema, name)
@@ -820,6 +821,27 @@ def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
 #: says about a `when` is about what the solver can see, not the rule.
 _ARITHMETIC_REFUSALS = ("the left operand of", "the shift amount of",
                         "division by zero")
+
+
+def _check_orderings(result: ResolvedSchema) -> None:
+	"""`[ascending]` on a run the backends can hold to it (26.985)."""
+	from situc.traverse import run_ordering
+
+	for struct in result.structs.values():
+		for entry in struct.entries:
+			held = run_ordering(result.structs, entry.placement)
+			if not isinstance(held, str):
+				continue
+			attr = next(one for one in entry.placement.attrs
+			            if one.name == "ascending")
+			raise error(
+				f"`{entry.placement.path}` cannot be held in order",
+				attr.span,
+				label = held,
+				notes = ["`[ascending = key]` on a counted run of structs of "
+				         "one size, or `[ascending]` on a counted run of "
+				         "integers: each key above the one before"],
+			)
 
 
 def _check_when_extents(schema: ast.Schema, result: ResolvedSchema) -> None:
