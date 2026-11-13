@@ -843,9 +843,9 @@ def test_the_generated_crcs_match_the_published_check_values(tmp_path: Path) -> 
 		"\tif (situ_crc24_ble(check, 9u) != 0xC25A56u) { return 7; }\n"
 		"\tif (situ_crc40_gsm(check, 9u) != 0xD4164FC646u) { return 8; }\n"
 		"\n"
-		"\t/* IEEE 802.3: a zero is 01 and a one is 10. */\n"
+		"\t/* IEEE 802.3: a zero is 10 and a one is 01. */\n"
 		"\tif (situ_manchester_encode(plain, 8u, coded) != 16u) { return 3; }\n"
-		"\tif (coded[0] != 0x9Au || coded[1] != 0x55u) { return 4; }\n"
+		"\tif (coded[0] != 0x65u || coded[1] != 0xAAu) { return 4; }\n"
 		"\tif (situ_manchester_decode(coded, 16u, back) != 8u) { return 5; }\n"
 		"\tif (back[0] != 0xB0u) { return 6; }\n"
 		"\treturn 0;\n"
@@ -1647,10 +1647,11 @@ TABLE_CODES = {
 	# ANSI X3.263 / FDDI: 0 is 11110, 1 is 01001. Chosen to bound the run
 	# length, so they are not an arithmetic function of the input.
 	"code_4b5b":         (4, 5, bytes([0x01]), "1111001001"),
-	# IEEE 802.3: a one is a falling edge, encoded 10.
-	"manchester_802_3":  (1, 2, bytes([0b0100_0000]), "0110"),
+	# IEEE 802.3: the first half of a cell is the complement of the bit
+	# and the second half the bit, so a one is a rising edge, 01 (26.997).
+	"manchester_802_3":  (1, 2, bytes([0b0100_0000]), "1001"),
 	# G.E. Thomas's, which is the bit-inverse and a different code.
-	"manchester_thomas": (1, 2, bytes([0b0100_0000]), "1001"),
+	"manchester_thomas": (1, 2, bytes([0b0100_0000]), "0110"),
 }
 
 #: How many input bits each case above feeds in.

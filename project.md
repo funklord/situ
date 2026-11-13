@@ -8667,6 +8667,10 @@ Moved to `doc/decision/26.995-a-terminator-is-looked-for-past-the-lead.md`.
 
 Moved to `doc/decision/26.996-a-derived-region-decodes-natively.md`.
 
+### 26.997 IEEE 802.3 Manchester was Thomas's
+
+Moved to `doc/decision/26.997-ieee-802-3-manchester-was-thomas-s.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

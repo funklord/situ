@@ -1116,13 +1116,15 @@ def _symbol_map(decl: ast.CodecDecl, inputs: int, outputs: int
 # Line-code tables, from the standards rather than from situ.
 NAMED_CODES: dict[str, list[int]] = {
 	# The two Manchesters, named apart because they are two codes. IEEE
-	# 802.3's is a one as a falling edge, encoded 10; G.E. Thomas's is the
-	# bit-inverse of it, and both are called "Manchester" in the wild. A
-	# schema that says only `manchester` is refused (`kernels.py`), because a
-	# decoder built on the wrong one returns the complement of what was sent
-	# and nothing at run time can see that.
-	"manchester_802_3": [0b01, 0b10],
-	"manchester_thomas": [0b10, 0b01],
+	# 802.3 puts the complement of the bit in the first half of the cell
+	# and the bit in the second, so a one is a rising edge, encoded 01;
+	# G.E. Thomas's is the bit-inverse of it, a one as a falling edge, and
+	# both are called "Manchester" in the wild. These two were the other way
+	# round until 26.997. A schema that says only `manchester` is refused
+	# (`kernels.py`), because a decoder built on the wrong one returns the
+	# complement of what was sent and nothing at run time can see that.
+	"manchester_802_3": [0b10, 0b01],
+	"manchester_thomas": [0b01, 0b10],
 	# ANSI X3.263 / FDDI 4b5b, the data symbols. The five-bit codes are chosen
 	# to bound the run length, which is why they are not an arithmetic function
 	# of the input.
