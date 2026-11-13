@@ -1460,6 +1460,13 @@ def _compare_facts(where: str, name: str, was: set[str],
 	each asserted the direction the other denied -- and for `must_eq` both
 	were wrong, there being no message the two sides both accept.
 	"""
+	# By value, not spelling: a contract rendered before the signature
+	# reduced literals (format v1) says `must_eq=0x4D544657` where today's
+	# says `must_eq=1297368663`, and the two are one constraint -- openmlx4's
+	# FS2 magics reported four BREAKING findings over an unchanged schema
+	# (26.1010).
+	was = {_by_value(fact) for fact in was}
+	now = {_by_value(fact) for fact in now}
 	findings = []
 	moved    = {fact for fact in (now - was) | (was - now)
 	            if _is_interpretation(fact)}
@@ -1493,6 +1500,18 @@ def _compare_facts(where: str, name: str, was: set[str],
 			"message a new sender legitimately produces"))
 
 	return findings
+
+
+def _by_value(fact: str) -> str:
+	"""`key=<integer literal>` with the literal as its decimal value; any
+	other fact as it stands."""
+	key, equals, value = fact.partition("=")
+	if not equals:
+		return fact
+	try:
+		return f"{key}={int(value, 0)}"
+	except ValueError:
+		return fact
 
 
 def _key_of(fact: str) -> str:

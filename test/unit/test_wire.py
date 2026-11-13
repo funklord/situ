@@ -1024,6 +1024,21 @@ def test_the_case_of_a_hex_digit_is_not_a_wire_change() -> None:
 	                   "struct s { u16 n; u8 a[0xff + n]; }").findings
 
 
+def test_an_older_contract_spelling_a_value_in_hex_is_the_same_value() -> None:
+	"""A contract rendered before the signature reduced literals (format v1)
+	spells `must_eq=0x4D544657` where today's says `must_eq=1297368663`.
+	Compared as text they were four BREAKING findings over openmlx4's
+	unchanged FS2 magics (26.1010); compared as values they are nothing.
+	And a value that did move still breaks, whatever either side spells."""
+	text = "struct s { u32 magic [must_eq = 0x4D544657]; u8 b; }"
+	new  = signature(text)
+	assert "must_eq=1297368663" in new
+	old  = new.replace("must_eq=1297368663", "must_eq=0x4D544657")
+	assert not wire.compare(old, new).findings
+	moved = new.replace("must_eq=1297368663", "must_eq=0x4D544658")
+	assert "breaking" in kinds(wire.compare(moved, new))
+
+
 def test_a_const_sharing_a_field_name_does_not_eat_the_field() -> None:
 	"""The substitution is scope-aware, and the first version was not.
 
