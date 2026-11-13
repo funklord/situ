@@ -57,8 +57,7 @@ from situc.codegen.python.emit import py_name
 from situc.diagnostics import Source
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
-from situc.traverse import (Check, arguments, arm_of, classify_check,
-                            data_sized, is_recursive)
+from situc.traverse import Check, arguments, classify_check, data_sized
 
 
 @dataclass
@@ -489,10 +488,10 @@ def _unwalked(resolved: ResolvedSchema, struct: ResolvedStruct) -> tuple[str, ..
 	"""Arrays whose elements carry constraints that `validate` does not read.
 
 	Shared by all four backends. A run of structs is validated element by
-	element since 26.789, except in a variant arm, where its element names
-	its own type, or where it takes arguments -- and those are what this
-	still names. An enum array is not: an out-of-range `k` in `k kinds[2]`
-	passes.
+	element since 26.789 -- in a variant arm since 26.790, of a recursive
+	struct since 26.791, and handed its arguments since 0068 -- so what this
+	still names is an element taking arguments its run does not hand, and
+	an enum array: an out-of-range `k` in `k kinds[2]` passes.
 
 	Nothing here changes that. What it changes is the report: a command whose
 	whole purpose is telling CI that bytes conform must not print an
@@ -537,9 +536,14 @@ def _gather(resolved: ResolvedSchema, struct: ResolvedStruct, found: list[str],
 			# walk it (26.789): a top-level run of a struct that neither
 			# names itself nor takes arguments. What is inside one is
 			# asked of the element, as of a nested member.
-			if inner is not None and arm_of(struct, placement) is None \
-					and not is_recursive(resolved.structs, inner.name) \
-					and not arguments(inner):
+			# In an arm (26.790), of a struct naming itself (26.791), and
+			# of one handed its arguments (0068) as well: all four
+			# backends walk those, and this kept naming them "not read"
+			# after they were -- which hull took at its word for
+			# `machines.items` (26.1011). What stays unread is an element
+			# taking arguments its run does not hand it.
+			if inner is not None and (not arguments(inner)
+			                          or bool(placement.arguments)):
 				_gather(resolved, inner, found, seen)
 				continue
 			if inner is not None and _has_checks(resolved, inner, set()):

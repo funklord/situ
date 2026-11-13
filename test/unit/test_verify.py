@@ -752,9 +752,10 @@ def test_a_delimited_run_of_structs_qualifies_the_verdict(tmp_path: Path,
 	The vectors here are hull's own. The point was not that they are
 	refused, and they were not, until 26.926 made a run its terminator
 	never ended a refusal: the two unterminated lists are refused by name
-	now, which is what hull was owed. The point still is that the sentence
-	says what was not read -- the elements, which `validate` does not
-	descend into here (traverse.Check).
+	now, which is what hull was owed. And the sentence that said the
+	elements went unread is gone, because they do not: `validate` walks a
+	recursive element since 26.791, and this kept claiming otherwise until
+	hull, reading it, took a run it checked for one it did not (26.1011).
 	"""
 	schema = ROOT / "example" / "sexpr" / "sexpr.situ"
 	vectors = tmp_path / "sexpr.vectors"
@@ -772,5 +773,4 @@ def test_a_delimited_run_of_structs_qualifies_the_verdict(tmp_path: Path,
 	assert "`nested_unterm` does not conform" in said, said
 	assert "`escaped_quote`" not in said, said
 	assert "2 of 3 vectors do not conform" in said, said
-	assert "`list.items`" in said, said
-	assert "none was read" in said, said
+	assert "none was read" not in said, said

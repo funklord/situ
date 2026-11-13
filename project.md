@@ -8723,6 +8723,10 @@ Moved to `doc/decision/26.1009-a-reply-is-matched-without-ending-it.md`.
 
 Moved to `doc/decision/26.1010-an-older-contract-compares-by-value.md`.
 
+### 26.1011 Verify names only what is unread
+
+Moved to `doc/decision/26.1011-verify-names-only-what-is-unread.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
