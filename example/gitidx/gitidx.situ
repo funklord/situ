@@ -1,0 +1,49 @@
+// A git pack index, version 2: the `.idx` beside every `.pack`, which is
+// how git finds one object among millions without reading the pack.
+//
+// Its object names are sorted, each once, and a reader finds one by binary
+// search -- so an index whose names are out of order is not a slower index
+// but a wrong one: objects present in the pack go unfound. That is why this
+// example exists. `[ascending = sha1]` states the order, and `validate`
+// refuses an index that breaks it (26.985).
+//
+// The 256-entry fanout counts the names below each first byte, so its last
+// entry is the number of objects; it is written here as 255 entries and
+// `count`, which is the same bytes. The fanout itself never descends, but
+// it may stay level -- no object starting with a given byte -- which is an
+// order `[ascending]` does not state: each key above the one before.
+//
+// An offset with its top bit set indexes `large_offsets`, which a pack under
+// 2 GiB never needs; how many there are is not stored, so the run takes what
+// is left before the two 20-byte trailers. Both trailers are SHA-1 digests --
+// of the pack, and of this file up to the second -- and situ has no SHA-1
+// codec, so neither is checked here.
+//
+// Reference: gitformat-pack(5), "Version 2 pack-*.idx files".
+
+target buffer;
+endian big;
+
+struct object_name {
+	u8  sha1[20];
+}
+
+struct pack_index {
+	preamble u8[4] = "\xFFtOc";
+	u32 version [must_eq = 2];
+	u32 fanout[255];
+	u32 count;
+	object_name names[count] [ascending = sha1];
+	u32 crc32[count];
+	u32 offsets[count];
+	u64 large_offsets[max(remaining, 40) / 8 - 5];
+	u8  pack_checksum[20];
+	u8  index_checksum[20];
+}
+
+// The header, the fanout and the object count sit at constant offsets: a
+// reader binary-searches the names knowing where they start, which is the
+// whole of what the fanout is for. Each name is twenty bytes wherever its
+// run puts it.
+require absolute_static(pack_index.count);
+require size(object_name) == 20;

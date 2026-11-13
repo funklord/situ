@@ -265,6 +265,75 @@ def pcap_situ(module: object, capture: bytes) -> list[dict[str, int]]:
 	                    for index in range(view.packets_count))]
 
 
+# -- gitidx -------------------------------------------------------------------
+#
+# git writes the pack and its index from a repository whose names and dates
+# are fixed, and `git show-index` reads the index back: each object's name,
+# its offset in the pack and its CRC-32. Three runs the same `count` sizes,
+# laid one after another, so reading a run at the wrong offset moves every
+# fact after it.
+
+#: Fixed so that the same commands write the same bytes, as the committed
+#: vector's header says.
+_GIT_ENV = {"GIT_AUTHOR_NAME": "situ", "GIT_AUTHOR_EMAIL": "situ@example.invalid",
+            "GIT_COMMITTER_NAME": "situ",
+            "GIT_COMMITTER_EMAIL": "situ@example.invalid",
+            "GIT_AUTHOR_DATE": "2026-11-13T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2026-11-13T00:00:00Z",
+            "GIT_CONFIG_NOSYSTEM": "1", "HOME": "/nonexistent"}
+
+
+def _git(args: list[str], cwd: Path) -> str:
+	import os
+
+	done = subprocess.run(["git", *args], capture_output=True, text=True,
+	                      check=True, cwd=cwd, env={**os.environ, **_GIT_ENV})
+	return done.stdout
+
+
+def gitidx_corpus(tmp: Path) -> bytes:
+	"""An index of thirty-odd objects: files, trees and commits."""
+	repo = tmp / "repo"
+	repo.mkdir()
+	_git(["init", "-q", "-b", "main"], repo)
+	for round_ in range(3):
+		for one in range(8):
+			(repo / f"f{one}").write_text(f"file {one} round {round_}\n",
+			                              encoding="ascii")
+		_git(["add", "."], repo)
+		_git(["commit", "-qm", f"round {round_}"], repo)
+	_git(["-c", "pack.writeReverseIndex=false", "repack", "-qad"], repo)
+	index = next((repo / ".git" / "objects" / "pack").glob("*.idx"))
+	return index.read_bytes()
+
+
+def gitidx_says(index: bytes, tmp: Path) -> list[dict[str, object]]:
+	"""Each object as git reads the index: name, offset and CRC, in order."""
+	path = tmp / "read.idx"
+	path.write_bytes(index)
+	with path.open("rb") as handle:
+		shown = subprocess.run(["git", "show-index"], stdin=handle,
+		                       capture_output=True, text=True,
+		                       check=True).stdout
+	facts = []
+	for line in shown.splitlines():
+		offset, name, crc = line.split()
+		facts.append({"name": name, "offset": int(offset),
+		              "crc": int(crc.strip("()"), 16)})
+	return facts
+
+
+def gitidx_situ(module: object, index: bytes) -> list[dict[str, object]]:
+	"""The same, through situ's accessors and nothing else."""
+	from situ_runtime import Message
+
+	view = module.pack_index.at(Message(bytearray(index)), 0, len(index))  # type: ignore[attr-defined]
+	view.validate()
+	return [{"name": bytes(view.names(at).sha1).hex(),
+	         "offset": int(view.offsets(at)), "crc": int(view.crc32(at))}
+	        for at in range(view.count)]
+
+
 # -- bmp ----------------------------------------------------------------------
 #
 # ImageMagick writes the bitmap and reports its geometry. The interesting part
@@ -1523,6 +1592,15 @@ ORACLES: tuple[Oracle, ...] = (
 		          "wrong field misplaces every record after it."),
 	),
 	Oracle(
+		name   = "gitidx",
+		schema = ROOT / "example" / "gitidx" / "gitidx.situ",
+		tool   = "git",
+		why    = ("git writes the pack index and `git show-index` reads it "
+		          "back; situ reads three runs `count` sizes, one after "
+		          "another, and holds the names in order. A run read at the "
+		          "wrong offset moves every fact after it."),
+	),
+	Oracle(
 		name   = "bmp-file",
 		schema = ROOT / "example" / "bmp" / "bmp.situ",
 		tool   = "file",
@@ -1551,6 +1629,10 @@ LIES = {
 	# the two editcap cut, so the swap reads 60 bytes where 40 are kept.
 	"pcap": ("\tu32  incl_len;\n\tu32  orig_len;",
 	         "\tu32  orig_len;\n\tu32  incl_len;"),
+	# The CRCs and the offsets: two runs of one width and one count, so the
+	# layout still measures the same and only the facts trade places.
+	"gitidx": ("\tu32 crc32[count];\n\tu32 offsets[count];",
+	           "\tu32 offsets[count];\n\tu32 crc32[count];"),
 	"bmp": ("\ti32          width;\n\ti32          height;",
 	        "\ti32          height;\n\ti32          width;"),
 	"bmp-file": ("\ti32          width;\n\ti32          height;",
@@ -1617,6 +1699,7 @@ DRIVERS = {
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),
+	"gitidx":   (gitidx_corpus, gitidx_says, gitidx_situ),
 	"png":      (png_corpus, png_says, png_situ),
 	"tiff":     (tiff_corpus_little, tiff_says, tiff_situ),
 	"tiff-be":  (tiff_corpus_big, tiff_says, tiff_situ),

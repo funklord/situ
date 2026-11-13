@@ -54,6 +54,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/arp/arp.situ example/ble/ble.situ example/bmp/bmp.situ \
 		   example/coap/coap.situ example/cpio/cpio.situ \
 		   example/ustar/ustar.situ example/pcap/pcap.situ \
+		   example/gitidx/gitidx.situ \
 		   example/dns/dns.situ example/dnsname/dnsname.situ example/dtls/dtls.situ example/ethernet/ethernet.situ example/http/http.situ \
 		   example/icmp/icmp.situ example/ipv6ext/ipv6ext.situ example/ipv4/ipv4.situ \
 		   example/id3/id3.situ \
@@ -440,11 +441,12 @@ test: all
 	@# harness now opens, so the smoke test was silent about exactly the code
 	@# that had just stopped being unreachable. An input below the floor is
 	@# not a weak test of a struct, it is no test of it. 1024 since ustar
-	@# (26.948), whose header is one 512-byte block.
+	@# (26.948), whose header is one 512-byte block; 2048 since gitidx,
+	@# whose index is 1072 bytes before it holds a single object.
 	@for t in $(FUZZ_BINS); do \
 		echo "--- $$t (smoke)"; \
 		for i in 0 1 2 3 4 5 6 7; do \
-			head -c 1024 /dev/urandom | { case "$$t" in /*) "$$t";; *) "./$$t";; esac; } \
+			head -c 2048 /dev/urandom | { case "$$t" in /*) "$$t";; *) "./$$t";; esac; } \
 				|| exit 1; \
 		done; \
 	done

@@ -1496,9 +1496,9 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	# THE POPULATION, so the floors cannot decay as the corpus grows. A
 	# new schema fails here, and the message says to re-measure -- which is
 	# the only moment anybody does.
-	assert len(SCHEMAS) == 62, (
+	assert len(SCHEMAS) == 63, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 62. Re-measure and re-pin all three: a floor left "
+		f"measured over 63. Re-measure and re-pin all three: a floor left "
 		f"at an older total goes slack by exactly what the new schemas "
 		f"contribute, which is how this one came to permit a 40% loss")
 
@@ -1521,15 +1521,20 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	# RE-MEASURED 2026-11-12 over 62, `example/pcap` having joined (26.961):
 	# 6725 compared of 8314 shown, 10169 walked, 80%. pcap adds rows and
 	# walked lines and no compared answer over these draws.
-	assert compared >= 6660, (
+	#
+	# RE-MEASURED 2026-11-13 over 63, `example/gitidx` having joined
+	# (26.985): 6980 compared of 8660 shown, 10679 walked, 80%. Some of the
+	# rise is not gitidx: an arm that runs to the frame's end is shown now
+	# (26.981), and MQTT's packet body with it.
+	assert compared >= 6915, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 6725; the dissector shows {shown} rows and the walker "
+		f"down from 6980; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
 	assert compared * 100 >= shown * 80, (
 		f"{compared} of the dissector's {shown} rows are compared against "
 		f"the walker, down from 80%")
-	assert walked >= 10105, (
-		f"the walker renders {walked} member lines, down from 10169; the "
+	assert walked >= 10615, (
+		f"the walker renders {walked} member lines, down from 10679; the "
 		"share above can be met by the dissector showing less")
 
 

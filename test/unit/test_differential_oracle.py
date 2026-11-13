@@ -1523,8 +1523,10 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 	# independent implementation and it is a library. The shapes are named
 	# here and the BYTES are its -- every framing decision in a document,
 	# which is the half a layout language is on trial for.
+	# `_git(` for `_tiff(`'s reason: a helper that runs git with the names
+	# and dates fixed, so the corpus is the same bytes on every run.
 	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(",
-	             "_paho_packets(", "_tiff(", "_json_dumps(")
+	             "_paho_packets(", "_tiff(", "_json_dumps(", "_git(")
 
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]

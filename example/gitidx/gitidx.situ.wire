@@ -1,0 +1,34 @@
+# situ wire signature v3
+# schema: gitidx.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian big
+target buffer
+
+struct object_name size=20
+  @0x0000   20        u8         sha1  big
+
+struct pack_index size=1072..
+  @0x0000   4         u8         <reserved0>  big
+  @0x0004   4         u32        version  big must_eq=2
+  @0x0008   1020      u32        fanout  big
+  @0x0404   4         u32        count  big
+  @0x0408   0..85899345900 object_name names  sized-by=count ascending=sha1
+  ~         0..17179869180 u32        crc32  sized-by=count
+  ~         0..17179869180 u32        offsets  sized-by=count
+  ~         0..       u64        large_offsets  sized-by=max(remaining,40)/8-5
+  ~         20        u8         pack_checksum  big
+  ~         20        u8         index_checksum  big

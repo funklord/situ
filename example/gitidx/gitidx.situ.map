@@ -1,0 +1,29 @@
+# situ capability map v1
+# schema: gitidx.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct object_name size=20 atomic=NonAtomic
+  object_name.sha1                       offset=AbsoluteStatic(0x00) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
+struct pack_index size=1072.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  pack_index.<reserved0>                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  pack_index.version                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  pack_index.fanout                      offset=AbsoluteStatic(0x08) size=Fixed(1020) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  pack_index.count                       offset=AbsoluteStatic(0x404) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  pack_index.names                       offset=AbsoluteStatic(0x408) size=Bounded(0, 85899345900) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  pack_index.names[]                     offset=FrameStatic(0x00) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  pack_index.names[].sha1                offset=FrameStatic(0x00) size=Fixed(20) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  pack_index.crc32                       offset=Dynamic size=Bounded(0, 17179869180) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  pack_index.offsets                     offset=Dynamic size=Bounded(0, 17179869180) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  pack_index.large_offsets               offset=Dynamic size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  pack_index.pack_checksum               offset=Dynamic size=Fixed(20) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  pack_index.index_checksum              offset=Dynamic size=Fixed(20) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
