@@ -4332,6 +4332,18 @@ class Emitter:
 		        f"({start}), {count}, {width}u, {big}, "
 		        f"situ_remaining_u32(raw_.limit, {start}))))")
 
+	def _remaining_from(self, struct: ResolvedStruct,
+			placement: Placement) -> dict[str, str] | None:
+		"""`remaining` in a member's size: the bytes from where the member
+		starts to the end of the view, as the walkers read it. C's copy
+		says what reading it as a constant did (26.986)."""
+		if "remaining" not in (placement.size_expr or ""):
+			return None
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return None
+		return {"remaining": f"situ_remaining_u32(raw_.limit, {start})"}
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -5363,7 +5375,8 @@ class Emitter:
 			# function already answers None for a length it cannot form.
 			try:
 				counted = self._over_fields(struct, placement.size_expr,
-				                            bounded=True)
+				                            bounded=True,
+				                            extra=self._remaining_from(struct, placement))
 			except UnknownName:
 				return None
 			each    = element_bytes(placement)
@@ -5551,7 +5564,8 @@ class Emitter:
 				# sum. No stride multiplication, unlike the length path:
 				# this is elements, not bytes.
 				return (self._over_fields(struct, placement.size_expr,
-				                          bounded=leaf_bounded), True)
+				                          bounded=leaf_bounded,
+				                          extra=self._remaining_from(struct, placement)), True)
 			except UnknownName:
 				return (None, False)
 

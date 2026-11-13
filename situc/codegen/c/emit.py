@@ -4445,6 +4445,20 @@ class Emitter:
 		return next((held for held in order[here + 1:]
 		             if held.path in top), None)
 
+	def _remaining_from(self, struct: ResolvedStruct, placement: Placement,
+			held: str) -> dict[str, str] | None:
+		"""`remaining` in a member's size: the bytes from where the member
+		starts to the end of the view, as the walkers have always read it.
+
+		`u64 x[remaining / 8]` named no field, so the solver took it for a
+		constant and every backend read one element (26.986). Offered only
+		over `view`, the name every offset function is written against.
+		"""
+		if held != "view" or "remaining" not in (placement.size_expr or ""):
+			return None
+		start = self._base_expression(struct, placement)
+		return {"remaining": f"situ_remaining_u32(view.limit, {start})"}
+
 	def _base_expression(self, struct: ResolvedStruct, placement: Placement,
 			gated: bool = False) -> str:
 		"""Where this member starts, in bytes, as a C expression.
@@ -10296,7 +10310,9 @@ class Emitter:
 		if placement.size_expr is not None:
 			# Bounded leaves, signed arithmetic, one clamp (14.2b).
 			rendered = self._over_fields(struct, placement.size_expr, held,
-			                             bounded=True)
+			                             bounded=True,
+			                             extra=self._remaining_from(
+			                                 struct, placement, held))
 			each     = element_bytes(placement)
 			signed   = rendered if each == 1 else f"({rendered}) * {each}"
 			return f"situ_nonneg_u32({signed})"
@@ -10527,7 +10543,9 @@ class Emitter:
 
 		if placement.size_expr is not None:
 			try:
-				self._over_fields(struct, placement.size_expr, "view")
+				self._over_fields(struct, placement.size_expr, "view",
+				                  extra=self._remaining_from(struct, placement,
+				                                             "view"))
 			except UnknownName:
 				return False
 			return True
@@ -10720,7 +10738,9 @@ class Emitter:
 			# and this is elements, and multiplying after the clamp would
 			# leave the domain again.
 			return (self._over_fields(struct, placement.size_expr, held,
-			                          bounded=leaf_bounded), True)
+			                          bounded=leaf_bounded,
+			                          extra=self._remaining_from(
+			                              struct, placement, held)), True)
 
 		if placement.sized_by is None:
 			return (f"{placement.array_count or 0}u", False)

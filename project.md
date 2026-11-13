@@ -8622,6 +8622,10 @@ Moved to `doc/decision/26.984-a-relation-names-a-constant.md`.
 
 Moved to `doc/decision/26.985-a-run-holds-its-keys-in-order.md`.
 
+### 26.986 A size reads remaining
+
+Moved to `doc/decision/26.986-a-size-reads-remaining.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

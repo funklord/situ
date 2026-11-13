@@ -4379,12 +4379,31 @@ def _expression_source(size: ast.Expr | None,
 	# here made `traverse.classify` call a fixed array variable -- which is
 	# the same fact `array_count` already carries, said a second time and
 	# believed instead.
-	if not paths_in(size):
+	#
+	# `remaining` is not a path and not a constant: `u64 x[remaining / 8]`
+	# names no field, so it was taken for one, and every reader read ONE
+	# `u64` where the schema states a run -- silently, since 8f327801
+	# brought this test, with nothing in the tree writing the shape until
+	# git's pack index did (26.986).
+	if not paths_in(size) and not _reads_remaining(size):
 		return None
 
 	# `explicit=True`: this text is handed to four host compilers, whose
 	# precedence tables are not all situ's. See `expr_to_source`.
 	return expr_to_source(size, explicit=explicit)
+
+
+def _reads_remaining(expr: ast.Expr) -> bool:
+	"""Whether `remaining` appears anywhere in a size expression."""
+	if isinstance(expr, ast.Remaining):
+		return True
+	if isinstance(expr, ast.Binary):
+		return _reads_remaining(expr.left) or _reads_remaining(expr.right)
+	if isinstance(expr, ast.Unary):
+		return _reads_remaining(expr.operand)
+	if isinstance(expr, ast.Call):
+		return any(_reads_remaining(arg) for arg in expr.args)
+	return False
 
 
 def _region_argument(region: ast.Member, name: str) -> str | None:
