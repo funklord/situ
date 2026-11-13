@@ -12534,7 +12534,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"	/* {when.severity.value} {when.name} */",
-				f"	if ({self._over_fields(struct, local, 'view')}) {{",
+				f"	if ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit'})}) {{",
 				"		if (held < cap) {",
 				f"			ids[held] = "
 				f"{macro(self.prefix, struct.name, when.name, 'MSG')};",
@@ -12766,7 +12766,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\tif ({self._over_fields(struct, local, 'view')}) {{",
+				f"\tif ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit'})}) {{",
 				f"\t\t/* {when.name} */",
 				f"\t\t*which = {_NO_CHECK};",
 				"\t\treturn SITU_ERR_CONSTRAINT;",

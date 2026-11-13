@@ -1882,7 +1882,10 @@ def _message_calls(struct: ResolvedStruct) -> list[str]:
 	for when in held:
 		source = expr_to_source(when.expr, explicit=True)
 		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
-		shown  = _over_fields(struct, local, "0")
+		# `remaining` from the struct's start is its whole frame, as both
+		# walkers and the four backends read it in a `when`.
+		shown  = _over_fields(struct, local, "0",
+		                      extra = {"remaining": "tvb:len()"})
 		if shown is None:
 			lines.append(f"\t-- {when.name}: {_unreadable(struct, local)}")
 			continue

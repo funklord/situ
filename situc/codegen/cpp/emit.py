@@ -10643,7 +10643,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif ({self._over_fields(struct, local)}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit'})}) {{",
 				f"\t\t\t/* {when.name} */",
 				*(["\t\t\t*which_ = no_check;"] if named else []),
 				"\t\t\treturn ::situ::rt::err::constraint;",
@@ -10688,7 +10688,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t/* {when.severity.value} {when.name} */",
-				f"\t\tif ({self._over_fields(struct, local)}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit'})}) {{",
 				"\t\t\tif (found < cap) {",
 				f"\t\t\t\tids[found] = msg_{c_name(when.name)};",
 				"\t\t\t}",

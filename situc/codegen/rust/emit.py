@@ -10720,7 +10720,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._rule_text(struct, local)} {{",
+				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()'})} {{",
 				f"\t\t\t// {when.name}",
 				"\t\t\treturn Err(situ_rt::Error::Constraint);",
 				"\t\t}",
@@ -10762,7 +10762,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t// {when.severity.value} {when.name}",
-				f"\t\tif {self._rule_text(struct, local)} {{",
+				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()'})} {{",
 				"\t\t\tif found < ids.len() {",
 				f"\t\t\t\tids[found] = Self::MSG_{_ident(when.name).upper()};",
 				"\t\t\t}",

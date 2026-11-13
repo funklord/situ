@@ -9011,7 +9011,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._over_fields(struct, local, 'self')}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len'})}:",
 				f'\t\t\traise ConstraintError("{struct.name}: {when.name}")',
 			])
 		return lines
@@ -9050,7 +9050,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t# {when.severity.value} {when.name}",
-				f"\t\tif {self._over_fields(struct, local, 'self')}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len'})}:",
 				f"\t\t\tfound.append(self.MSG_{py_name(when.name).upper()})",
 			])
 		lines.append("\t\treturn found")

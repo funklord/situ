@@ -2194,7 +2194,10 @@ Permitted:
 - references to previously-declared fields in the enclosing scope chain
 - arithmetic: `+ - * / %` (integer), bitwise `& | ^ ~ << >>`
 - comparison and boolean operators (in constraints only)
-- `size(X)`, `offset(X)`, `count(X)`, `remaining`
+- `size(X)`, `offset(X)`, `count(X)`, `remaining` -- the bytes to the end of
+  the enclosing frame from where it is read, so in a `when`, read from the
+  struct's start, the frame's whole length: `when 3 + size(s.body) !=
+  remaining refuse ...` says nothing follows the message (26.980)
 - `min`, `max`, `align_up(x, n)`
 - `popcount(x)`: the bits set in an unsigned value, for a presence bitmap
   counting what follows it (26.899)
@@ -8581,6 +8584,10 @@ Moved to `doc/decision/26.978-the-dissector-shows-a-located-struct-s-fields.md`.
 ### 26.979 A struct's own name is not a member
 
 Moved to `doc/decision/26.979-a-struct-s-own-name-is-not-a-member.md`.
+
+### 26.980 A `when` reads its frame
+
+Moved to `doc/decision/26.980-a-when-reads-its-frame.md`.
 
 ### 26.929 The offset cache counts bits
 
