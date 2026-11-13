@@ -8687,6 +8687,10 @@ Moved to `doc/decision/26.1000-cobs-adds-two-not-one.md`.
 
 Moved to `doc/decision/26.1001-a-builder-writes-cobs.md`.
 
+### 26.1002 Six Rust builders did not compile with warnings denied
+
+Moved to `doc/decision/26.1002-six-rust-builders-did-not-compile-with-warnings-denied.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

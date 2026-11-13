@@ -617,8 +617,13 @@ def four_say(schema: Path, tmp_path: Path, units: list[Unit],
 	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, cases),
 	                                      encoding="ascii")
 	assert fourway.RUSTC is not None
-	_run([fourway.RUSTC, "--edition", "2021", "-A", "warnings", "main.rs",
-	      "-o", "probe"], dirs["rust"])
+	# Warnings denied, as a consumer under `-D warnings` builds them: an
+	# unused import in a builder of nothing but a coded region, and six
+	# builders' worth of parentheses and constant comparisons, compiled
+	# here for months under `-A warnings` (26.1001). Dead code alone is
+	# allowed -- a probe calls one builder of a module that has many.
+	_run([fourway.RUSTC, "--edition", "2021", "-D", "warnings",
+	      "-A", "dead_code", "main.rs", "-o", "probe"], dirs["rust"])
 
 	said = {"python": python,
 	        **{target: _run([str(dirs[target] / "probe")], dirs[target])

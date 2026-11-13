@@ -333,7 +333,14 @@ def _pascal(name: str) -> str:
 	compiler's; this converts rather than demanding, so a snake_case schema
 	does not produce a module full of warnings nobody asked for.
 	"""
-	return "".join(part.capitalize() or "_" for part in c_name(name).split("_"))
+	# Trailing underscores dropped: a struct called `signed_` was `Signed_`,
+	# which is legal alone and became `Signed_Mut` with the suffix every
+	# struct gets -- an underscore between letters, refused under
+	# `-D warnings` (26.1002). A collision with a `signed` is the
+	# compiler's to report, as 0013 says of collisions.
+	stem = c_name(name)
+	stem = stem.rstrip("_") or stem
+	return "".join(part.capitalize() or "_" for part in stem.split("_"))
 
 
 def _byte_string(run: bytes) -> str:

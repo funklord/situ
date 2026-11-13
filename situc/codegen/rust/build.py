@@ -18,6 +18,8 @@ header asks for: no view of the buffer exists while it is being filled.
 
 from __future__ import annotations
 
+import re
+
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (WRITABLE_CODES, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
@@ -66,13 +68,19 @@ def _digits(part: Part, value: str) -> list[str]:
 	call   = "situ_rt::format_int" if signed else "situ_rt::format_uint"
 	widest = "i64" if signed else "u64"
 	held   = f"({value} as {widest})"
+	# Bare where it stands alone -- an argument, or the right of a `let` --
+	# for a plain name or call: rustc's `unused_parens` refuses the wrapped
+	# form under `-D warnings`. Kept wherever a method or comparison
+	# follows, and for anything with an operator in it.
+	bare   = (f"{value} as {widest}"
+	          if re.fullmatch(r"[\w.]+(\(\))?", value) else held)
 	refuse = ["\t\treturn Err(Error::Constraint);", "\t}"]
 	if not part.minimal:
 		return [*_room(str(part.digits)),
 		        f"\tif !{call}(&mut situ_out[situ_at..situ_at + {part.digits}],"
-		        f" {part.radix}, {held}) {{", *refuse,
+		        f" {part.radix}, {bare}) {{", *refuse,
 		        f"\tsitu_at += {part.digits};"]
-	left = f"{held}.unsigned_abs()" if signed else held
+	left = f"{held}.unsigned_abs()" if signed else bare
 	return [
 		"\t{",
 		"\t\tlet mut situ_digits = 1usize;",
@@ -87,7 +95,7 @@ def _digits(part: Part, value: str) -> list[str]:
 		"\t\t\treturn Err(Error::Bounds);",
 		"\t\t}",
 		f"\t\tif !{call}(&mut situ_out[situ_at..situ_at + situ_digits],"
-		f" {part.radix}, {held}) {{",
+		f" {part.radix}, {bare}) {{",
 		"\t\t\treturn Err(Error::Constraint);",
 		"\t\t}",
 		"\t\tsitu_at += situ_digits;",
@@ -195,9 +203,12 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 		                         for v in part.others)
 		   + " {", "\t\treturn Err(Error::Constraint);", "\t}"]
 		  if part.others else []),
+		# A stated value is the schema's, so whether it fits is known now;
+		# a constant comparison is `unused_comparisons` under `-D warnings`.
 		*([f"\tif {held} > {most} {{",
 		   "\t\treturn Err(Error::Constraint);", "\t}"]
-		  if part.value < 64 else []),
+		  if part.value < 64 and (part.stated is None
+		                          or part.stated > most) else []),
 		f"\tlet situ_used = {call}(&mut situ_out[situ_at..], {value}{tail});",
 		"\tif situ_used == 0 {",
 		"\t\treturn Err(Error::Bounds);",
