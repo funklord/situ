@@ -728,9 +728,12 @@ def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			f"\t\tsitu_e = situ_view.{name}_compute("
 			+ (f"{over}, " if over else "") + "situ_tag);",
 			"\t\tif (situ_e == ::situ::rt::err::ok) {",
-			f"\t\t\tsitu_put_{plain_build.tag_order(part)}{bits}("
-			f"situ_out + situ_tag_{part.local},",
-			f"\t\t\t              static_cast<std::uint{bits}_t>(situ_tag));",
+			*([f"\t\t\tsitu_out[situ_tag_{part.local}] = "
+			   "static_cast<std::uint8_t>(situ_tag);"] if bits == 8 else
+			  [f"\t\t\tsitu_put_{plain_build.tag_order(part)}{bits}("
+			   f"situ_out + situ_tag_{part.local},",
+			   f"\t\t\t              static_cast<std::uint{bits}_t>"
+			   "(situ_tag));"]),
 			f"\t\t\tsitu_e = situ_view.{name}_check({over});",
 			"\t\t}",
 			"\t}"])

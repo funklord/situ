@@ -1349,9 +1349,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "no codec, so there is nothing to compute it " \
 				           "from"
 			size = _whole_bytes(held)
-			if size is None or held.size_bits not in (16, 32, 64):
+			if size is None or held.size_bits not in (8, 16, 32, 64):
 				return [], f"`{local_name}` is a {held.size_bits}-bit tag, " \
-				           "and the runtime stores 16, 32 and 64"
+				           "and the runtime stores 8, 16, 32 and 64"
 			if held.tag_codec_endian is None:
 				return [], f"`{local_name}` has no byte order for its " \
 				           "codec's output"
@@ -2521,8 +2521,11 @@ def _tags(parts: list[Part], structs: Mapping[str, ResolvedStruct] | None,
 			f"\t\tif ({ERR} != SITU_OK) {{",
 			f"\t\t\treturn {ERR};",
 			"\t\t}",
-			f"\t\tsitu_put_{end}{width}({SCRATCH}_at, "
-			f"(uint{width}_t){TAGV});",
+			# A byte has no order, and the runtime no `put` for one: FLAC's
+			# frame header CRC-8 (26.1005).
+			(f"\t\t{SCRATCH}_at[0] = (uint8_t){TAGV};" if width == 8 else
+			 f"\t\tsitu_put_{end}{width}({SCRATCH}_at, "
+			 f"(uint{width}_t){TAGV});"),
 			*([f"\t\t{ERR} = {part.inner}_check({VIEW},",
 			   f"\t\t                    {part.local}_prefix,",
 			   f"\t\t                    {part.local}_prefix_len);"]

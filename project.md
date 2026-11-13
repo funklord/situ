@@ -8699,6 +8699,10 @@ Moved to `doc/decision/26.1003-a-builder-writes-a-24-bit-field.md`.
 
 Moved to `doc/decision/26.1004-a-builder-pads-to-where-the-struct-ends.md`.
 
+### 26.1005 A builder writes an 8-bit tag
+
+Moved to `doc/decision/26.1005-a-builder-writes-an-8-bit-tag.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
