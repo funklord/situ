@@ -8711,6 +8711,10 @@ Moved to `doc/decision/26.1006-one-size-states-two-byte-runs.md`.
 
 Moved to `doc/decision/26.1007-a-builder-writes-in-the-markers-order.md`.
 
+### 26.1008 A deadline survives the clock wrap
+
+Moved to `doc/decision/26.1008-a-deadline-survives-the-clock-wrap.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

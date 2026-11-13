@@ -238,7 +238,11 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		"\t\tif (drive->slots[i].live == 0u) {",
 		"\t\t\tcontinue;",
 		"\t\t}",
-		"\t\tif (now_ms >= drive->slots[i].deadline_ms) {",
+		# Serially, modulo 2^32: `now_ms` is a millisecond counter that
+		# wraps, and `>=` across the wrap expired an exchange the moment
+		# it was sent -- fuzznet, after 49.7 days of uptime (26.1008).
+		"\t\tif ((uint32_t)(now_ms - drive->slots[i].deadline_ms)"
+		" < 0x80000000u) {",
 		"\t\t\tif (drive->slots[i].left == 0u) {",
 		"\t\t\t\tdrive->slots[i].live = 0u;",
 		"\t\t\t\t*expired += 1u;",
@@ -250,7 +254,8 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		"\t\t\t                       drive->slots[i].bytes,",
 		"\t\t\t                       drive->slots[i].len);",
 		"\t\t}",
-		"\t\tif (any == 0u || drive->slots[i].deadline_ms < soonest) {",
+		"\t\tif (any == 0u || (uint32_t)(drive->slots[i].deadline_ms - now_ms)"
+		" < (uint32_t)(soonest - now_ms)) {",
 		"\t\t\tsoonest = drive->slots[i].deadline_ms;",
 		"\t\t\tany     = 1u;",
 		"\t\t}",
