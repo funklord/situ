@@ -1596,8 +1596,24 @@ def check_whens(schema: ast.Schema) -> None:
 					         "struct, so the members it reads have to be in "
 					         "one"],
 				)
+			# A struct's bare name is no value, and `size(s)` is not a
+			# member's size: both passed, having no field to step to, and
+			# all four backends raised `UnknownName` out of the code
+			# generator for them -- the crash this function's enum note
+			# records, by a third route.
+			if not field:
+				raise error(
+					f"`{struct_name}` is a struct, and a `when` reads its "
+					"members",
+					held.span,
+					label = "not a member of the message",
+					notes = ["name a member, `s.m`, or measure one, "
+					         "`size(s.m)`: the view the `when` is evaluated "
+					         "against holds the struct, so its own extent "
+					         "is the frame's business (0051)"],
+				)
 			reached = _step_through(structs, struct, field, held, path)
-			holder = _conditional_holder(*reached) if field else None
+			holder = _conditional_holder(*reached)
 			if holder is not None:
 				raise error(
 					f"`{held.name}` reads `{path}`, which is inside "
@@ -1686,7 +1702,18 @@ def check_invariants(schema: ast.Schema) -> None:
 						f"every path in the expression must start `{struct_name}.`",
 					],
 				)
-			if name and _find_member(struct, name) is None:
+			# The struct's own name has no value: `s.len == s` was taken
+			# and maintained nothing, and `size(s)` crashed four backends.
+			if not name:
+				raise error(
+					f"`{struct_name}` is a struct, and an invariant derives "
+					"from its fields",
+					invariant.span,
+					label = "not a field of the struct",
+					notes = ["name a field, `s.m`, or measure one, "
+					         "`size(s.m)`"],
+				)
+			if _find_member(struct, name) is None:
 				raise error(
 					f"`{struct_name}` has no field `{name}`",
 					invariant.span,

@@ -8578,6 +8578,10 @@ Moved to `doc/decision/26.977-generated-c-suites-need-no-framework.md`.
 
 Moved to `doc/decision/26.978-the-dissector-shows-a-located-struct-s-fields.md`.
 
+### 26.979 A struct's own name is not a member
+
+Moved to `doc/decision/26.979-a-struct-s-own-name-is-not-a-member.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
