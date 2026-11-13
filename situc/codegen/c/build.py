@@ -210,6 +210,9 @@ class Part:
 		#: The stuffing code an ENDED part is written through: a coded
 		#: region, whose content the caller hands over (26.998).
 		self.code = ""
+		#: The run whose size field this one shares, by its local, which
+		#: this one's length must equal (26.1006).
+		self.twin = ""
 					# the arms it cannot write, and why
 		self.chooser: Part | None = None
 		#: The CHOSEN part that wrote this one's discriminant, whose tag
@@ -1165,6 +1168,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	# the member that comes later.
 	by_name = {held.name: held for held in members}
 	measures: dict[str, Placement] = {}
+	twins: dict[str, Placement] = {}
 	for held in members:
 		if not held.sized_by or held.sized_by not in by_name:
 			# `sized_by` also carries `remaining`, which names no member:
@@ -1174,7 +1178,17 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		if held.sized_by in measures:
 			# Two runs measured by one field would make the writer compute
 			# one value for two lengths, and the last one to be planned
-			# would win silently.
+			# would win silently. Two BYTE runs are writable: the field is
+			# computed from the first and the second must be as long --
+			# ARP's sender and target hardware addresses (26.1006).
+			measured_first = measures[held.sized_by]
+			if all(one.element_bits == BITS_PER_BYTE
+			       and one.type_name not in (structs or {})
+			       and one.array_count is None and not one.delimiters
+			       for one in (measured_first, held)) \
+					and held.path not in twins:
+				twins[held.path] = measured_first
+				continue
 			return [], f"`{held.sized_by}` is the stated size of both " \
 			           f"`{measures[held.sized_by].name}` and " \
 			           f"`{held.name}`, so one value cannot say both"
@@ -1784,6 +1798,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# bytes and their length -- and what differs is only what the
 			# field holds, which is that field's own part's business.
 			parts.append(Part(SPAN, held, local))
+			if held.path in twins:
+				parts[-1].twin = _local(struct, twins[held.path])
 			continue
 		if held.delimiters:
 			# `_delimited_refusal` has already settled the shape; what is
@@ -2739,6 +2755,12 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 	for part in writing:
 		held  = part.placement
 		local = traverse.local_name(struct, held)
+		if part.twin:
+			lines += [f"\t/* {local}: as long as `{part.twin}`, whose size "
+			          "field states both. */",
+			          f"\tif ({part.local}_len != {part.twin}_len) {{",
+			          "\t\treturn SITU_ERR_CONSTRAINT;",
+			          "\t}"]
 		if part.role == CHOSEN:
 			lines += _chosen(struct, part, parts, structs, prefix, enums)
 		elif part.role == SIZE and part.solved is not None:

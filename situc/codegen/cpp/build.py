@@ -667,7 +667,10 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"\tstd::memcpy(situ_out + situ_at, {part.local}, {part.bytes}u);",
 		        f"\tsitu_at += {part.bytes}u;"]
 	assert part.role == SPAN, part.role
-	return [*_room(f"{part.local}_len"),
+	return [*([f"\tif ({part.local}_len != {part.twin}_len) {{",
+	           "\t\treturn ::situ::rt::err::constraint;", "\t}"]
+	          if part.twin else []),
+	        *_room(f"{part.local}_len"),
 	        f"\tif ({part.local}_len != 0u) {{",
 	        f"\t\tif ({part.local} == nullptr) {{",
 	        "\t\t\treturn ::situ::rt::err::bounds;",

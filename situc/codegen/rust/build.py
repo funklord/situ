@@ -608,7 +608,10 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        f".copy_from_slice({local});",
 		        f"\tsitu_at += {part.bytes};"]
 	assert part.role == SPAN, part.role
-	return [*_room(f"{local}.len()"),
+	return [*([f"\tif {local}.len() != {_ident(part.twin)}.len() {{",
+	           "\t\treturn Err(Error::Constraint);", "\t}"]
+	          if part.twin else []),
+	        *_room(f"{local}.len()"),
 	        f"\tsitu_out[situ_at..situ_at + {local}.len()]"
 	        f".copy_from_slice({local});",
 	        f"\tsitu_at += {local}.len();"]

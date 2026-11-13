@@ -8703,6 +8703,10 @@ Moved to `doc/decision/26.1004-a-builder-pads-to-where-the-struct-ends.md`.
 
 Moved to `doc/decision/26.1005-a-builder-writes-an-8-bit-tag.md`.
 
+### 26.1006 One size field states two byte runs
+
+Moved to `doc/decision/26.1006-one-size-states-two-byte-runs.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

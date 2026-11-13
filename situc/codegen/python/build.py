@@ -591,7 +591,11 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = {local}",
 		        f"\tsitu_at += {part.bytes}"]
 	assert part.role == SPAN, part.role
-	return [*_room(f"len({local})", path),
+	return [*([f"\tif len({local}) != len({py_name(part.twin)}):",
+	           f'\t\traise ConstraintError("{path}: as long as '
+	           f'`{part.twin}`, whose size field states both")']
+	          if part.twin else []),
+	        *_room(f"len({local})", path),
 	        f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
 	        f"\tsitu_at += len({local})"]
 
