@@ -150,6 +150,20 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\traise ConstraintError(",
 			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
 			"\t\treturn self._live.pop(key)",
+			"",
+			f"\tdef peek(self, {second.name}: "
+			f"{py_name(second.type_name)}) -> int:",
+			'\t\t"""`take` without taking: which request a reply answers,',
+			"",
+			"\t\tleft pending for a reply that comes in pieces (26.1009).",
+			'\t\tRaises ConstraintError where none is."""',
+			*(_key(response, second.name) if layout.packed
+			  else _key_bytes(response, second.name)),
+			"",
+			"\t\tif key not in self._live:",
+			"\t\t\traise ConstraintError(",
+			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
+			"\t\treturn self._live[key]",
 		]
 
 	return {f"{basename}_converse.py": "\n".join(lines).rstrip("\n") + "\n"}

@@ -181,6 +181,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tErr(Error::Constraint)",
 			"\t}",
 			"",
+			"\t/// `take` without taking: which request a reply answers, left",
+			"\t/// pending for a reply that comes in pieces (26.1009).",
+			f"\tpub fn peek(&self, {second.name}: &"
+			f"{_pascal(second.type_name)}) -> Result<u32> {{",
+			*(_key(response, second.name, resolved) if layout.packed
+			  else _key_bytes(response, second.name, layout.total_bytes,
+			                  resolved)),
+			"",
+			"\t\tfor slot in self.slots.iter() {",
+			"\t\t\tif slot.live && slot.key == key {",
+			"\t\t\t\treturn Ok(slot.id);",
+			"\t\t\t}",
+			"\t\t}",
+			"\t\tErr(Error::Constraint)",
+			"\t}",
+			"",
 			(f"\tfn held(key: u64, id: u32) -> {held}Slot {{"
 			 if layout.packed else
 			 f"\tfn held(key: [u8; {layout.total_bytes}], id: u32) -> {held}Slot {{"),

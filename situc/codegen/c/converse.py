@@ -195,6 +195,28 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		"\treturn SITU_ERR_CONSTRAINT;",
 		"}",
 		"",
+		f"/* Whether `{second.name}` answers a request still pending, and which,",
+		" * without taking it: a reply in many pieces is asked once a piece,",
+		" * and only the last should end the exchange (26.1009). */",
+		f"static inline situ_err_t {name}_peek(const {name}_t *table,",
+		f"                                     situ_view_t {second.name},",
+		"                                     uint32_t *id)",
+		"{",
+		*(_key(response, second.name, prefix) if layout.packed
+		  else _key_bytes(response, second.name, prefix, layout.total_bytes)),
+		"",
+		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
+		("\t\tif (table->slots[i].live != 0u && table->slots[i].key == key) {"
+		 if layout.packed else
+		 f"\t\tif (table->slots[i].live != 0u && "
+		 f"memcmp(table->slots[i].key, key, {layout.total_bytes}u) == 0) {{"),
+		"\t\t\t*id = table->slots[i].id;",
+		"\t\t\treturn SITU_OK;",
+		"\t\t}",
+		"\t}",
+		"\treturn SITU_ERR_CONSTRAINT;",
+		"}",
+		"",
 	]
 
 

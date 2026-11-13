@@ -8715,6 +8715,10 @@ Moved to `doc/decision/26.1007-a-builder-writes-in-the-markers-order.md`.
 
 Moved to `doc/decision/26.1008-a-deadline-survives-the-clock-wrap.md`.
 
+### 26.1009 A reply is matched without ending it
+
+Moved to `doc/decision/26.1009-a-reply-is-matched-without-ending-it.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
