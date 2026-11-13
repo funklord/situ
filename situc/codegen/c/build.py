@@ -121,11 +121,23 @@ class Shape:
 
 	def __init__(self, header: str = "", prefix: str = "situ",
 			structs: Mapping[str, ResolvedStruct] | None = None,
-			varints: Mapping[str, ast.VarintDecl] | None = None) -> None:
+			varints: Mapping[str, ast.VarintDecl] | None = None,
+			codecs: Mapping[str, ast.CodecDecl] | None = None) -> None:
 		self.header  = header
 		self.prefix  = prefix
 		self.structs = structs
 		self.varints = varints
+		#: The DERIVED codecs, whose encoders situ generates: a coded
+		#: region is writable only through one of those (26.998).
+		self.codecs  = codecs
+
+
+def derived_codecs(schema: ast.Schema) -> dict[str, ast.CodecDecl]:
+	"""The codecs bound `derived`, by name: what `Shape.codecs` holds."""
+	bound = {impl.codec for impl in schema.impls()
+	         if impl.kind is ast.ImplKind.DERIVED}
+	return {decl.name: decl for decl in schema.codecs()
+	        if decl.name in bound and decl.kernel is not None}
 
 
 class Each:
@@ -193,6 +205,9 @@ class Part:
 		self.closes    = closes		# last of one
 		self.arms: tuple[ArmOf, ...] = ()	# what a CHOSEN part offers
 		self.declined: tuple[tuple[str, str], ...] = ()
+		#: The stuffing code an ENDED part is written through: a coded
+		#: region, whose content the caller hands over (26.998).
+		self.code = ""
 					# the arms it cannot write, and why
 		self.chooser: Part | None = None
 		#: The CHOSEN part that wrote this one's discriminant, whose tag
@@ -517,6 +532,64 @@ def _delimited_refusal(placement: Placement) -> str | None:
 	if placement.trim_set:
 		return "is trimmed, so the bytes it holds are not the bytes it " \
 		       "was given"
+	return None
+
+
+#: Stuffing codes a builder writes a region through (26.998), and whether
+#: the generated encoder puts the region's delimiter down itself. SLIP and
+#: PPP's encoders end the frame; SMTP's leaves `CRLF . CRLF` to the framing.
+#: A code is here only where its encoder is known never to produce the
+#: delimiter inside the body: that is what stuffing is for, but it holds
+#: only for the delimiter the code protects, which `coded_refusal` checks.
+WRITABLE_CODES: dict[str, bool] = {"slip": True, "ppp_async": True,
+                                   "smtp_dot": False}
+
+
+def coded_code(shape: "Shape", placement: Placement) -> str | None:
+	"""The stuffing code a region is written through, or None."""
+	decl = (shape.codecs or {}).get(placement.codec or "")
+	kernel = getattr(decl, "kernel", None)
+	named = kernel.argument("code") if kernel is not None else None
+	name = getattr(named, "name", None)
+	return name if name in WRITABLE_CODES else None
+
+
+def coded_refusal(struct: ResolvedStruct, placement: Placement,
+		shape: "Shape") -> str | None:
+	"""Why a coded region cannot be written from the caller's content.
+
+	The caller hands over what the region DECODES to, and the writer encodes
+	it -- the division `_escaped` already makes for an escape byte, here
+	with the codec as the rule (26.998). It needs a derived stuffing code
+	whose encoder situ generates, one delimiter that code protects, and an
+	interior that is one plain byte run: content with fields in it would be
+	a struct the caller builds first, which no builder here composes yet.
+	"""
+	from situc.codegen.c.derived import ESCAPE_STUFFING
+
+	code = coded_code(shape, placement)
+	if code is None:
+		return "is a coded region, and only a derived stuffing code " \
+		       f"({', '.join(sorted(WRITABLE_CODES))}) is written from " \
+		       "the content: the bytes on the wire are the codec's output"
+	if len(placement.delimiters) != 1 or not placement.delimiter_consumed:
+		return "is a coded region with no single delimiter of its own to " \
+		       "write after the encoded bytes"
+	ends = placement.delimiters[0]
+	if code in ESCAPE_STUFFING:
+		if ends != bytes([ESCAPE_STUFFING[code][1]]):
+			return f"ends at a delimiter `{code}` does not escape, so an " \
+			       "encoded body could contain it"
+	elif code == "smtp_dot" and ends != b"\r\n.\r\n":
+		return "ends at a delimiter dot-stuffing does not protect"
+	prefix   = placement.path + "."
+	interior = [entry.placement for entry in struct.entries
+	            if entry.placement.path.startswith(prefix)]
+	if len(interior) != 1 or interior[0].element_bits != BITS_PER_BYTE \
+			or interior[0].sized_by != "remaining" \
+			or interior[0].type_name in (shape.structs or {}):
+		return "is a coded region whose interior is not one byte run, so " \
+		       "its content is a struct no builder here composes"
 	return None
 
 
@@ -1507,6 +1580,15 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			parts.append(Part(ZERO, held, local, size))
 			continue
 
+		if held.kind == "coded":
+			why = coded_refusal(struct, held, shape)
+			if why:
+				return [], f"`{traverse.local_name(struct, held)}` {why}"
+			part = Part(ENDED, held, local, delimiter=held.delimiters[0])
+			part.code = coded_code(shape, held) or ""
+			parts.append(part)
+			continue
+
 		why = _member_refusal(held, accounted.get(held.path),
 		                      declined.get(held.path),
 		                      held.path in stated)
@@ -2083,6 +2165,42 @@ def _needle(local: str, at: str, delim: bytes) -> str:
 	return " && ".join(
 		f"{local}[{at}{f' + {i}u' if i else ''}] == 0x{byte:02X}u"
 		for i, byte in enumerate(delim))
+
+
+def _encoded(part: Part, local: str) -> list[str]:
+	"""Write a coded region from its content, through its codec (26.998).
+
+	Room is the code's worst case, `ceil(len / per) * worst + overhead`,
+	in 64 bits so a length near `UINT32_MAX` cannot wrap past the check: a
+	body that would fit after encoding can be refused, and none can
+	overrun. The builder validates the message before returning, which is
+	where a framing the encoder got wrong would show.
+	"""
+	from situc.kernels import STUFFING_BOUNDS
+
+	worst, per, over = STUFFING_BOUNDS[part.code]
+	own  = WRITABLE_CODES[part.code]
+	tail = 0 if own else len(part.delimiter)
+	fn   = f"situ_{part.placement.codec}_encode"
+	return [
+		f"\t/* {local}: the caller's content, `{part.placement.codec}`"
+		"-encoded,",
+		("\t * the encoder writing the delimiter that ends it. */" if own
+		 else "\t * then the delimiter that ends it. */"),
+		"\t{",
+		f"\t\tconst uint64_t {NEED}64 = ((uint64_t){part.local}_len"
+		f" + {per - 1}u) / {per}u * {worst}u + {over + tail}u;",
+		"",
+		f"\t\tif ((uint64_t)({CAP} - {AT}) < {NEED}64) {{",
+		"\t\t\treturn SITU_ERR_BOUNDS;",
+		"\t\t}",
+		f"\t\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+		"\t\t\treturn SITU_ERR_BOUNDS;",
+		"\t\t}",
+		f"\t\t{AT} += {fn}({part.local}, {part.local}_len, {OUT} + {AT});",
+		"\t}",
+		*([] if own else _write_needle(part.delimiter, "delimiter")),
+	]
 
 
 def _escaped(part: Part, local: str, escape: int) -> list[str]:
@@ -3155,6 +3273,8 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t{AT} += {part.local}_len;",
 				"",
 			]
+		elif part.role == ENDED and part.code:
+			lines += [*_encoded(part, local), ""]
 		elif part.role == ENDED and held.delimiter_escape is not None:
 			lines += [
 				*_escaped(part, local, held.delimiter_escape),
@@ -3243,7 +3363,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	something wrong.
 	"""
 	shape   = Shape(header, prefix, resolved.structs,
-	                {decl.name: decl for decl in schema.varints()})
+	                {decl.name: decl for decl in schema.varints()},
+	                derived_codecs(schema))
 	structs = buildable(resolved, shape)
 	if not structs:
 		return {}

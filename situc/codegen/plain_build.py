@@ -48,8 +48,9 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.others and part.role not in (BITS, NESTED, SCALAR, VARINT):
 		return False
-	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field":
-		return False
+	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field" \
+			and not (part.role == ENDED and part.code):
+		return False		# a coded region is ENDED with its code
 	if part.role in (ARMTAG, SCALAR, SIZE) \
 			and (held.scalar is None or held.marker is not None
 			     # A pad or a run in an arm is a scalar part wider or
@@ -117,10 +118,12 @@ def shape(schema: ast.Schema, resolved: ResolvedSchema) -> Shape:
 	question of the nested struct in their own language.
 	"""
 	from situc.codegen.c import generate
+	from situc.codegen.c.build import derived_codecs
 
 	return Shape(generate(schema, resolved, "plain").header, "situ",
 	             resolved.structs,
-	             {decl.name: decl for decl in schema.varints()})
+	             {decl.name: decl for decl in schema.varints()},
+	             derived_codecs(schema))
 
 
 def takes_value(part: Part) -> bool:

@@ -6181,9 +6181,13 @@ class Emitter:
 				" const std::uint8_t *b, std::uint32_t blen,"
 				" std::uint32_t hole_at, std::uint32_t hole_len,"
 				" std::uint8_t fill);")], *[
-			f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
-			f" std::uint32_t {counted(name)}, std::uint8_t *out);"
-			for name in wanted], *[
+			line for name in wanted for line in (
+				f"uint32_t situ_{c_name(name)}_decode(const std::uint8_t *in,"
+				f" std::uint32_t {counted(name)}, std::uint8_t *out);",
+				# The pair, as C's header declares it: a builder writes
+				# a region through the encoder (26.998).
+				f"uint32_t situ_{c_name(name)}_encode(const std::uint8_t *in,"
+				f" std::uint32_t {counted(name)}, std::uint8_t *out);")], *[
 			f"situ_err_t {symbol}_decode(const std::uint8_t *in,"
 			" std::uint32_t in_len,"
 			f" std::uint8_t *out, std::uint32_t out_cap,"

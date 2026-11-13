@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -232,6 +232,25 @@ def _needle(part: Part) -> list[str]:
 	        f"\tsitu_at += {wide}"]
 
 
+def _encoded(part: Part) -> list[str]:
+	"""A coded region from its content, through the kernel the module
+	defines (26.996): C's `_encoded`."""
+	from situc.kernels import STUFFING_BOUNDS
+
+	worst, per, over = STUFFING_BOUNDS[part.code]
+	own  = WRITABLE_CODES[part.code]
+	tail = 0 if own else len(part.delimiter)
+	local = py_name(part.local)
+	codec = (part.placement.codec or "").lower()
+	return [*_room(f"(len({local}) + {per - 1}) // {per} * {worst}"
+	               f" + {over + tail}", part.placement.path),
+	        # Into the caller's buffer through a view, as everything here
+	        # writes: nothing allocates.
+	        f"\tsitu_at += situ_schema.{codec}_encode(bytes({local}),"
+	        f" len({local}), memoryview(situ_out)[situ_at:])",
+	        *([] if own else _needle(part))]
+
+
 def _ended(part: Part) -> list[str]:
 	"""Bytes, then the delimiter that ends them.
 
@@ -240,6 +259,8 @@ def _ended(part: Part) -> list[str]:
 	exactly two kinds of byte carry the escape: the delimiter's first byte
 	where it begins one, and the escape itself.
 	"""
+	if part.code:
+		return _encoded(part)
 	local  = py_name(part.local)
 	path   = part.placement.path
 	wide   = len(part.delimiter)

@@ -8671,6 +8671,10 @@ Moved to `doc/decision/26.996-a-derived-region-decodes-natively.md`.
 
 Moved to `doc/decision/26.997-ieee-802-3-manchester-was-thomas-s.md`.
 
+### 26.998 A builder writes a coded region
+
+Moved to `doc/decision/26.998-a-builder-writes-a-coded-region.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
