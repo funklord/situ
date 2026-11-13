@@ -2325,7 +2325,7 @@ impl interleave_16 derived;
 codec wide { kernel = permutation(rows = 2, columns = 8); }
 impl wide derived;
 
-codec smtp { kernel = stuffing(worst_case = 4, per = 3, unit = stream,
+codec smtp { kernel = stuffing(worst_case = 3, per = 2, unit = stream,
 	code = smtp_dot); }
 impl smtp derived;
 """

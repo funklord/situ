@@ -877,7 +877,7 @@ STUFFING_BOUNDS: dict[str, tuple[int, int, int]] = {
 	"json_string": (6, 1, 0),
 	"ppp_async": (2, 1, 1),
 	"slip":      (2, 1, 1),
-	"smtp_dot":  (4, 3, 0),
+	"smtp_dot":  (3, 2, 0),
 	"usb":       (7, 6, 0),
 }
 

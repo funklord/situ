@@ -83,13 +83,15 @@ struct reply_line {
 //
 // Declared as a `stuffing` kernel, which is the family COBS and HDLC are in:
 // a trigger predicate and an insertion rule. The worst case is a body of
-// nothing but `.CRLF` lines, three bytes in and four out.
+// nothing but `.LF` lines, two bytes in and three out: the encoder takes a
+// bare LF as a line end, so it streams, and `.CRLF` (3 in, 4 out) is not the
+// worst case it was written down as until 2026-11-13.
 //
 // `unit = stream` and not `byte`, and the difference is real: the trigger is
 // "the start of a line", which a decoder cannot evaluate from one byte
 // without knowing what preceded it.
 codec dot_stuffing {
-	kernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);
+	kernel = stuffing(worst_case = 3, per = 2, unit = stream, code = smtp_dot);
 }
 impl dot_stuffing derived;
 

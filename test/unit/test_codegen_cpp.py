@@ -2018,7 +2018,7 @@ def test_every_schema_compiles(schema: Path, materialize: bool,
 
 # -- a coded region that ends at a delimiter (13.6) -------------------------
 
-CODED = 'codec dot_stuffing {\n\tkernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);\n}\nimpl dot_stuffing derived;\nstruct data_block {\n\tcoded body(dot_stuffing) until "\\r\\n.\\r\\n" {\n\t\tu8 content[remaining];\n\t}\n}\n'
+CODED = 'codec dot_stuffing {\n\tkernel = stuffing(worst_case = 3, per = 2, unit = stream, code = smtp_dot);\n}\nimpl dot_stuffing derived;\nstruct data_block {\n\tcoded body(dot_stuffing) until "\\r\\n.\\r\\n" {\n\t\tu8 content[remaining];\n\t}\n}\n'
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
@@ -2496,7 +2496,7 @@ def test_the_arm_types_of_a_variant_come_before_it(tmp_path: Path) -> None:
 
 # -- a coded region that ends at a delimiter (13.6) -------------------------
 
-STUFFED = ("codec stuff { kernel = stuffing(worst_case = 4, per = 3,"
+STUFFED = ("codec stuff { kernel = stuffing(worst_case = 3, per = 2,"
 	" unit = stream, code = smtp_dot); }\nimpl stuff derived;\n"
 	'struct S { coded body(stuff) until "\\r\\n.\\r\\n" '
 	"{ u8 content[remaining]; } }")

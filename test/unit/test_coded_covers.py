@@ -150,7 +150,7 @@ def test_a_length_changing_codec_may_not_cover_anything() -> None:
 	the case this exists for, is a mask and preserves length.
 	"""
 	body = """codec stuffed {
-	kernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);
+	kernel = stuffing(worst_case = 3, per = 2, unit = stream, code = smtp_dot);
 }
 impl stuffed derived;
 

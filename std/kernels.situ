@@ -467,9 +467,10 @@ impl usb_bit_stuffing derived;
 //
 // `unit = stream` and not `byte`: the trigger is "the start of a line", which
 // cannot be evaluated from one byte without knowing what preceded it. The worst
-// case is a body of nothing but `.CRLF` lines -- three bytes in, four out.
+// case is a body of nothing but `.LF` lines -- two bytes in, three out, since
+// a bare LF ends a line here; `.CRLF` was named until 2026-11-13.
 codec smtp_dot_stuffing {
-	kernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);
+	kernel = stuffing(worst_case = 3, per = 2, unit = stream, code = smtp_dot);
 }
 impl smtp_dot_stuffing derived;
 

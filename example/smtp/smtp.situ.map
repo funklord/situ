@@ -13,7 +13,7 @@
 
 # codecs. `trusted` means the properties are declared and
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
-codec dot_stuffing derived expansion=ratio_bounded(4,3) seekable=none granularity=stream invertible deterministic
+codec dot_stuffing derived expansion=ratio_bounded(3,2) seekable=none granularity=stream invertible deterministic
 
 struct command size=3..528 access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
   command.verb                           offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical

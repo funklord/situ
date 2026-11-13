@@ -18,7 +18,7 @@
 endian big
 target buffer
 
-kernel dot_stuffing : stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot)
+kernel dot_stuffing : stuffing(worst_case = 3, per = 2, unit = stream, code = smtp_dot)
 
 struct command size=3..528
   @0x0000   until:20  command_verb verb  fold-case cap=16 encoding=ascii

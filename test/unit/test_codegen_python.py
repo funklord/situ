@@ -1280,7 +1280,7 @@ def test_every_schema_imports(schema: Path, tmp_path: Path) -> None:
 
 # -- a coded region that ends at a delimiter (13.6) -------------------------
 
-CODED = 'codec dot_stuffing {\n\tkernel = stuffing(worst_case = 4, per = 3, unit = stream, code = smtp_dot);\n}\nimpl dot_stuffing derived;\nstruct data_block {\n\tcoded body(dot_stuffing) until "\\r\\n.\\r\\n" {\n\t\tu8 content[remaining];\n\t}\n}\n'
+CODED = 'codec dot_stuffing {\n\tkernel = stuffing(worst_case = 3, per = 2, unit = stream, code = smtp_dot);\n}\nimpl dot_stuffing derived;\nstruct data_block {\n\tcoded body(dot_stuffing) until "\\r\\n.\\r\\n" {\n\t\tu8 content[remaining];\n\t}\n}\n'
 
 
 def test_a_coded_region_is_framed_like_any_delimited_member(tmp_path: Path) -> None:
@@ -1648,7 +1648,7 @@ def test_a_be128_field_reads_what_sqlite_wrote(tmp_path: Path) -> None:
 
 # -- a coded region that ends at a delimiter (13.6) -------------------------
 
-STUFFED = ("codec stuff { kernel = stuffing(worst_case = 4, per = 3,"
+STUFFED = ("codec stuff { kernel = stuffing(worst_case = 3, per = 2,"
 	" unit = stream, code = smtp_dot); }\nimpl stuff derived;\n"
 	'struct S { coded body(stuff) until "\\r\\n.\\r\\n" '
 	"{ u8 content[remaining]; } }")

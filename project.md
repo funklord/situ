@@ -8675,6 +8675,10 @@ Moved to `doc/decision/26.997-ieee-802-3-manchester-was-thomas-s.md`.
 
 Moved to `doc/decision/26.998-a-builder-writes-a-coded-region.md`.
 
+### 26.999 Dot-stuffing grows three for two
+
+Moved to `doc/decision/26.999-dot-stuffing-grows-three-for-two.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

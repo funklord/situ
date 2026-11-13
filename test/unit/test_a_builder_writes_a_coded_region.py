@@ -91,6 +91,20 @@ def test_the_room_is_the_codes_worst_case(tmp_path: Path) -> None:
 	assert build.build_frame(bytearray(11), b"abcde") == 6
 
 
+def test_a_body_of_bare_dot_lines_fits_the_room_it_is_given(
+		tmp_path: Path) -> None:
+	"""The encoder takes a bare LF as a line end, so `.LF` lines grow 3:2.
+	The bound said 4:3, from `.CRLF`, and room computed from it was 141
+	bytes for these 155: an overrun in C and C++ (26.998). Exactly the
+	corrected room builds, and a byte less is refused."""
+	base, build = _module(tmp_path, "example/smtp/smtp.situ")
+	content = b".\n" * 50
+	n = build.build_data_block(bytearray(155), content)
+	assert n == 155
+	with pytest.raises(build.BoundsError):
+		build.build_data_block(bytearray(154), content)
+
+
 @pytest.mark.skipif(COMPILER is None, reason = "needs a C compiler")
 def test_c_writes_slip_as_rfc_1055_says(tmp_path: Path) -> None:
 	out = tmp_path / "gen"
