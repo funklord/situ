@@ -719,6 +719,12 @@ assert TERMINATED == TERMINATED_ROW
 DIGITS_VALID, DIGITS_MINIMAL = 9, 10
 NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
 PINNED_RUN = 14
+#: `[ascending]` (26.985): a run's keys each above the one before. Not an
+#: `image_check` row -- its own table carries it -- and numbered after
+#: `BOUND_BY`'s three so the C walker's kinds and these stay one list.
+ASCENDING = 22
+#: `pack.ORDER_*`, which `walk` cannot import from the packer.
+ORDER_BYTES, ORDER_UNSIGNED, ORDER_SIGNED = 0, 1, 2
 #: `[encoding = from(f)]` (0058), and the mapping it reads. ENCODED_FROM sits
 #: on the governed member and its value is the SOURCE's placement; ENCODING_ARM
 #: sits on the source, one row per arm of the token set in declaration order,
@@ -1298,6 +1304,30 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			if verdict is None or verdict:
 				return verdict
 
+		# A run whose keys ascend: each above the one before, compared as
+		# the four backends compare it -- bytes first byte first, or the
+		# number they spell (26.985). After the run's own checks, so the
+		# elements compared are ones the frame holds.
+		if index in image.orderings:
+			step, key_at, width, kind, little = image.orderings[index]
+			try:
+				start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+				count = size_bits(view, index) // BITS_PER_BYTE // step
+			except (Unplaceable, Refused):
+				return None
+			if start + count * step <= view.limit:
+				previous = None
+				for one in range(count):
+					at  = start + one * step + key_at
+					raw = bytes(view.buffer[at:at + width])
+					key: bytes | int = raw if kind == ORDER_BYTES \
+						else int.from_bytes(raw, "little" if little
+						                    else "big",
+						                    signed=kind == ORDER_SIGNED)
+					if previous is not None and not key > previous:  # type: ignore[operator]
+						return fail(ERR_CONSTRAINT, index, ASCENDING)
+					previous = key
+
 		# A nested member is `validate` called through, and its error is
 		# returned as it stands: C propagates the inner code rather than
 		# folding it into CONSTRAINT.
@@ -1767,6 +1797,7 @@ CHECK_NAMES = {
 	ENCODED_FROM: "encoding", ENCODING_ARM: "encoding",
 	PAD_LENGTH_MIN: "pad_min", PAD_LENGTH_MAX: "pad_max",
 	19: "must_eq", 20: "min", 21: "max",
+	ASCENDING: "ascending",
 }
 
 
@@ -1776,7 +1807,7 @@ ALL_CHECKS = frozenset({
 	MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN,
 	FITS_FRAME, TERMINATED, ARM_SELECTED, DIGITS_VALID, DIGITS_MINIMAL,
 	NUL_TERMINATED, ENCODED_AS, ZERO_RUN, PINNED_RUN, ENCODED_FROM,
-	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX, *BOUND_BY,
+	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX, *BOUND_BY, ASCENDING,
 })
 
 

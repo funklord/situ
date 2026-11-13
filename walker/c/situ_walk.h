@@ -215,6 +215,11 @@ typedef struct {
 	const uint8_t *holds;
 	uint32_t       holds_count;
 	uint32_t       holds_stride;
+	/* A run whose keys ascend (26.985): placement, stride, key offset,
+	 * key bytes, kind and byte order, one row per run. */
+	const uint8_t *orderings;
+	uint32_t       ordering_count;
+	uint32_t       ordering_stride;
 
 	/* What the schema says about a message beyond its layout (0051): one
 	 * row per `when`, keyed by the shape whose members its predicate

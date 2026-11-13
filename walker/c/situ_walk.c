@@ -23,6 +23,7 @@
 #define TAG_MESSAGES   25u
 #define TAG_ARGUMENTS  28u
 #define TAG_HOLDS      29u
+#define TAG_ORDERINGS  30u
 #define TAG_RELATIONS  18u
 #define TAG_RELATION_MUSTS 19u
 
@@ -50,6 +51,7 @@
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
 #define ARGUMENT_READS  12u	/* `<III`: placement, parameter, code */
 #define HOLDS_READS      8u	/* `<II`: placement, shape */
+#define ORDERING_READS  18u	/* `<IIIIBB`: placement, stride, key at, width, kind, little */
 /* How many arguments a parent may hand one child (0068), which sizes the
  * array a descent keeps them in. A child taking more is UNSUPPORTED. */
 #define SITU_WALK_ARGUMENTS_MAX 8u
@@ -261,6 +263,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->holds        = image + offset;
 			out->holds_count  = items;
 			out->holds_stride = stride;
+		} else if (kind == TAG_ORDERINGS) {
+			if (stride < ORDERING_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->orderings       = image + offset;
+			out->ordering_count  = items;
+			out->ordering_stride = stride;
 		} else if (kind == TAG_DEPTHS) {
 			if (stride < DEPTH_READS) {
 				return SITU_WALK_MALFORMED;
@@ -4512,6 +4521,9 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_MINIMUM_BY     20u
 #define CHECK_MAXIMUM_BY     21u
 #define CHECK_BY             19u
+/* `[ascending]` (26.985): not an `image_check` row, its own table carries
+ * it; numbered after the three above so the two walkers keep one list. */
+#define CHECK_ASCENDING      22u
 
 /* `text_flags` bit 2: the member compares case-insensitively (0055). */
 #define TEXT_CASE_INSENSITIVE 4u
@@ -6808,6 +6820,64 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (inner != SITU_WALK_OK) {
 				*verdict = inner;
 				return SITU_WALK_OK;
+			}
+		}
+
+		/* A run whose keys ascend: each above the one before, compared as
+		 * the four backends compare it -- bytes first byte first, or the
+		 * number they spell (26.985). The run's own checks came first, so
+		 * an element past the frame is not compared. */
+		for (uint32_t o = 0u; o < image->ordering_count; o++) {
+			const uint8_t *row = image->orderings + o * image->ordering_stride;
+
+			if (u32_at(row) != index) {
+				continue;
+			}
+			const uint32_t step   = u32_at(row + 4);
+			const uint32_t key_at = u32_at(row + 8);
+			const uint32_t width  = u32_at(row + 12);
+			const uint8_t  order  = row[16];
+			const int      little = row[17] != 0u;
+			const uint32_t first  = at / 8u;
+			const uint32_t count  = step == 0u ? 0u : (wide / 8u) / step;
+
+			if (first > len || count > (len - first) / (step ? step : 1u)
+			    || key_at + width > step || (width > 8u && order != 0u)) {
+				break;
+			}
+			for (uint32_t i = 1u; i < count; i++) {
+				const uint8_t *prev = message + first + (i - 1u) * step + key_at;
+				const uint8_t *next = prev + step;
+				int            rank = 0;
+
+				if (order == 0u) {
+					for (uint32_t k = 0u; k < width && rank == 0; k++) {
+						rank = (int)next[k] - (int)prev[k];
+					}
+				} else {
+					uint64_t a = 0u, b = 0u;
+					for (uint32_t k = 0u; k < width; k++) {
+						const uint32_t from = little ? width - 1u - k : k;
+						a = (a << 8) | prev[from];
+						b = (b << 8) | next[from];
+					}
+					if (order == 2u && width < 8u) {
+						const uint64_t sign = (uint64_t)1u << (width * 8u - 1u);
+						a = (a ^ sign) - sign;
+						b = (b ^ sign) - sign;
+					}
+					if (order == 2u) {
+						rank = (int64_t)b > (int64_t)a ? 1
+						       : (int64_t)b < (int64_t)a ? -1 : 0;
+					} else {
+						rank = b > a ? 1 : b < a ? -1 : 0;
+					}
+				}
+				if (rank <= 0) {
+					record(why, index, CHECK_ASCENDING);
+					*verdict = SITU_WALK_CONSTRAINT;
+					return SITU_WALK_OK;
+				}
 			}
 		}
 

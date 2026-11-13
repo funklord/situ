@@ -1138,8 +1138,8 @@ twice, which is what `ordering = ascending` asks of a `tlv` region's items
 under its default (9.5) -- and `u32 offsets[n] [ascending]` says it of the
 elements themselves. A byte key compares byte by byte, first byte first; an
 integer key as the number its bytes say. `validate` refuses a run out of
-order in all four backends; the walkers, whose image carries no ordering
-program, say they cannot answer for such a struct. It holds a counted run
+order in all four backends and both walkers, the image carrying each run's
+stride and key (26.988). It holds a counted run
 of elements of one size, the key at one place in each, which is the shape a
 sorted index takes, and is refused with that reason on any other (26.985).
 
@@ -8629,6 +8629,10 @@ Moved to `doc/decision/26.986-a-size-reads-remaining.md`.
 ### 26.987 gen-checks places a fixed wide run
 
 Moved to `doc/decision/26.987-gen-checks-places-a-fixed-wide-run.md`.
+
+### 26.988 The walkers read the order
+
+Moved to `doc/decision/26.988-the-walkers-read-the-order.md`.
 
 ### 26.929 The offset cache counts bits
 

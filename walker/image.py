@@ -40,6 +40,8 @@ RELATIONS, RELATION_MUSTS = 18, 19
 MESSAGES = 25
 ARGUMENTS = 28
 HOLDS = 29
+#: `[ascending]` (26.985): placement, stride, key offset and width, kind, order.
+ORDERINGS = 30
 PINNED_RUNS = 20
 
 #: `image_check`
@@ -479,6 +481,10 @@ class Image:
 	arguments: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 	#: The struct a run of bytes holds (26.898): run placement -> struct.
 	holds: dict[int, int] = field(default_factory=dict)
+	#: A run whose keys ascend (26.985): run placement -> (stride, key
+	#: offset, key bytes, kind, little-endian), `pack.ORDER_*` the kind.
+	orderings: dict[int, tuple[int, int, int, int, bool]] = field(
+		default_factory=dict)
 	#: Per recursive struct, `(depth, limit)`: what the format allows and
 	#: what the schema asks a reader to spend (0054). Absent for a struct
 	#: that does not name itself, which is nearly all of them -- so an
@@ -774,6 +780,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 		for i in range(records):
 			where, shape = _struct.unpack_from("<II", blob, at + i * stride)
 			image.holds[where] = shape
+
+	if ORDERINGS in found:
+		at, records, stride = found[ORDERINGS]
+		for i in range(records):
+			where, step, key_at, width, kind, little = _struct.unpack_from(
+				"<IIIIBB", blob, at + i * stride)
+			image.orderings[where] = (step, key_at, width, kind, bool(little))
 
 	if DEPTHS in found:
 		at, records, stride = found[DEPTHS]

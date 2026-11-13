@@ -72,6 +72,7 @@ enum image_section_tag : u32 {
 	messages     = 25,     // what a schema says about a message (0051)
 	arguments    = 28,     // what a parent hands a child (0068)
 	holds        = 29,     // the struct a run of bytes holds (26.898)
+	orderings    = 30,     // a run whose keys ascend (26.985, 26.988)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -523,6 +524,9 @@ enum image_check : u8 {
 	must_eq_by     = 19,  // A bound written over a field (26.902): the value
 	minimum_by     = 20,  // is where its program starts, and the comparison
 	maximum_by     = 21,  // is must_eq, minimum or maximum.
+	ascending      = 22,  // a run's keys each above the one before
+	                      // (26.988): no row carries it -- `image_ordering`
+	                      // does -- and it is the kind a refusal reports.
 	encoding_arm = 16,    // one per arm of the token set a member holds, in
 	                      // declaration order, `value` being the encoding
 	                      // code an `encoded_as` would carry. Rows on the
@@ -589,6 +593,26 @@ struct image_argument {
 struct image_holds {
 	u32  placement;
 	u32  shape;
+}
+
+// A run whose keys ascend (26.985, 26.988). `placement` is the run, each
+// element `stride` bytes; its key sits `key_at` bytes into one and is
+// `key_bytes` wide, compared as bytes, first byte first, or as the integer
+// they spell in the order `little` says.
+enum image_order_kind : u8 {
+	as_bytes    = 0,
+	as_unsigned = 1,
+	as_signed   = 2,
+}
+
+struct image_ordering {
+	u32  placement;
+	u32  stride;
+	u32  key_at;
+	u32  key_bytes;
+	image_order_kind kind;
+	u8   little  [max = 1];
+	u8   ordering_pad[2];
 }
 
 struct image_index {

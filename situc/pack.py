@@ -71,6 +71,10 @@ TLV_RULE_BYTES	= 28
 INDEX_BYTES	= 20
 ARGUMENT_BYTES	= 16
 HOLDS_BYTES	= 8
+#: `<IIIIBBxx`: placement, stride, key offset, key bytes, key kind, little.
+ORDERING_BYTES	= 20
+#: `image_ordering.kind`: the key compared as bytes, unsigned or signed.
+ORDER_BYTES, ORDER_UNSIGNED, ORDER_SIGNED = 0, 1, 2
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
@@ -153,6 +157,8 @@ SECTION_KERNEL_TABLES	= 27
 SECTION_ARGUMENTS	= 28
 #: The struct a run of bytes holds (26.898): `image_holds`, one row per run.
 SECTION_HOLDS		= 29
+#: A run whose keys ascend (26.985): `image_ordering`, one row per run.
+SECTION_ORDERINGS	= 30
 
 #: `image_placement.flags`
 OFFSET_KNOWN		= 1 << 0
@@ -1702,6 +1708,24 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# reason this needed no opcode. The predicate's owner is the struct
 	# every path in it names, which `wellformed.check_whens` has already
 	# held to one.
+	# A run whose keys ascend (26.985): where each key sits, so both walkers
+	# compare the bytes the four backends compare -- `traverse.run_ordering`
+	# answers for all six.
+	orderings_blob = bytearray()
+	for _owner, placement in rows:
+		ordered = traverse.run_ordering(resolved.structs, placement)
+		if not isinstance(ordered, traverse.RunOrdering):
+			continue
+		ordered_key = ordered.key
+		compared = (ORDER_BYTES if ordered_key is None
+		            else ORDER_SIGNED if ordered_key.scalar is not None
+		            and ordered_key.scalar.signed else ORDER_UNSIGNED)
+		key_little = (ordered_key is not None
+		              and ordered_key.endian is ast.Endian.LITTLE)
+		orderings_blob += _struct.pack(
+			"<IIIIBBxx", placement_index[placement.path], ordered.stride,
+			ordered.key_at, ordered.key_bytes, compared, 1 if key_little else 0)
+
 	# The struct a run of bytes holds (26.898).
 	holds_blob = bytearray()
 	for _owner, placement in rows:
@@ -1784,13 +1808,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			if placement.kind in ("coded", "sealed") \
 					and placement.path not in code_at \
 					and not placement.delimiters:
-				whole = False
-				continue
-			# `[ascending]` compares each element's key with the one before,
-			# and the image carries no such program: the walkers say they
-			# cannot answer rather than pass a run out of order (26.985),
-			# as they do for a `tlv` region's `ordering = ascending`.
-			if any(attr.name == "ascending" for attr in placement.attrs):
 				whole = False
 				continue
 			# A `[since]` member is checked only where the message's own
@@ -3207,6 +3224,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
 			(SECTION_ARGUMENTS, arguments_blob, ARGUMENT_BYTES),
 			(SECTION_HOLDS, holds_blob, HOLDS_BYTES),
+			(SECTION_ORDERINGS, orderings_blob, ORDERING_BYTES),
 			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
 			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),

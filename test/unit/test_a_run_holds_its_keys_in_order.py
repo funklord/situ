@@ -6,9 +6,8 @@ by hand. `index_entry index[count] [ascending = digest]` states it: the four
 backends refuse a run out of order or with a key twice, in the same order
 `ordering = ascending` holds a `tlv` region's items to (26.741).
 
-The walkers' image carries no ordering program, so they say they cannot
-answer for such a struct rather than pass it, which is how they treat a
-`tlv` region's ordering too.
+The walkers read where each key sits from the image and compare the same
+bytes (26.988).
 """
 
 from __future__ import annotations
@@ -95,12 +94,15 @@ def test_all_four_hold_the_order(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason = "needs a C compiler")
-def test_both_walkers_say_they_cannot_answer(tmp_path: Path) -> None:
+def test_both_walkers_hold_the_order(tmp_path: Path) -> None:
+	"""The image carries each ordered run's stride and key (26.988), so the
+	walkers give the four backends' verdict rather than abstaining."""
 	image = _inline_image(SCHEMA)
-	for struct, data, _ in CASES[:4]:
+	for struct, data, verdict in CASES:
 		shape = shape_named_text(SCHEMA, struct)
-		assert python_verdict(image, data, shape) == "cannot-say"
-		assert c_verdict(tmp_path, image, data, shape) == "cannot-say"
+		assert python_verdict(image, data, shape) == verdict, (struct, data.hex())
+		assert c_verdict(tmp_path, image, data, shape) == verdict, \
+			(struct, data.hex())
 
 
 @pytest.mark.parametrize("member, said", [
