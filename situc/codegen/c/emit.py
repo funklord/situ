@@ -641,6 +641,21 @@ class Emitter:
 			if entry is None or entry.placement.scalar is None:
 				continue
 
+			# A field the data places has no offset the store can name, and
+			# the recompute stores at one: all four raised `offset is dynamic`
+			# out of the generator (26.982). 16.1's answer for what a build
+			# cannot do is the same as for a right side it cannot evaluate.
+			if entry.placement.offset_bits is None:
+				lines.extend([
+					"",
+					f"/* No {field} recompute: `{field}` sits after a member the",
+					" * data sizes, and this build stores a derived field only",
+					" * at an offset it knows. The refusal to write it directly",
+					" * still stands, and `validate` still refuses a message",
+					" * that contradicts it. */",
+				])
+				continue
+
 			value = invariant_expression(struct, decl.expr, self)
 			if value is None:
 				lines.extend([

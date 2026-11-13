@@ -8595,6 +8595,10 @@ Moved to `doc/decision/26.980-a-when-reads-its-frame.md`.
 
 Moved to `doc/decision/26.981-a-struct-its-frame-holds-exactly.md`.
 
+### 26.982 A derived field the data places
+
+Moved to `doc/decision/26.982-a-derived-field-the-data-places.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
