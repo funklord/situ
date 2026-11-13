@@ -10063,6 +10063,14 @@ class Emitter:
 
 		fields = [f"\t\tstd::uint32_t {bare_name(local_name(struct, held))};"
 		          for held in dynamic]
+		# A member called `offsets` -- git's pack index has one -- would be a
+		# field with its class's name, which C++ refuses ("`offsets` is not a
+		# type"). The type yields, as a keyword does in `bare_name`: `offsets_`
+		# there and `offsets` everywhere else, so no other schema's API moves
+		# (26.990).
+		named = ("offsets_" if any(bare_name(local_name(struct, held))
+		                           == "offsets" for held in dynamic)
+		         else "offsets")
 
 		return [
 			"",
@@ -10073,11 +10081,11 @@ class Emitter:
 			"\t * it, so it rescans every delimited member ahead of the one",
 			"\t * asked for, on every call. This is that sum once, for all of",
 			"\t * them. The memory is the caller's: one word per member. */",
-			"\tstruct offsets {",
+			f"\tstruct {named} {{",
 			*fields,
 			"\t};",
 			"",
-			"\tvoid resolve_offsets(offsets &out) const noexcept",
+			f"\tvoid resolve_offsets({named} &out) const noexcept",
 			"\t{",
 			"\t\tstd::uint32_t at = 0;",
 			"",

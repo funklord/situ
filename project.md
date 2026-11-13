@@ -8639,6 +8639,10 @@ Moved to `doc/decision/26.988-the-walkers-read-the-order.md`.
 
 Moved to `doc/decision/26.989-wireshark-says-a-run-is-out-of-order.md`.
 
+### 26.990 A member called offsets
+
+Moved to `doc/decision/26.990-a-member-called-offsets.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
