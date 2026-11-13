@@ -409,3 +409,10 @@ unbuilt and citing no record fails, naming itself -- so the empty cell
 cannot be entered silently again. That closes the mechanical half; the half
 where both prose copies are wrong together is closed only by measuring, and
 this record's `Status:` now carries the word a tool can read.
+
+## Amendment, 2026-11-13: a coded region too
+
+The 2026-09-30 amendment measured `derived` native for a checksum. A
+coded region's decode was not: Rust still called the C codec through
+`extern "C"` and Python emitted none. Both now call the kernel they
+define, as 26.996 records; the `for <lang>` qualifier is still unbuilt.

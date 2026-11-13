@@ -2705,7 +2705,8 @@ class Emitter:
 		wanted = sorted({placement.tag_codec
 		                 for struct in self.resolved.structs.values()
 		                 for placement in struct.layout.placements
-		                 if placement.tag_codec})
+		                 if placement.tag_codec}
+		                | self._region_codecs())
 		if not wanted:
 			return []
 
@@ -2713,6 +2714,12 @@ class Emitter:
 		# rather than by `derived.generate`, which this path never calls:
 		# a single file gets one copy however many codecs it carries.
 		lines: list[str] = list(kernels.span_byte())
+		# And bit access, where a codec here reads bits: a region's table
+		# code does, where no checksum did (26.996).
+		if any(decl.name in wanted and decl.kernel is not None
+		       and kernels._reads_bits(decl)
+		       for decl in self.schema.codecs()):
+			lines.extend(kernels.bits_access())
 		for decl in self.schema.codecs():
 			if decl.name not in wanted:
 				continue
@@ -2735,6 +2742,38 @@ class Emitter:
 				continue
 			lines.extend(body)
 		return lines
+
+	def _region_codecs(self) -> set[str]:
+		"""Derived codecs a coded region decodes through, inline (26.996).
+
+		A region's decode was left to C (0017) after 0017's own amendment
+		of 2026-09-04 made `derived` native: the kernel is generated, so a
+		Python rendering is a spelling of the same description rather than
+		a second implementation. A tier-1 `extern` is still the caller's.
+		"""
+		return {placement.codec
+		        for struct in self.resolved.structs.values()
+		        for placement in own_members(struct)
+		        if placement.kind == "coded" and placement.codec
+		        and self._native_decode(placement)}
+
+	def _native_decode(self, placement: Placement) -> bool:
+		"""Whether a coded region's decode is a derived kernel this backend
+		generates, with the `(in, count, out) -> count` shape."""
+		from situc.codegen.python import derived as kernels
+
+		if extern_symbol(self.schema, placement.codec or "") is not None:
+			return False
+		codec = self.codecs.get(placement.codec or "")
+		if codec is None or not decodes_here(codec):
+			return False
+		ratio = decode_ratio(codec)
+		if ratio is None or ratio[0] == 0:
+			return False
+		decl = next((one for one in self.schema.codecs()
+		             if one.name == placement.codec), None)
+		return decl is not None and decl.kernel is not None \
+			and kernels._for_kernel(decl, "situ") is not None
 
 	def _prefix_bytes(self, placement: Placement) -> int | None:
 		"""How many bytes the prefix struct is, where that is a constant.
@@ -3414,15 +3453,13 @@ class Emitter:
 
 	def _coded_region(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
-		"""The encoded bytes of a coded region, and why the decode is not here.
+		"""The encoded bytes of a coded region, and its decode.
 
 		The bytes need no transform to reach and this backend hands them
-		back. The *decode* is a call into the C implementation, which
-		decision 0017 makes the only one there is -- and where C++ links it
-		for free and Rust declares it `extern "C"`, this one would have to
-		load a shared object at run time, from a path situ has no convention
-		for. Inventing one here would be a policy decision made in a code
-		generator, so the accessor says what to do instead.
+		back. A derived codec decodes natively, through the kernel this
+		module defines (26.996); a tier-1 `extern` one is the caller's C,
+		which this backend would have to load from a path situ has no
+		convention for, so the note says what to call instead.
 		"""
 		name  = py_name(local_name(struct, placement))
 		start = self._offset_expression(struct, placement)
@@ -3459,7 +3496,7 @@ class Emitter:
 			"\t\treturn self._msg.buffer[start:stop]",
 		]
 
-		return lines + self._decode_note(struct, placement)
+		return lines + self._decode_note(struct, placement, f"self.{name}")
 
 	def _coded_delimited(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3477,19 +3514,20 @@ class Emitter:
 			"\t# the order the format specifies -- a stuffing code protects its",
 			"\t# own terminator, so the sequence is unambiguous there and would",
 			"\t# not be after decoding.",
-			*self._decode_note(struct, placement),
+			*self._decode_note(
+				struct, placement,
+				f"self.{py_name(local_name(struct, placement))}_raw"),
 		]
 
-	def _decode_note(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
-		"""Where the decoded bytes are, which for this backend is elsewhere.
+	def _decode_note(self, struct: ResolvedStruct, placement: Placement,
+			source: str) -> list[str]:
+		"""The decoded bytes, or where they are.
 
-		Not emitted, deliberately and unchanged: the codec is C's (0017), and
-		calling it from here means loading a shared object from a path this
-		generator would have to invent. What the note can do is name the symbol
-		and the size, and it now does so for a delimited region too -- which
-		got no note at all, so a Python reader had nothing saying the bytes
-		were stuffed.
+		A derived codec's decode is a method here, calling the kernel this
+		module defines (26.996). A tier-1 `extern` one is the caller's C,
+		and calling it means loading a shared object from a path this
+		generator would have to invent, so the note names the symbol and
+		the size instead. `source` is the expression for the encoded bytes.
 		"""
 		codec = self.codecs.get(placement.codec or "")
 		if codec is None:
@@ -3590,16 +3628,28 @@ class Emitter:
 				*sequence,
 			]
 
-		if not decodes_here(codec):
+		if not self._native_decode(placement):
 			return []
 
+		# Native, as `derived` is in every backend since 0017's amendment of
+		# 2026-09-04: the kernel is defined in this module (26.996).
+		assert ratio is not None
+		kernel  = f"{(placement.codec or '').lower()}_decode"
+		bitwise = decode_counts_bits(codec)
+		count   = "len(data) * 8" if bitwise else "len(data)"
+		took    = "written // 8" if bitwise else "written"
 		return [
 			"",
-			f"\t# No `{name}_decode`: the codec is C's (decision 0017), and",
-			"\t# calling it from here means loading a shared object from a",
-			"\t# path this generator would have to invent. Build the C",
-			f"\t# runtime and call `situ_{py_name(placement.codec or '')}_decode`",
-			f"\t# through ctypes; {sized}.",
+			f"\tdef {name}_decode(self) -> bytes:",
+			f'\t\t"""The decoded bytes of {placement.path}, through'
+			f" `{placement.codec}`.",
+			"",
+			"\t\tEmpty where the codec refuses the encoded form, as the",
+			'\t\tgenerated C returns no bytes for it."""',
+			f"\t\tdata    = bytes({source})",
+			f"\t\tout     = bytearray(len(data) * {ratio[1]} // {ratio[0]})",
+			f"\t\twritten = {kernel}(data, {count}, out)",
+			f"\t\treturn bytes(out[:{took}])",
 		]
 
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:

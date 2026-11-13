@@ -867,10 +867,19 @@ def test_a_derived_impl_still_declares_the_derived_decoder(
 	directions are asserted, because the change that produced this test
 	could satisfy the other test by declaring nothing at all.
 	"""
-	derived = _declared(_built(tmp_path, "derived;", target), target)
+	source  = _built(tmp_path, "derived;", target)
+	derived = _declared(source, target)
+	assert "app_puffer_decode" not in derived
+	if target == "rust":
+		# Rust defines a derived decoder in the module rather than
+		# declaring C's (26.996): the accessor's callee is still there,
+		# and no C symbol is promised.
+		assert "pub fn puffer_decode(" in source, (
+			"rust: a derived impl must still define its decoder")
+		assert not derived, f"rust: declares C symbols {derived}"
+		return
 	assert "situ_puffer_decode" in derived, (
 		f"{target}: a derived impl must still declare its decoder")
-	assert "app_puffer_decode" not in derived
 
 
 @pytest.mark.parametrize("impl", ['extern "app_puffer";', "derived;"])

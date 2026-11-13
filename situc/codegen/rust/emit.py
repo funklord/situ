@@ -1957,7 +1957,11 @@ class Emitter:
 		wanted = sorted({placement.tag_codec
 		                 for struct in self.resolved.structs.values()
 		                 for placement in struct.layout.placements
-		                 if placement.tag_codec})
+		                 if placement.tag_codec}
+		                | {held.codec
+		                   for struct in self.resolved.structs.values()
+		                   for held in own_members(struct)
+		                   if held.codec and self._decodes(held)})
 		if not wanted:
 			return []
 
@@ -1966,6 +1970,12 @@ class Emitter:
 		# because this path never goes through `derived.generate` and a
 		# second copy is a second thing to be wrong.
 		lines: list[str] = list(kernels.span_byte_helper())
+		# And bit access, where a codec here reads bits: a region's table
+		# code does, where no checksum did (26.996).
+		if any(decl.name in wanted and decl.kernel is not None
+		       and kernels._reads_bits(decl)
+		       for decl in self.schema.codecs()):
+			lines.extend(kernels.bits_helper())
 		for decl in self.schema.codecs():
 			if decl.name not in wanted:
 				continue
@@ -2655,11 +2665,11 @@ class Emitter:
 			placement: Placement) -> list[str]:
 		"""The encoded bytes of a coded region, and the decode beside them.
 
-		The decode calls the C implementation, which decision 0017 makes the
-		only one there is -- so it goes through `extern "C"` and therefore
-		through `unsafe`, and section 26.18 says where that `unsafe` belongs:
-		at the call site, with a note saying what the caller is promising,
-		rather than buried in a helper.
+		A derived codec decodes through the native kernel this module
+		defines (26.996), with no `unsafe`. A tier-1 `extern` one is the
+		caller's C, reached through `extern "C"` and therefore `unsafe`,
+		and section 26.18 says where that belongs: at the call site, with
+		a note saying what the caller is promising.
 		"""
 		name  = _ident(c_name(local_name(struct, placement)))
 		start = self._offset_expression(struct, placement)
@@ -2755,19 +2765,18 @@ class Emitter:
 			return self._extern_decode(struct, placement, codec, symbol,
 			                           encoded)
 
-		if not decodes_here(codec):
+		if not self._decodes(placement):
 			return []
 
 		# `decode_ratio`, not `codec.ratio`: a length-preserving kernel
 		# declares no ratio and its decoded size is the encoded one.
 		ratio = decode_ratio(codec)
-		if ratio is None or ratio[0] == 0:
-			return []
+		assert ratio is not None
 
 		name    = _ident(c_name(local_name(struct, placement)))
 		bound   = decode_bound(codec, placement)
 		bitwise = decode_counts_bits(codec)
-		sym     = f"situ_{c_name(placement.codec or '')}_decode"
+		sym     = f"{(placement.codec or '').lower()}_decode"
 		scale   = " * 8" if bitwise else ""
 		unscale = " / 8" if bitwise else ""
 		return [
@@ -2799,21 +2808,20 @@ class Emitter:
 			*([f"\tpub const {name.upper()}_DECODED_MAX: usize = {bound};", ""]
 			  if bound is not None else []),
 			f"\tpub fn {name}_decode(&self, out: &mut [u8]) -> Result<usize> {{",
-			f"\t\tlet encoded = {encoded};",
+			# The bytes the region holds, not the length its fields
+			# claim: a short message gives fewer, and the native kernel
+			# indexes them (26.996).
+			f"\t\tlet input = self.{name}();",
+			f"\t\tlet encoded = core::cmp::min({encoded}, input.len());",
 			f"\t\tlet need = encoded * {ratio[1]} / {ratio[0]};",
 			"",
 			"\t\tif out.len() < need {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			"\t\t// SAFETY: the codec is the C implementation (decision 0017)",
-			"\t\t// and this is the one call that crosses to it. Both slices",
-			"\t\t// are checked above -- the input is this region's own bytes",
-			"\t\t// and the output is at least what the ratio says it needs.",
-			"\t\tlet written = unsafe {",
-			f"\t\t\t{sym}(self.{name}().as_ptr(), (encoded{scale}) as u32,",
-			"\t\t\t\tout.as_mut_ptr())",
-			"\t\t};",
-			f"\t\tOk(written as usize{unscale})",
+			"\t\t// The kernel is derived and native (0017's amendment of",
+			"\t\t// 2026-09-04), defined in this module: no `unsafe`.",
+			f"\t\tlet written = {sym}(input, encoded{scale}, out);",
+			f"\t\tOk(written{unscale})",
 			"\t}",
 		]
 
@@ -2985,12 +2993,11 @@ class Emitter:
 
 	def _codec_externs(self) -> list[str]:
 		"""Decoders this module calls, declared once at module scope."""
-		wanted = sorted({
-			held.codec for struct in self.resolved.structs.values()
-			for held in own_members(struct)
-			if held.codec and self._decodes(held)})
+		# A derived decode is native and inline (`_derived_codecs`, 26.996),
+		# so only the tier-1 implementations are C's.
+		wanted: list[str] = []
 
-		# And the tier-1 ones, under the symbol their `impl` binds (13.2a).
+		# The tier-1 ones, under the symbol their `impl` binds (13.2a).
 		tier_one = sorted({
 			symbol for struct in self.resolved.structs.values()
 			for held in own_members(struct)
@@ -3014,7 +3021,8 @@ class Emitter:
 			"",
 			# `//` and not `///`: a doc comment on an `extern` block is an
 			# `unused_doc_comments` warning, and warnings are errors here.
-			"// The codec implementations, which are C's (decision 0017).",
+			"// The tier-1 codec implementations this schema binds, which are",
+			"// the caller's C (13.2a); derived ones are defined in this module.",
 			*([
 				"// The span a scattered transform is handed (13.2b). `repr(C)`",
 				"// because C is what reads it, and the layout is the contract.",
@@ -3054,10 +3062,20 @@ class Emitter:
 		(26.138, 26.513); the C++ copy carries the longer note and 26.368's
 		precedent.
 		"""
+		from situc.codegen.rust import derived as kernels
+
 		if extern_symbol(self.schema, placement.codec or "") is not None:
 			return False
 		codec = self.codecs.get(placement.codec or "")
-		return codec is not None and decodes_here(codec)
+		if codec is None or not decodes_here(codec):
+			return False
+		ratio = decode_ratio(codec)
+		if ratio is None or ratio[0] == 0:
+			return False
+		decl = next((one for one in self.schema.codecs()
+		             if one.name == placement.codec), None)
+		return decl is not None and decl.kernel is not None \
+			and kernels._for_kernel(decl, "situ") is not None
 
 	def _arm_accessors(self, struct: ResolvedStruct) -> list[str]:
 		"""Each variant arm's members, guarded by the discriminant (9.6)."""

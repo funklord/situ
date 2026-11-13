@@ -1153,18 +1153,20 @@ CODED_BODY = 'struct S { coded body(halve) { u8 raw[4]; } }'
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
-def test_a_coded_region_decodes_through_the_c_codec(tmp_path: Path) -> None:
-	"""The codec is C's (decision 0017), so this goes through `extern "C"`
-	and therefore through `unsafe` -- and section 26.18 says where that
-	belongs: at the call site with a note saying what is being promised,
-	rather than buried in a helper."""
+def test_a_coded_region_decodes_natively(tmp_path: Path) -> None:
+	"""The decode went through `extern "C"` and `unsafe` to the C codec,
+	from 0017 -- whose amendment of 2026-09-04 made `derived` native, and
+	this backend already inlined native kernels for its checksums. A
+	region's decode is the same kernel, so the module needs no C and no
+	`unsafe` for it (26.996). Built with `-D warnings` and no link
+	argument: a stray extern would fail to link."""
 	schema   = parse_text(CODED_PRE + CODED_BODY)
 	resolved = resolve(schema, solve(schema))
 	module   = generate_rs(schema, resolved, "unit").module
 
-	assert 'extern "C" {' in module
-	assert "fn situ_halve_decode(" in module
-	assert "// SAFETY: the codec is the C implementation" in module
+	assert 'extern "C"' not in module
+	assert "unsafe {" not in module
+	assert "pub fn halve_decode(" in module
 
 	src = tmp_path / "src"
 	src.mkdir(exist_ok=True)
@@ -1172,32 +1174,14 @@ def test_a_coded_region_decodes_through_the_c_codec(tmp_path: Path) -> None:
 		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 		encoding="ascii")
 	(src / "unit.rs").write_text(module, encoding="ascii")
-
-	from situc.codegen.c import derived, generate as generate_c
-	(tmp_path / "unit.h").write_text(
-		generate_c(schema, resolved, "unit").header, encoding="ascii")
-	(tmp_path / "unit_derived.c").write_text(
-		derived.generate(schema, "unit"), encoding="ascii")
-
-	cc = shutil.which("gcc") or shutil.which("cc")
-	if cc is None:
-		pytest.skip("no C compiler to build the codec")
-	built = subprocess.run(
-		[cc, "-c", "-O2", f"-I{ROOT / 'runtime' / 'c'}", f"-I{tmp_path}",
-		 str(tmp_path / "unit_derived.c"), "-o", str(tmp_path / "derived.o")],
-		capture_output=True, text=True)
-	assert built.returncode == 0, built.stderr
-
 	(src / "main.rs").write_text("""
 mod situ_rt;
 mod unit;
 
-extern "C" { fn situ_halve_encode(i: *const u8, b: u32, o: *mut u8) -> u32; }
-
 fn main() {
 	let plain = [0xA5u8, 0x3C, 0xF0, 0x0F];
 	let mut buf = [0u8; 8];
-	unsafe { situ_halve_encode(plain.as_ptr(), 32, buf.as_mut_ptr()); }
+	assert_eq!(unit::halve_encode(&plain, 32, &mut buf), 64);
 
 	let v = unit::S::new(&buf).unwrap();
 	assert_eq!(v.body().len(), 8);
@@ -1215,8 +1199,7 @@ fn main() {
 	assert RUSTC is not None
 	compiled = subprocess.run(
 		[RUSTC, "--edition", "2021", "-D", "warnings", str(src / "main.rs"),
-		 "-o", str(tmp_path / "out"),
-		 "-C", f"link-arg={tmp_path / 'derived.o'}"],
+		 "-o", str(tmp_path / "out")],
 		capture_output=True, text=True, cwd=tmp_path)
 	assert compiled.returncode == 0, compiled.stderr
 
@@ -1542,7 +1525,10 @@ def test_a_stuffing_kernel_gets_a_decode_accessor() -> None:
 	module = emit(STUFFED)
 
 	assert "pub fn body_decode(&self, out: &mut [u8]) -> Result<usize>" in module
-	assert "let encoded = self.body_len();" in module
+	# Clamped to the bytes the region holds: the native kernel indexes
+	# them (26.996).
+	assert "let encoded = core::cmp::min(self.body_len(), input.len());" \
+		in module
 
 
 def test_a_byte_kernel_is_handed_bytes() -> None:
@@ -1550,8 +1536,8 @@ def test_a_byte_kernel_is_handed_bytes() -> None:
 	region and returns confidently."""
 	module = emit(STUFFED)
 
-	assert "(encoded) as u32," in module
-	assert "len: u32, out: *mut u8" in module
+	assert "stuff_decode(input, encoded, out);" in module
+	assert "pub fn stuff_decode(input: &[u8], len: usize," in module
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")

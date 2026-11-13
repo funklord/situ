@@ -1358,16 +1358,24 @@ def test_a_region_the_data_sizes_reports_the_bytes_it_occupies(
 	assert len(bytes(short.body)) == 3
 
 
-def test_and_says_why_the_decode_is_not_here(tmp_path: Path) -> None:
-	"""C++ links the C codec for free and Rust declares it `extern "C"`; this
-	one would have to load a shared object from a path situ has no convention
-	for, and inventing one in a code generator is a policy decision. So the
-	module says what to call and how large the buffer must be."""
-	module = emit(CODED_BODY, CODED_PRE)
+def test_a_derived_region_decodes_natively(tmp_path: Path) -> None:
+	"""The decode was left out, with a note to load the C codec through
+	ctypes, because 0017 made the codec C's. Its amendment of 2026-09-04
+	made `derived` native, and this module already carried native kernels
+	for its checksums; a region's decode is the same kernel (26.996).
 
-	assert "No `body_decode`" in module
-	assert "situ_halve_decode" in module
-	assert "4 bytes is what it needs" in module
+	Encoded with the module's own `halve_encode` and decoded through the
+	accessor. Which way round each bit goes is the kernel's, held to C's
+	by the codec tests; this asks only that the region reaches it."""
+	module = load(tmp_path, CODED_BODY, preamble=CODED_PRE)
+	plain  = bytes([0xA5, 0x3C, 0xF0, 0x0F])
+	wire   = bytearray(8)
+	assert module.halve_encode(plain, 32, wire) == 64
+	assert wire != bytearray(8)
+
+	held = module.acquire(module.S, module.Message(wire), 0, len(wire))
+	assert held.body_decode() == plain
+	assert "through ctypes" not in emit(CODED_BODY, CODED_PRE)
 
 
 # -- tlv regions (section 9.5) ----------------------------------------------
@@ -1655,22 +1663,14 @@ def test_a_delimited_coded_region_says_the_bytes_are_encoded() -> None:
 	assert "the order the format specifies" in module
 
 
-def test_the_note_names_the_symbol_to_call() -> None:
-	"""The decode is not emitted here, deliberately: the codec is C's (0017)
-	and calling it means loading a shared object from a path this generator
-	would have to invent. What the note can do is say which symbol."""
-	module = emit(STUFFED)
-
-	assert "No `body_decode`" in module
-	assert "situ_stuff_decode" in module
-
-
-def test_an_unbounded_region_is_told_how_to_size_the_buffer() -> None:
-	"""There is no static bound for a `[remaining]` region, so the note names
-	the accessor that gives the encoded length instead of a number."""
-	module = emit(STUFFED)
-
-	assert "`body_len` gives" in module
+def test_a_stuffed_region_decodes_natively(tmp_path: Path) -> None:
+	"""SMTP's dot-stuffing, undone by the module's own kernel (26.996): a
+	line that began with a dot was sent with two, and the terminator is
+	the region's, not its content."""
+	module = load(tmp_path, STUFFED)
+	raw    = bytearray(b"hi\r\n..dot\r\n.\r\n")
+	held   = module.S.at(module.Message(raw), 0, len(raw))
+	assert held.body_decode() == b"hi\r\n.dot"
 
 
 # -- an endian marker (section 8.3) -----------------------------------------

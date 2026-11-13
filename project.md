@@ -8663,6 +8663,10 @@ Moved to `doc/decision/26.994-the-dissector-takes-a-handed-argument.md`.
 
 Moved to `doc/decision/26.995-a-terminator-is-looked-for-past-the-lead.md`.
 
+### 26.996 A derived region decodes natively
+
+Moved to `doc/decision/26.996-a-derived-region-decodes-natively.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
