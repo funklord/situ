@@ -516,7 +516,13 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				# keeps it askable where Rust returns a `Result` and C does
 				# not.
 				found.append(Ask(Probe.ELEMENT, local))
-		elif kind is Member.VARIABLE and indexed_elements(placement):
+		elif kind is Member.VARIABLE and indexed_elements(placement) \
+				and placement.type_name in _SCALAR_TYPES:
+			# Not an enum, for the reason the fixed-count probe above and
+			# this module's header give: four languages, four types. It
+			# reached Rust's getter as `held as i64` over an `Option`, which
+			# did not compile once that getter declared what it returns
+			# (26.1013).
 			# A run of values the message counts. Not asked for its whole life,
 			# and every backend answered it differently: C decoded the values,
 			# the other three handed back the raw bytes, and the arithmetic

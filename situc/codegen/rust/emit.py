@@ -9781,7 +9781,10 @@ class Emitter:
 		scalar = placement.scalar
 		assert scalar is not None
 		width  = scalar.bits // BITS_PER_BYTE
-		rtype  = self._rust_type(scalar)
+		# The element's own type, which for an enum is `Option<E>` --
+		# `_load` converts, and declaring the raw type here was a
+		# getter that did not compile (26.1013).
+		rtype = self._field_type(placement)
 		load   = self._load(placement, scalar,
 		                    offset=f"self.{_ident(base + '_offset')}()"
 		                           f" + index * {width}")
@@ -9828,7 +9831,10 @@ class Emitter:
 			return ["", f"\t// {placement.path}: this backend cannot resolve"
 			        " where the array starts."]
 
-		rtype = self._rust_type(scalar)
+		# The element's own type, which for an enum is `Option<E>` --
+		# `_load` converts, and declaring the raw type here was a
+		# getter that did not compile (26.1013).
+		rtype = self._field_type(placement)
 		load  = self._load(placement, scalar,
 		                   offset=f"{self._unparen(start)} + index * {width}")
 
@@ -11242,6 +11248,25 @@ class Emitter:
 		binding for the same reason, an arm having no `_len` accessor of
 		its own.
 		"""
+		# A run of an `error`-defaulting enum, every element against its
+		# members: no backend read them (26.1013).
+		enum = self.enums.get(placement.type_name or "")
+		scalar = placement.scalar
+		if span is None and scalar is not None and enum is not None \
+				and enum.width is None \
+				and enum.effective_default is ast.EnumDefault.ERROR:
+			known = f"{_pascal(enum.name)}::is_known"
+			if scalar.bits == BITS_PER_BYTE:
+				return [f"\t\tfor &v in self.{name}().iter() {{",
+				        f"\t\t\tif !{known}(v) {{",
+				        "\t\t\t\treturn Err(Error::Constraint);",
+				        "\t\t\t}", "\t\t}"]
+			# The indexed getter converts, and answers `None` for a value no
+			# member names.
+			return [f"\t\tfor i in 0..self.{name}_count() {{",
+			        f"\t\t\tif self.{name}(i)?.is_none() {{",
+			        "\t\t\t\treturn Err(Error::Constraint);",
+			        "\t\t\t}", "\t\t}"]
 		checks: list[str] = []
 		if placement.kind == "reserved":
 			return [*self._pad_bounds_checks(struct, placement),

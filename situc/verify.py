@@ -490,8 +490,8 @@ def _unwalked(resolved: ResolvedSchema, struct: ResolvedStruct) -> tuple[str, ..
 	Shared by all four backends. A run of structs is validated element by
 	element since 26.789 -- in a variant arm since 26.790, of a recursive
 	struct since 26.791, and handed its arguments since 0068 -- so what this
-	still names is an element taking arguments its run does not hand, and
-	an enum array: an out-of-range `k` in `k kinds[2]` passes.
+	still names is an element taking arguments its run does not hand. An
+	enum array's elements are read since 26.1013.
 
 	Nothing here changes that. What it changes is the report: a command whose
 	whole purpose is telling CI that bytes conform must not print an
@@ -546,14 +546,10 @@ def _gather(resolved: ResolvedSchema, struct: ResolvedStruct, found: list[str],
 			                          or bool(placement.arguments)):
 				_gather(resolved, inner, found, seen)
 				continue
+			# An enum array is read too, element by element, since 26.1013.
 			if inner is not None and _has_checks(resolved, inner, set()):
 				found.append(f"`{placement.path}`: every `{placement.type_name}` "
 				             f"in it carries constraints, and none was read")
-			elif (placement.scalar is not None
-			      and placement.type_name in resolved.layout.env.enums):
-				found.append(f"`{placement.path}`: every element is a "
-				             f"`{placement.type_name}`, and no element's "
-				             f"membership was read")
 			continue
 
 		if inner is not None and placement.scalar is None:

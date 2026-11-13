@@ -13152,6 +13152,15 @@ class Emitter:
 		placement = entry.placement
 		scalar    = placement.scalar
 
+		# A run of an enum, element by element, and before every path below:
+		# a counted one reached the scalar check and named a getter no array
+		# has, and a fixed one left at the array test unchecked (26.1013).
+		# Its own members only; a nested struct's is checked under it.
+		if self._enum_run(placement) \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			return self._enum_run_check(
+				struct, placement, c_name(self._local(struct, placement)))
+
 		# A marker states one of its two orders; anything else is a header
 		# that names none, which every read below would take as big
 		# (26.964).
@@ -13676,6 +13685,65 @@ class Emitter:
 			                              fits)
 
 		return lines
+
+	def _enum_run(self, placement: Placement) -> bool:
+		"""A run of an `error`-defaulting enum, every element of which is
+		held to its members (26.1013)."""
+		enum = self.enums.get(placement.type_name or "")
+		# Not a byte-string enum (`enum signature : u8[2]`), whose `[2]` is
+		# one value's width rather than a count of them.
+		return enum is not None and enum.width is None \
+			and enum.effective_default is ast.EnumDefault.ERROR \
+			and placement.scalar is not None and placement.since is None \
+			and (placement.array_count is not None
+			     or bool(placement.sized_by)
+			     or placement.size_expr is not None)
+
+	def _enum_run_check(self, struct: ResolvedStruct, placement: Placement,
+			local: str) -> list[str]:
+		"""Each element of an enum run, through the enum's `_is_known`.
+
+		This checked the run as one scalar, `_is_known(<run>_get(view))`,
+		which names a getter no array has: a counted enum array emitted C
+		that did not compile, and a fixed one was checked not at all
+		(26.1013). A byte-wide element is read from the run's bytes; a wider
+		one through the indexed getter, which applies the byte order.
+		"""
+		enum   = self.enums[placement.type_name or ""]
+		known  = f"{ident(self.prefix, enum.name)}_is_known"
+		name   = ident(self.prefix, struct.name, local)
+		args   = self._member_args(struct, placement)
+		ctype  = f"{ident(self.prefix, enum.name)}_t"
+		if placement.array_count is not None:
+			count = f"{placement.array_count}u"
+		elif placement.element_bits == BITS_PER_BYTE:
+			count = f"{name}_len(view{args})"
+		else:
+			count = f"{name}_count(view{args})"
+		if placement.element_bits == BITS_PER_BYTE:
+			head = [f"\t\tconst uint8_t *run = {name}_ptr(view{args});",
+			        "",
+			        "\t\tif (run == NULL) {",
+			        "\t\t\treturn SITU_ERR_BOUNDS;",
+			        "\t\t}"]
+			read = f"({ctype})run[i]"
+		else:
+			head = []
+			read = f"{name}_get(view, i{args})"
+		return [
+			f"\t/* {placement.path}: every element is a `{enum.name}`, which",
+			"\t * rejects unknown values (section 8.7, 26.1013). */",
+			"\t{",
+			f"\t\tconst uint32_t count = {count};",
+			*head,
+			"",
+			"\t\tfor (uint32_t i = 0u; i < count; i++) {",
+			f"\t\t\tif (!{known}({read})) {{",
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _enum_check(self, placement: Placement, value: str) -> list[str]:
 		"""An enum with `default = error` admits its members and nothing else.

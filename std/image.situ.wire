@@ -34,7 +34,7 @@ enum image_offset_base : u8 unknown=error
   base_region=0 base_message=1 base_field=2
 
 enum image_check : u8 unknown=error
-  must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8 digits_valid=9 digits_minimal=10 nul_terminated=11 encoded_as=12 pinned_run=14 zero_run=13 encoded_from=15 pad_length_min=17 pad_length_max=18 must_eq_by=19 minimum_by=20 maximum_by=21 ascending=22 encoding_arm=16
+  must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8 digits_valid=9 digits_minimal=10 nul_terminated=11 encoded_as=12 pinned_run=14 zero_run=13 encoded_from=15 pad_length_min=17 pad_length_max=18 must_eq_by=19 minimum_by=20 maximum_by=21 ascending=22 enum_each=23 encoding_arm=16
 
 enum image_order_kind : u8 unknown=error
   as_bytes=0 as_unsigned=1 as_signed=2

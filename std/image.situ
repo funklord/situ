@@ -533,6 +533,8 @@ enum image_check : u8 {
 	ascending      = 22,  // a run's keys each above the one before
 	                      // (26.988): no row carries it -- `image_ordering`
 	                      // does -- and it is the kind a refusal reports.
+	enum_each      = 23,  // every element of an enum run is one of its
+	                      // members: `value` is the enum's id (26.1013)
 	encoding_arm = 16,    // one per arm of the token set a member holds, in
 	                      // declaration order, `value` being the encoding
 	                      // code an `encoded_as` would carry. Rows on the

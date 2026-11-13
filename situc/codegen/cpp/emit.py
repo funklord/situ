@@ -12503,6 +12503,25 @@ class Emitter:
 			return [*self._pad_bounds_checks(struct, placement),
 			        *self._reserved_checks(struct, placement)]
 
+		# A run of an `error`-defaulting enum, every element against its
+		# members: no backend read them (26.1013).
+		enum = self.enums.get(placement.type_name or "")
+		if span is None and enum is not None and enum.width is None \
+				and enum.effective_default is ast.EnumDefault.ERROR:
+			name = bare_name(local_name(struct, placement))
+			kind = c_name(enum.name)
+			if scalar.bits == BITS_PER_BYTE:
+				return ["\t\t{",
+				        f"\t\t\tconst auto run = {name}();",
+				        "\t\t\tfor (std::uint32_t i = 0u; i < run.size(); i++) {",
+				        f"\t\t\t\tif (!is_known(static_cast<{kind}>(run.data()[i]))) {{",
+				        "\t\t\t\t\treturn ::situ::rt::err::constraint;",
+				        "\t\t\t\t}", "\t\t\t}", "\t\t}"]
+			return [f"\t\tfor (std::uint32_t i = 0u; i < {name}_count(); i++) {{",
+			        f"\t\t\tif (!is_known(static_cast<{kind}>({name}(i)))) {{",
+			        "\t\t\t\treturn ::situ::rt::err::constraint;",
+			        "\t\t\t}", "\t\t}"]
+
 		# utf16's code unit is two bytes, so a `u16` run is validated over a
 		# byte view taken here rather than through the u8-only span accessor
 		# (0044). A plain `u16` run carries no encoding and emits nothing.

@@ -4569,6 +4569,8 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 /* `[ascending]` (26.985): not an `image_check` row, its own table carries
  * it; numbered after the three above so the two walkers keep one list. */
 #define CHECK_ASCENDING      22u
+/* Every element of an enum run is one of its members (26.1013). */
+#define CHECK_ENUM_EACH      23u
 
 /* `text_flags` bit 2: the member compares case-insensitively (0055). */
 #define TEXT_CASE_INSENSITIVE 4u
@@ -6588,7 +6590,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_ENCODED_FROM
 			                && kind != CHECK_ENCODING_ARM
 			                && kind != CHECK_PAD_LENGTH_MIN
-			                && kind != CHECK_PAD_LENGTH_MAX) {
+			                && kind != CHECK_PAD_LENGTH_MAX
+			                && kind != CHECK_ENUM_EACH) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 		}
@@ -6931,6 +6934,45 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				}
 				if (rank <= 0) {
 					record(why, index, CHECK_ASCENDING);
+					*verdict = SITU_WALK_CONSTRAINT;
+					return SITU_WALK_OK;
+				}
+			}
+		}
+
+		/* A run of an enum: every element one of its members, read in the
+		 * run's own byte order as the backends' indexed getters read it
+		 * (26.1013). After the run's own checks, so the elements are in
+		 * the frame. */
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t *row  = checks + c * image->constraint_stride;
+			const uint32_t step = held.element_bits / 8u;
+			const uint32_t first = at / 8u;
+
+			if (row[12] != CHECK_ENUM_EACH || step == 0u || step > 8u) {
+				continue;
+			}
+			const uint32_t count = (wide / 8u) / step;
+
+			if (first > len || count > (len - first) / step) {
+				continue;
+			}
+			for (uint32_t i = 0u; i < count; i++) {
+				const uint8_t *one   = message + first + i * step;
+				uint64_t       value = 0u;
+
+				for (uint32_t k = 0u; k < step; k++) {
+					const uint32_t from = held.endian == ENDIAN_LITTLE
+					                      ? step - 1u - k : k;
+					value = (value << 8) | one[from];
+				}
+				if ((held.flags & FLAG_SIGNED) != 0u && step < 8u) {
+					const uint64_t sign = (uint64_t)1u << (step * 8u - 1u);
+					value = (value ^ sign) - sign;
+				}
+				if (!enum_admits(image, (uint32_t)i64_at(row + 4),
+				                 (int64_t)value)) {
+					record(why, index, CHECK_ENUM_EACH);
 					*verdict = SITU_WALK_CONSTRAINT;
 					return SITU_WALK_OK;
 				}
@@ -7390,7 +7432,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                || kind == CHECK_ENCODING_ARM
 			                || kind == CHECK_ARM_SELECTED
 			                || kind == CHECK_PAD_LENGTH_MIN
-			                || kind == CHECK_PAD_LENGTH_MAX) {
+			                || kind == CHECK_PAD_LENGTH_MAX
+			                || kind == CHECK_ENUM_EACH) {
 				continue;	/* asked above, over the span rather than a value */
 			}
 

@@ -57,6 +57,10 @@ FORMAT_VERSION	= 10
 #: `image_ordering` -- passed its refusals as clean in an older walker.
 SECTION_ANCILLARY = 1 << 16
 
+#: `image_check.enum_each` (26.1013): every element of an enum run is one
+#: of its members.
+ENUM_EACH = 23
+
 #: The check a bound over a field makes: its row holds a program (26.902).
 BOUND_BY = {"must_eq": 19, "min": 20, "max": 21}
 NONE		= 0xFFFFFFFF
@@ -2027,6 +2031,27 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						"<IqBxxx", at, enum_ids[held_enum.name], 5)
 				continue
 			if kind is traverse.Check.REPEATED:
+				# A run of an enum that rejects unknown values: every
+				# element against its members (26.1013). Its own kind, so a
+				# walker from before it answers UNSUPPORTED for the struct
+				# rather than reading `enum_known` as one scalar.
+				run_enum = schema_enums.get(placement.type_name or "")
+				if run_enum is not None and placement.scalar is not None \
+						and run_enum.width is None \
+						and run_enum.default is not ast.EnumDefault.PASS:
+					if run_enum.name not in enum_ids:
+						enum_ids[run_enum.name] = len(enum_ids)
+						for member in run_enum.members:
+							named_value = getattr(member.value, "value", None)
+							if named_value is None \
+									or not fits_q(int(named_value)):
+								whole = False
+								continue
+							enum_blob += _struct.pack(
+								"<IqI", enum_ids[run_enum.name],
+								int(named_value), 0)
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, enum_ids[run_enum.name], ENUM_EACH)
 				# A run is only a *check* where it carries one. 87 of the
 				# 106 in this tree carry none -- `ipv4_address`'s octets
 				# validate to `return SITU_OK;` and nothing else -- so

@@ -10410,6 +10410,21 @@ class Emitter:
 		if scalar is None:
 			return []
 
+		# A run of an `error`-defaulting enum, every element against its
+		# members: no backend read them (26.1013).
+		enum = self.enums.get(placement.type_name or "")
+		if enum is not None and enum.width is None \
+				and enum.effective_default is ast.EnumDefault.ERROR:
+			each = (f"self.{name}" if scalar.bits == BITS_PER_BYTE else
+			        f"(self.{name}(_i) for _i in range(self.{name}_count))")
+			return [
+				f"\t\tfor _v in {each}:",
+				f"\t\t\tif not known_enum({py_name(enum.name)}, int(_v)):",
+				f"\t\t\t\traise ConstraintError(",
+				f"\t\t\t\t\tf\"{placement.path} holds {{int(_v)}}, not a"
+				f" {enum.name}\")",
+			]
+
 		if placement.kind == "reserved":
 			if scalar.bits != BITS_PER_BYTE:
 				return []

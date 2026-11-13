@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from walker import vm
-from walker.image import FRAME_CAP, NONE, Image, _string_at
+from walker.image import FRAME_CAP, LITTLE, NONE, Image, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          says_little,
                          Unsupplied, View, child_args,
@@ -724,6 +724,8 @@ PINNED_RUN = 14
 #: `image_check` row -- its own table carries it -- and numbered after
 #: `BOUND_BY`'s three so the C walker's kinds and these stay one list.
 ASCENDING = 22
+#: `enum_each` (26.1013): every element of an enum run is one of its members.
+ENUM_EACH = 23
 #: `pack.ORDER_*`, which `walk` cannot import from the packer.
 ORDER_BYTES, ORDER_UNSIGNED, ORDER_SIGNED = 0, 1, 2
 #: `[encoding = from(f)]` (0058), and the mapping it reads. ENCODED_FROM sits
@@ -1305,6 +1307,30 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			if verdict is None or verdict:
 				return verdict
 
+		# A run of an enum: every element one of its members (26.1013), read
+		# in the run's own byte order, as the four backends' indexed getters
+		# read it. After the run's own checks, so the elements are in frame.
+		for check, against in image.constraints.get(index, ()):
+			if check != ENUM_EACH:
+				continue
+			held_run = image.placements[index]
+			width = held_run.element_bits // BITS_PER_BYTE
+			try:
+				start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+				count = size_bits(view, index) // BITS_PER_BYTE // max(width, 1)
+			except (Unplaceable, Refused):
+				return None
+			if width < 1 or start + count * width > view.limit:
+				continue
+			little = held_run.endian == LITTLE
+			for one in range(count):
+				at = start + one * width
+				element = int.from_bytes(bytes(view.buffer[at:at + width]),
+				                         "little" if little else "big",
+				                         signed=held_run.signed)
+				if element not in image.enum_values.get(against, set()):
+					return fail(ERR_CONSTRAINT, index, ENUM_EACH)
+
 		# A run whose keys ascend: each above the one before, compared as
 		# the four backends compare it -- bytes first byte first, or the
 		# number they spell (26.985). After the run's own checks, so the
@@ -1637,7 +1663,7 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		                                   ENCODED_AS, ZERO_RUN,
 		                                   PINNED_RUN, ENCODED_FROM,
 		                                   ENCODING_ARM, PAD_LENGTH_MIN,
-		                                   PAD_LENGTH_MAX)]
+		                                   PAD_LENGTH_MAX, ENUM_EACH)]
 		if not value_checks:
 			continue
 		try:
@@ -1799,6 +1825,7 @@ CHECK_NAMES = {
 	PAD_LENGTH_MIN: "pad_min", PAD_LENGTH_MAX: "pad_max",
 	19: "must_eq", 20: "min", 21: "max",
 	ASCENDING: "ascending",
+	ENUM_EACH: "enum_each",
 }
 
 
@@ -1809,6 +1836,7 @@ ALL_CHECKS = frozenset({
 	FITS_FRAME, TERMINATED, ARM_SELECTED, DIGITS_VALID, DIGITS_MINIMAL,
 	NUL_TERMINATED, ENCODED_AS, ZERO_RUN, PINNED_RUN, ENCODED_FROM,
 	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX, *BOUND_BY, ASCENDING,
+	ENUM_EACH,
 })
 
 

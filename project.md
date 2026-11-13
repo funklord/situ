@@ -8731,6 +8731,10 @@ Moved to `doc/decision/26.1011-verify-names-only-what-is-unread.md`.
 
 Moved to `doc/decision/26.1012-an-arm-sized-by-its-argument-is-written.md`.
 
+### 26.1013 An enum array is read element by element
+
+Moved to `doc/decision/26.1013-an-enum-array-is-read-element-by-element.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
