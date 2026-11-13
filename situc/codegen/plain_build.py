@@ -12,7 +12,7 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Choice, Part,
                                    Shape, _supplies_a_value, arm_name, arms,
@@ -26,7 +26,7 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, CHOSEN, ENDED, FRAMED, LITERAL, NESTED, PAD,
+SERVED = frozenset({ARMTAG, BITS, CHOSEN, ENDED, FRAMED, LITERAL, MARKER, NESTED, PAD,
                     PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                     ZERO})
 
@@ -52,8 +52,14 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field" \
 			and not (part.role == ENDED and part.code):
 		return False		# a coded region is ENDED with its code
+	# In a marker's scope where the marker is a member written here: its
+	# value sets the order the store reads (26.1007). One handed down as
+	# an argument is C's alone.
+	marked = held.marker is not None and not any(
+		one.role == MARKER and one.placement.name == held.marker
+		for one in parts)
 	if part.role in (ARMTAG, SCALAR, SIZE) \
-			and (held.scalar is None or held.marker is not None
+			and (held.scalar is None or marked
 			     # A pad or a run in an arm is a scalar part wider or
 			     # narrower than its scalar, and not one value. A text
 			     # number is as wide as its digits.
@@ -124,7 +130,8 @@ def shape(schema: ast.Schema, resolved: ResolvedSchema) -> Shape:
 	return Shape(generate(schema, resolved, "plain").header, "situ",
 	             resolved.structs,
 	             {decl.name: decl for decl in schema.varints()},
-	             derived_codecs(schema))
+	             derived_codecs(schema),
+	             {decl.name: decl for decl in schema.markers()})
 
 
 def takes_value(part: Part) -> bool:
@@ -134,7 +141,7 @@ def takes_value(part: Part) -> bool:
 	is written from the schema: C's own `_supplies_a_value`, for the two
 	roles here that carry a number.
 	"""
-	return part.role == SCALAR or (part.role in (BITS, VARINT)
+	return part.role in (SCALAR, MARKER) or (part.role in (BITS, VARINT)
 	                               and _supplies_a_value(part))
 
 

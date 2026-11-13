@@ -1066,7 +1066,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 			                            args.prefix, ordinary))
 			shape = build.Shape(ordinary, args.prefix, resolved.structs,
 			                    {d.name: d for d in parsed.varints()},
-			                    build.derived_codecs(parsed))
+			                    build.derived_codecs(parsed),
+			                    {d.name: d for d in parsed.markers()})
 			for name, why in build.refusals(resolved, shape):
 				print(f"situc: no builder for `{name}`: {why}",
 				      file=sys.stderr)

@@ -8707,6 +8707,10 @@ Moved to `doc/decision/26.1005-a-builder-writes-an-8-bit-tag.md`.
 
 Moved to `doc/decision/26.1006-one-size-states-two-byte-runs.md`.
 
+### 26.1007 A builder writes in the marker's order
+
+Moved to `doc/decision/26.1007-a-builder-writes-in-the-markers-order.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

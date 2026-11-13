@@ -84,6 +84,8 @@ OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
 HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
 ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
 CHOSEN  = "chosen"	# a variant whose arm is a value the caller hands over
+MARKER  = "marker"	# an endian marker: the caller's literal, whose value
+			# says the order of every field in its scope (26.1007)
 FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
 			# computes from what is already written (26.1004)
 
@@ -93,7 +95,7 @@ FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
                              BITS, WIDE, OPAQUE, HIDDEN, VARINT, VARRUN,
-                             ARG, CHOSEN})
+                             ARG, CHOSEN, MARKER})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
@@ -124,7 +126,8 @@ class Shape:
 	def __init__(self, header: str = "", prefix: str = "situ",
 			structs: Mapping[str, ResolvedStruct] | None = None,
 			varints: Mapping[str, ast.VarintDecl] | None = None,
-			codecs: Mapping[str, ast.CodecDecl] | None = None) -> None:
+			codecs: Mapping[str, ast.CodecDecl] | None = None,
+			markers: Mapping[str, ast.EndianMarkerDecl] | None = None) -> None:
 		self.header  = header
 		self.prefix  = prefix
 		self.structs = structs
@@ -132,6 +135,9 @@ class Shape:
 		#: The DERIVED codecs, whose encoders situ generates: a coded
 		#: region is writable only through one of those (26.998).
 		self.codecs  = codecs
+		#: The endian markers by name, whose literals a MARKER part is
+		#: checked against and says the order of its scope by (26.1007).
+		self.markers = markers
 
 
 def derived_codecs(schema: ast.Schema) -> dict[str, ast.CodecDecl]:
@@ -213,6 +219,9 @@ class Part:
 		#: The run whose size field this one shares, by its local, which
 		#: this one's length must equal (26.1006).
 		self.twin = ""
+		#: A MARKER's literals for each order (26.1007).
+		self.little: tuple[int, ...] = ()
+		self.big: tuple[int, ...] = ()
 					# the arms it cannot write, and why
 		self.chooser: Part | None = None
 		#: The CHOSEN part that wrote this one's discriminant, whose tag
@@ -1450,6 +1459,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "struct argument that is not a scalar, so there " \
 				           "is no value to take"
 			parts.append(Part(ARG, held, local))
+			marked = (shape.markers or {}).get(held.type_name or "")
+			if marked is not None:
+				# An order handed down as an argument -- TIFF's directory
+				# entries take the header's (26.961). The fields in its
+				# scope read it, and were written big-endian whatever it
+				# said until 26.1007.
+				parts[-1].little = tuple(getattr(one, "value", 0)
+				                         for one in marked.literals("little"))
 			continue
 
 		if held.peek:
@@ -1547,6 +1564,20 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			part.value = int(case.value)
 			parts.append(part)
 			continue
+		pinned = next((attr.value.value for attr in held.attrs
+		               if attr.name == "must_eq"
+		               and isinstance(attr.value, ast.IntLiteral)), None)
+		if held.marker and held.scalar is not None and pinned is not None:
+			# TIFF's `magic [must_eq = 42]`: its bytes depend on the order
+			# the marker chose, so no literal run says them, and the value
+			# is the schema's rather than a caller's (26.1007).
+			why = _scalar_refusal(held)
+			if why:
+				return [], f"`{traverse.local_name(struct, held)}` {why}"
+			part = _value_part(ARMTAG, held, local)
+			part.value = int(pinned)
+			parts.append(part)
+			continue
 		runs  = traverse.pinned_runs(held)
 		size  = _whole_bytes(held)
 
@@ -1613,6 +1644,21 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				parts.append(Part(OPAQUE, held, local, size))
 				continue
 			parts.append(Part(ZERO, held, local, size))
+			continue
+
+		if held.kind == "marker":
+			decl = (shape.markers or {}).get(held.type_name or "")
+			width = held.size_bits or 0
+			if decl is None or width not in WORD_WIDTHS:
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           "marker whose declaration this writer was not " \
+				           "given"
+			part = Part(MARKER, held, local, width // BITS_PER_BYTE)
+			part.little = tuple(getattr(one, "value", 0)
+			                    for one in decl.literals("little"))
+			part.big = tuple(getattr(one, "value", 0)
+			                 for one in decl.literals("big"))
+			parts.append(part)
 			continue
 
 		if held.kind == "coded":
@@ -1910,6 +1956,9 @@ def _arguments(struct: ResolvedStruct, parts: list[Part], prefix: str,
 		elif part.role == SCALAR:
 			args.append(f"{_ctype(part.placement, prefix, enums)} "
 			            f"{part.local}")
+		elif part.role == MARKER:
+			args.append(f"uint{storage_width(part.bytes * BITS_PER_BYTE)}_t "
+			            f"{part.local}")
 		elif part.role in (RUN, OPAQUE):
 			args.append(f"const uint8_t *{part.local}")
 		elif part.role == WIDE:
@@ -1970,6 +2019,16 @@ def _store(part: Part, value: str) -> list[str]:
 	# netlink header read back byte-swapped through the view beside it
 	# (26.857).
 	end = order_suffix(part.placement.endian)
+	if part.placement.marker:
+		# In a marker's scope, whose value chose the order (26.1007).
+		flag = f"situ_little_{part.placement.marker}"
+		return [f"\tif ({flag}) {{",
+		        f"\t\tsitu_put_le{scalar.bits}({OUT} + {AT}, "
+		        f"(uint{width}_t){value});",
+		        "\t} else {",
+		        f"\t\tsitu_put_be{scalar.bits}({OUT} + {AT}, "
+		        f"(uint{width}_t){value});",
+		        "\t}"]
 	if scalar.bits not in WORD_WIDTHS:
 		return _store_bytes(scalar.bits, end, value, f"{OUT} + {AT}")
 	return [f"\tsitu_put_{end}{scalar.bits}({OUT} + {AT},",
@@ -3339,6 +3398,27 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t{AT} += {part.local}_len;",
 				"",
 			]
+		elif part.role == MARKER:
+			bits = part.bytes * BITS_PER_BYTE
+			allowed = " || ".join(f"{part.local} == {v:#x}u"
+			                      for v in (*part.little, *part.big))
+			little = " || ".join(f"{part.local} == {v:#x}u"
+			                     for v in part.little)
+			lines += [
+				f"\t/* {local}: the marker, one of the schema's literals and",
+				"\t * written as the table spells it; its value says the",
+				"\t * order of every field after it. */",
+				f"\tif (!({allowed})) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+				*_room(f"{part.bytes}u"),
+				*([f"\t{OUT}[{AT}] = (uint8_t){part.local};"] if bits == 8 else
+				  [f"\tsitu_put_be{bits}({OUT} + {AT}, "
+				   f"(uint{bits}_t){part.local});"]),
+				f"\t{AT} += {part.bytes}u;",
+				f"\tconst int situ_little_{held.name} = ({little});",
+				"",
+			]
 		elif part.role == FRAMED:
 			lines += [
 				f"\t/* {local}: zeros to where the struct's own framing ends",
@@ -3414,6 +3494,10 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"\t * parameter and not a byte. The runs whose length it",
 				"\t * states read it below, exactly as the reader's own",
 				"\t * accessors take it. */",
+				*([f"\tconst int situ_little_{held.name} = ("
+				   + " || ".join(f"{traverse.argument_name(held)} == {v:#x}u"
+				                 for v in part.little) + ");"]
+				  if part.little else []),
 				"",
 			]
 		else:
@@ -3451,7 +3535,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	"""
 	shape   = Shape(header, prefix, resolved.structs,
 	                {decl.name: decl for decl in schema.varints()},
-	                derived_codecs(schema))
+	                derived_codecs(schema),
+	                {decl.name: decl for decl in schema.markers()})
 	structs = buildable(resolved, shape)
 	if not structs:
 		return {}

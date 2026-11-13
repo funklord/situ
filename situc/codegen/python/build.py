@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -401,7 +401,8 @@ def _store(part: Part, value: str) -> list[str]:
 	if part.radix:
 		return _digits(part, value)
 	width  = placement.scalar.bits // BITS_PER_BYTE
-	order  = _byte_order(placement.endian)
+	order  = (f'("little" if situ_little_{placement.marker} else "big")'
+	          if placement.marker else _byte_order(placement.endian))
 	return [
 		*_room(str(width), placement.path),
 		f"\tsitu_out[situ_at:situ_at + {width}] = ({value}).to_bytes("
@@ -508,6 +509,20 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == MARKER:
+		# C's: one of the schema's literals, written as the table spells
+		# it, whose value says the order of its scope (26.1007).
+		local = py_name(part.local)
+		values = (*part.little, *part.big)
+		return [f"\tif {local} not in {values!r}:",
+		        f'\t\traise ConstraintError("{part.placement.path}: not one '
+		        'of the schema\'s literals")',
+		        *_room(str(part.bytes), part.placement.path),
+		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = "
+		        f"{local}.to_bytes({part.bytes}, \"big\")",
+		        f"\tsitu_at += {part.bytes}",
+		        f"\tsitu_little_{part.placement.name} = "
+		        f"{local} in {part.little!r}"]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\ttry:",

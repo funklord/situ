@@ -21,7 +21,7 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.c.names import bare_name, c_name
@@ -114,6 +114,18 @@ def _store(part: Part, value: str) -> list[str]:
 		return _digits(part, value)
 	bits  = part.placement.scalar.bits
 	width = bits // BITS_PER_BYTE
+	if part.placement.marker and bits in (16, 32, 64):
+		# In a marker's scope, whose value chose the order (26.1007).
+		flag = f"situ_little_{part.placement.marker}"
+		return [*_room(f"{width}u"),
+		        f"\tif ({flag}) {{",
+		        f"\t\tsitu_put_le{bits}(situ_out + situ_at, "
+		        f"static_cast<std::uint{bits}_t>({value}));",
+		        "\t} else {",
+		        f"\t\tsitu_put_be{bits}(situ_out + situ_at, "
+		        f"static_cast<std::uint{bits}_t>({value}));",
+		        "\t}",
+		        f"\tsitu_at += {width}u;"]
 	if bits not in (8, 16, 32, 64):
 		# C's `_store_bytes`: a byte at a time, refused where too wide.
 		end = _order_suffix(part.placement.endian)
@@ -582,6 +594,22 @@ def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == MARKER:
+		# C's: one of the schema's literals, written as the table spells
+		# it, whose value says the order of its scope (26.1007).
+		bits = part.bytes * BITS_PER_BYTE
+		allowed = " || ".join(f"{part.local} == {v:#x}u"
+		                      for v in (*part.little, *part.big))
+		little = " || ".join(f"{part.local} == {v:#x}u" for v in part.little)
+		return [f"\tif (!({allowed})) {{",
+		        "\t\treturn ::situ::rt::err::constraint;", "\t}",
+		        *_room(f"{part.bytes}u"),
+		        (f"\tsitu_out[situ_at] = static_cast<std::uint8_t>({part.local});"
+		         if bits == 8 else
+		         f"\tsitu_put_be{bits}(situ_out + situ_at, "
+		         f"static_cast<std::uint{bits}_t>({part.local}));"),
+		        f"\tsitu_at += {part.bytes}u;",
+		        f"\tconst bool situ_little_{part.placement.name} = ({little});"]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\t{",

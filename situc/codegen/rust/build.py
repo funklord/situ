@@ -22,7 +22,7 @@ import re
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
@@ -119,6 +119,18 @@ def _store(part: Part, value: str) -> list[str]:
 	wide  = ([f"\tif {value} as u64 > {(1 << bits) - 1:#x} {{",
 	          "\t\treturn Err(Error::Constraint);", "\t}"]
 	         if bits not in (8, 16, 32, 64) else [])
+	if part.placement.marker:
+		# In a marker's scope, whose value chose the order (26.1007).
+		flag = f"situ_little_{part.placement.marker}"
+		return [*_room(str(width)), *wide,
+		        f"\tif {flag} {{",
+		        f"\t\tsitu_rt::write_le(situ_out, situ_at, {width},"
+		        f" {value} as u64);",
+		        "\t} else {",
+		        f"\t\tsitu_rt::write_be(situ_out, situ_at, {width},"
+		        f" {value} as u64);",
+		        "\t}",
+		        f"\tsitu_at += {width};"]
 	return [
 		*_room(str(width)),
 		*wide,
@@ -529,6 +541,20 @@ def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part]
 def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == MARKER:
+		# C's: one of the schema's literals, written as the table spells
+		# it, whose value says the order of its scope (26.1007).
+		local = _ident(part.local)
+		allowed = " || ".join(f"{local} == {v:#x}"
+		                      for v in (*part.little, *part.big))
+		little = " || ".join(f"{local} == {v:#x}" for v in part.little)
+		return [f"\tif !({allowed}) {{",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        *_room(str(part.bytes)),
+		        f"\tsitu_rt::write_be(situ_out, situ_at, {part.bytes},"
+		        f" {local} as u64);",
+		        f"\tsitu_at += {part.bytes};",
+		        f"\tlet situ_little_{part.placement.name} = {little};"]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return [f"\tlet situ_end = match {_pascal(struct.name)}::required("

@@ -32,7 +32,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (ArmOf, BITS, CHOSEN, ENDED, NESTED, REPEAT,	# noqa: E402
+from situc.codegen.c.build import (ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                                    Part)
 from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
@@ -216,6 +216,10 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			found.append((part, 5 + at))	# small enough for its digits
 		elif part.role == SCALAR:
 			found.append((part, _raw(part.placement, at)))
+		elif part.role == MARKER:
+			# The little-endian literal: a writer ignoring the marker
+			# writes big, so this is the value that tells them apart.
+			found.append((part, part.little[0]))
 		elif part.role == WIDE:
 			found.append((part, [0x12 + at + one
 			                     for one in range(part.bytes or 2)]))
