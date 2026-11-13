@@ -1437,3 +1437,57 @@ the property a committed contract exists for.
 
 Every `.wire` holding a nested tag would regenerate. fuzznet has one
 and says it will take the change with the fix.
+
+## 2026-11-13: rung 6 against fuzznet's caller -- one bug, three gaps
+
+fuzznet assessed moving its caller's pairing and resend (`node/caller.c`,
+`fzn_caller_ask`, sec 737) onto `converse` and `drive`, generating
+`example/dns/dns.situ` at `--layer drive` from situ 0d7a6b88 to read the
+real interface. One thing is a bug; the rest are what stops adoption.
+
+**The bug: `step` misreads every deadline across the 32-bit wrap.**
+`deadline_ms = now_ms + timeout_ms` wraps, and `now_ms >= deadline_ms`
+then holds at once. Reproduced against the generated DNS driver: send at
+`now = 0xFFFFFFFF - 1000`, then call `step` three times at `now + 1` --
+
+    send 0
+    step 0: rc=0 next=4000 expired=0 sent=2
+    step 1: rc=0 next=4000 expired=0 sent=3
+    step 2: rc=7 next=4000 expired=1 sent=3
+
+-- both retries spent and the exchange expired one millisecond after it
+was sent, where nothing was due for 5000 ms. A daemon passing
+milliseconds since boot meets this after 49.7 days, which a router running
+fuzznetd does. The usual fix is the serial comparison,
+`(int32_t)(now_ms - deadline_ms) >= 0`, wherever a deadline is compared,
+including the `soonest` choice. The test is short: the driver, a counting
+`submit`, and the three steps above.
+
+**Gap 1: `submit` cannot reseal.** It is handed the same bytes every
+time. fuzznet's requests are sealed frames, and a resend must be the same
+message under a fresh nonce -- the far end refuses a replayed nonce, so a
+verbatim resend is a lost resend. A vtable `submit` could seal on the way
+out if it were told which exchange it is sending; today it gets only
+`(bytes, len)`, so the caller has to map the pointer back to its message.
+Passing the exchange's `id` to `submit` would be enough.
+
+**Gap 2: `*expired` is a count.** A caller with several exchanges
+outstanding has to know WHICH gave up -- fuzznet forgets that message's
+reassembly slot and answers that waiter with a timeout. A count says
+something expired and not what. An out-array of ids, or a callback, would
+serve.
+
+**Gap 3: no way to ask "is this still outstanding" without taking it.**
+A reply here is many datagrams. fuzznet drops a late piece of a settled
+message BEFORE reassembly, so a stray piece cannot take a slot (sec 737's
+ring of 64 settled numbers). `match` consumes the pending entry, so it
+can be asked only once, at the end; a non-taking peek is what a per-piece
+check needs.
+
+Smaller: the timeout is per relation, with a deployment override at
+`init`; fuzznet's wait is chosen per call (3 s for a round's asks,
+longer for a fetch). That one fuzznet can live with by keeping one driver
+per kind of wait.
+
+Until these are settled fuzznet keeps its hand-written loop, and records
+the assessment as its sec 1117.
