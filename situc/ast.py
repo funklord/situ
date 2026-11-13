@@ -1829,6 +1829,25 @@ def _refusal_of(decl: Invariant) -> When:
 	            Binary(decl.span, "!=", stated, decl.expr))
 
 
+def _bytes_after(decl: StructDecl) -> When:
+	"""`when size(s) < remaining refuse s_bytes_after`, for `[fills_frame]`.
+
+	A struct that fills its frame has nothing after it, and the frame's
+	length is `remaining` read from the struct's start (26.980), so the
+	statement is one every reader already holds (26.981).
+
+	`<` and not `!=`: a frame too SHORT for the struct is a bounds refusal
+	`validate` makes first, and `messages` -- which does not stop at the
+	first -- would otherwise say bytes follow a struct that is cut off.
+	"""
+	span = next(attr.span for attr in decl.attrs if attr.name == "fills_frame")
+	return When(span, Severity.REFUSE, f"{decl.name}_bytes_after",
+	            f"bytes follow `{decl.name}` in its frame",
+	            Binary(span, "<",
+	                   Call(span, "size", (NameRef(span, decl.name),)),
+	                   Remaining(span)))
+
+
 @dataclass(frozen=True)
 class Must(Node):
 	"""One run-time constraint in a relation body (26.95, decision 0030).
@@ -1925,7 +1944,9 @@ class Schema(Node):
 		"""
 		return [*(decl for decl in self.decls if isinstance(decl, When)),
 		        *(_refusal_of(decl) for decl in self.invariants()
-		          if _readable(decl.expr))]
+		          if _readable(decl.expr)),
+		        *(_bytes_after(decl) for decl in self.structs()
+		          if any(attr.name == "fills_frame" for attr in decl.attrs))]
 
 	def relations(self) -> list[Relation]:
 		return [decl for decl in self.decls if isinstance(decl, Relation)]

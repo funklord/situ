@@ -198,6 +198,8 @@ ATTRIBUTE_NAMES = frozenset({
 	"trim", "case_insensitive",
 	# section 19.4: one file, more than one version of the protocol
 	"since", "version",
+	# 26.981: a struct its frame holds exactly, nothing after it
+	"fills_frame",
 	# decision 0050: a `parameter` fixed for a stream rather than varying
 	# per message, which is what lets it reach an expression that moves a
 	# member -- a dissector can carry a per-stream fact as a preference and

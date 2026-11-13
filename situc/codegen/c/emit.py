@@ -7430,9 +7430,8 @@ class Emitter:
 		              lambda found: handed[found.group(1)], rendered)
 
 	def _size_term(self, struct: ResolvedStruct, path: str) -> str | None:
-		"""`size(member)` in an expression: `Terms.size`, by name (26.897)."""
-		found = self.resolved.find(f"{struct.name}.{path.removeprefix(struct.name + '.')}")
-		return None if found is None else self.size(struct, found.placement)
+		"""`size(member)` or `size(s)`: `traverse.size_term` (26.981)."""
+		return traverse.size_term(self.resolved, struct, path, self.size)
 
 	def _sum_run(self, struct: ResolvedStruct, run: str, held: str) -> str:
 		"""`sum(run)`: the elements added, from the bytes (26.896)."""

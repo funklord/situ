@@ -1528,6 +1528,14 @@ def check_whens(schema: ast.Schema) -> None:
 		seen[held.name] = held
 
 		owner: str | None = None
+		# `size(s)` is the struct's own extent (26.981), so its argument is
+		# a path with no member that is nonetheless a read of the message.
+		# Counted rather than collected: `paths_in` folds a call's argument
+		# into the list, and only that many bare names are measures.
+		measures = sum(1 for call in _calls_in(held.expr)
+		               if call.name == "size" and len(call.args) == 1
+		               and isinstance(call.args[0], ast.NameRef)
+		               and call.args[0].name in structs)
 		for path in paths_in(held.expr):
 			struct_name, _, field = path.partition(".")
 
@@ -1596,21 +1604,32 @@ def check_whens(schema: ast.Schema) -> None:
 					         "struct, so the members it reads have to be in "
 					         "one"],
 				)
-			# A struct's bare name is no value, and `size(s)` is not a
-			# member's size: both passed, having no field to step to, and
-			# all four backends raised `UnknownName` out of the code
-			# generator for them -- the crash this function's enum note
-			# records, by a third route.
+			# A struct's bare name is no value: it passed, having no field
+			# to step to, and all four backends raised `UnknownName` out of
+			# the code generator for it -- the crash this function's enum
+			# note records, by a third route (26.979). `size(s)` measures
+			# the struct, and `resolve` asks whether it can be measured.
+			if not field and measures:
+				# Every renderer strips `s.` before reading a path, so a
+				# member named `s` and the struct would be one name there.
+				if _find_member(struct, struct_name) is not None:
+					raise error(
+						f"`size({struct_name})` could be the struct or its "
+						f"member `{struct_name}`",
+						held.span,
+						label = "two things of one name",
+						notes = ["rename the member to measure the struct"],
+					)
+				measures -= 1
+				continue
 			if not field:
 				raise error(
 					f"`{struct_name}` is a struct, and a `when` reads its "
 					"members",
 					held.span,
 					label = "not a member of the message",
-					notes = ["name a member, `s.m`, or measure one, "
-					         "`size(s.m)`: the view the `when` is evaluated "
-					         "against holds the struct, so its own extent "
-					         "is the frame's business (0051)"],
+					notes = ["name a member, `s.m`, measure one, `size(s.m)`, "
+					         "or measure the struct, `size(s)` (0051)"],
 				)
 			reached = _step_through(structs, struct, field, held, path)
 			holder = _conditional_holder(*reached)
@@ -2546,6 +2565,8 @@ STRUCT_ONLY_ATTRS = {
 	                        "format allows the nesting to go (0054)",
 	"limit":                "a struct that names itself, stating how deep this "
 	                        "build will follow it (0054)",
+	"fills_frame":          "a struct its frame holds exactly, with nothing "
+	                        "after it (26.981)",
 }
 
 
@@ -4513,13 +4534,14 @@ def check_attribute_places(schema: ast.Schema) -> None:
 #:    allow_straddle           `layout`, where a bit field may cross a byte
 #:    allow_host_dependent     `resolve`, for a host-order field
 #:    version                  `_version_field`, which `[since]` counts against
+#:    fills_frame              `Schema.whens`, as a refusal (26.981)
 #:
 #: Everything else was accepted and read by nothing: 45 of the 53 names in
 #: `ATTRIBUTE_NAMES`, measured per name against the four backends, the
 #: capability map, the wire signature and the documentation (26.546).
 STRUCT_ATTRS = frozenset({
 	"depth", "limit", "endian", "bit_order", "encoding",
-	"allow_straddle", "allow_host_dependent", "version",
+	"allow_straddle", "allow_host_dependent", "version", "fills_frame",
 })
 
 

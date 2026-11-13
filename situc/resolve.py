@@ -120,6 +120,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 
 	from situc.traverse import messages
 	_check_when_arithmetic(schema, layout, result)
+	_check_when_extents(schema, result)
 	for name in result.structs:
 		result.refusals[name] = tuple(
 			when.expr for when in messages(schema, name)
@@ -819,6 +820,49 @@ def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
 #: says about a `when` is about what the solver can see, not the rule.
 _ARITHMETIC_REFUSALS = ("the left operand of", "the shift amount of",
                         "division by zero")
+
+
+def _check_when_extents(schema: ast.Schema, result: ResolvedSchema) -> None:
+	"""`size(s)` in a `when` names a struct a reader can measure (26.981).
+
+	`wellformed` lets the struct's own name through as `size`'s argument and
+	cannot say more without the layout: a struct whose length is not a whole
+	number of bytes, or one with a member nothing measures, has no extent a
+	backend could render, and it would reach the generator as a name.
+	"""
+	from situc.traverse import measured_extent, messages
+
+	for name, struct in result.structs.items():
+		for when in messages(schema, name):
+			if not _measures_itself(when.expr, name):
+				continue
+			if measured_extent(result.structs, struct) is not None:
+				continue
+			raise error(
+				f"`size({name})` cannot be measured",
+				when.span,
+				label = "no reader can say how long this struct is",
+				notes = ["a struct is measured from its members, and one of "
+				         "these has no length a reader computes, or the "
+				         "whole is not a whole number of bytes",
+				         "`size(s.m)` measures one member"],
+			)
+
+
+def _measures_itself(expr: ast.Expr, name: str) -> bool:
+	"""Whether `expr` holds `size(name)` with the struct itself as argument."""
+	if isinstance(expr, ast.Call):
+		if expr.name == "size" and len(expr.args) == 1 \
+				and isinstance(expr.args[0], ast.NameRef) \
+				and expr.args[0].name == name:
+			return True
+		return any(_measures_itself(arg, name) for arg in expr.args)
+	if isinstance(expr, ast.Binary):
+		return _measures_itself(expr.left, name) \
+			or _measures_itself(expr.right, name)
+	if isinstance(expr, ast.Unary):
+		return _measures_itself(expr.operand, name)
+	return False
 
 
 def _check_when_arithmetic(schema: ast.Schema, layout: SchemaLayout,

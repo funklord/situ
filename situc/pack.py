@@ -29,6 +29,7 @@ from __future__ import annotations
 import struct as _struct
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 
 from situc import ast, traverse
 from situc.capability import DOMAINS, Axis
@@ -1105,6 +1106,41 @@ def _kernel_row(schema: "ast.Schema", named: str,
 		+ _struct.pack("<ii", 0, 0)
 
 
+def _measured(expr: ast.Expr, struct: ResolvedStruct,
+		resolved: ResolvedSchema) -> ast.Expr:
+	"""`expr` with `size(s)` of its own struct spelled as its parts (26.981).
+
+	The struct has no placement for `SIZE` to carry, and its members do: a
+	constant and each variable member's `size`, as every backend renders it,
+	so the image needs no opcode for it.
+	"""
+	if isinstance(expr, ast.Call):
+		if expr.name == "size" and len(expr.args) == 1 \
+				and isinstance(expr.args[0], ast.NameRef) \
+				and expr.args[0].name == struct.name:
+			held = traverse.measured_extent(resolved.structs, struct)
+			if held is None:
+				raise PackError(f"`size({struct.name})` cannot be measured")
+			constant, variable = held
+			whole: ast.Expr = ast.IntLiteral(expr.span, constant, str(constant))
+			for one in variable:
+				member = one.path.removeprefix(struct.name + ".")
+				whole = ast.Binary(expr.span, "+", whole, ast.Call(
+					expr.span, "size", (ast.Access(
+						expr.span, ast.NameRef(expr.span, struct.name),
+						member),)))
+			return whole
+		return dc_replace(expr, args=tuple(_measured(arg, struct, resolved)
+		                                   for arg in expr.args))
+	if isinstance(expr, ast.Binary):
+		return dc_replace(expr, left=_measured(expr.left, struct, resolved),
+		                  right=_measured(expr.right, struct, resolved))
+	if isinstance(expr, ast.Unary):
+		return dc_replace(expr, operand=_measured(expr.operand, struct,
+		                                          resolved))
+	return expr
+
+
 def pack(schema: ast.Schema, resolved: ResolvedSchema,
          metadata: bool = False) -> tuple[bytes, Coverage]:
 	"""Emit the image for one resolved schema.
@@ -1695,7 +1731,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 		start = len(program.code)
 		try:
-			program.compile(when.expr, resolve_path, consts, enum_members)
+			program.compile(_measured(when.expr, resolved.structs[owner],
+			                          resolved),
+			                resolve_path, consts, enum_members)
 		except PackError as why:
 			# Recorded rather than dropped: an image that carried a message
 			# it cannot evaluate would answer about a schema nobody wrote,

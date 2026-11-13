@@ -2196,8 +2196,10 @@ Permitted:
 - comparison and boolean operators (in constraints only)
 - `size(X)`, `offset(X)`, `count(X)`, `remaining` -- the bytes to the end of
   the enclosing frame from where it is read, so in a `when`, read from the
-  struct's start, the frame's whole length: `when 3 + size(s.body) !=
-  remaining refuse ...` says nothing follows the message (26.980)
+  struct's start, the frame's whole length: `when size(s) < remaining
+  refuse ...` says something follows the message (26.980), `size(s)` being
+  the struct's own extent where a `when` reads `s` -- which is what
+  `struct s [fills_frame]` states without the author writing it (26.981)
 - `min`, `max`, `align_up(x, n)`
 - `popcount(x)`: the bits set in an unsigned value, for a presence bitmap
   counting what follows it (26.899)
@@ -8588,6 +8590,10 @@ Moved to `doc/decision/26.979-a-struct-s-own-name-is-not-a-member.md`.
 ### 26.980 A `when` reads its frame
 
 Moved to `doc/decision/26.980-a-when-reads-its-frame.md`.
+
+### 26.981 A struct its frame holds exactly
+
+Moved to `doc/decision/26.981-a-struct-its-frame-holds-exactly.md`.
 
 ### 26.929 The offset cache counts bits
 

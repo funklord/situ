@@ -103,16 +103,16 @@ def test_the_four_refuse_a_contradicted_length(tmp_path: Path, text: str) -> Non
 
 
 @pytest.mark.parametrize("statement, said", [
-	('when size(s) != 6 refuse bad "no";', "a `when` reads its members"),
 	('when s != 0 refuse bad "no";', "a `when` reads its members"),
 	("invariant s.len == size(s);", "an invariant derives from its fields"),
 	("invariant s.len == s;", "an invariant derives from its fields"),
-], ids=["when-size", "when-bare", "invariant-size", "invariant-bare"])
+], ids=["when-bare", "invariant-size", "invariant-bare"])
 def test_a_struct_s_own_name_is_refused_where_a_member_is_read(
 		statement: str, said: str) -> None:
-	"""A path with no member stepped through nothing: `size(s)` in a `when`
+	"""A path with no member stepped through nothing: `s` in a `when`
 	reached all four backends as a name none defines, and they raised
-	`UnknownName`; `invariant s.len == s` was taken and maintained nothing."""
+	`UnknownName`; `invariant s.len == s` was taken and maintained nothing.
+	`size(s)` in a `when` measures the struct since 26.981."""
 	text = SCHEMA.replace("invariant s.len == size(s.body);", statement)
 	with pytest.raises(SituError) as caught:
 		parse_text(text, path="s.situ")

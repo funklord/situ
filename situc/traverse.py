@@ -34,7 +34,7 @@ from situc.layout import (BITS_PER_BYTE, Arm, Placement,
                           expansion_is_closed_form, regions_covered_by,
                           transform_covers)
 from situc.propagate import Resolved
-from situc.resolve import ResolvedStruct
+from situc.resolve import ResolvedSchema, ResolvedStruct
 
 #: Entry kinds that are not a member in their own right.
 #:
@@ -2540,6 +2540,44 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	if constant_bits % BITS_PER_BYTE:
 		return None		# not a whole number of bytes; nothing to walk by
 	return constant_bits // BITS_PER_BYTE, variable
+
+
+def measured_extent(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct) -> tuple[int, list[Placement]] | None:
+	"""`size(s)` in a `when`: the struct's own bytes, as `extent_parts` says
+	them, with a fixed struct as its size and nothing to add (26.981).
+
+	None where no reader can measure it, which `resolve` refuses before any
+	backend is asked to render it.
+	"""
+	if struct.layout.is_fixed_size:
+		return ((struct.layout.size_bytes, [])
+		        if struct.layout.is_byte_sized else None)
+	return extent_parts(structs, struct)
+
+
+def size_term(resolved: ResolvedSchema, struct: ResolvedStruct, path: str,
+		size: Callable[[ResolvedStruct, Placement], str | None]
+		) -> str | None:
+	"""`size(member)` in an expression, or `size(s)` of the struct itself,
+	rendered through a backend's own `Terms.size` (26.897, 26.981).
+
+	One copy rather than four: the four backends each carried this function
+	verbatim, and the struct's own extent is the same sum in every one of
+	them -- a constant and the variable members' sizes, in a syntax all four
+	share.
+	"""
+	if path == struct.name:
+		held = measured_extent(resolved.structs, struct)
+		if held is None:
+			return None
+		constant, variable = held
+		parts = [size(struct, one) for one in variable]
+		if any(part is None for part in parts):
+			return None
+		return " + ".join([str(constant), *(f"({part})" for part in parts)])
+	found = resolved.find(f"{struct.name}.{path.removeprefix(struct.name + '.')}")
+	return None if found is None else size(struct, found.placement)
 
 
 def nests_one_struct(structs: dict[str, ResolvedStruct],
