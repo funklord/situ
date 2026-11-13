@@ -691,8 +691,8 @@ def _shift_register(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	# `complement_feedback` inverts the bit the register hands to the data, and
 	# it exists because a differential code has two conventions rather than
 	# one. Fed from the output at width 1 it is the whole difference between
-	# NRZI transitioning on a one -- HDLC's, and magnetic recording's -- and on
-	# a zero, which is USB's. Neither is a variant of the other at the surface:
+	# NRZI transitioning on a one -- NRZ-M, magnetic recording's -- and on a
+	# zero, NRZ-S, which is HDLC's and USB's. Neither is a variant of the other at the surface:
 	# a receiver built on the wrong one returns the complement of what was sent.
 	#
 	# It says nothing about any of the nine derived properties. Complementing
