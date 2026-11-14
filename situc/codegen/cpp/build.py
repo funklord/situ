@@ -29,7 +29,7 @@ from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
 from situc.codegen.cpp.names import class_name
 from situc.codegen.plain_build import plain
-from situc.codegen.c.build import peeked_byte
+from situc.codegen.c.build import peeked_byte, wide_peek, every_part as _every
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -283,7 +283,10 @@ def _nested(part: Part, inner: str) -> list[str]:
 		        "\t}",
 		        f"\tsitu_at += {local}_len;"]
 	return [
-		*([] if not part.others and part.value <= 0 else [
+		# A peek wider than the arm's first byte is held to its case by the
+		# reader once the message is whole, as C's is (26.1028, 26.1033).
+		*([] if (not part.others and part.value <= 0) or wide_peek(part)
+		  else [
 			f"\tif ({local}_len == 0u) {{", CONSTRAINT, "\t}",
 			(f"\tif ({peeked_byte(local, part)} != {part.value}u) {{" if part.value >= 0
 			 else "\tif ("
@@ -909,7 +912,19 @@ def _held_to_the_reader(struct: ResolvedStruct,
 				f"\t    && situ_view.{name}_count() != situ_count) {{",
 				"\t\tsitu_e = ::situ::rt::err::constraint;",
 				"\t}"])
-		elif part.verify:
+	for part in _every(parts):
+		if wide_peek(part):
+			assert part.peeked is not None
+			got = (f"static_cast<std::uint64_t>(situ_view."
+			       f"{traverse.local_name(struct, part.peeked)}())")
+			test = (f"{got} != {part.value}ull" if part.value >= 0 else
+			        " || ".join(f"{got} == {v}ull" for v in part.others)
+			        or "false")
+			found.extend(["\tif (situ_e == ::situ::rt::err::ok",
+			              f"\t    && ({test})) {{",
+			              "\t\tsitu_e = ::situ::rt::err::constraint;",
+			              "\t}"])
+		if part.verify:
 			# C's: as long as the reader says, once whole (26.1016).
 			name = traverse.local_name(struct, part.placement)
 			found.extend([

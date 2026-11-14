@@ -16,7 +16,7 @@ from situc.codegen.c.build import (ARG, BETWEEN, FRAMED, LOCATED, MARKER, ARMTAG
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Choice, Part,
                                    Shape, _supplies_a_value, arm_name, arms,
-                                   plan, refusals, wide_peek)
+                                   plan, refusals)
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
@@ -49,8 +49,6 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.tagged:
 		return False		# a tag in bits, stored by C's reader (26.1027)
-	if wide_peek(part):
-		return False		# held to its case by C's reader (26.1028)
 	if part.role in (BETWEEN, LOCATED) and any(one.role == ARG
 	                                           for one in parts):
 		return False		# its reader is asked without the arguments

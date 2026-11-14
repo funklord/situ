@@ -26,7 +26,7 @@ from situc.codegen.c.build import (ARG, BETWEEN, LOCATED, WRITABLE_CODES, FRAMED
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
-from situc.codegen.c.build import peeked_byte
+from situc.codegen.c.build import peeked_byte, wide_peek, every_part as _every
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
@@ -258,7 +258,10 @@ def _nested(part: Part) -> list[str]:
 		        f".copy_from_slice({local});",
 		        f"\tsitu_at += {local}.len();"]
 	return [
-		*([] if not part.others and part.value <= 0 else [
+		# A peek wider than the arm's first byte is held to its case by the
+		# reader once the message is whole, as C's is (26.1028, 26.1033).
+		*([] if (not part.others and part.value <= 0) or wide_peek(part)
+		  else [
 			f"\tif {local}.is_empty() {{", *refuse,
 			(f"\tif {peeked_byte(local, part)} != {part.value} {{" if part.value >= 0
 			 else "\tif "
@@ -801,7 +804,17 @@ def _held_to_the_reader(struct: ResolvedStruct,
 			name = traverse.local_name(struct, part.placement)
 			found.extend([f"\tif situ_view.{name}_count() != situ_count {{",
 			              "\t\treturn Err(Error::Constraint);", "\t}"])
-		elif part.verify:
+	for part in _every(parts):
+		if wide_peek(part):
+			assert part.peeked is not None
+			got = (f"(situ_view.{traverse.local_name(struct, part.peeked)}()"
+			       " as u64)")
+			test = (f"{got} != {part.value}" if part.value >= 0 else
+			        " || ".join(f"{got} == {v}" for v in part.others)
+			        or "false")
+			found.extend([f"\tif {test} {{",
+			              "\t\treturn Err(Error::Constraint);", "\t}"])
+		if part.verify:
 			# C's: as long as the reader says, once whole (26.1016).
 			name = traverse.local_name(struct, part.placement)
 			found.extend([f"\tif situ_view.{name}().len() != "

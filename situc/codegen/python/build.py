@@ -39,7 +39,7 @@ from situc.codegen.c.build import (ARG, BETWEEN, LOCATED, WRITABLE_CODES, FRAMED
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
 from situc.codegen.plain_build import plain
-from situc.codegen.c.build import peeked_byte
+from situc.codegen.c.build import peeked_byte, wide_peek, every_part as _every
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -159,7 +159,10 @@ def _nested(part: Part) -> list[str]:
 		        f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
 		        f"\tsitu_at += len({local})"]
 	return [
-		*([] if not part.others and part.value <= 0 else [
+		# A peek wider than the arm's first byte is held to its case by the
+		# reader once the message is whole, as C's is (26.1028, 26.1033).
+		*([] if (not part.others and part.value <= 0) or wide_peek(part)
+		  else [
 			f"\tif not {local}:", refuse,
 			(f"\tif {peeked_byte(local, part)} != {part.value}:" if part.value >= 0
 			 else f"\tif {peeked_byte(local, part)} in {tuple(part.others)!r}:"),
@@ -780,7 +783,17 @@ def _held_to_the_reader(struct: ResolvedStruct,
 				f"\tif situ_view.{name}_count != situ_count:",
 				f'\t\traise ConstraintError("{part.placement.path}: '
 				'the reader counts otherwise")'])
-		elif part.verify:
+	for part in _every(parts):
+		if wide_peek(part):
+			assert part.peeked is not None
+			got = (f"situ_view."
+			       f"{py_name(traverse.local_name(struct, part.peeked))}")
+			test = (f"{got} != {part.value}" if part.value >= 0 else
+			        f"{got} in {tuple(part.others)!r}")
+			found.extend([f"\tif {test}:",
+			              f'\t\traise ConstraintError("{part.placement.path}'
+			              ': reads as another arm")'])
+		if part.verify:
 			# C's: a span its expression sizes is as long as the reader
 			# says, once the message is whole (26.1016).
 			name = py_name(traverse.local_name(struct, part.placement))

@@ -8811,6 +8811,10 @@ Moved to `doc/decision/26.1031-a-dissector-checks-a-checksum.md`.
 
 Moved to `doc/decision/26.1032-the-other-three-write-packed-decimal.md`.
 
+### 26.1033 The other three hold a wide peek
+
+Moved to `doc/decision/26.1033-the-other-three-hold-a-wide-peek.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
