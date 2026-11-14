@@ -865,6 +865,19 @@ def _packed_groups(members: list[Placement]
 	return found
 
 
+def wide_peek(part: Part) -> bool:
+	"""Whether an arm's peeked discriminant is more than its first byte.
+
+	Matroska's `peek u64 written`: no byte of the arm says it alone, so the
+	arm is held to its case through the reader's own getter once the
+	message is whole, rather than by a first-byte test (26.1028).
+	"""
+	disc = part.peeked
+	return disc is not None and (disc.size_bits > BITS_PER_BYTE
+	                             or bool((disc.offset_bits or 0)
+	                                     % BITS_PER_BYTE))
+
+
 def peeked_byte(local: str, part: Part) -> str:
 	"""An arm's first byte, as much of it as its peeked discriminant reads."""
 	disc = part.peeked
@@ -1122,6 +1135,27 @@ def argued_bytes(struct: ResolvedStruct, inner: Placement,
 	              and (one.scalar is not None or one.varint is not None)),
 	             None)
 	return field
+
+
+def _peek_after(struct: ResolvedStruct, part: Part, prefix: str
+		) -> list[str]:
+	"""The reader's discriminant against the case this arm is for."""
+	assert part.peeked is not None
+	getter = ident(prefix, struct.name,
+	               traverse.local_name(struct, part.peeked), "get")
+	test = (f"(uint64_t){getter}({VIEW}) != {part.value}ull"
+	        if part.value >= 0 else
+	        " || ".join(f"(uint64_t){getter}({VIEW}) == {v}ull"
+	                    for v in part.others) or "0")
+	return [
+		f"\t/* {part.placement.name}: the discriminant the reader peeks is",
+		"\t * wider than the arm's first byte, so it is asked of the",
+		"\t * whole message: bytes saying another arm's case are a valid",
+		"\t * message of THAT arm (26.1028). */",
+		f"\tif ({test}) {{",
+		"\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t}",
+	]
 
 
 def _tail_check(part: Part, local: str, held: Placement) -> list[str]:
@@ -1619,13 +1653,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# nothing and asks for nothing. The arm carries them -- and
 			# therefore carries the check that they say what this arm is:
 			# see where the arm part is built.
-			if (held.name in tags and arm is not None
-					and (held.size_bits > BITS_PER_BYTE
-					     or (held.offset_bits or 0) % BITS_PER_BYTE)):
-				return [], f"`{traverse.local_name(struct, held)}` is a " \
-				           f"peeked {held.size_bits}-bit discriminant, and " \
-				           "this writer checks the top of an arm's first " \
-				           "byte against the case it was called for"
+			# A discriminant wider than the arm's first byte is held to
+			# the case through the reader once the message is whole
+			# (26.1028), so it no longer refuses here.
 			parts.append(Part(PEEKED, held, local))
 			continue
 
@@ -2911,6 +2941,10 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
 		*_tags(parts, structs, prefix),
+		# An arm whose peeked discriminant is wider than a byte, held to
+		# the case it was built for by the reader's getter (26.1028).
+		*[line for part in every_part(parts) if wide_peek(part)
+		  for line in _peek_after(struct, part, prefix)],
 		# A span its expression sizes, against the reader (26.1016).
 		*[line for part in every_part(parts) if part.verify for line in (
 			f"\t/* {part.local}: as long as the reader now says, its length",
@@ -3613,7 +3647,8 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 			]
 		elif part.role == NESTED:
 			lines += [
-				*([] if not part.others and part.value <= 0 else [
+				*([] if (not part.others and part.value <= 0)
+				  or wide_peek(part) else [
 					f"\t/* {local}: its first byte is the peeked",
 					"\t * discriminant, so it has to say which arm this",
 					"\t * is -- bytes beginning with another arm's kind",

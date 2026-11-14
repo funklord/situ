@@ -105,7 +105,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	 lambda pl, res: pl.type_name not in res.structs and pl.scalar is None),
 	("is a variant", lambda pl, res: pl.kind == "variant"),
 	("is the discriminant of a variant", lambda pl, res: True),
-	("is a peeked", lambda pl, res: bool(pl.peek)),
 	("packs into a group", lambda pl, res: build.packed(pl)),
 	("is a packed", lambda pl, res: build.packed(pl)),
 	# A packed member that counts a run of structs, which no corpus
@@ -241,7 +240,7 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"is minimal with no `max`", "which is a digit at radix",
 		"is written in digits with neither a width",
 		"is the stated size of both", "is not a member of this struct",
-		"is a peeked", "packs into a group", "is a packed",
+		"packs into a group", "is a packed",
 		"has no byte order for its codec's output",
 		"holds something this writer cannot place",
 		"is the discriminant of a variant", "is quoted", "is a variant",
