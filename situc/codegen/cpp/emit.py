@@ -8928,6 +8928,10 @@ class Emitter:
 		"""
 		name   = bare_name(local_name(struct, placement))
 		offset = self._over_fields(struct, placement.located or "")
+		# Wide, then narrowed: C's reason (26.1037) -- `high << 32 | low`
+		# was undefined in 32 bits and cut to the low half.
+		wide   = self._over_fields(struct, placement.located or "",
+		                           bounded = True)
 		length = self._length_expression(struct, placement)
 		if length is None and placement.is_fixed_size \
 				and placement.size_bits % BITS_PER_BYTE == 0:
@@ -8991,7 +8995,11 @@ class Emitter:
 			*(["\t\tif (!(" + " && ".join(reaches) + ")) {",
 			   "\t\t\treturn ::situ::rt::err::bounds;",
 			   "\t\t}"] if reaches else []),
-			f"\t\tconst std::uint32_t at = static_cast<std::uint32_t>({offset});",
+			f"\t\tconst std::int64_t at_wide = static_cast<std::int64_t>({wide});",
+			"\t\tif (at_wide < 0 || at_wide > static_cast<std::int64_t>(msg->size)) {",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			"\t\tconst std::uint32_t at = static_cast<std::uint32_t>(at_wide);",
 			*measure,
 			f"\t\tconst std::uint32_t n  = static_cast<std::uint32_t>({length});",
 			"",

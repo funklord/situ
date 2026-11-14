@@ -9132,6 +9132,8 @@ class Emitter:
 		"""
 		local  = c_name(self._local(struct, placement))
 		offset = self._over_fields(struct, placement.located or "", "view")
+		wide   = self._over_fields(struct, placement.located or "", "view",
+		                           bounded = True)
 		length = (str(placement.size_bits // BITS_PER_BYTE)
 		          if placement.is_fixed_size
 		          and placement.size_bits % BITS_PER_BYTE == 0
@@ -9208,7 +9210,17 @@ class Emitter:
 			*(["\tif (!(" + " && ".join(reaches) + ")) {",
 			   "\t\treturn SITU_ERR_BOUNDS;",
 			   "\t}"] if reaches else []),
-			f"\tconst uint32_t at = (uint32_t)({offset});",
+			# Wide, then narrowed: an offset built from fields can pass 32
+			# bits -- openmlx4's MFA data sits at `high << 32 | low`, and in
+			# 32 bits that shift was undefined and the result cut to the low
+			# half, so the accessor served bytes from offset 0x18 for an
+			# offset of 0x1_0000_0018 (26.1037). Every leaf held as a size
+			# expression's is, and the sum refused past the message.
+			f"\tconst int64_t  at_wide = (int64_t)({wide});",
+			"\tif (at_wide < 0 || at_wide > (int64_t)msg->size) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"\tconst uint32_t at = (uint32_t)at_wide;",
 			f"\tconst uint32_t n  = (uint32_t)({length});",
 			"",
 			*self._argument_unused(struct, taken, offset, length),
