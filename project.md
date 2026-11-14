@@ -8795,6 +8795,10 @@ Moved to `doc/decision/26.1027-a-tag-in-bits-is-stored-by-its-reader.md`.
 
 Moved to `doc/decision/26.1028-a-wide-peek-is-held-by-the-reader.md`.
 
+### 26.1029 Packed decimal is written
+
+Moved to `doc/decision/26.1029-packed-decimal-is-written.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

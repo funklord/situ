@@ -81,8 +81,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("is scaled, so its digits carry a point",
 	 lambda pl, res: bool(pl.scaled) and pl.radix is not None),
 	("is fixed point", lambda pl, res: pl.scalar is not None),
-	("is packed and its value is not its bits",
-	 lambda pl, res: build.packed(pl)),
 	("bits wide, so it shares a byte",
 	 lambda pl, res: (pl.scalar is not None
 	                  and pl.scalar.bits % 8 != 0)),

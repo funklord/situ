@@ -1572,8 +1572,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"packed {held.kind}"
 			assert held.scalar is not None
-			if held.scalar.is_bcd or held.radix is not None \
-					or held.scaled:
+			# Packed decimal is written (26.1029): the value is encoded
+			# into its digits' nibbles, which is all BCD's bits are.
+			if held.radix is not None or held.scaled:
 				return [], f"`{traverse.local_name(struct, held)}` is " \
 				           "packed and its value is not its bits"
 			part = Part(BITS, held, local, span,
@@ -1937,7 +1938,12 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		if held.scalar is not None and not traverse.data_sized(held) \
 				and not ends_at_byte \
 				and (held.array_count is None or held.radix is not None):
-			why = _scalar_refusal(held)
+			# Packed decimal is written for a plain member, through
+			# `_value`'s encoder (26.1029); everywhere else it keeps the
+			# refusal, its value not being its bytes.
+			why = (None if held.scalar.is_bcd and held.radix is None
+			       and held.array_count is None and not held.marker
+			       else _scalar_refusal(held))
 			if why:
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
 			parts.append(_value_part(SCALAR, held, local))
@@ -2289,6 +2295,18 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 	and not the other is how `atom.length`, which is both, would get the
 	binary writer.
 	"""
+	held = part.placement.scalar
+	if not part.radix and held is not None and held.is_bcd:
+		# Packed decimal, a nibble a digit through the runtime's own
+		# encoder -- the one the reader's setter calls -- and refused past
+		# what the field holds rather than encoded and cut (26.1029).
+		return [f"\tif ((uint64_t)({value}) > {held.decimal_max}u) {{",
+		        "\t\treturn SITU_ERR_CONSTRAINT;",
+		        "\t}",
+		        *_room(f"{part.bytes}u"),
+		        *_store(part, f"situ_bcd_encode((uint64_t)({value}), "
+		                      f"{held.digits}u)"),
+		        f"\t{AT} += {part.bytes}u;"]
 	if not part.radix:
 		return [*_room(f"{part.bytes}u"),
 		        *_store(part, value),
@@ -3411,6 +3429,24 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 					f"\tsitu_bits_set_{order}({OUT} + {AT}, "
 					f"{part.bit_at}u, {width}u,",
 					f"\t                    (uint64_t){value});",
+				]
+			elif held.scalar.is_bcd:
+				# Packed decimal: the value's digits, a nibble each, which
+				# is what the reader's `situ_bcd_decode` undoes. Refused
+				# past what the field holds -- all nines, unless the field
+				# is narrower than its digits, as an RTC's seconds are
+				# (0027) -- rather than encoded and masked (26.1029).
+				lines += [
+					f"\t/* {local}: {width} bits at {part.bit_at}, packed "
+					"decimal. */",
+					f"\tif ((uint64_t){part.local} > "
+					f"{held.scalar.decimal_max}u) {{",
+					"\t\treturn SITU_ERR_CONSTRAINT;",
+					"\t}",
+					f"\tsitu_bits_set_{order}({OUT} + {AT}, "
+					f"{part.bit_at}u, {width}u,",
+					f"\t                    situ_bcd_encode((uint64_t)"
+					f"{part.local}, {held.scalar.digits}u));",
 				]
 			else:
 				# `situ_bits_set_*` MASKS the value, so a field given more
