@@ -268,6 +268,20 @@ def _nested(part: Part, inner: str) -> list[str]:
 	which arm this is, or the bytes are a valid message of another arm.
 	"""
 	local = part.local
+	if part.equals:
+		# C's: an arm whose extent is its argument is as long as the field
+		# the argument is; its content is validated with the message
+		# (26.1012, 26.1020).
+		return [f"\tif (static_cast<std::uint64_t>({local}_len)"
+		        f" != static_cast<std::uint64_t>({part.equals})) {{",
+		        "\t\treturn ::situ::rt::err::constraint;", "\t}",
+		        f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS,
+		        "\t}",
+		        *_room(f"{local}_len"),
+		        f"\tif ({local}_len != 0u) {{",
+		        f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		        "\t}",
+		        f"\tsitu_at += {local}_len;"]
 	return [
 		*([] if not part.others and part.value <= 0 else [
 			f"\tif ({local}_len == 0u) {{", CONSTRAINT, "\t}",

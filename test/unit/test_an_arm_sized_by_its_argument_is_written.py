@@ -7,8 +7,8 @@ states no extent of its own, so there is no `_required` to ask whether the
 caller's bytes are one of it. But its extent IS its argument, a field the
 caller passes, so the bytes are one exactly when they are that long; their
 content is checked by the closing `validate`, which hands the arm the same
-argument a reader does. C only: the other three do not yet build a member
-taking arguments.
+argument a reader does. All four since 26.1020, held to C by
+`test_the_four_builders_agree`; the A record is checked in Python here too.
 
 Held to RFC 1035 section 4.1.3 for an A record, and to the WebAssembly core
 spec's section layout for a custom section (id 0, LEB128 size, a name).
@@ -106,3 +106,38 @@ def test_a_wasm_custom_section(tmp_path: Path) -> None:
 		return 2;
 	}
 """)
+
+
+def test_python_writes_the_same_a_record(tmp_path: Path) -> None:
+	"""26.1020: the record above, from Python's builder, and RDLENGTH 5 over
+	four bytes refused."""
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build",
+		 str(ROOT / "example" / "dnsname" / "dnsname.situ"), "--target",
+		 "python", "--layer", "edit", "--out", str(out)],
+		cwd = ROOT, capture_output = True, text = True)
+	assert done.returncode == 0, done.stderr
+	(out / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding = "ascii"), encoding = "ascii")
+	(out / "run.py").write_text("""import sys
+sys.path.insert(0, ".")
+import dnsname_build
+from situ_runtime import ConstraintError
+owner = b"\\x07example\\x03com\\x00"
+buf = bytearray(64)
+n = dnsname_build.build_resource_a(buf, owner, 1, 300, 4, bytes([93, 184, 216, 34]))
+print(bytes(buf[:n]).hex())
+try:
+	dnsname_build.build_resource_a(buf, owner, 1, 300, 5, bytes([93, 184, 216, 34]))
+	print("built")
+except ConstraintError:
+	print("refused")
+""", encoding = "ascii")
+	ran = subprocess.run([sys.executable, "-I", "run.py"], cwd = out,
+	                     capture_output = True, text = True)
+	assert ran.returncode == 0, ran.stderr
+	assert ran.stdout.split() == [
+		"076578616d706c6503636f6d00000100010000012c00045db8d822",
+		"refused"], ran.stdout

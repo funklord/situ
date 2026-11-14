@@ -75,8 +75,11 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 			or traverse.bit_extractor(held.scalar, held) == "ne"):
 		return False
 	if part.role in (NESTED, REPEAT) and held.arguments \
-			and not (part.role == REPEAT and part.args):
-		return False		# a run's are the caller's values (26.1018)
+			and not (part.role == REPEAT and part.args) \
+			and not (part.role == NESTED and part.equals
+			         and part.peeked is None and not part.others):
+		return False		# a run's are the caller's values (26.1018),
+					# an arm's its own length field's (26.1020)
 	if part.role == REPEAT and part.value == 1 and sum(
 			one.role == REPEAT and one.value == 1 for one in parts) > 1:
 		return False		# one walked count to hold the reader's to

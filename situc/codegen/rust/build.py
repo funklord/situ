@@ -247,6 +247,16 @@ def _nested(part: Part) -> list[str]:
 	local = _ident(part.local)
 	inner = _pascal(part.placement.type_name or "")
 	refuse = ["\t\treturn Err(Error::Constraint);", "\t}"]
+	if part.equals:
+		# C's: an arm whose extent is its argument is as long as the field
+		# the argument is; its content is validated with the message
+		# (26.1012, 26.1020).
+		return [f"\tif {local}.len() as u64 != {_ident(part.equals)} as u64 {{",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        *_room(f"{local}.len()"),
+		        f"\tsitu_out[situ_at..situ_at + {local}.len()]"
+		        f".copy_from_slice({local});",
+		        f"\tsitu_at += {local}.len();"]
 	return [
 		*([] if not part.others and part.value <= 0 else [
 			f"\tif {local}.is_empty() {{", *refuse,

@@ -150,6 +150,14 @@ def _nested(part: Part) -> list[str]:
 	path  = part.placement.path
 	inner = f"situ_schema.{py_name(part.placement.type_name or '')}"
 	refuse = f'\t\traise ConstraintError("{path}: not one whole {inner}")'
+	if part.equals:
+		# C's: an arm whose extent is its argument is as long as the field
+		# the argument is; its content is validated with the message
+		# (26.1012, 26.1020).
+		return [f"\tif len({local}) != {py_name(part.equals)}:", refuse,
+		        *_room(f"len({local})", path),
+		        f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
+		        f"\tsitu_at += len({local})"]
 	return [
 		*([] if not part.others and part.value <= 0 else [
 			f"\tif not {local}:", refuse,
