@@ -8866,6 +8866,12 @@ Moved to `doc/decision/26.1039-a-resend-interval-beside-a-total-wait.md`.
 
 Moved to `doc/decision/26.1040-a-variant-states-its-size.md`.
 
+Open after it, for the next session: a builder that chooses among arms, or
+a variant size written as arithmetic, is declined rather than computed; the
+generated checks build no baseline for a struct holding one. The next goal-gap
+item is recursion through `at` (openmlx4's FS2): a recursive located chain
+builds in no backend, as f715cd8c records.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
