@@ -32,7 +32,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (ARG, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
+from situc.codegen.c.build import (ARG, LOCATED, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                                    Part)
 from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
@@ -237,6 +237,11 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			found.append((part, _run_bytes(part.bytes, at)))
 		elif part.role == SPAN:
 			found.append((part, _run_bytes(_span_length(part, parts), at)))
+		elif part.role == LOCATED:
+			# Where the offset already written puts it; its length is the
+			# one a nested header states, which a generic value rarely is,
+			# so the explicit cases are 26.1025's own test.
+			found.append((part, _run_bytes(4, at)))
 		elif part.role == NESTED:
 			found.append((part, inner.get(part.placement.type_name or "",
 			                              [b"\x00"])[0]))
@@ -317,7 +322,8 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			lines.append(_array(name, value, "uint8_t"))
 			spelt.append((part, [name, *(
 				[f"{len(value)}u"]
-				if part.role in (*plain_build.MEASURED, TAG) else [])]))
+				if part.role in (*plain_build.MEASURED, TAG, LOCATED)
+				 else [])]))
 
 		def arm_value(part: Part, arm: ArmOf, args: list[str],
 				unit: Unit = unit) -> str:
@@ -365,7 +371,8 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			lines.append(_array(name, value, "std::uint8_t"))
 			spelt.append((part, [name, *(
 				[f"{len(value)}u"]
-				if part.role in (*plain_build.MEASURED, TAG) else [])]))
+				if part.role in (*plain_build.MEASURED, TAG, LOCATED)
+				 else [])]))
 
 		def arm_value(part: Part, arm: ArmOf, args: list[str],
 				unit: Unit = unit) -> str:

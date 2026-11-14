@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -550,6 +550,26 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"\tsitu_at += {part.bytes}",
 		        f"\tsitu_little_{part.placement.name} = "
 		        f"{local} in {part.little!r}"]
+	if part.role == LOCATED:
+		# C's: where the offset already written puts it, as the reader
+		# finds it over the whole backing; zeros up to there, and an offset
+		# behind the cursor refused (26.1015, 26.1025).
+		local = py_name(part.local)
+		path  = part.placement.path
+		name  = py_name(traverse.local_name(struct, part.placement))
+		held  = f"situ_schema.{py_name(struct.name)}"
+		return ["\tsitu_whole = "
+		        f"{held}.at(Message(memoryview(situ_out)), 0"
+		        + ("" if struct.layout.is_fixed_size else ", len(situ_out)")
+		        + ")",
+		        f"\tsitu_to = situ_whole.{name}_offset",
+		        f"\tif situ_to < situ_at or len(situ_whole.{name}) != "
+		        f"len({local}):",
+		        f'\t\traise ConstraintError("{path}: not where, or not as '
+		        'long as, the message puts it")',
+		        f"\tsitu_out[situ_at:situ_to] = bytes(situ_to - situ_at)",
+		        f"\tsitu_out[situ_to:situ_to + len({local})] = {local}",
+		        f"\tsitu_at = situ_to + len({local})"]
 	if part.role == ARG:
 		# C's: a struct argument is no byte, and where it is a byte order
 		# the fields in its scope are stored in the order it says
@@ -656,6 +676,8 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}: {_arm_type(struct, part)}")
 		elif plain_build.takes_value(part):
 			found.append(f"{py_name(part.local)}: int")
+		elif part.role == LOCATED:
+			found.append(f"{py_name(part.local)}: bytes")
 		elif part.role == ARG:
 			# The reader's keyword, so one value has one spelling.
 			found.append(f"{traverse.argument_name(part.placement)}: int")

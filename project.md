@@ -8779,6 +8779,10 @@ Moved to `doc/decision/26.1023-verify-checks-checksums.md`.
 
 Moved to `doc/decision/26.1024-a-pad-reaches-where-the-next-member-is.md`.
 
+### 26.1025 The other three write where an offset puts it
+
+Moved to `doc/decision/26.1025-the-other-three-write-where-an-offset-puts-it.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

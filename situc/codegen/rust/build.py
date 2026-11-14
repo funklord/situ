@@ -22,7 +22,7 @@ import re
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
@@ -582,6 +582,29 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        f" {local} as u64);",
 		        f"\tsitu_at += {part.bytes};",
 		        f"\tlet situ_little_{part.placement.name} = {little};"]
+	if part.role == LOCATED:
+		# C's: where the offset already written puts it, as the reader
+		# finds it over the whole backing; zeros up to there (26.1015,
+		# 26.1025). The run's place is its pointer's distance from the
+		# backing's start, taken before anything is written.
+		local = _ident(part.local)
+		held  = _pascal(struct.name)
+		name  = traverse.local_name(struct, part.placement)
+		return ["\tlet situ_to = {",
+		        f"\t\tlet situ_whole = {held}::new(&situ_out[..])"
+		        ".map_err(|_| Error::Bounds)?;",
+		        f"\t\tlet situ_run = situ_whole.{name}(&situ_out[..])"
+		        ".map_err(|_| Error::Bounds)?;",
+		        f"\t\tif situ_run.len() != {local}.len() {{",
+		        "\t\t\treturn Err(Error::Constraint);", "\t\t}",
+		        "\t\tsitu_run.as_ptr() as usize - situ_out.as_ptr() as usize",
+		        "\t};",
+		        "\tif situ_to < situ_at {",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        "\tsitu_out[situ_at..situ_to].fill(0);",
+		        f"\tsitu_out[situ_to..situ_to + {local}.len()]"
+		        f".copy_from_slice({local});",
+		        f"\tsitu_at = situ_to + {local}.len();"]
 	if part.role == ARG:
 		# C's: no byte, and where it is a byte order the fields in its
 		# scope are stored in the order it says (26.1018).
@@ -690,6 +713,8 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 		if part.role == CHOSEN:
 			found.append(f"{name}: {_arm_type(struct, part)}"
 			             f"{_elided(struct, part)}")
+		elif part.role == LOCATED:
+			found.append(f"{name}: &[u8]")
 		elif part.role == ARG:
 			found.append(f"{_ident(traverse.argument_name(part.placement))}"
 			             f": {_scalar(part.placement)}")

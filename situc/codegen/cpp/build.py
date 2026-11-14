@@ -21,7 +21,7 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.c.names import bare_name, c_name
@@ -646,6 +646,37 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		         f"static_cast<std::uint{bits}_t>({part.local}));"),
 		        f"\tsitu_at += {part.bytes}u;",
 		        f"\tconst bool situ_little_{part.placement.name} = ({little});"]
+	if part.role == LOCATED:
+		# C's: where the offset already written puts it, as the reader
+		# finds it over the whole backing; zeros up to there (26.1015,
+		# 26.1025). The run's place is its pointer's distance from the
+		# backing's start.
+		local = part.local
+		held  = f"::situ::{class_name(struct)}"
+		name  = traverse.local_name(struct, part.placement)
+		size  = "" if struct.layout.is_fixed_size else " situ_cap,"
+		return ["\t{",
+		        "\t\t::situ::rt::message situ_backing(situ_out, situ_cap);",
+		        f"\t\t{held} situ_whole;",
+		        "\t\t::situ::rt::bytes situ_run;",
+		        "",
+		        f"\t\tif ({held}::at(situ_backing, 0,{size} situ_whole)"
+		        " != ::situ::rt::err::ok",
+		        f"\t\t    || situ_whole.{name}(situ_backing.raw(), situ_run)"
+		        " != ::situ::rt::err::ok) {",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        "\t\tconst std::uint32_t situ_to = static_cast<std::uint32_t>"
+		        "(situ_run.data() - situ_out);",
+		        f"\t\tif (situ_to < situ_at || situ_run.size() != {local}_len) {{",
+		        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+		        f"\t\tif ({local}_len != 0u && {local} == nullptr) {{",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        "\t\tstd::memset(situ_out + situ_at, 0, situ_to - situ_at);",
+		        f"\t\tif ({local}_len != 0u) {{",
+		        f"\t\t\tstd::memcpy(situ_out + situ_to, {local}, {local}_len);",
+		        "\t\t}",
+		        f"\t\tsitu_at = situ_to + {local}_len;",
+		        "\t}"]
 	if part.role == ARG:
 		# C's: no byte, and where it is a byte order the fields in its
 		# scope are stored in the order it says (26.1018).
@@ -756,6 +787,9 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	for part in parts:
 		if part.role == CHOSEN:
 			found.append(f"{_arm_type(struct, part)} {part.local}")
+		elif part.role == LOCATED:
+			found.extend([f"const std::uint8_t *{part.local}",
+			              f"std::uint32_t {part.local}_len"])
 		elif part.role == ARG:
 			found.append(f"{_scalar(part.placement)} "
 			             f"{traverse.argument_name(part.placement)}")

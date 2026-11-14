@@ -5073,6 +5073,18 @@ class Emitter:
 			f'\t\t\traise BoundsError("{placement.path}: `{placement.located}`'
 			' points outside the message")',
 			"\t\treturn self._msg.buffer[at:at + n]",
+			# Where it is, which the bytes above cannot say: a memoryview
+			# keeps no offset into the buffer it was cut from, and a writer
+			# placing the run has to ask (26.1025). C++ and Rust answer it by
+			# pointer difference, C by the run's own view.
+			"", "\t@property",
+			f"\tdef {name}_offset(self) -> int:",
+			f'\t\t"""Where {placement.path} starts in the message."""',
+			"\t\tself._check()",
+			*([f"\t\tif not ({' and '.join(reaches)}):",
+			   f'\t\t\traise BoundsError("{placement.path}: the frame does'
+			   f' not reach `{placement.located}`")'] if reaches else []),
+			f"\t\treturn {offset}",
 			*self._located_value(placement, name),
 			*self._located_view(struct, placement, name, offset),
 		]
