@@ -21,7 +21,7 @@ Nothing is written to disk and nothing is compiled. The Python accessors are
 built in memory and executed there, so an adopter's build gains a check and
 no artifacts.
 
-WHAT A VECTOR IS HELD TO. Four things, and they were not always four. The
+WHAT A VECTOR IS HELD TO. Five things, and they were not always five. The
 view has to be acquirable over the vector's bytes and no more of them; the
 generated `validate` has to accept it; and every expectation the vector
 states -- `sender_hardware = 00:1A:2B:3C:4D:5E`, the lines the corpus writes
@@ -44,6 +44,17 @@ PNG chunk with a wrong CRC conformed until 26.1023. A tag nothing can
 compute here -- a MAC with no key, a sum over a pseudo-header the vector
 does not carry, one inside a nested member -- is named in the report as
 unchecked rather than counted as a pass.
+
+The fifth is that every member placed by `at` lies inside the vector
+(26.1034), read through its own accessor. That is stricter than `validate`,
+on purpose, and the line between them is 26.1038's: `validate` answers for
+a reader that may hold part of a message -- a BMP's headers before its
+pixels, which 26.446 reads rather than refuses -- while a vector is by
+definition ONE WHOLE message, which is why surplus bytes are refused here
+too and nowhere in `validate`. An adopter's gate over vectors their own
+writer produced is a check that the schema is right about where things
+are, and a member placed outside the bytes is the schema or the writer
+being wrong about exactly that.
 """
 
 from __future__ import annotations

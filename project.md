@@ -8847,6 +8847,10 @@ Moved to `doc/decision/26.1036-a-resend-is-told-its-exchange.md`.
 
 Moved to `doc/decision/26.1037-a-wide-located-offset-is-computed-wide.md`.
 
+### 26.1038 A vector is one whole message
+
+Moved to `doc/decision/26.1038-a-vector-is-one-whole-message.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
