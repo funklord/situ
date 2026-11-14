@@ -8819,6 +8819,10 @@ Moved to `doc/decision/26.1033-the-other-three-hold-a-wide-peek.md`.
 
 Moved to `doc/decision/26.1034-verify-reads-every-located-member.md`.
 
+### 26.1035 wire --check pairs members by name
+
+Moved to `doc/decision/26.1035-wire-check-pairs-members-by-name.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

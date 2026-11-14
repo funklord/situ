@@ -1272,13 +1272,94 @@ def _compare_struct(name: str, old: list[str], new: list[str]) -> list[Finding]:
 	if reordered is not None:
 		return [*findings, reordered, *_compare_annotations(name, old, new)]
 
-	for index in range(max(len(old_members), len(new_members))):
-		was = old_members[index] if index < len(old_members) else None
-		now = new_members[index] if index < len(new_members) else None
-		findings.extend(_compare_member(name, index, was, now))
-
+	findings.extend(_compare_aligned(name, old_members, new_members))
 	findings.extend(_compare_annotations(name, old, new))
 	return findings
+
+
+def _compare_aligned(struct: str, old: list[str], new: list[str]
+		) -> list[Finding]:
+	"""Members compared by NAME, the two lists aligned where names agree.
+
+	Paired by index, one member inserted shifted every comparison after it:
+	openmlx4 wrapped fields in `authenticated` regions and split one 28-bit
+	field into a checksum byte and twenty bits, and every later field of
+	`fs2_header` was reported as moved and breaking -- none had moved a bit
+	(26.1035). So the lists are aligned on their names, a member present in
+	both is compared with itself, and what is left is removed, inserted or
+	appended. A run replaced over exactly the bits it held is one finding.
+	Names are unique within a struct; where they are not, position pairs.
+	"""
+	old_names = [_name_of(line) for line in old]
+	new_names = [_name_of(line) for line in new]
+	if len(set(old_names)) != len(old_names) \
+			or len(set(new_names)) != len(new_names):
+		return [finding
+		        for index in range(max(len(old), len(new)))
+		        for finding in _compare_member(
+		            struct, index,
+		            old[index] if index < len(old) else None,
+		            new[index] if index < len(new) else None)]
+
+	from difflib import SequenceMatcher
+
+	findings: list[Finding] = []
+	matcher = SequenceMatcher(None, old_names, new_names, autojunk = False)
+	for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+		if tag == "equal":
+			for offset in range(i2 - i1):
+				findings.extend(_compare_member(struct, j1 + offset,
+				                                old[i1 + offset],
+				                                new[j1 + offset]))
+			continue
+		if tag == "replace" and i2 - i1 == j2 - j1:
+			# Renames in place, or a member swapped for another at its
+			# position: the positional comparison says which, and a rename
+			# at the same bytes is the API change it always was.
+			for offset in range(i2 - i1):
+				findings.extend(_compare_member(struct, j1 + offset,
+				                                old[i1 + offset],
+				                                new[j1 + offset]))
+			continue
+		if tag == "replace" and _same_bits(old[i1:i2], new[j1:j2]):
+			findings.append(Finding(
+				"breaking", f"{struct}[{j1}]",
+				f"{', '.join(old_names[i1:i2])} replaced by "
+				f"{', '.join(new_names[j1:j2])} over the same bits; an old "
+				"receiver reads them as what they replaced"))
+			continue
+		for index in range(i1, i2):
+			findings.extend(_compare_member(struct, index, old[index], None))
+		for index in range(j1, j2):
+			if i2 >= len(old):
+				# Past every old member: appended, which `_compare_member`
+				# already knows how to judge, `[since]` included.
+				findings.extend(_compare_member(struct, index, None,
+				                                new[index]))
+				continue
+			findings.append(Finding(
+				"breaking", f"{struct}[{index}]",
+				f"inserted {new_names[index]} at "
+				f"{new[index].split()[0]}; an old receiver does not expect "
+				"these bytes"))
+	return findings
+
+
+def _same_bits(old: list[str], new: list[str]) -> bool:
+	"""Whether two runs of member lines start together and span as much."""
+	def span(lines: list[str]) -> tuple[str, int] | None:
+		total = 0
+		for line in lines:
+			width = line.split()[1]
+			if width.endswith("bit") and width[:-3].isdigit():
+				total += int(width[:-3])
+			elif width.isdigit():
+				total += int(width) * 8
+			else:
+				return None		# a range or a computed width
+		return lines[0].split()[0], total
+	held = span(old)
+	return held is not None and held == span(new)
 
 
 def _compare_head(name: str, old: str, new: str) -> list[Finding]:

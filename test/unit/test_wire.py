@@ -1268,3 +1268,24 @@ def test_the_four_policies_give_four_different_signatures() -> None:
 	assert len(set(rendered.values())) == len(RESERVED_POLICIES), (
 		"two reserved policies render the same signature: "
 		+ ", ".join(sorted(rendered)))
+
+
+def test_members_are_paired_by_name_not_by_position() -> None:
+	"""openmlx4 (26.1035): one field split into a checksum byte and the
+	rest, and the fields after it wrapped in a region the checksum covers.
+	Paired by index, every later member was reported moved and breaking;
+	none had moved a bit. By name, the split is the one change.
+	"""
+	codec = ("codec sum8 {\n\tkernel = byte_sum(width = 8, negate);\n}\n"
+	         "impl sum8 derived;\n")
+	old = ("struct h {\n\tu32 head;\n\tu24 whole;\n\tu8 flags;\n"
+	       "\tu32 size;\n}\n")
+	new = codec + ("struct h {\n\tu32 head;\n"
+	               "\tchecksum u8 whole_sum[1] covers(rest) is sum8;\n"
+	               "\tauthenticated rest {\n\t\tu16 whole_rest;\n"
+	               "\t\tu8 flags;\n\t}\n\tu32 size;\n}\n")
+	found = verdict(old, new)
+	moved = [one for one in found.findings if "moves" in one.detail]
+	assert not moved, detail(found)
+	assert "whole replaced by whole_sum, whole_rest over the same bits" \
+		in detail(found), detail(found)
