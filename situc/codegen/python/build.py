@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -192,6 +192,11 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 	framed = not structs[held].layout.is_fixed_size
 	count  = plain_build.counts_elements(part, parts)
 	refuse = f'raise ConstraintError("{path}: not whole elements")'
+	# An argued element's arguments, by the reader's keywords (26.1018).
+	given  = "".join(
+		f", {traverse.argument_name(param)}={py_name(value)}"
+		for param, value in zip(traverse.arguments(structs[held]),
+		                        part.args))
 	return [
 		*(["\tsitu_count = 0"] if count else []),
 		"\tsitu_scan = 0",
@@ -202,7 +207,7 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 		   f"\t\t\t{refuse}"] if part.delimiter else []),
 		"\t\tsitu_tail = False",
 		"\t\ttry:",
-		f"\t\t\tsitu_need = {inner}.required({local}[situ_scan:])",
+		f"\t\t\tsitu_need = {inner}.required({local}[situ_scan:]{given})",
 		"\t\texcept TruncatedError:",
 		f"\t\t\tsitu_need = len({local}) - situ_scan",
 		"\t\t\tsitu_tail = True",
@@ -210,7 +215,7 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 		f"\t\t\t{refuse}",
 		"\t\ttry:",
 		f"\t\t\tsitu_element = {inner}.at(situ_elements, situ_scan"
-		+ (f", len({local}) - situ_scan" if framed else "") + ")",
+		+ (f", len({local}) - situ_scan" if framed else "") + f"{given})",
 		"\t\texcept SituError as situ_refused:",
 		f"\t\t\t{refuse} from situ_refused",
 		"\t\ttry:",
@@ -535,6 +540,13 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"\tsitu_at += {part.bytes}",
 		        f"\tsitu_little_{part.placement.name} = "
 		        f"{local} in {part.little!r}"]
+	if part.role == ARG:
+		# C's: a struct argument is no byte, and where it is a byte order
+		# the fields in its scope are stored in the order it says
+		# (26.1018).
+		return [f"\tsitu_little_{part.placement.name} = "
+		        f"{traverse.argument_name(part.placement)} in "
+		        f"{part.little!r}"] if part.little else []
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\ttry:",
@@ -634,6 +646,9 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}: {_arm_type(struct, part)}")
 		elif plain_build.takes_value(part):
 			found.append(f"{py_name(part.local)}: int")
+		elif part.role == ARG:
+			# The reader's keyword, so one value has one spelling.
+			found.append(f"{traverse.argument_name(part.placement)}: int")
 		elif part.role == RUN or part.role in plain_build.MEASURED:
 			found.append(f"{py_name(part.local)}: bytes")
 		elif part.role == TAG and part.opens:
@@ -801,7 +816,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t# The view over exactly what was written, not over `situ_out`: a",
 			"\t# longer buffer would hide a struct that came out short.",
 			f"\tsitu_view = {held}.at(Message(memoryview(situ_out)[:situ_at]), 0"
-			+ ("" if struct.layout.is_fixed_size else ", situ_at") + ")",
+			+ ("" if struct.layout.is_fixed_size else ", situ_at")
+			+ "".join(f", {name}={name}" for name in (
+				traverse.argument_name(one.placement) for one in parts
+				if one.role == ARG)) + ")",
 			*_filled(struct, parts),
 			*_held_to_the_reader(struct, parts),
 			"\tsitu_view.validate()",

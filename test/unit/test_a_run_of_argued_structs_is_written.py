@@ -6,7 +6,8 @@ pcap's `record(order = magic) packets[remaining]` and TIFF's
 takes the byte order as well, and the writer had no value to pass. It has
 one wherever the caller already handed it over -- the file's endian marker,
 or the struct's own argument -- and passes that to each element's
-`_required` and `_validate`, as the reader does. C only.
+`_required` and `_validate`, as the reader does. C here; the other three
+write them too since 26.1018, held to C by `test_the_four_builders_agree`.
 
 Judged by the real consumers: tshark reads the capture, Pillow decodes the
 image.

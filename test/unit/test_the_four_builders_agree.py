@@ -32,7 +32,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
+from situc.codegen.c.build import (ARG, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                                    Part)
 from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
@@ -51,6 +51,8 @@ from situc.pack import pack				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
 from test_walker_c import python_verdict		# noqa: E402
 from walker.image import load				# noqa: E402
+from walker import report				# noqa: E402
+from walker.walk import acquire			# noqa: E402
 
 RUNTIME = ROOT / "runtime"
 #: Comfortably past the largest struct the class serves; asserted below.
@@ -220,6 +222,11 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			# The little-endian literal: a writer ignoring the marker
 			# writes big, so this is the value that tells them apart.
 			found.append((part, part.little[0]))
+		elif part.role == ARG:
+			# A byte order handed down is the same choice as a marker's,
+			# and the little literal tells the four apart the same way.
+			found.append((part, part.little[0] if part.little
+			              else _raw(part.placement, at)))
 		elif part.role == WIDE:
 			found.append((part, [0x12 + at + one
 			                     for one in range(part.bytes or 2)]))
@@ -486,7 +493,7 @@ def _cases(module: object, base: object,
 	return found
 
 
-def _reads_back(plain: object, base: object, unit: Unit,
+def _reads_back(plain: object, base: object, unit: Unit, given: Given,
 		made: str) -> None:
 	"""A message a builder wrote is one the reader takes whole.
 
@@ -497,8 +504,12 @@ def _reads_back(plain: object, base: object, unit: Unit,
 	if made == "refused" or not hasattr(held, "required"):
 		return
 	message = bytes.fromhex(made)
+	# The struct's own arguments, as the reader's keywords: the values the
+	# builder was handed for them.
+	handed = {traverse.argument_name(part.placement): value for part, value in given
+	          if part.role == ARG}
 	try:
-		said = held.required(message)
+		said = held.required(message, **handed)
 	except base.TruncatedError:		# type: ignore[attr-defined]
 		# A run nothing but the frame ends asks for more: `required` frames
 		# a stream, and netlink's attributes end where the message does.
@@ -525,8 +536,8 @@ def _python(tmp: Path, stem: str, units: list[Unit],
 		found  = [*_cases(module, base, units),
 		          *((unit, given, _build_one(module, base, unit, given))
 		            for unit, given in extra)]
-		for unit, _, made in found:
-			_reads_back(plain, base, unit, made)
+		for unit, given, made in found:
+			_reads_back(plain, base, unit, given, made)
 		return ("".join(f"{_label(unit)} {made}\n"
 		                for unit, _, made in found),
 		        [(unit, given) for unit, given, _ in found])
@@ -562,17 +573,30 @@ def _run(argv: list[str], cwd: Path) -> str:
 	return done.stdout
 
 
-def _the_walker_takes_it(schema: Path, python: str) -> None:
+def _the_walker_takes_it(schema: Path, python: str,
+		cases: list[tuple[Unit, Given]]) -> None:
 	"""What four writers built is valid to the reader that shares no code
-	with them. Python's walker alone: C's costs a compile per message."""
+	with them. Python's walker alone: C's costs a compile per message.
+
+	A struct's own arguments are the values its builder was handed, in
+	declaration order, which is the order its ARG parts are in."""
 	parsed = load_schema(schema)
 	blob   = pack(parsed, resolve(parsed, solve(parsed)), metadata=True)[0]
-	names  = load(blob).struct_names
-	for line in python.splitlines():
+	image  = load(blob)
+	names  = image.struct_names
+	for line, (_, given) in zip(python.splitlines(), cases, strict=True):
 		label, made = line.rsplit(" ", 1)
-		if made != "refused":
-			assert python_verdict(blob, bytes.fromhex(made), names.index(
-				label.split(".")[0])) == "0", (label, made)
+		if made == "refused":
+			continue
+		shape  = names.index(label.split(".")[0])
+		handed = [value for part, value in given
+		          if part.role == ARG and isinstance(value, int)]
+		if not handed:
+			assert python_verdict(blob, bytes.fromhex(made), shape) == "0", \
+				(label, made)
+			continue
+		view = acquire(image, bytes.fromhex(made), shape, handed)
+		assert report._validate(image, view, shape) == 0, (label, made)
 
 
 def four_say(schema: Path, tmp_path: Path, units: list[Unit],
@@ -634,7 +658,7 @@ def four_say(schema: Path, tmp_path: Path, units: list[Unit],
 	           for target in ("c", "cpp", "rust")}}
 	assert said["python"].count("\n") == len(cases)
 	assert len(set(said.values())) == 1, said
-	_the_walker_takes_it(schema, python)
+	_the_walker_takes_it(schema, python, cases)
 	return python
 
 

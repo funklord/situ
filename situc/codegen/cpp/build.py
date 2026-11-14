@@ -21,7 +21,7 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.c.names import bare_name, c_name
@@ -316,6 +316,9 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 	held   = structs[part.placement.type_name or ""]
 	inner  = f"::situ::{class_name(held)}"
 	length = "" if held.layout.is_fixed_size else f" {local}_len - situ_scan,"
+	# An argued element's arguments, before the out-parameter as the
+	# reader takes them (26.1018).
+	given  = "".join(f" {value}," for value in part.args)
 	count  = plain_build.counts_elements(part, parts)
 	wide   = len(part.delimiter)
 	spelt  = ", ".join(f"0x{byte:02X}u" for byte in part.delimiter)
@@ -341,7 +344,8 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 		   "\t\t\t\treturn ::situ::rt::err::constraint;",
 		   "\t\t\t}"] if wide else []),
 		f"\t\t\tif ({inner}::required({local} + situ_scan,",
-		f"\t\t\t                     {local}_len - situ_scan, situ_need)",
+		f"\t\t\t                     {local}_len - situ_scan,{given} "
+		"situ_need)",
 		"\t\t\t    != ::situ::rt::err::ok) {",
 		f"\t\t\t\tsitu_need = {local}_len - situ_scan;",
 		"\t\t\t\tsitu_tail = true;",
@@ -349,7 +353,7 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 		"\t\t\tif (situ_need == 0u) {",
 		"\t\t\t\treturn ::situ::rt::err::constraint;",
 		"\t\t\t}",
-		f"\t\t\tif ({inner}::at(situ_elements, situ_scan,{length}"
+		f"\t\t\tif ({inner}::at(situ_elements, situ_scan,{length}{given}"
 		" situ_element)",
 		"\t\t\t    != ::situ::rt::err::ok) {",
 		"\t\t\t\treturn ::situ::rt::err::constraint;",
@@ -622,6 +626,13 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		         f"static_cast<std::uint{bits}_t>({part.local}));"),
 		        f"\tsitu_at += {part.bytes}u;",
 		        f"\tconst bool situ_little_{part.placement.name} = ({little});"]
+	if part.role == ARG:
+		# C's: no byte, and where it is a byte order the fields in its
+		# scope are stored in the order it says (26.1018).
+		name = traverse.argument_name(part.placement)
+		return [f"\tconst bool situ_little_{part.placement.name} = ("
+		        + " || ".join(f"{name} == {v:#x}u" for v in part.little)
+		        + ");"] if part.little else []
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\t{",
@@ -725,6 +736,9 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	for part in parts:
 		if part.role == CHOSEN:
 			found.append(f"{_arm_type(struct, part)} {part.local}")
+		elif part.role == ARG:
+			found.append(f"{_scalar(part.placement)} "
+			             f"{traverse.argument_name(part.placement)}")
 		elif part.role == VARINT and plain_build.takes_value(part):
 			kind = "std::int64_t" if part.minimal else "std::uint64_t"
 			found.append(f"{kind} {part.local}")
@@ -879,7 +893,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t::situ::rt::message situ_msg(situ_out, situ_at);",
 			f"\t::situ::{held} situ_view;",
 			f"\t::situ::rt::err situ_e = ::situ::{held}::at(situ_msg, 0,{length}"
-			" situ_view);",
+			+ "".join(f" {traverse.argument_name(one.placement)},"
+			          for one in parts if one.role == ARG)
+			+ " situ_view);",
 			"",
 			*_filled(struct, parts),
 			*_held_to_the_reader(struct, parts),

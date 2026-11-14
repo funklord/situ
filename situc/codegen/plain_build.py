@@ -12,7 +12,7 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Choice, Part,
                                    Shape, _supplies_a_value, arm_name, arms,
@@ -26,7 +26,7 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, CHOSEN, ENDED, FRAMED, LITERAL, MARKER, NESTED, PAD,
+SERVED = frozenset({ARG, ARMTAG, BITS, CHOSEN, ENDED, FRAMED, LITERAL, MARKER, NESTED, PAD,
                     PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                     ZERO})
 
@@ -55,11 +55,12 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field" \
 			and not (part.role == ENDED and part.code):
 		return False		# a coded region is ENDED with its code
-	# In a marker's scope where the marker is a member written here: its
-	# value sets the order the store reads (26.1007). One handed down as
-	# an argument is C's alone.
+	# In a marker's scope where the marker is a member written here, or
+	# an argument the caller hands over: its value sets the order the
+	# store reads (26.1007, 26.1018).
 	marked = held.marker is not None and not any(
-		one.role == MARKER and one.placement.name == held.marker
+		(one.role == MARKER or (one.role == ARG and one.little))
+		and one.placement.name == held.marker
 		for one in parts)
 	if part.role in (ARMTAG, SCALAR, SIZE) \
 			and (held.scalar is None or marked
@@ -72,8 +73,9 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 			held.scalar is None or held.marker is not None
 			or traverse.bit_extractor(held.scalar, held) == "ne"):
 		return False
-	if part.role in (NESTED, REPEAT) and held.arguments:
-		return False
+	if part.role in (NESTED, REPEAT) and held.arguments \
+			and not (part.role == REPEAT and part.args):
+		return False		# a run's are the caller's values (26.1018)
 	if part.role == REPEAT and part.value == 1 and sum(
 			one.role == REPEAT and one.value == 1 for one in parts) > 1:
 		return False		# one walked count to hold the reader's to

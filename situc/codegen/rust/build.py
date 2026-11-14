@@ -22,7 +22,7 @@ import re
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
@@ -284,6 +284,8 @@ def _walk(part: Part, parts: list[Part]) -> list[str]:
 	local  = _ident(part.local)
 	inner  = _pascal(part.placement.type_name or "")
 	count  = plain_build.counts_elements(part, parts)
+	# An argued element's arguments, after the bytes (26.1018).
+	given  = "".join(f", {_ident(value)}" for value in part.args)
 	needle = ", ".join(f"{byte:#04x}" for byte in part.delimiter)
 	return [
 		*(["\tlet mut situ_count = 0usize;"] if count else []),
@@ -294,14 +296,14 @@ def _walk(part: Part, parts: list[Part]) -> list[str]:
 		   "\t\t\t\treturn Err(Error::Constraint);",
 		   "\t\t\t}"] if part.delimiter else []),
 		f"\t\t\tlet (situ_need, situ_tail) = match {inner}::required("
-		f"&{local}[situ_scan..]) {{",
+		f"&{local}[situ_scan..]{given}) {{",
 		"\t\t\t\tsitu_rt::Framing::Complete(n) => (n, false),",
 		f"\t\t\t\t_ => ({local}.len() - situ_scan, true),",
 		"\t\t\t};",
 		"\t\t\tif situ_need == 0 {",
 		"\t\t\t\treturn Err(Error::Constraint);",
 		"\t\t\t}",
-		f"\t\t\tlet situ_element = {inner}::new(&{local}[situ_scan..])"
+		f"\t\t\tlet situ_element = {inner}::new(&{local}[situ_scan..]{given})"
 		".map_err(|_| Error::Constraint)?;",
 		"\t\t\tif let Err(situ_verdict) = situ_element.validate() {",
 		"\t\t\t\treturn Err(if situ_tail { Error::Constraint } "
@@ -567,6 +569,13 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        f" {local} as u64);",
 		        f"\tsitu_at += {part.bytes};",
 		        f"\tlet situ_little_{part.placement.name} = {little};"]
+	if part.role == ARG:
+		# C's: no byte, and where it is a byte order the fields in its
+		# scope are stored in the order it says (26.1018).
+		name = _ident(traverse.argument_name(part.placement))
+		return [f"\tlet situ_little_{part.placement.name} = "
+		        + " || ".join(f"{name} == {v:#x}" for v in part.little)
+		        + ";"] if part.little else []
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return [f"\tlet situ_end = match {_pascal(struct.name)}::required("
@@ -655,6 +664,12 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 	        f"\tsitu_at += {local}.len();"]
 
 
+def _handed(parts: list[Part]) -> str:
+	"""The struct's own arguments, as its reader's `new` takes them."""
+	return "".join(f", {_ident(traverse.argument_name(one.placement))}"
+	               for one in parts if one.role == ARG)
+
+
 def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	found: list[str] = []
 	for part in parts:
@@ -662,6 +677,9 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 		if part.role == CHOSEN:
 			found.append(f"{name}: {_arm_type(struct, part)}"
 			             f"{_elided(struct, part)}")
+		elif part.role == ARG:
+			found.append(f"{_ident(traverse.argument_name(part.placement))}"
+			             f": {_scalar(part.placement)}")
 		elif part.role == VARINT and plain_build.takes_value(part):
 			found.append(f"{name}: {'i64' if part.minimal else 'u64'}")
 		elif plain_build.takes_value(part):
@@ -692,11 +710,11 @@ def _filled(struct: ResolvedStruct, held: str,
 		at   = f"situ_tag_{part.local}"
 		over = f"{part.local}_prefix" if part.opens else ""
 		found.extend([
-			f"\tlet situ_tag = {held}::new(&situ_out[..situ_at])?"
+			f"\tlet situ_tag = {held}::new(&situ_out[..situ_at]{_handed(parts)})?"
 			f".{name}_compute({over})?;",
 			f"\tsitu_out[{at}..{at} + {part.bytes}].copy_from_slice("
 			f"&(situ_tag as u{bits}).to_{plain_build.tag_order(part)}_bytes());",
-			f"\t{held}::new(&situ_out[..situ_at])?.{name}_check({over})?;"])
+			f"\t{held}::new(&situ_out[..situ_at]{_handed(parts)})?.{name}_check({over})?;"])
 	return found
 
 
@@ -773,7 +791,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t// Over exactly what was written, not over the backing: a longer",
 			"\t// slice would hide a struct that came out short.",
 			*_filled(struct, held, parts),
-			f"\tlet situ_view = {held}::new(&situ_out[..situ_at])?;",
+			f"\tlet situ_view = {held}::new(&situ_out[..situ_at]{_handed(parts)})?;",
 			*_held_to_the_reader(struct, parts),
 			"\tsitu_view.validate()?;",
 			"\tOk(situ_at)",

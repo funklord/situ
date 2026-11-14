@@ -8751,6 +8751,10 @@ Moved to `doc/decision/26.1016-a-span-its-expression-sizes-is-checked-after.md`.
 
 Moved to `doc/decision/26.1017-a-run-of-argued-structs-is-written.md`.
 
+### 26.1018 The other three builders take struct arguments
+
+Moved to `doc/decision/26.1018-the-other-three-builders-take-struct-arguments.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
