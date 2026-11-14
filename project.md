@@ -8755,6 +8755,10 @@ Moved to `doc/decision/26.1017-a-run-of-argued-structs-is-written.md`.
 
 Moved to `doc/decision/26.1018-the-other-three-builders-take-struct-arguments.md`.
 
+### 26.1019 The other three check a span after
+
+Moved to `doc/decision/26.1019-the-other-three-check-a-span-after.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

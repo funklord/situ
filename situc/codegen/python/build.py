@@ -678,6 +678,23 @@ def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	return found
 
 
+def _closing(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
+	"""The reader's checks, then `validate`.
+
+	With a span its expression sizes (26.1016), C's answer: the reader
+	stops at the bytes there are, so a stated length past them is met as
+	truncation -- and a writer holding the whole message reports that as
+	the caller's length disagreeing with their bytes."""
+	held = _held_to_the_reader(struct, parts)
+	if not any(part.verify for part in parts):
+		return [*held, "\tsitu_view.validate()"]
+	return ["\ttry:", *("\t" + line for line in held),
+	        "\t\tsitu_view.validate()",
+	        "\texcept (BoundsError, TruncatedError) as situ_short:",
+	        f'\t\traise ConstraintError("{struct.name}: the message states '
+	        'more than was written") from situ_short']
+
+
 def _held_to_the_reader(struct: ResolvedStruct,
 		parts: list[Part]) -> list[str]:
 	"""A `while` run ends where a predicate stops holding, which is the
@@ -690,6 +707,14 @@ def _held_to_the_reader(struct: ResolvedStruct,
 				f"\tif situ_view.{name}_count != situ_count:",
 				f'\t\traise ConstraintError("{part.placement.path}: '
 				'the reader counts otherwise")'])
+		elif part.verify:
+			# C's: a span its expression sizes is as long as the reader
+			# says, once the message is whole (26.1016).
+			name = py_name(traverse.local_name(struct, part.placement))
+			found.extend([
+				f"\tif len(situ_view.{name}) != len({py_name(part.local)}):",
+				f'\t\traise ConstraintError("{part.placement.path}: not as '
+				'long as the message says")'])
 	return found
 
 
@@ -821,8 +846,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 				traverse.argument_name(one.placement) for one in parts
 				if one.role == ARG)) + ")",
 			*_filled(struct, parts),
-			*_held_to_the_reader(struct, parts),
-			"\tsitu_view.validate()",
+			*_closing(struct, parts),
 			"\treturn situ_at",
 		])
 

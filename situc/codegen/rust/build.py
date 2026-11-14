@@ -728,6 +728,12 @@ def _held_to_the_reader(struct: ResolvedStruct,
 			name = traverse.local_name(struct, part.placement)
 			found.extend([f"\tif situ_view.{name}_count() != situ_count {{",
 			              "\t\treturn Err(Error::Constraint);", "\t}"])
+		elif part.verify:
+			# C's: as long as the reader says, once whole (26.1016).
+			name = traverse.local_name(struct, part.placement)
+			found.extend([f"\tif situ_view.{name}().len() != "
+			              f"{_ident(part.local)}.len() {{",
+			              "\t\treturn Err(Error::Constraint);", "\t}"])
 	return found
 
 
@@ -793,7 +799,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*_filled(struct, held, parts),
 			f"\tlet situ_view = {held}::new(&situ_out[..situ_at]{_handed(parts)})?;",
 			*_held_to_the_reader(struct, parts),
-			"\tsitu_view.validate()?;",
+			# C's: a stated length past a checked span's bytes is met as
+			# truncation, which a whole message cannot be (26.1016).
+			("\tsitu_view.validate().map_err(|situ_e| match situ_e {"
+			 " Error::Bounds => Error::Constraint, other => other })?;"
+			 if any(one.verify for one in parts)
+			 else "\tsitu_view.validate()?;"),
 			"\tOk(situ_at)",
 			"}",
 		])

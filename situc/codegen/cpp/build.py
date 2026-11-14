@@ -196,8 +196,12 @@ def _wide(part: Part) -> list[str]:
 	bits  = part.placement.scalar.bits
 	count = f"{part.bytes}u" if part.bytes else f"{local}_count"
 	end   = _order_suffix(part.placement.endian)
+	# C's: a caller's count of zero is an empty run -- RTP's CSRC list,
+	# nearly always -- and the loop reads nothing then (26.1016).
+	null = (f"\tif ({local} == nullptr) {{" if part.bytes else
+	        f"\tif ({count} != 0u && {local} == nullptr) {{")
 	return [
-		f"\tif ({local} == nullptr) {{", BOUNDS, "\t}",
+		null, BOUNDS, "\t}",
 		f"\tif ({count} > (situ_cap - situ_at) / {each}u) {{", BOUNDS, "\t}",
 		f"\tfor (std::uint32_t situ_scan = 0; situ_scan < {count}; "
 		"situ_scan++) {",
@@ -810,6 +814,14 @@ def _held_to_the_reader(struct: ResolvedStruct,
 				f"\t    && situ_view.{name}_count() != situ_count) {{",
 				"\t\tsitu_e = ::situ::rt::err::constraint;",
 				"\t}"])
+		elif part.verify:
+			# C's: as long as the reader says, once whole (26.1016).
+			name = traverse.local_name(struct, part.placement)
+			found.extend([
+				"\tif (situ_e == ::situ::rt::err::ok",
+				f"\t    && situ_view.{name}().size() != {part.local}_len) {{",
+				"\t\tsitu_e = ::situ::rt::err::constraint;",
+				"\t}"])
 	return found
 
 
@@ -901,6 +913,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*_held_to_the_reader(struct, parts),
 			"\tif (situ_e == ::situ::rt::err::ok) {",
 			"\t\tsitu_e = situ_view.validate();",
+			# C's: a stated length past a checked span's bytes is met as
+			# truncation, which a whole message cannot be (26.1016).
+			*(["\t\tif (situ_e == ::situ::rt::err::bounds) {",
+			   "\t\t\tsitu_e = ::situ::rt::err::constraint;",
+			   "\t\t}"] if any(one.verify for one in parts) else []),
 			"\t}",
 			"\tif (situ_e == ::situ::rt::err::ok) {",
 			"\t\tsitu_wrote = situ_at;",
