@@ -812,3 +812,49 @@ def test_a_tag_nothing_computes_is_named_unchecked(
 	out = capsys.readouterr().out
 	assert "except unchecked tags" in out, out
 	assert "record.tag: no codec computes it" in out, out
+
+
+# --------------------------------------------------------------------------
+# A member placed by `at`, which `validate` reads only for a constraint
+# (26.1034).
+# --------------------------------------------------------------------------
+
+#: openmlx4's reproduction, measured against 73e8e79a: an MFA TOC entry's
+#: 48-bit offset, low half at byte 0 and high half at byte 20.
+MFA = """target buffer;
+endian big;
+struct mfa_toc_entry {
+	u32  data_offset_low;
+	u32  data_size;
+	opaque undescribed [12];
+	u16  data_offset_high;
+	opaque undescribed_tail [2];
+}
+struct toc_and_data {
+	mfa_toc_entry toc;
+	u8 data[toc.data_size] at (toc.data_offset_high << 32) | toc.data_offset_low;
+}
+"""
+
+
+def test_a_located_member_past_the_vector_is_refused(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""The offset is 0x1_0000_0018 into 26 bytes. `verify` said "conform"
+	-- `validate` reads a located member only for a constraint it carries,
+	and `data` carries none -- while the accessor refused the same bytes.
+	A vacuous pass, which is worse than a refusal."""
+	schema = tmp_path / "mfa.situ"
+	schema.write_text(MFA, encoding="ascii")
+	vectors = tmp_path / "mfa.vectors"
+	vectors.write_text(
+		"toc_and_data in_range 00 00 00 18 00 00 00 02 00 00 00 00 00 00 00"
+		" 00 00 00 00 00 00 00 00 00 AB CD\n", encoding="ascii")
+	assert main(["verify", str(schema), str(vectors)]) == 0
+	capsys.readouterr()
+
+	vectors.write_text(
+		"toc_and_data high_half_set 00 00 00 18 00 00 00 02 00 00 00 00 00"
+		" 00 00 00 00 00 00 00 00 01 00 00 AB CD\n", encoding="ascii")
+	assert main(["verify", str(schema), str(vectors)]) == 1
+	out = capsys.readouterr().out
+	assert "BoundsError" in out and "points outside the message" in out, out

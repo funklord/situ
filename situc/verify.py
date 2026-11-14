@@ -257,6 +257,11 @@ def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 		# whole message" (26.622). This is that caller: every vector is in
 		# memory whole. A wrong CRC was reported as conforming (26.1023).
 		unchecked = _checked_tags(resolved, struct, view)
+		# And every member placed by `at`, read where the message puts
+		# it: `validate` reads one only for a constraint it carries, so a
+		# bare run placed past the vector's end conformed while its own
+		# accessor refused the bytes (openmlx4, 26.1034).
+		unchecked += _located_reached(struct, view)
 	except Exception as refused:                        # noqa: BLE001
 		# A refusal by the generated module is a verdict about the vector,
 		# which is what this function exists to report. Anything else is
@@ -290,6 +295,29 @@ def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 
 	return Outcome(case, None, unwalked=unwalked, messages=said,
 	               unchecked=unchecked)
+
+
+def _located_reached(struct: ResolvedStruct, view: object
+		) -> tuple[str, ...]:
+	"""Read each located member through its accessor; name the unreadable.
+
+	The accessor is the reader's own answer to "is it there", and it raises
+	`BoundsError` for an offset past the message -- a refusal of the vector,
+	which propagates as one. A located member with no accessor (its length
+	is not something the backend can work out) is named, as an unchecked
+	tag is, rather than counted a pass.
+	"""
+	named: list[str] = []
+	for placement in traverse.own_members(struct):
+		if not placement.located:
+			continue
+		local = traverse.local_name(struct, placement)
+		if not hasattr(type(view), py_name(local)):
+			named.append(f"{struct.name}.{local}: placed by `at` and no "
+			             "accessor reads it, so where it lands is unchecked")
+			continue
+		getattr(view, py_name(local))
+	return tuple(named)
 
 
 def _is_tag(placement: Placement) -> bool:
