@@ -71,15 +71,14 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		and one.placement.name == held.marker
 		for one in parts)
 	if part.role in (ARMTAG, SCALAR, SIZE) \
-			and (held.scalar is None or marked or held.scalar.is_bcd
+			and (held.scalar is None or marked
 			     # A pad or a run in an arm is a scalar part wider or
 			     # narrower than its scalar, and not one value. A text
 			     # number is as wide as its digits.
 			     or (held.size_bits != held.scalar.bits and not part.radix)):
 		return False
 	if part.role == BITS and (
-			held.scalar is None or held.scalar.is_bcd	# C's (26.1029)
-			or held.marker is not None
+			held.scalar is None or held.marker is not None
 			or traverse.bit_extractor(held.scalar, held) == "ne"):
 		return False
 	if part.role in (NESTED, REPEAT) and held.arguments \

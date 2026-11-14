@@ -329,6 +329,27 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 	]
 
 
+def _bcd(part: Part) -> bool:
+	return part.placement.scalar is not None and part.placement.scalar.is_bcd
+
+
+def _bcd_bound(part: Part, local: str) -> list[str]:
+	"""C's: refused past what the field holds (26.1029, 26.1032)."""
+	scalar = part.placement.scalar
+	assert scalar is not None
+	return [f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {scalar.decimal_max}:",
+	        f'\t\traise ConstraintError("{part.placement.path}: more than '
+	        'its digits hold")']
+
+
+def _bcd_value(part: Part, local: str) -> str:
+	"""Packed decimal is its digits, through the runtime's own encoder."""
+	scalar = part.placement.scalar
+	if scalar is None or not scalar.is_bcd:
+		return local
+	return f"bcd_encode({local}, {scalar.digits})"
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -360,9 +381,10 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		lines += [*([f"\tif {local} in {tuple(part.others)!r}:",
 		             f'\t\traise ConstraintError("{path}: reads as something else")']
 		            if part.others else []),
-		          f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {limit}:",
-		          f'\t\traise ConstraintError("{path}: wider than its field")',
-		          *_bit_store(part, local)]
+		          *(_bcd_bound(part, local) if _bcd(part) else
+		            [f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {limit}:",
+		             f'\t\traise ConstraintError("{path}: wider than its field")']),
+		          *_bit_store(part, _bcd_value(part, local))]
 	elif plain_build.stated_ones(part):
 		lines += _bit_store(part, str(limit))
 	if part.closes:
@@ -652,7 +674,8 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		return [*([f"\tif {local} in {tuple(part.others)!r}:",
 		           f'\t\traise ConstraintError("{path}: reads as something else")']
 		          if part.others else []),
-		        *_store(part, local)]
+		        *(_bcd_bound(part, local) if _bcd(part) else []),
+		        *_store(part, _bcd_value(part, local))]
 	if part.role == SIZE:
 		measured = next(one for one in parts if one.placement is part.sizes)
 		if part.inner:
@@ -845,6 +868,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			for unit in built for one in every_part(list(unit.parts))
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
+		"                          bcd_encode,",
 		"                          TruncatedError, View, format_int,",
 		"                          format_uint, varint_be_put, varint_put,",
 		"                          varint_bertag_put, varint_bijective_put,",

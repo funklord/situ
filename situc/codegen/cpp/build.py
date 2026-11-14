@@ -502,6 +502,25 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 	]
 
 
+def _bcd_digits(part: Part) -> int:
+	scalar = part.placement.scalar
+	return scalar.digits if scalar is not None and scalar.is_bcd else 0
+
+
+def _bcd_max(part: Part, limit: int) -> int:
+	"""C's bound: what a packed-decimal field holds, else its bits (26.1032)."""
+	scalar = part.placement.scalar
+	return scalar.decimal_max if scalar is not None and scalar.is_bcd \
+		else limit
+
+
+def _bcd_value(part: Part) -> str:
+	"""Packed decimal is its digits, through C's runtime encoder."""
+	digits = _bcd_digits(part)
+	return (f"situ_bcd_encode(static_cast<std::uint64_t>({part.local}), "
+	        f"{digits}u)" if digits else part.local)
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -529,8 +548,9 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	elif plain_build.takes_value(part):
 		lines += [*([f"\tif ({' || '.join(f'{part.local} == {v}u' for v in part.others)}) {{",
 		             CONSTRAINT, "\t}"] if part.others else []),
-		          f"\tif (static_cast<std::uint64_t>({part.local}) > {limit}u) {{",
-		          CONSTRAINT, "\t}", *_bit_store(part, part.local)]
+		          f"\tif (static_cast<std::uint64_t>({part.local}) > "
+		          f"{_bcd_max(part, limit)}u) {{",
+		          CONSTRAINT, "\t}", *_bit_store(part, _bcd_value(part))]
 	elif plain_build.stated_ones(part):
 		lines += _bit_store(part, f"{limit}u")
 	if part.closes:
@@ -762,7 +782,10 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		# arm, so the default builder refuses it.
 		return [*([f"\tif ({' || '.join(f'{part.local} == {v}u' for v in part.others)}) {{",
 		           CONSTRAINT, "\t}"] if part.others else []),
-		        *_store(part, part.local)]
+		        *([f"\tif (static_cast<std::uint64_t>({part.local}) > "
+		           f"{_bcd_max(part, 0)}u) {{", CONSTRAINT, "\t}"]
+		          if _bcd_digits(part) else []),
+		        *_store(part, _bcd_value(part))]
 	if part.role == SIZE:
 		measured = next(one for one in parts if one.placement is part.sizes)
 		if part.inner:

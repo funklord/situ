@@ -424,6 +424,25 @@ def _repeat(part: Part, parts: list[Part]) -> list[str]:
 	]
 
 
+def _bcd_digits(part: Part) -> int:
+	scalar = part.placement.scalar
+	return scalar.digits if scalar is not None and scalar.is_bcd else 0
+
+
+def _bcd_max(part: Part, limit: int) -> int:
+	"""C's bound: what a packed-decimal field holds, else its bits (26.1032)."""
+	scalar = part.placement.scalar
+	return scalar.decimal_max if scalar is not None and scalar.is_bcd \
+		else limit
+
+
+def _bcd_value(part: Part, local: str) -> str:
+	"""Packed decimal is its digits, through the runtime's own encoder."""
+	digits = _bcd_digits(part)
+	return (f"situ_rt::bcd_encode({local} as u64, {digits})"
+	        if digits else local)
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -452,9 +471,9 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		lines += [*([f"\tif {' || '.join(f'{local} as u64 == {v}' for v in part.others)} {{",
 		             "\t\treturn Err(Error::Constraint);", "\t}"]
 		            if part.others else []),
-		          f"\tif {local} as u64 > {limit} {{",
+		          f"\tif {local} as u64 > {_bcd_max(part, limit)} {{",
 		          "\t\treturn Err(Error::Constraint);", "\t}",
-		          *_bit_store(part, local)]
+		          *_bit_store(part, _bcd_value(part, local))]
 	elif plain_build.stated_ones(part):
 		lines += _bit_store(part, str(limit))
 	if part.closes:
@@ -679,7 +698,10 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		return [*([f"\tif {' || '.join(f'{local} as u64 == {v}' for v in part.others)} {{",
 		           "\t\treturn Err(Error::Constraint);", "\t}"]
 		          if part.others else []),
-		        *_store(part, local)]
+		        *([f"\tif {local} as u64 > {_bcd_max(part, 0)} {{",
+		           "\t\treturn Err(Error::Constraint);", "\t}"]
+		          if _bcd_digits(part) else []),
+		        *_store(part, _bcd_value(part, local))]
 	if part.role == SIZE:
 		measured = next(one for one in parts if one.placement is part.sizes)
 		if part.inner:

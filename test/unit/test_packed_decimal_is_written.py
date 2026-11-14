@@ -74,3 +74,40 @@ def test_fixed_point_is_its_stored_integer(tmp_path: Path) -> None:
 		return 1;
 	}
 """)
+
+
+def test_python_writes_the_same_time(tmp_path: Path) -> None:
+	"""26.1032: the other three encode packed decimal too, through their
+	runtimes' own `bcd_encode`; Python's DS1307 bytes are C's above."""
+	import subprocess
+	import sys
+
+	from test_an_arm_sized_by_its_argument_is_written import ROOT
+
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build",
+		 str(ROOT / "example" / "rtc" / "rtc.situ"), "--target", "python",
+		 "--layer", "edit", "--out", str(out)],
+		cwd = ROOT, capture_output = True, text = True)
+	assert done.returncode == 0, done.stderr
+	(out / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding = "ascii"), encoding = "ascii")
+	(out / "run.py").write_text("""import sys
+sys.path.insert(0, ".")
+import rtc_build
+from situ_runtime import ConstraintError
+buf = bytearray(16)
+n = rtc_build.build_wall_clock(buf, 0, 30, 59, 0, 2, 7, 14, 11, 26)
+print(bytes(buf[:n]).hex())
+try:
+	rtc_build.build_wall_clock(buf, 0, 80, 59, 0, 2, 7, 14, 11, 26)
+	print("built")
+except ConstraintError:
+	print("refused")
+""", encoding = "ascii")
+	ran = subprocess.run([sys.executable, "-I", "run.py"], cwd = out,
+	                     capture_output = True, text = True)
+	assert ran.returncode == 0, ran.stderr
+	assert ran.stdout.split() == ["30590207141126", "refused"], ran.stdout
