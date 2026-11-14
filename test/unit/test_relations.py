@@ -2148,7 +2148,8 @@ def test_the_rust_driver_submits_after_walking_its_own_table() -> None:
 
 	module = drive_rs.generate(schema, resolved, "t")["t_drive.rs"]
 
-	assert "for bytes in due.iter().take(n).flatten() {" in module
+	# Each due exchange carries its id since 26.1036, for `resend`.
+	assert "for (id, bytes) in due.iter().take(n).flatten() {" in module
 
 
 def test_io_is_the_shape_each_language_already_has() -> None:

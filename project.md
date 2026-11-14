@@ -8823,6 +8823,10 @@ Moved to `doc/decision/26.1034-verify-reads-every-located-member.md`.
 
 Moved to `doc/decision/26.1035-wire-check-pairs-members-by-name.md`.
 
+### 26.1036 A resend is told its exchange
+
+Moved to `doc/decision/26.1036-a-resend-is-told-its-exchange.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
