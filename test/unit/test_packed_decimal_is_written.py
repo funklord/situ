@@ -56,3 +56,21 @@ def test_a_ds1307_time(tmp_path: Path) -> None:
 		return 5;
 	}
 """)
+
+
+@pytest.mark.skipif(COMPILER is None, reason = "needs a C compiler")
+def test_fixed_point_is_its_stored_integer(tmp_path: Path) -> None:
+	"""26.1030: `calibration` was refused as "fixed point, whose value is
+	scaled", though every reader's getter and setter take the stored
+	integer. Built as that: a trim of -1.5 ppm in Q8.8 is -384, and a
+	32768 Hz reference in UQ16.16 is 0x80000000, both big-endian."""
+	_run(tmp_path, _built(tmp_path, "rtc"), "rtc", """
+	static const uint8_t want[6] = { 0xFE, 0x80, 0x80, 0x00, 0x00, 0x00 };
+	uint8_t  buf[16];
+	uint32_t wrote = 0;
+
+	if (situ_calibration_build(buf, sizeof buf, -384, 0x80000000u, &wrote)
+	    != SITU_OK || wrote != 6u || memcmp(buf, want, 6u) != 0) {
+		return 1;
+	}
+""")

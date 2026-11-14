@@ -1941,8 +1941,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# Packed decimal is written for a plain member, through
 			# `_value`'s encoder (26.1029); everywhere else it keeps the
 			# refusal, its value not being its bytes.
-			why = (None if held.scalar.is_bcd and held.radix is None
-			       and held.array_count is None and not held.marker
+			# And fixed point as its stored integer, which is what every
+			# reader's getter and setter take -- the Q8.8 of a trim is
+			# -384 for -1.5 -- and what a packed one was already written
+			# as (26.1030).
+			plain = held.radix is None and held.array_count is None \
+				and not held.marker
+			why = (None if plain and (held.scalar.is_bcd
+			                          or held.scalar.is_fixed_point)
 			       else _scalar_refusal(held))
 			if why:
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
