@@ -68,8 +68,9 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	 lambda pl, res: pl.kind in ("reserved", "preamble")),
 	("names the varint type", lambda pl, res: pl.varint is not None),
 	("is quoted", lambda pl, res: bool(pl.delimiter_quote)),
-	("delimiters, so which byte to write after it is not stated",
-	 lambda pl, res: len(pl.delimiters) > 1),
+	("delimiters and escapes, so which of them an escape protects",
+	 lambda pl, res: len(pl.delimiters) > 1
+	 and pl.delimiter_escape is not None),
 	("run, so nothing it writes ends it",
 	 lambda pl, res: bool(pl.delimiters) and not pl.delimiter_consumed),
 	("is written in digits with neither a width",
@@ -244,6 +245,9 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"has no byte order for its codec's output",
 		"holds something this writer cannot place",
 		"is the discriminant of a variant", "is quoted", "is a variant",
+		# 26.1021's test reaches it inline: several delimiters and an
+		# escape, which no corpus schema has.
+		"delimiters and escapes, so which of them an escape protects",
 		"is minimal and ends at any of",
 		"is minimal and does not consume its delimiter",
 		"repeats while a condition holds and this schema emits no count",

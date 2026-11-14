@@ -8763,6 +8763,10 @@ Moved to `doc/decision/26.1019-the-other-three-check-a-span-after.md`.
 
 Moved to `doc/decision/26.1020-the-other-three-write-an-argued-arm.md`.
 
+### 26.1021 A run with two delimiters writes the first
+
+Moved to `doc/decision/26.1021-a-run-with-two-delimiters-writes-the-first.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

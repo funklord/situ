@@ -552,9 +552,9 @@ def _delimited_refusal(placement: Placement) -> str | None:
 		       "the bytes after it begin with a delimiter is a property of " \
 		       "what is written next, which composes it rather than being " \
 		       "part of it"
-	if len(placement.delimiters) > 1:
-		return f"ends at any of {len(placement.delimiters)} delimiters, so " \
-		       "which byte to write after it is not stated"
+	if len(placement.delimiters) > 1 and placement.delimiter_escape is not None:
+		return f"ends at any of {len(placement.delimiters)} delimiters and " \
+		       "escapes, so which of them an escape protects is not stated"
 	if placement.delimiter_quote:
 		return "is quoted, so where it ends depends on a quote this " \
 		       "writer does not place"
@@ -1974,6 +1974,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			                  delimiter=held.delimiters[0],
 			                  digits=held.delimiter_cap or 0))
 			parts[-1].trim = tuple(held.trim_set)
+			# Several delimiters: the writer puts down the FIRST, which is
+			# the one a sender is held to -- HTTP's CRLF, RFC 9112 section
+			# 2.2, where a bare LF is what a recipient MAY also take. Where
+			# the reader then stops depends on the content as well, so the
+			# whole message is asked afterwards, as a span its expression
+			# sizes is (26.1016): a run that reads back shorter is refused
+			# (26.1021).
+			parts[-1].verify = len(held.delimiters) > 1
 			continue
 		return [], f"`{traverse.local_name(struct, held)}` has no stated " \
 		           "length, so nothing says when the writer should stop"

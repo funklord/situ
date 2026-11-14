@@ -676,9 +676,11 @@ def test_a_delimited_member_is_a_run_and_not_a_one_byte_scalar() -> None:
 
 
 @pytest.mark.parametrize("member,wanted", [
-	# Several bytes may end it, so which to write is not stated. http's
-	# `header_field.value` is the corpus instance.
-	('u8 x[] until " " | "\\t"', "any of 2 delimiters"),
+	# Several bytes may end it and one escapes, so which of them the
+	# escape protects is not stated. Several alone are written with the
+	# first and checked after (26.1021) -- http's `header_field.value`.
+	('u8 x[] until " " | "\\t" [escape = "\\\\"]',
+	 "any of 2 delimiters and escapes"),
 	# The escape row went the way the `\r\n` one did: escaping is
 	# written now, so there is no refusal left to assert. It moved to
 	# `test_an_escaped_run_writes_the_encoding_its_reader_scans`, which
@@ -692,7 +694,7 @@ def test_a_delimiter_the_writer_cannot_place_is_refused(
 	`\r\n` was in this list and is not any more: a multi-byte delimiter
 	is written now, and the row was removed rather than reworded because
 	there is no refusal left to assert. What remains is an ambiguity the
-	schema has (several delimiters).
+	schema has (several delimiters, and an escape that protects one of them).
 	"""
 	_, resolved = _inline("struct one {\n\t%s;\n\tu8 rest[2];\n}\n"
 	                      % member)
@@ -771,13 +773,13 @@ int main(void)
 	# `before`, and it lists three. The count must not be what it is told
 	# about, because it writes no terminator at all.
 	("sexpr/sexpr.situ", "symbol", "is a `before` run"),
-	# `until`, and it lists two. Here the count IS the reason: the run ends
-	# at one of them and which to write is not stated.
-	("http/http.situ", "header_field", "any of 2 delimiters"),
+	# `http.header_field.value` was the second instance, `until` with two
+	# delimiters, refused for the count; it is written with the first now
+	# (26.1021), so the count no longer refuses anything in the corpus.
 ])
 def test_a_before_run_is_not_told_about_its_delimiter_count(
 		schema: str, struct: str, wanted: str) -> None:
-	"""Two corpus instances that separate two checks, in that order.
+	"""The `before` check comes before the delimiter count.
 
 	A `before` run writes no terminator -- the delimiter belongs to
 	whatever follows -- so the number it lists does not bear on it. Asked
@@ -2032,9 +2034,9 @@ def test_a_two_byte_delimiter_is_one_delimiter() -> None:
 
 	The single-byte and multi-byte forms are one emitter, because the
 	one-byte case is the other with N = 1 and a second comparison written
-	for it is a second thing to be wrong. What stays refused in http is
-	the member that ends at TWO delimiters, which is an ambiguity in the
-	schema rather than a gap in the writer.
+	for it is a second thing to be wrong. The member that ends at TWO
+	delimiters was refused here as an ambiguity, until RFC 9112 was read
+	for which one a sender writes: the first, checked after (26.1021).
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "http" / "http.situ")
 	header = _header(parsed, resolved, "http")
@@ -2046,10 +2048,11 @@ def test_a_two_byte_delimiter_is_one_delimiter() -> None:
 	assert version.role == build.ENDED
 	assert version.delimiter == b"\r\n"
 
-	refused = dict(build.refusals(resolved, _shape(parsed, resolved,
-	                                               header)))
-	assert "header_field" in refused
-	assert "any of 2 delimiters" in refused["header_field"]
+	parts, why = _only(resolved, "header_field", header, None, parsed)
+	assert why is None, why
+	value = [part for part in parts if part.placement.name == "value"][0]
+	assert value.role == build.ENDED and value.delimiter == b"\r\n"
+	assert value.verify, "where the reader stops is asked afterwards"
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
