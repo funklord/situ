@@ -1491,3 +1491,31 @@ per kind of wait.
 
 Until these are settled fuzznet keeps its hand-written loop, and records
 the assessment as its sec 1117.
+
+## 2026-11-14: rung 6 against its caller, read again -- one gap binds, one new
+
+Delivered through the inbox (20261113T2359Z), after fuzznet read both of
+its resend loops against the DNS driver at situ a08ec428.
+
+- **Both loops keep ONE exchange outstanding** (`fzn_caller_ask` in
+  node/caller.c, the daemon's `recv_answering` in node/daemon.c), so
+  **gap 2 (`*expired` a count) does not bind fuzznet** -- drop it unless
+  another adopter needs it.
+- **Gap 1 still binds and is the one that matters**: a resend is the same
+  `msg` under a fresh nonce, a new sealed frame each time, and the far end
+  refuses a replayed nonce. Passing the exchange's `id` to `submit` is the
+  ask; smuggling it through `ctx` works with one exchange and is exactly
+  the workaround the gap describes.
+- **The relation is fine**: `reply_to` matches `head.msg` and
+  `head.sender`, which every reseal keeps.
+- **New: the policy cannot be stated.** fuzznet resends every 600 ms with
+  no piece of the reply, at most 3 times, and gives up at 3 s whatever
+  happened (sends at 0, 600, 1200, 1800, a final wait to 3000). The
+  driver has one per-attempt `timeout_ms` and a retry count, so its total
+  is always (retries + 1) x timeout. Two numbers -- a resend interval and
+  a total deadline -- e.g. `[resend_ms = 600, retries = 3, timeout_ms =
+  3000]`, the total capping the last wait.
+
+fuzznet keeps its loops until gap 1 and the total deadline are settled,
+then moves the daemon's `recv_answering` first; recorded on its side as
+its project.md sec 1148.

@@ -595,3 +595,55 @@ Whether it takes more than that depends on question 1.
 > One thing in situ did say otherwise and is corrected: a docstring in
 > `test_examples.py` had called `map --check` "phase 9" for the 77 days
 > since it landed.
+
+## 2026-11-14: what the five schemas still cannot say, and three faults
+
+Delivered through the inbox (20261114T0025Z, T0041Z, T0049Z), measured
+against situ 73e8e79a. openmlx4 is adopting checksums, a type-dependent
+size unit, enums and a whole-list VPD description.
+
+**Faults, with reproductions:**
+
+- **`situc verify` passes a located member that points outside the
+  vector** (T0025Z, the most urgent: a vacuous pass). `u8 data[toc.data_size]
+  at (toc.data_offset_high << 32) | toc.data_offset_low` with the offset
+  0x1_0000_0018 into a 26-byte vector reports "1 vectors conform"; the
+  generated accessor refuses the same bytes with a BoundsError.
+- **`situc verify` crashes on a recursive located member**: `gph_chain
+  following at hdr.next` (depth and limit 64) gives "AttributeError:
+  'gph_chain' object has no attribute 'following_count' ... a fault in
+  situc", so no vector can cover the chain; the 0-or-1 count spelling
+  `following[hdr.next != 0xFF000000] at hdr.next` crashes the same way.
+- **`situc wire --check` pairs members by index** (T0049Z): wrapping
+  existing fields in `authenticated` regions, no field moving a bit,
+  reported every later field of `fs2_header` as moved and breaking
+  ("info_ptr_checksum moves @0x002c -> @0x002b:5"), while the regenerated
+  contract has them where they were. Reproduce: `git -C ~/src/openmlx4
+  show dd19cee:src/fs2.situ` against `dd19cee~1:src/fs2.situ.wire`, then
+  `situc wire --check`. Matching by name, region-qualified, would report
+  the one real change (`fs_data_high` split).
+
+**What stays out, by cost to openmlx4** (each tried in a trial schema):
+
+1. `[limit]` without `depth` (0054) is still refused -- the open item
+   project.md already carries; `[depth = 64]` calls a legal 65-section
+   image malformed.
+2. verify on a recursive located member (the crash above).
+3. No sentinel-terminated located chain: the FS2 list ends at `next ==
+   0xFF000000`; `at` on a variant arm is not implemented, and a count
+   comparison is "constraints only" (section 10). A `while`-style end, or
+   `until next == K`, for a located chain.
+4. One value from two places: an MFA TOC entry's 48-bit offset is low 32
+   bits at byte 0 and high 16 at byte 20, used in a DIFFERENT buffer, so
+   `at` does not fit.
+5. Compression chosen by a flag bit, and no `xz` codec: every way to make
+   `coded payload(xz)` conditional is refused, and a nested struct taking
+   the length as a `[stream]` parameter crashes verify ("'xz_payload'
+   object has no attribute 'n'").
+6. `situc verify` does not run checksums -- **closed 2026-11-14 by
+   26.1023**, which arrived the same night: verify now calls every codec
+   tag's `_check` and names the tags it cannot check.
+7. A checksum whose position depends on a keyword: PCI VPD's `RV` byte
+   makes the sum from byte 0 through itself zero, wherever the keyword
+   walk puts it. Not attempted to a conclusion; asks whether there is a
+   way.
