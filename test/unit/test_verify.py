@@ -772,3 +772,43 @@ def test_a_delimited_run_of_structs_qualifies_the_verdict(tmp_path: Path,
 	assert "`escaped_quote`" not in said, said
 	assert "2 of 3 vectors do not conform" in said, said
 	assert "none was read" not in said, said
+
+
+# --------------------------------------------------------------------------
+# Checksums, which `validate` leaves to the caller with the whole message
+# (26.622) -- and `verify` is that caller (26.1023).
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(("stem", "struct", "good", "bad"), [
+	# PNG's IEND, whose CRC32 the specification states.
+	("png", "chunk", "00000000 49454E44 AE426082", "00000000 49454E44 AE426083"),
+	# A FLAC frame header from the committed corpus, CRC-8 over its fields.
+	("flac", "frame_header", "fff86408000fce", "fff86408000fcf"),
+])
+def test_a_wrong_checksum_is_refused(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str], stem: str, struct: str,
+		good: str, bad: str) -> None:
+	"""A wrong CRC was reported as conforming: `validate` deliberately does
+	not check a checksum, and nothing else here did."""
+	schema  = ROOT / "example" / stem / f"{stem}.situ"
+	vectors = tmp_path / "crc.vectors"
+	vectors.write_text(f"{struct} good {good}\n", encoding="ascii")
+	assert main(["verify", str(schema), str(vectors)]) == 0
+	capsys.readouterr()
+
+	vectors.write_text(f"{struct} bad {bad}\n", encoding="ascii")
+	assert main(["verify", str(schema), str(vectors)]) == 1
+	out = capsys.readouterr().out
+	assert "ChecksumError" in out and "does not conform" in out, out
+
+
+def test_a_tag_nothing_computes_is_named_unchecked(
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""DTLS's record tag is an AEAD tag: no codec, a key it does not have.
+	Not a refusal -- the bytes may well be right -- and not a silent pass
+	either: the summary says so, as it does for unread arrays."""
+	schema = ROOT / "example" / "dtls" / "dtls.situ"
+	assert main(["verify", str(schema), str(schema.with_suffix(".vectors"))]) == 0
+	out = capsys.readouterr().out
+	assert "except unchecked tags" in out, out
+	assert "record.tag: no codec computes it" in out, out

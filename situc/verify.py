@@ -21,7 +21,7 @@ Nothing is written to disk and nothing is compiled. The Python accessors are
 built in memory and executed there, so an adopter's build gains a check and
 no artifacts.
 
-WHAT A VECTOR IS HELD TO. Three things, and they were not always three. The
+WHAT A VECTOR IS HELD TO. Four things, and they were not always four. The
 view has to be acquirable over the vector's bytes and no more of them; the
 generated `validate` has to accept it; and every expectation the vector
 states -- `sender_hardware = 00:1A:2B:3C:4D:5E`, the lines the corpus writes
@@ -37,10 +37,18 @@ called the same edit BREAKING. The expectations are read here the way
 `_byte_run` and `_hex`, imported rather than restated, because two commands
 that decide the shape of an expectation separately are two commands that
 will eventually disagree about a corpus.
+
+The fourth is every checksum a codec computes, which `validate` leaves to
+"the caller with the whole message" (26.622) -- and this is that caller. A
+PNG chunk with a wrong CRC conformed until 26.1023. A tag nothing can
+compute here -- a MAC with no key, a sum over a pseudo-header the vector
+does not carry, one inside a nested member -- is named in the report as
+unchecked rather than counted as a pass.
 """
 
 from __future__ import annotations
 
+import inspect
 import sys
 import types
 from dataclasses import dataclass, field
@@ -55,6 +63,7 @@ from situc.codegen.c.vectors import (
 )
 from situc.codegen.python.emit import py_name
 from situc.diagnostics import Source
+from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import Check, arguments, classify_check, data_sized
@@ -92,6 +101,12 @@ class Outcome:
 	#: and the count string in `refusal` -- and four verify tests went red
 	#: for a reason that had nothing to do with what was being changed.
 	broke: bool = False
+
+	#: Tags this vector's struct holds that were NOT checked, each with why:
+	#: no codec computes it (a MAC, a signature), its sum covers a
+	#: pseudo-header the vector does not carry, or it sits inside a nested
+	#: member. Like `unwalked`, it qualifies what conforming means (26.1023).
+	unchecked: tuple[str, ...] = ()
 
 	@property
 	def ok(self) -> bool:
@@ -236,6 +251,12 @@ def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 		# reader most wants (0051).
 		said = _said(schema, struct, view)
 		view.validate()
+		# `validate` deliberately leaves a checksum alone -- its coverage
+		# can run to the end of the message, which is not the flat walk
+		# 0051 settled on -- and says to check it "where the caller has the
+		# whole message" (26.622). This is that caller: every vector is in
+		# memory whole. A wrong CRC was reported as conforming (26.1023).
+		unchecked = _checked_tags(resolved, struct, view)
 	except Exception as refused:                        # noqa: BLE001
 		# A refusal by the generated module is a verdict about the vector,
 		# which is what this function exists to report. Anything else is
@@ -256,16 +277,74 @@ def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 
 	surplus = _surplus(held, struct, case.data)
 	if surplus is not None:
-		return Outcome(case, surplus, unwalked=unwalked, messages=said)
+		return Outcome(case, surplus, unwalked=unwalked, messages=said,
+		               unchecked=unchecked)
 
 	mismatches = _expectations(resolved, macros, view, struct.name, case)
 	if mismatches:
 		return Outcome(case,
 		               f"{len(mismatches)} of {len(case.expectations)} "
 		               f"expectations do not hold",
-		               mismatches, unwalked, messages=said)
+		               mismatches, unwalked, messages=said,
+		               unchecked=unchecked)
 
-	return Outcome(case, None, unwalked=unwalked, messages=said)
+	return Outcome(case, None, unwalked=unwalked, messages=said,
+	               unchecked=unchecked)
+
+
+def _is_tag(placement: Placement) -> bool:
+	return placement.kind in ("tag", "checksum") or bool(placement.tag_covers)
+
+
+def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
+		view: object) -> tuple[str, ...]:
+	"""Check every tag of this struct a codec computes; name the rest.
+
+	A tag's `_check` raises `ChecksumError` (or `TagError`) where the stored
+	value disagrees with the bytes it covers, which is a verdict on the
+	vector and propagates as one. Where there is no `_check` -- no codec, so
+	nothing to compute it from -- or it takes the pseudo-header its sum
+	covers, which a vector does not carry, the tag is returned unchecked
+	with the reason, and so is every tag inside a nested member, which this
+	does not descend into.
+	"""
+	unchecked: list[str] = []
+	for placement in traverse.own_members(struct):
+		local = traverse.local_name(struct, placement)
+		if _is_tag(placement):
+			checker = getattr(view, f"{py_name(local)}_check", None)
+			if checker is None:
+				unchecked.append(f"{struct.name}.{local}: no codec computes "
+				                 "it, so there is nothing to check it against")
+			elif inspect.signature(checker).parameters:
+				unchecked.append(f"{struct.name}.{local}: it covers a "
+				                 "prefix the vector does not carry")
+			else:
+				checker()
+			continue
+		inner = resolved.structs.get(placement.type_name or "")
+		if inner is not None:
+			unchecked.extend(f"{one} (inside `{struct.name}.{local}`, "
+			                 "which this does not descend into)"
+			                 for one in _tags_within(resolved, inner, set()))
+	return tuple(unchecked)
+
+
+def _tags_within(resolved: ResolvedSchema, struct: ResolvedStruct,
+		seen: set[str]) -> list[str]:
+	"""Every tag in `struct` and what it nests, by path."""
+	if struct.name in seen:
+		return []
+	seen.add(struct.name)
+	found: list[str] = []
+	for placement in traverse.own_members(struct):
+		if _is_tag(placement):
+			found.append(f"{struct.name}.{traverse.local_name(struct, placement)}")
+			continue
+		inner = resolved.structs.get(placement.type_name or "")
+		if inner is not None:
+			found.extend(_tags_within(resolved, inner, seen))
+	return found
 
 
 def _said(schema: ast.Schema, struct: ResolvedStruct,
@@ -629,6 +708,8 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 	# saying so twice is noise.
 	arrays = list(dict.fromkeys(one for outcome in found
 	                            for one in outcome.unwalked))
+	tags   = list(dict.fromkeys(one for outcome in found
+	                            for one in outcome.unchecked))
 
 	broke = [one for one in failed if one.broke]
 
@@ -647,11 +728,15 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 	elif failed:
 		lines.append(f"situc: {len(failed)} of {len(found)} vectors do not "
 		             f"conform to {schema_path}")
-	elif arrays:
+	elif arrays or tags:
 		# Not "N vectors conform to X", which is what this printed while
-		# an out-of-range enum sat unread inside an array.
+		# an out-of-range enum sat unread inside an array -- and while a
+		# tag nothing could check sat beside the ones that were.
 		lines.append(f"situc: {len(found)} vectors conform to {schema_path}, "
-		             f"except inside arrays")
+		             "except " + " and ".join(
+				             what for what, held in (("inside arrays", arrays),
+				                                     ("unchecked tags", tags))
+				             if held))
 	else:
 		lines.append(f"situc: {len(found)} vectors conform to {schema_path}")
 
@@ -661,5 +746,8 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 		             "names its own type or takes arguments -- so these "
 		             "were not read:")
 		lines.extend(f"    = {one}" for one in arrays)
+	if found and tags:
+		lines.append("note: these tags were not checked:")
+		lines.extend(f"    = {one}" for one in tags)
 
 	return "\n".join(lines) + "\n"

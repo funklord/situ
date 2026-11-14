@@ -8771,6 +8771,10 @@ Moved to `doc/decision/26.1021-a-run-with-two-delimiters-writes-the-first.md`.
 
 Moved to `doc/decision/26.1022-a-publish-packet-is-built.md`.
 
+### 26.1023 verify checks checksums
+
+Moved to `doc/decision/26.1023-verify-checks-checksums.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

@@ -255,7 +255,7 @@ does not take it.
 | `situc advise` | ranked, costed schema changes that would restore what was lost |
 | `situc diff` | capability regressions between two revisions of a schema |
 | `situc wire` | the byte-level contract, and `--check` against the committed one |
-| `situc verify` | whether real bytes conform to the schema, generating nothing -- the way to adopt one without taking the codegen |
+| `situc verify` | whether real bytes conform to the schema -- layout, constraints, expectations and checksums -- generating nothing; the way to adopt one without taking the codegen |
 | `situc pack` | the packed layout image: placements, kinds, offsets, sizes, endianness and a bytecode for the expression language, for a walker to read a format it was not compiled against (`--metadata` adds names and capability vectors) |
 | `situc doc` | RFC-style byte-layout diagrams and a field reference |
 | `situc gen-checks` | tests holding the generated accessors to the map they were generated beside |
