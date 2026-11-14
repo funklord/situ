@@ -1519,3 +1519,9 @@ its resend loops against the DNS driver at situ a08ec428.
 fuzznet keeps its loops until gap 1 and the total deadline are settled,
 then moves the daemon's `recv_answering` first; recorded on its side as
 its project.md sec 1148.
+
+**Both settled, 2026-11-14.** Gap 1 is 26.1036: each driver's resend hook
+is told the exchange's id. The policy is 26.1039, pushed as `71e573cd`:
+`[resend_ms = 600, retries = 3, timeout_ms = 3000]` resends at 600, 1200
+and 1800 and expires at 3000 in all four drivers. fuzznet was told through
+its inbox (20261114T1138Z).
