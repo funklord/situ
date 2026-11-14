@@ -314,7 +314,11 @@ def data_sized(placement: Placement) -> bool:
 	`sized_by` also names a compile-time constant, and `x[remaining]` sets it
 	to a word rather than to a path.
 	"""
+	# A variant stating its size (26.1040) is not a run: its bytes are an
+	# arm's, reached through the arm's own accessors, and asking for the
+	# `_len` and `_ptr` of a run named two functions nothing emits.
 	return (placement.array_count is None
+	        and placement.kind != "variant"
 	        and (placement.sized_by is not None
 	             or placement.size_expr is not None))
 
@@ -2314,6 +2318,10 @@ def _ends_in_the_frame(structs: dict[str, ResolvedStruct],
 			if reaches(placement):
 				return True
 			continue
+		# A variant stating its size bounds its arms (26.1040): one that
+		# runs to `remaining` runs to the variant's end, not the view's.
+		if placement.size_expr is not None:
+			continue
 		arms = [member for _, member in arm_members(struct, placement)
 		        if member is not None]
 		if arms and (all if always else any)(reaches(one) for one in arms):
@@ -3636,6 +3644,11 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		if any(source is not None and _READS_REMAINING.search(source)
 		       for source in (placement.repeat_while, placement.size_expr)):
 			return False
+		# A VARIANT THAT STATES ITS SIZE is that long whichever arm is
+		# there, so no arm needs a length of its own: MQTT's PUBLISH ends
+		# its payload at `remaining`, which is the variant's end (26.1040).
+		if placement.kind == "variant" and placement.size_expr is not None:
+			continue
 		# AN ARM HOLDING A COUNTED RUN, which no backend walks: an arm is
 		# emitted by a family of its own -- a scalar, a byte run, a run of
 		# wide values and one fixed-size struct -- and never a run of

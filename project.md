@@ -636,7 +636,7 @@ block         = "positional"    "{" { member } "}"
               | "opaque" ident "[" size_expr "]" [ attrs ] ";"
               | "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
 
-variant       = "variant" ident "switch" "(" expr ")" [ attrs ] "{"
+variant       = "variant" ident [ "[" expr "]" ] "switch" "(" expr ")" [ attrs ] "{"
                 { variant_arm } "}" ;
 variant_arm   = ( "case" expr | "default" ) ":" arm_body ;
 arm_body      = "error" ";" | "opaque" ";" | member ;
@@ -2040,6 +2040,13 @@ forward references are an error. Size of the variant is the size of the
 selected arm, so unless all arms are the same size the variant makes everything
 after it dynamic -- which the advisor will point out, along with the padding
 cost of equalizing them.
+
+**A variant may state its size**: `variant body[length] switch (kind)` is
+`length` bytes whichever arm is there -- the Remaining Length of MQTT 3.1.1, 2.2.3.
+Each arm is read within those bytes, so a `remaining` inside one ends where
+the variant does, and a message can be framed by the length alone. An arm
+shorter than the size leaves the rest unread, as `[holds]` does (26.898). See
+`doc/decision/26.1040-a-variant-states-its-size.md`.
 
 Dynamic is not unknown. The size of the selected arm is a switch on the
 discriminant, and generated code evaluates it (11.6), so a variant can sit
@@ -8854,6 +8861,10 @@ Moved to `doc/decision/26.1038-a-vector-is-one-whole-message.md`.
 ### 26.1039 A resend interval beside a total wait
 
 Moved to `doc/decision/26.1039-a-resend-interval-beside-a-total-wait.md`.
+
+### 26.1040 A variant states its size
+
+Moved to `doc/decision/26.1040-a-variant-states-its-size.md`.
 
 ### 26.929 The offset cache counts bits
 

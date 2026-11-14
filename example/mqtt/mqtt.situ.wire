@@ -77,11 +77,11 @@ struct mqtt_string size=2..65537
 
 struct nothing size=0
 
-struct packet size=2..
+struct packet size=2..268435460
   @0x0000   4bit      control_kind kind  msb_first
   @0x0000:4 4bit      u4         flags  msb_first
   @0x0001   1..4      remaining_length length  varint=remaining_length
-  ~         0..       variant    body
+  ~         0..268435455 variant    body  sized-by=length
   body switch: kind
   body case 1: connect connect_body
   body case 2: connack connack_body

@@ -54,6 +54,8 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	 lambda pl, res: pl.element_bits != 8),
 	("is a run whose element",
 	 lambda pl, res: pl.scalar is not None and pl.element_bits != 8),
+	("states its size, which is the arm's length and computed only",
+	 lambda pl, res: pl.kind == "variant" and pl.size_expr is not None),
 	("is a sealed region", lambda pl, res: pl.kind == "sealed"),
 	("is a coded region", lambda pl, res: pl.kind == "coded"),
 	("is a TLV region", lambda pl, res: pl.kind == "tlv"),
@@ -242,6 +244,9 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"has no byte order for its codec's output",
 		"holds something this writer cannot place",
 		"is the discriminant of a variant", "is quoted", "is a variant",
+		# A sized variant whose size is arithmetic: MQTT's is a field and is
+		# computed, so 26.1040's test reaches the refusal inline.
+		"states its size, which is the arm's length and computed only",
 		# 26.1021's test reaches it inline: several delimiters and an
 		# escape, which no corpus schema has.
 		"delimiters and escapes, so which of them an escape protects",

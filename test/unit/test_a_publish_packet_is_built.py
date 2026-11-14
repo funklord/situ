@@ -8,6 +8,9 @@ which only the message supplies, so the arm could not be validated on its
 own; the packet's closing validation checks it with the qos it derives,
 as the reader does.
 
+The packet's remaining length is not an argument: the body states its size
+(26.1040), so the builder computes it from the arm it is handed.
+
 Held to MQTT 3.1.1 section 3.3: QoS 1, topic `a/b`, packet identifier 10,
 payload `hi` -- `32 09 00 03 61 2f 62 00 0a 68 69`.
 """
@@ -45,14 +48,14 @@ def test_c(tmp_path: Path) -> None:
 		return 1;
 	}}
 	/* Flags 0b0010: QoS 1, no DUP, no RETAIN. */
-	if (situ_packet_build_publish(packet, sizeof packet, 2u, 9u, body,
+	if (situ_packet_build_publish(packet, sizeof packet, 2u, body,
 	                              body_len, &wrote) != SITU_OK
 	    || wrote != 11u || memcmp(packet, want, 11u) != 0) {{
 		return 2;
 	}}
 	/* Flags 0b0110 say QoS 3, which `publish_body` refuses as
 	 * `default: error`: the qos reaches the arm. */
-	if (situ_packet_build_publish(packet, sizeof packet, 6u, 9u, body,
+	if (situ_packet_build_publish(packet, sizeof packet, 6u, body,
 	                              body_len, &wrote) == SITU_OK) {{
 		return 3;
 	}}
@@ -78,10 +81,10 @@ body = bytearray(32)
 n = mqtt_build.build_publish_body_at_least_once(body, 1, b"a/b", bytes([0, 10]), b"hi")
 print(bytes(body[:n]).hex())
 packet = bytearray(32)
-m = mqtt_build.build_packet_publish(packet, 2, n, bytes(body[:n]))
+m = mqtt_build.build_packet_publish(packet, 2, bytes(body[:n]))
 print(bytes(packet[:m]).hex())
 try:
-	mqtt_build.build_packet_publish(packet, 6, n, bytes(body[:n]))
+	mqtt_build.build_packet_publish(packet, 6, bytes(body[:n]))
 	print("built")
 except SituError:
 	print("refused")

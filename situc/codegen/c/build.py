@@ -1332,7 +1332,6 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	members = traverse.own_members(struct)
 	if not members:
 		return [], "has no members to write"
-
 	# A size field is the writer's to compute, so it must be known before
 	# the loop reaches it -- and `sized_by` names it from the run, which is
 	# the member that comes later.
@@ -1340,6 +1339,22 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	measures: dict[str, Placement] = {}
 	twins: dict[str, Placement] = {}
 	for held in members:
+		# A VARIANT THAT STATES ITS SIZE (26.1040) is measured by the arm
+		# this builder writes, which the caller hands over as bytes -- so
+		# MQTT's remaining length is that arm's `_len`, computed, rather
+		# than a second number the caller could get wrong. A builder that
+		# chooses among arms, or a size that is arithmetic, is declined.
+		if held.kind == "variant" and held.size_expr is not None:
+			written_arm = (_arm_placement(struct, str(arm.member))
+			          if isinstance(arm, Arm) and arm.member is not None
+			          else None)
+			if written_arm is None or held.sized_by not in by_name \
+					or not written_arm.path.startswith(f"{held.path}."):
+				return [], f"`{held.name}` states its size, which is the " \
+				           "arm's length and computed only where one arm " \
+				           "is written and a field states it"
+			measures[str(held.sized_by)] = written_arm
+			continue
 		if not held.sized_by or held.sized_by not in by_name:
 			# `sized_by` also carries `remaining`, which names no member:
 			# the run takes the rest of the frame, and since the builder
@@ -2699,6 +2714,11 @@ def _counts_elements(sized: Placement) -> bool:
 	naming `_len` named nothing. `example/wasm`'s `uleb type_index[count]`
 	behind a `uleb count` is the case, a varint measuring varints.
 	"""
+	# Not a run at all: the arm a sized variant's field measures (26.1040),
+	# handed over as bytes, whatever width its own type is.
+	if sized.sized_by is None and sized.size_expr is None \
+			and sized.array_count is None and sized.repeat_while is None:
+		return False
 	return (sized.element_bits or 0) in (16, 32, 64) \
 		or traverse.is_varint_run(sized)
 

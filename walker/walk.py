@@ -405,6 +405,11 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		# two, and dnsname's `qname` sub-view came back the wrong length.
 		return _while_walk(view, index, depth)[1] * BITS_PER_BYTE
 	if index in view.image.arms:
+		# A variant stating its size is that long whichever arm is there
+		# (26.1040): MQTT's remaining length.
+		if placement.size_code != NONE:
+			return max(0, _evaluate(view, placement.size_code)) \
+				* BITS_PER_BYTE
 		return _variant_bits(view, index, depth)
 	if index in view.image.varints:
 		# A varint's width is in its own bytes. The record's `size_bits` is

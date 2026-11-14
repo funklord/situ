@@ -2364,6 +2364,32 @@ class Solver:
 			total     = Interval(high, high)
 			arm_sizes = []
 
+		# `variant body[length]` (26.1040): the variant occupies what the
+		# expression says whichever arm is selected -- MQTT's remaining
+		# length -- exactly as an `opaque` region sized by a field does, and
+		# the arm is read within those bytes rather than to the frame's end.
+		sized: dict[str, object] = {}
+		if variant.size is not None:
+			env  = self.result.env.with_layout(
+				self.result.lookup, self.result.explain).with_fields(state.fields)
+			size = interval_of(variant.size, env)
+			if size.lo < 0:
+				raise error("a variant may not have a negative size",
+				            variant.size.span,
+				            label = f"range is {size.render()}")
+			total = Interval(size.lo * BITS_PER_BYTE,
+			                 None if size.hi is None
+			                 else size.hi * BITS_PER_BYTE)
+			sized = dict(
+				sized_by   = _path_of(variant.size),
+				# Always the source, a bare path included: a variant has no
+				# count branch for `sized_by` to drive, so every backend
+				# reads the window from this one field.
+				size_expr  = expr_to_source(variant.size),
+				size_shown = _expression_source(variant.size, explicit=False),
+				size_ast   = _expression_tree(variant.size),
+			)
+
 		layout.placements.insert(slot, Placement(
 			path          = f"{prefix}.{variant.name}",
 			name          = variant.name,
@@ -2384,6 +2410,7 @@ class Solver:
 			arm_sizes     = tuple(arm_sizes),
 			discriminant  = expr_to_source(variant.discriminant),
 			arm_cases     = tuple(arm_cases),
+			**sized,		# type: ignore[arg-type]
 		))
 
 		if state.cause is None and total.hi != total.lo:

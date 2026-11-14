@@ -3480,6 +3480,32 @@ class Emitter:
 			return ["", f"\t// ...and `{placement.name}` is not a shape this "
 			        f"backend reaches into yet."]
 
+		# AN ARM OF A VARIANT THAT STATES ITS SIZE (26.1040) is read within
+		# those bytes: `remaining` inside it ends where the variant does.
+		if nested is not None and variant.size_expr is not None:
+			inner = _pascal(nested.name)
+			base  = c_name(local_name(struct, placement))
+			size  = self._over_fields(struct, variant.size_expr, "self",
+			                          cast="i64", bounded=True)
+			return [
+				*head,
+				f"\tpub fn {_ident(base + '_extent')}(&self) -> usize {{",
+				f"\t\tsitu_rt::nonneg({size})",
+				"\t}",
+				"",
+				f"\tpub fn {name}(&self) -> Result<{inner}<'_>> {{",
+				*refuse,
+				f"\t\tlet at   = {self._unparen(start)};",
+				f"\t\tlet size = self.{_ident(base + '_extent')}();",
+				"\t\tif self.bytes.len() < at || self.bytes.len().saturating_sub(at) < size"
+				f" || size < {inner}::"
+				f"{'SIZE' if nested.layout.is_fixed_size else 'SIZE_MIN'} {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tOk({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})",
+				"\t}",
+			]
+
 		# A *variable-size* one, measured from its own bytes. C has emitted
 		# this since variants landed and the other three demanded a single
 		# size -- while `validate` called the accessor regardless, so a schema
@@ -8859,6 +8885,12 @@ class Emitter:
 		and `validate` is where that is said. Zero is the value the run walk
 		already refuses to advance by.
 		"""
+		# `variant body[length]` (26.1040): as long as it says.
+		if placement.size_expr is not None:
+			sized = self._over_fields(struct, placement.size_expr, "self",
+			                          cast="i64", bounded=True)
+			return f"situ_rt::nonneg({sized})"
+
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 

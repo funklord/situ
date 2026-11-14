@@ -131,7 +131,7 @@ RUST_CENSUS = {
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,
-	"mqtt.situ": 19,
+	"mqtt.situ": 10,
 	"netlink.situ": 4,
 	"ntp.situ": 4,
 	"packet.situ": 1,

@@ -747,6 +747,13 @@ def no_baseline_stands(resolved: ResolvedSchema, struct: ResolvedStruct,
 	       and entry.placement.type_name in resolved.structs
 	       for entry in struct.entries):
 		return True
+	# A variant stating its size (26.1040) holds its arm to the bytes a
+	# field says, and a zeroed buffer says none: MQTT's CONNECT baseline
+	# put twelve bytes of arm behind a length of four.
+	if any(entry.placement.kind == "variant"
+	       and entry.placement.size_expr is not None
+	       for entry in struct.entries):
+		return True
 	for entry in struct.entries:
 		placement = entry.placement
 		if placement.offset_bits is not None or not placement.size_bits \

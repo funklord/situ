@@ -5167,6 +5167,11 @@ class Emitter:
 		and `validate` is where that is said. Zero is the value the run walk
 		already refuses to advance by.
 		"""
+		# `variant body[length]` (26.1040): as long as it says.
+		if placement.size_expr is not None:
+			return (f"situ_nonneg_u32("
+			        f"static_cast<std::int64_t>({self._over_fields(struct, placement.size_expr)}))")
+
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
@@ -7709,6 +7714,33 @@ class Emitter:
 		if is_struct_run(self.resolved.structs, placement):
 			return [*head, f"\t/* ...and `{placement.name}` is not a shape this"
 			        " backend reaches into yet. */"]
+
+		# AN ARM OF A VARIANT THAT STATES ITS SIZE (26.1040) is read within
+		# those bytes: `remaining` inside it ends where the variant does.
+		if nested is not None and variant.size_expr is not None:
+			inner = self._struct_class(nested.name)
+			size  = (f"situ_nonneg_u32("
+			         f"static_cast<std::int64_t>({self._over_fields(struct, variant.size_expr)}))")
+			return [
+				*head,
+				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
+				"\t{",
+				f"\t\treturn {size};",
+				"\t}",
+				f"\t[[nodiscard]] ::situ::rt::err {name}"
+				f"(::{self.namespace}::{inner} &out) const noexcept",
+				"\t{",
+				*refuse,
+				"\t\tsitu_view_t whole;",
+				f"\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), {start},",
+				f"\t\t\t{name}_extent(), &whole);",
+				"",
+				"\t\tif (e == SITU_OK) {",
+				f"\t\t\tout = ::{self.namespace}::{inner}(whole{self._child_args(struct, placement)});",
+				"\t\t}",
+				"\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t}",
+			]
 
 		# A *variable-size* struct arm, measured from its own bytes. C has
 		# emitted one since variants landed and the other three demanded a

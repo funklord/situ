@@ -4048,6 +4048,30 @@ class Emitter:
 				f"reaches into yet.",
 			]
 
+		# AN ARM OF A VARIANT THAT STATES ITS SIZE (26.1040) is read within
+		# those bytes, whatever its own type would measure: `remaining`
+		# inside it ends where the variant does, as MQTT's payload must.
+		if nested is not None and variant.size_expr is not None:
+			made = (self._child(struct, placement)[0] if placement.arguments
+			        else py_name(nested.name))
+			args = self._child(struct, placement)[1]
+			size = self._over_fields(struct, variant.size_expr, "self")
+			base = py_name(local_name(struct, placement))
+			return [
+				"", "\t@property",
+				f"\tdef {base}_extent(self) -> int:",
+				f'\t\t"""How many bytes {placement.path} occupies: the'
+				' variant\'s own size."""',
+				f"\t\treturn max(0, {size})",
+				*head,
+				f"\t\tstart = {start}",
+				f"\t\tsize  = max(0, {size})",
+				"\t\tif self._len - start < size:",
+				f'\t\t\traise BoundsError("{placement.path}: the frame does'
+				' not reach it")',
+				f"\t\treturn {made}(self._msg, self._at + start, size{args})",
+			]
+
 		# A *variable-size* struct arm, measured from its own bytes. C has
 		# emitted one since variants landed and the other three required the
 		# arm's type to have a single size -- while `validate` called the
@@ -8562,6 +8586,10 @@ class Emitter:
 		and `validate` is where that is said. Zero is the value the run walk
 		already refuses to advance by.
 		"""
+		# `variant body[length]` (26.1040): as long as it says.
+		if placement.size_expr is not None:
+			return f"max(0, {self._over_fields(struct, placement.size_expr, 'self')})"
+
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 

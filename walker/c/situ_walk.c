@@ -3144,7 +3144,10 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 	 * back into the variant whose extent is that arm's. */
 	{
 		uint32_t arms = 0u;
-		if (arm_rows(image, index, &arms) != NULL && arms > 0u) {
+		/* ...unless it states its size, which the program below answers
+		 * whichever arm is there (26.1040). */
+		if (held.size_code == SITU_WALK_NONE
+		    && arm_rows(image, index, &arms) != NULL && arms > 0u) {
 			return variant_bits(image, message, len, shape, index, depth,
 			                    out);
 		}
@@ -5541,7 +5544,13 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	{
 		const uint32_t flags = u32_at(image->structs
 		                              + arm_type * image->struct_stride + 12u);
-		const uint32_t span  = (flags & STRUCT_TO_THE_END) != 0u
+		situ_walk_placement variant;
+		/* A variant stating its size is the arm's window whatever the
+		 * arm's own type would run to (26.1040). */
+		const int      sized = situ_walk_placement_at(image, index, &variant)
+		                       == SITU_WALK_OK
+		                       && variant.size_code != SITU_WALK_NONE;
+		const uint32_t span  = (flags & STRUCT_TO_THE_END) != 0u && !sized
 		                     ? len - at / 8u : wide / 8u;
 		const uint32_t least = image->struct_stride >= 20u
 		                     ? u32_at(image->structs

@@ -184,7 +184,7 @@ block		= "positional" "{" { member } "}"
 	| "opaque" ident "[" size_expr "]" [ attrs ] ";"
 	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
 
-variant		= "variant" ident "switch" "(" expr ")" [ attrs ] "{"
+variant		= "variant" ident [ "[" expr "]" ] "switch" "(" expr ")" [ attrs ] "{"
 		{ variant_arm } "}" ;
 variant_arm	= ( "case" expr | "default" ) ":" arm_body ;
 arm_body	= "error" ";" | "opaque" ";" | member ;

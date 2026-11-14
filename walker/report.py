@@ -1481,7 +1481,10 @@ def _validate_here(image: Image, view: View, struct_index: int,
 					floor = image.structs[inner_struct].size_min_bits
 					if floor != NONE and wide * BITS_PER_BYTE < floor:
 						return fail(ERR_BOUNDS, arm)
+					# Not to the frame's end where the variant states
+					# its size: that is the arm's window (26.1040).
 					ends = (view.limit if image.structs[inner_struct].to_the_end
+					        and image.placements[index].size_code == NONE
 					        else min(view.limit, at + wide))
 					verdict = _validate(
 						image, View(image, view.buffer, inner_struct,
@@ -2172,7 +2175,12 @@ def _arm_validates(image: Image, view: View, index: int,
 			return ERR_CONSTRAINT
 		return _elements_validate(view, chosen,
 		                          _run_elements(view, chosen, at))
-	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit,
+	# A variant stating its size is the arm's window (26.1040): `remaining`
+	# inside it ends where the variant does, as in the four backends.
+	limit = view.limit
+	if image.placements[index].size_code != NONE:
+		limit = min(limit, view.at + (at + size_bits(view, index)) // 8)
+	inner = View(image, view.buffer, arm_type, view.at + at // 8, limit,
 	             child_args(view, chosen))
 	return _validate(image, inner, arm_type) or OK
 

@@ -542,6 +542,10 @@ class Variant(Member):
 	discriminant: Expr
 	arms: tuple[VariantArm, ...]
 	attrs: tuple[Attr, ...]	= ()
+	#: `variant body[length] switch (...)`: the bytes the variant occupies,
+	#: whichever arm is selected -- MQTT's remaining length (26.1040).
+	#: None where the selected arm's own extent is the variant's.
+	size: Expr | None = None
 
 	def members_of(self) -> list[Member]:
 		"""The members the arms declare, skipping the policy-only arms."""

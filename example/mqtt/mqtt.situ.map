@@ -64,11 +64,11 @@ struct mqtt_string size=2..65537 mutate=Shifting repr=ValueConverted
 
 struct nothing size=0
 
-struct packet size=2.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+struct packet size=2..268435460 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   packet.kind                            offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   packet.flags                           offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   packet.length                          offset=AbsoluteStatic(0x01) size=Bounded(1, 4) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
-  packet.body                            offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  packet.body                            offset=Dynamic size=Bounded(0, 268435455) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
   packet.body.connect                    offset=Dynamic size=Bounded(12, 327695) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
   packet.body.connect.protocol_name_length offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   packet.body.connect.protocol_name      offset=FrameStatic(0x02) size=Fixed(4) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic address=FrameStable

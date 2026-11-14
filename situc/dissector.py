@@ -3915,6 +3915,11 @@ def _variant_length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	here because every `b` is a length, and a length is never `false` or `nil`
 	even when it is zero.
 	"""
+	# `variant body[length]` (26.1040): as long as it says.
+	if placement.size_expr is not None:
+		sized = _over_fields(struct, placement.size_expr, base)
+		return None if sized is None else f"math.max(0, {sized})"
+
 	if not placement.arm_cases or placement.discriminant is None:
 		return None
 
@@ -3973,6 +3978,9 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		if member is None:
 			continue		# `default: error`; nothing to show
 		length = _length(resolved, struct, member, "0", "at")
+		# A variant stating its size is each arm's window (26.1040).
+		if placement.size_expr is not None:
+			length = _variant_length(resolved, struct, placement, "0", "at")
 		# An arm that runs to the frame's end has the rest of the buffer,
 		# where nothing follows the variant -- fuzznet's call `frame`, whose
 		# body ends in `u8 media[remaining]`, and with it the whole variant

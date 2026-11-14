@@ -621,7 +621,8 @@ class Coverage:
 
 
 def _ast_members(
-		schema: ast.Schema) -> dict[str, ast.Field | ast.Opaque | ast.Reserved]:
+		schema: ast.Schema
+		) -> dict[str, ast.Field | ast.Opaque | ast.Reserved | ast.Variant]:
 	"""`struct.member` -> the AST field, for the expressions it carries.
 
 	Nested as well as top level. A variant's arm and a region's interior hold
@@ -630,7 +631,7 @@ def _ast_members(
 	packing it with no size program made a dnsname label one byte long and
 	a walk of them run off the end of the buffer (26.84).
 	"""
-	found: dict[str, ast.Field | ast.Opaque | ast.Reserved] = {}
+	found: dict[str, ast.Field | ast.Opaque | ast.Reserved | ast.Variant] = {}
 
 	# A reserved member is named by the compiler rather than by the schema,
 	# and `layout.reserved_count` numbers them per *struct* in declaration
@@ -659,7 +660,9 @@ def _ast_members(
 			if isinstance(member, ast.Reserved):
 				path = f"{owner}.<reserved{counter[0]}>"
 				counter[0] += 1
-			if isinstance(member, (ast.Field, ast.Opaque, ast.Reserved)):
+			if isinstance(member, (ast.Field, ast.Opaque, ast.Reserved)) \
+					or (isinstance(member, ast.Variant)
+					    and member.size is not None):
 				found[path] = member
 			# A variant holds its arms; a region and a positional block hold
 			# their members. Both are reached by the same walk rather than
@@ -1352,6 +1355,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		expr: ast.Expr | None
 		if isinstance(field, ast.Opaque):
 			expr = field.size
+		elif isinstance(field, ast.Variant) and field.size is not None:
+			expr = field.size		# `variant body[length]` (26.1040)
 		elif isinstance(field, (ast.Field, ast.Reserved)) and field.array:
 			expr = field.array.size
 			# What a run leaves the members after it (26.894), as the
@@ -1510,7 +1515,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# holds the run: `while (nla_len >= 4)` is netlink's `nla_ok`, and
 	# `nla_len` is a field of the attribute, not of the message.
 	picker: tuple[tuple[dict[str, int],
-	                    Callable[[ast.Field | ast.Opaque | ast.Reserved],
+	                    Callable[[ast.Field | ast.Opaque | ast.Reserved | ast.Variant],
 	                             ast.Expr | None],
 	                    bool], ...] = (
 		# Both are `Field` properties; an `Opaque` has neither, so it is

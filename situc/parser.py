@@ -2486,6 +2486,12 @@ class Parser:
 		"""`variant body switch (hdr.type) { case A: X a; default: error; }`"""
 		start = self.advance()
 		name  = self.expect_ident("a variant name")
+		# `variant body[length] switch (...)`: the brackets say what they
+		# say on an array, the bytes the member occupies (26.1040).
+		size: ast.Expr | None = None
+		if self.accept_symbol("["):
+			size = self.parse_expr()
+			self.expect_symbol("]", "to close the variant's size")
 		self.expect_keyword("switch", "after the variant name")
 		self.expect_symbol("(", "before the discriminant")
 		discriminant = self.parse_expr()
@@ -2511,7 +2517,7 @@ class Parser:
 			raise error("a variant has at most one `default` arm", defaults[1].span)
 
 		return ast.Variant(self.span_from(start), name.text, discriminant,
-		                   tuple(arms), attrs)
+		                   tuple(arms), attrs, size)
 
 	def parse_variant_arm(self) -> ast.VariantArm:
 		start = self.current

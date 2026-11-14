@@ -517,7 +517,9 @@ def _codec_args(codec: str, args: tuple[ast.Attr, ...]) -> str:
 
 def _variant_lines(variant: ast.Variant, depth: int) -> list[str]:
 	indent = "\t" * depth
-	lines  = [f"{indent}variant {variant.name} switch "
+	sized  = ("" if variant.size is None
+	          else f"[{expr_to_source(variant.size)}]")
+	lines  = [f"{indent}variant {variant.name}{sized} switch "
 	          f"({expr_to_source(variant.discriminant)})"
 	          f"{_attrs_to_source(variant.attrs)} {{"]
 

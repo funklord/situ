@@ -297,7 +297,10 @@ struct packet {
 	u4                flags;                        // 2.2.2
 	remaining_length  length;                       // 2.2.3
 
-	variant body switch (kind) {
+	// The body is exactly `length` bytes, whichever packet it is (2.2.3):
+	// a PUBLISH payload ends there rather than at the end of whatever
+	// buffer holds it, so a broker can frame packets off a stream.
+	variant body[length] switch (kind) {
 		case control_kind.connect:     connect_body      connect;
 		case control_kind.connack:     connack_body      connack;
 		case control_kind.publish:     publish_body(qos = (flags >> 1) & 3) publish;

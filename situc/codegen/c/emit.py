@@ -3612,7 +3612,12 @@ class Emitter:
 		if nested is not None and placement.array_count is None \
 				and placement.sized_by is None \
 				and not is_struct_run(self.resolved.structs, placement):
-			if nested.layout.is_fixed_size:
+			found = arm_of(struct, placement)
+			if found is not None and found[0].size_expr is not None:
+				# The variant's own size is the arm's window (26.1040):
+				# `remaining` inside it ends where the variant does.
+				size = (f"situ_nonneg_u32({self._over_fields(struct, found[0].size_expr, 'view', bounded=True)})")
+			elif nested.layout.is_fixed_size:
 				size = macro(self.prefix, nested.name, "SIZE_FIXED")
 			elif self._struct_extent(nested):
 				size = "size"
@@ -10106,6 +10111,12 @@ class Emitter:
 		by, so `default: error` arrives as the run stopping rather than as a
 		length nobody can justify.
 		"""
+		# `variant body[length]` (26.1040): the variant is as long as it
+		# says, whichever arm is there, and `validate` holds the arm to it.
+		if placement.size_expr is not None:
+			return (f"situ_nonneg_u32("
+			        f"{self._over_fields(struct, placement.size_expr, held, bounded=True)})")
+
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
