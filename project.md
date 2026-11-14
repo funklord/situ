@@ -280,6 +280,22 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   until `depth` acquired a behavioural meaning; their `[depth = 64]` now
   claims a 65-section FS2 image is malformed, which is false and blames the
   image rather than the reader.
+
+  **And the chain itself is not built by any backend, measured
+  2026-11-14.** FS2's section list is a recursive member placed by `at`:
+  `chain following at head.next;` under `[depth = 8]`. `situc build`
+  succeeds and the output does not compile -- C 4 errors (it calls a
+  `_following_span_at` it never emits), C++ 2, Rust 3 -- and the Python
+  reader's `required` and `nesting_at` read a `following_count` that does
+  not exist, which is the crash `situc verify` renders as a fault in situc
+  (test_recursion pins that rendering). The work, in order: a located
+  member adds nothing to its struct's extent, so `required` and `_extent`
+  must not walk it; depth is counted along the chain the way a nested
+  member's is; and openmlx4's sentinel end (`next == 0xFF000000`, its
+  item 3) needs a way to say the chain stops, which the 0-or-1 count
+  spelling `following[head.next != K]` reaches only as a constraint-shaped
+  count section 10 does not document. Until then a refusal by name would be
+  more honest than output that does not compile.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
