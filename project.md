@@ -8747,6 +8747,10 @@ Moved to `doc/decision/26.1015-a-builder-writes-where-an-offset-puts-it.md`.
 
 Moved to `doc/decision/26.1016-a-span-its-expression-sizes-is-checked-after.md`.
 
+### 26.1017 A run of argued structs is written
+
+Moved to `doc/decision/26.1017-a-run-of-argued-structs-is-written.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

@@ -231,6 +231,9 @@ class Part:
 		#: backwards: checked against the reader's `_len` once the message
 		#: is whole (26.1016).
 		self.verify = False
+		#: What a run of an argued struct hands each element, as C values
+		#: in the element's parameter order (26.1017).
+		self.args: tuple[str, ...] = ()
 		#: A MARKER's literals for each order (26.1007).
 		self.little: tuple[int, ...] = ()
 		self.big: tuple[int, ...] = ()
@@ -875,6 +878,48 @@ def hands_over(header: str, name: str, prefix: str,
 		return False
 	inner = structs.get(name) if structs is not None else None
 	return inner is None or not ends_before_a_byte_it_does_not_own(inner)
+
+
+def run_arguments(struct: ResolvedStruct, held: Placement,
+		parts: list[Part], header: str, prefix: str,
+		structs: Mapping[str, ResolvedStruct] | None) -> tuple[str, ...] | None:
+	"""What a run of an argued struct hands each element, or None (26.1017).
+
+	pcap's `record(order = magic) packets[remaining]` and TIFF's
+	`ifd_entry(order = order) entries[count]`: the element frames itself,
+	but its `_required` takes the argument as well, which `frames_itself`'s
+	exact match refuses. The writer can pass it wherever the value is one
+	the caller has already handed over -- an endian marker this struct
+	wrote earlier, which the reader passes as its literal and the caller
+	passed as the same literal, or one of this struct's own arguments.
+	Anything computed is left refused.
+	"""
+	inner = (structs or {}).get(held.type_name or "")
+	if not held.arguments or inner is None \
+			or ends_before_a_byte_it_does_not_own(inner):
+		return None
+	name = ident(prefix, held.type_name or "")
+	if (f"situ_err_t {name}_required(const uint8_t *data, uint32_t have, "
+	    "uint32_t *need, ") not in header:
+		return None
+	given = dict(held.arguments)
+	order = [one.name for one in traverse.arguments(inner)]
+	if sorted(order) != sorted(given):
+		return None
+	own = {one.name: traverse.argument_name(one)
+	       for one in traverse.arguments(struct)}
+	markers = {part.placement.name: part.local for part in parts
+	           if part.role == MARKER}
+	values: list[str] = []
+	for param in order:
+		expr = given[param]
+		if expr in markers:
+			values.append(markers[expr])
+		elif expr in own:
+			values.append(own[expr])
+		else:
+			return None
+	return tuple(values)
 
 
 def _arm_refusal(placement: Placement, header: str, prefix: str,
@@ -1752,7 +1797,12 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
 			run = measures[held.name]
 			part = _value_part(SIZE, held, local, sizes=run)
-			if not run.element_bits and run.type_name \
+			# Keyed on the type being a struct rather than on a width: a
+			# FIXED struct's run has one -- TIFF's `ifd_entry` is 96 bits
+			# -- and its count field was written as the byte length
+			# (26.1017).
+			if run.type_name and (not run.element_bits
+			                      or run.type_name in (structs or {})) \
 					and not traverse.is_varint_run(run):
 				# ble's `num` and edges' `count` are documented element
 				# counts -- "a LITERAL count of elements that have no
@@ -1846,8 +1896,10 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# here -- `mqtt_string topic;` and `value held;` are fields.
 			# Same class as the `before` misdiagnosis in 26.612: the
 			# verdict was right and the reason was about something else.
-			if held.type_name and hands_over(header, held.type_name,
-			                                 prefix, structs):
+			args = run_arguments(struct, held, parts, header, prefix,
+			                     structs) if repeats else None
+			if held.type_name and (args is not None or hands_over(
+					header, held.type_name, prefix, structs)):
 				if not repeats:
 					parts.append(Part(NESTED, held, local,
 					                  inner=ident(prefix, held.type_name)))
@@ -1878,6 +1930,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				                  value=1 if held.repeat_while is not None
 				                  else 0))
 				parts[-1].inner_count = counts
+				parts[-1].args = args or ()
 				continue
 			if not repeats and held.type_name:
 				if not frames_itself(header,
@@ -2223,6 +2276,8 @@ def _walk(part: Part, local: str, count: bool,
 	# `is_fixed_size` and so does this.
 	inner = (structs or {}).get(part.placement.type_name or "")
 	framed = inner is not None and not inner.layout.is_fixed_size
+	# An argued element's arguments, after the ones every call takes.
+	passed = "".join(f", {value}" for value in part.args)
 	lines = [
 		f"\t/* {local}: a run of `{part.placement.type_name}` the caller",
 		"\t * built. Walked with the element's own `_required`, because",
@@ -2267,7 +2322,7 @@ def _walk(part: Part, local: str, count: bool,
 	lines += [
 		f"\t\t\tif ({part.inner}_required({part.local} + {SCAN},",
 		f"\t\t\t                      {part.local}_len - {SCAN},",
-		f"\t\t\t                      &{NEED}) != SITU_OK) {{",
+		f"\t\t\t                      &{NEED}{passed}) != SITU_OK) {{",
 		"\t\t\t\t/* THE CALLER'S BUFFER ENDS HERE, and for an element",
 		"\t\t\t\t * that ends `before` a byte it does not own that end",
 		"\t\t\t\t * IS the separator. `_required` cannot know that: it",
@@ -2315,7 +2370,7 @@ def _walk(part: Part, local: str, count: bool,
 		+ f"&{VIEW}) != SITU_OK) {{",
 		"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t\t\t}",
-		f"\t\t\t{ERR} = {ident_validate(part.inner)}({VIEW});",
+		f"\t\t\t{ERR} = {ident_validate(part.inner)}({VIEW}{passed});",
 		f"\t\t\tif ({ERR} != SITU_OK) {{",
 		# The element's own verdict rather than a flat CONSTRAINT: a
 		# caller told which of its elements is wrong, and why, can fix
@@ -2969,6 +3024,10 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 			tally = Part(REPEAT, part.sizes, run, inner=part.inner,
 			             delimiter=(part.sizes.delimiters[0]
 			                        if part.sizes.delimiters else b""))
+			# The run's own part says what an argued element is handed.
+			tally.args = next((other.args for other in parts
+			                   if other.role == REPEAT
+			                   and other.placement is part.sizes), ())
 			lines += [
 				*_walk(tally, traverse.local_name(struct, part.sizes),
 				       True, structs),
