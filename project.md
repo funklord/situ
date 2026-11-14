@@ -8803,6 +8803,10 @@ Moved to `doc/decision/26.1029-packed-decimal-is-written.md`.
 
 Moved to `doc/decision/26.1030-fixed-point-is-built-as-its-stored-integer.md`.
 
+### 26.1031 A dissector checks a checksum
+
+Moved to `doc/decision/26.1031-a-dissector-checks-a-checksum.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

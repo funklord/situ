@@ -130,6 +130,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines = _preamble(basename)
 
+	# Which tags this dissector can check, decided once, because the
+	# helpers below are emitted only where one is (26.1031).
+	_CHECKED.clear()
+	for struct in resolved.structs.values():
+		held = _checkable(struct)
+		if held:
+			_CHECKED[struct.name] = held
+	lines.extend(_check_helpers())
+
 	# Only where something scans. A helper nobody calls is dead Lua in a file
 	# a user is expected to read before trusting it.
 	if any(entry.placement.delimiters
@@ -1330,6 +1339,7 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# every dissect function closes over it as an upvalue.
 	lines.append(f"{proto}.fields = {{}}")
 	lines.extend(fields)
+	lines.extend(_check_fields(struct))
 	lines.extend(_conversation_fields(struct))
 	lines.extend(_experts(struct))
 	lines.extend(_preferences(struct))
@@ -1710,6 +1720,251 @@ def _uncomputable(path: str, why: str) -> list[str]:
 	return [f"\t-- {path}: {why}", _LOST]
 
 
+@dataclasses.dataclass(frozen=True)
+class Checked:
+	"""A tag this dissector recomputes, and the span it computes it over."""
+
+	tag: Placement
+	codec: ast.CodecDecl
+	first: str		# the path of the first member the tag covers
+	last: str		# and of the last
+	filler: int | None	# `[self_as]`: the tag's own bytes read as this
+
+
+def _checkable(struct: ResolvedStruct) -> list[Checked]:
+	"""The tags whose check this dissector can make (26.1031).
+
+	`validate` leaves a checksum to "the caller with the whole message"
+	(26.622), and a dissector is one: Wireshark's own dissectors mark a
+	header checksum `[correct]` or `[incorrect, should be ...]`, and a
+	generated one showed the bytes and nothing else. The arithmetic is the
+	backends' -- `kernel_math`'s table and the loop each of them spells --
+	so this is a fifth spelling and not a fifth derivation.
+
+	Narrow on purpose, each exclusion a span this file cannot state
+	exactly: a tag covering a pseudo-header, more than one region, a
+	variant (ICMP's arms sit at the variant's offset, which is how a span
+	of 8 bytes stood for 21 once, 26.579), or bits rather than bytes; a
+	kernel other than a CRC of at most 32 bits -- what Lua 5.2's `bit32`
+	holds -- or RFC 1071's sum.
+	"""
+	from situc.codegen.kernel_math import crc_width
+
+	members = [held for held in own_members(struct) if not held.parameter]
+	paths   = [held.path for held in members]
+	found: list[Checked] = []
+	for tag in members:
+		if not (tag.kind in ("tag", "checksum") or tag.tag_covers):
+			continue
+		codec = _CODECS.get(tag.tag_codec or "")
+		if codec is None or codec.kernel is None or tag.tag_prefix \
+				or len(tag.tag_covers) != 1 \
+				or (tag.size_bits or 0) % BITS_PER_BYTE \
+				or (tag.offset_bits or 0) % BITS_PER_BYTE:
+			continue
+		family = codec.kernel.family
+		if family is ast.KernelFamily.POLYNOMIAL:
+			width = crc_width(codec)
+			if codec.kernel.argument("field") is not None or width is None \
+					or width > 32 or width != tag.size_bits:
+				continue
+		elif family is ast.KernelFamily.ONES_COMPLEMENT:
+			if tag.size_bits != 16:
+				continue
+		else:
+			continue
+		# A variant of THIS struct; one inside a nested member is measured
+		# with that member, as FLAC's frame fields are.
+		if any(entry.placement.kind == "variant"
+		       and entry.placement.path.rsplit(".", 1)[0] == struct.name
+		       and set(entry.placement.regions) & set(tag.tag_covers)
+		       for entry in struct.entries):
+			continue
+		covered = [index for index, held in enumerate(members)
+		           if set(held.regions) & set(tag.tag_covers)]
+		if not covered or covered != list(range(covered[0],
+		                                        covered[-1] + 1)):
+			continue
+		found.append(Checked(tag, codec, paths[covered[0]],
+		                     paths[covered[-1]],
+		                     traverse.self_as(tag.attrs)))
+	return found
+
+
+def _check_fields(struct: ResolvedStruct) -> list[str]:
+	"""The status row each checked tag gets, beside its bytes."""
+	proto = _lua(struct.name)
+	return [f"{proto}.fields.{_lua(_local(struct, one.tag))}_status = "
+	        f'ProtoField.string("situ.{struct.name}.'
+	        f'{_local(struct, one.tag)}.status", '
+	        f'"{_local(struct, one.tag)} status")'
+	        for one in _CHECKED.get(struct.name, [])]
+
+
+def _check_marks(struct: ResolvedStruct, checked: list[Checked],
+		placement: Placement, when: str) -> list[str]:
+	"""Where each checked tag's span starts and ends, and the check itself
+	once both the tag and its span are behind the cursor."""
+	lines: list[str] = []
+	proto = _lua(struct.name)
+	for one in checked:
+		tag = _lua(_local(struct, one.tag))
+		if when == "before":
+			if placement.path == one.first:
+				lines.append(f"\tlocal situ_{tag}_from = at")
+			if placement.path == one.tag.path:
+				lines.append(f"\tlocal situ_{tag}_at = at")
+			continue
+		if placement.path == one.last:
+			lines.append(f"\tlocal situ_{tag}_to = at")
+		# After whichever of the two comes later.
+		later = one.last if _after(struct, one.last, one.tag.path) \
+			else one.tag.path
+		if placement.path != later:
+			continue
+		n      = (one.tag.size_bits or 0) // BITS_PER_BYTE
+		little = "true" if one.tag.tag_codec_endian is ast.Endian.LITTLE \
+			else "false"
+		hole   = (f"situ_{tag}_at, {n}, {one.filler}"
+		          if one.filler is not None else "0, 0, 0")
+		lines += [
+			f"\t-- {one.tag.path}: {one.codec.name} over what it covers,"
+			" as the readers",
+			"\t-- compute it, and Wireshark's verdict beside it (26.1031).",
+			f"\tif situ_{tag}_to <= tvb:len() and situ_{tag}_at + {n}"
+			" <= tvb:len() then",
+			f"\t\tlocal want = situ_check.{_lua(one.codec.name)}(tvb, "
+			f"situ_{tag}_from, situ_{tag}_to, {hole})",
+			f"\t\tlocal got = situ_uint(tvb, situ_{tag}_at, {n}, {little})",
+			"\t\tif got == want then",
+			f"\t\t\tsubtree:add({proto}.fields.{tag}_status, "
+			f'tvb(situ_{tag}_at, {n}), "Good")',
+			"\t\telse",
+			f"\t\t\tsubtree:add({proto}.fields.{tag}_status, "
+			f"tvb(situ_{tag}_at, {n}),",
+			f'\t\t\t\tstring.format("Bad, should be 0x%0{n * 2}x", want))'
+			f":add_proto_expert_info({proto}_e.{tag}_bad)",
+			"\t\tend",
+			"\tend",
+		]
+	return lines
+
+
+def _after(struct: ResolvedStruct, one: str, other: str) -> bool:
+	"""Whether member `one` comes after member `other` in the struct."""
+	order = [held.path for held in own_members(struct)]
+	return order.index(one) > order.index(other)
+
+
+def _check_helpers() -> list[str]:
+	"""The kernels the checked tags name, once each, in one table.
+
+	One local for all of them: the main chunk allows two hundred, and
+	`edges` has reached that before (26.518). Bitwise operators are chosen
+	at load time, because decision 0021 keeps Lua 5.2 working, where they
+	are `bit32`, and Wireshark's own Lua is 5.4, where `bit32` is gone and
+	the operators are syntax 5.2 cannot parse -- so they are loaded from a
+	string rather than written.
+	"""
+	from situc.codegen.kernel_math import (crc_init, crc_register,
+	                                       crc_shift, crc_start, crc_table,
+	                                       crc_width, number)
+
+	codecs = {one.codec.name: one.codec
+	          for held in _CHECKED.values() for one in held}
+	if not codecs:
+		return []
+	lines = ["",
+	         "-- Checksums recomputed as the readers compute them (26.1031).",
+	         "local situ_check = {}",
+	         "if bit32 then",
+	         "\tsitu_check.xor, situ_check.band = bit32.bxor, bit32.band",
+	         "\tsitu_check.shl, situ_check.shr = bit32.lshift, bit32.rshift",
+	         "else",
+	         "\tsitu_check.xor, situ_check.band, situ_check.shl,"
+	         " situ_check.shr = load(",
+	         '\t\t"return function(a, b) return a ~ b end, "',
+	         '\t\t.. "function(a, b) return a & b end, "',
+	         '\t\t.. "function(a, n) return a << n end, "',
+	         '\t\t.. "function(a, n) return a >> n end")()',
+	         "end",
+	         "local function situ_check_byte(tvb, i, hole_at, hole_n, fill)",
+	         "\tif i >= hole_at and i < hole_at + hole_n then",
+	         "\t\treturn fill",
+	         "\tend",
+	         "\treturn tvb(i, 1):uint()",
+	         "end"]
+	for name, codec in sorted(codecs.items()):
+		kernel = codec.kernel
+		assert kernel is not None
+		fn = f"situ_check.{_lua(name)}"
+		if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
+			complement = kernel.flag("complement")
+			lines += [
+				f"-- {name}: RFC 1071's sum, end-around carry"
+				+ (", complemented" if complement else "") + ".",
+				f"{fn} = function(tvb, from, to, hole_at, hole_n, fill)",
+				"\tlocal total, i = 0, from",
+				"\twhile i + 1 < to do",
+				"\t\ttotal = total"
+				" + situ_check_byte(tvb, i, hole_at, hole_n, fill) * 256",
+				"\t\t\t+ situ_check_byte(tvb, i + 1, hole_at, hole_n, fill)",
+				"\t\ti = i + 2",
+				"\tend",
+				"\tif i < to then",
+				"\t\ttotal = total"
+				" + situ_check_byte(tvb, i, hole_at, hole_n, fill) * 256",
+				"\tend",
+				"\twhile total > 0xFFFF do",
+				"\t\ttotal = total % 65536 + math.floor(total / 65536)",
+				"\tend",
+				*(["\ttotal = 0xFFFF - total"] if complement else []),
+				*(["\tif total == 0 then", "\t\ttotal = 0xFFFF", "\tend"]
+				  if kernel.flag("zero_means_none") else []),
+				"\treturn total",
+				"end",
+			]
+			continue
+		width   = crc_width(codec)
+		assert width is not None
+		poly    = number(codec, "poly")
+		reflect = kernel.flag("reflect")
+		table   = crc_table(width, poly, reflect)
+		shift   = crc_shift(width, reflect)
+		mask    = (1 << width) - 1
+		holds   = crc_register(width, reflect) // 4
+		started = crc_start(crc_init(codec), width, reflect)
+		xorout  = number(codec, "xorout")
+		# Lua arrays count from one, so every index below is `+ 1`.
+		lines += [f"-- {name}: the backends' table, computed from the"
+		          " polynomial.",
+		          f"local situ_{_lua(name)}_table = {{"]
+		lines += ["\t" + ", ".join(f"0x{table[row + column]:0{holds}X}"
+		                           for column in range(8)) + ","
+		          for row in range(0, 256, 8)]
+		lines += ["}",
+		          f"{fn} = function(tvb, from, to, hole_at, hole_n, fill)",
+		          "\tlocal x, band = situ_check.xor, situ_check.band",
+		          "\tlocal shl, shr = situ_check.shl, situ_check.shr",
+		          f"\tlocal t, crc = situ_{_lua(name)}_table, 0x{started:X}",
+		          "\tfor i = from, to - 1 do",
+		          "\t\tlocal byte = situ_check_byte(tvb, i, hole_at, hole_n,"
+		          " fill)"]
+		if reflect:
+			lines.append(f"\t\tcrc = band(x(t[band(x(crc, byte), 0xFF) + 1],"
+			             f" shr(crc, 8)), 0x{mask:X})")
+		elif width == 8 or shift:
+			lines.append("\t\tcrc = t[x(crc, byte) + 1]")
+		else:
+			lines.append(f"\t\tcrc = band(x(t[band(x(shr(crc, {width - 8}),"
+			             f" byte), 0xFF) + 1], shl(crc, 8)), 0x{mask:X})")
+		held = f"shr(crc, {shift})" if shift else "crc"
+		lines += ["\tend",
+		          f"\treturn band(x({held}, 0x{xorout:X}), 0x{mask:X})",
+		          "end"]
+	return lines
+
+
 def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		members: list[Placement]) -> list[str]:
 	proto  = _lua(struct.name)
@@ -1741,7 +1996,10 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 	lost = False
 	capturable = {held.path for held in _capturable(struct, members)}
 	_captured.clear()
+	checked = _CHECKED.get(struct.name, [])
 	for placement in members:
+		if not lost:
+			lines.extend(_check_marks(struct, checked, placement, "before"))
 		if placement.path in capturable and not lost:
 			lines.append(f"\t{_capture_line(placement, 'at')}")
 		if lost:
@@ -1759,6 +2017,8 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		lost = _LOST in body
 		if order is not None and not lost:
 			lines.extend(_order_check(struct, placement, order))
+		if not lost:
+			lines.extend(_check_marks(struct, checked, placement, "after"))
 
 	lines.extend(_conversation_calls(resolved, struct))
 	lines.extend(_message_calls(struct, lost))
@@ -1848,12 +2108,21 @@ def _experts(struct: ResolvedStruct) -> list[str]:
 	"""
 	held    = _MESSAGES.get(struct.name, [])
 	ordered = _ORDERED.get(struct.name, {})
-	if not held and not ordered:
+	checked = _CHECKED.get(struct.name, [])
+	if not held and not ordered and not checked:
 		return []
 
 	proto = _lua(struct.name)
 	lines = [f"{proto}.experts = {{}}",
 	         f"local {proto}_e = {proto}.experts"]
+	# A checksum that disagrees with the bytes it covers, in Wireshark's own
+	# group for it (26.1031).
+	for one in checked:
+		tag = _lua(_local(struct, one.tag))
+		lines.append(
+			f"{proto}_e.{tag}_bad = ProtoExpert.new("
+			f'"{struct.name}.{tag}.bad", "Bad {one.codec.name}", '
+			"expert.group.CHECKSUM, expert.severity.ERROR)")
 	# A run held in order and out of it is malformed, as a `refuse` is: the
 	# six other readers refuse it (26.985, 26.988).
 	for path in ordered:
@@ -2827,6 +3096,9 @@ _STRUCTS: dict[str, ResolvedStruct] = {}
 
 #: Every codec, for a region's expansion (26.965).
 _CODECS: dict[str, ast.CodecDecl] = {}
+
+#: The tags each struct's dissector checks, by struct name (26.1031).
+_CHECKED: dict[str, list["Checked"]] = {}
 
 
 #: Every `endian_marker`, for the literal a governed member is compared against.

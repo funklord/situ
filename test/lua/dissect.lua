@@ -278,7 +278,8 @@ ProtoField = {
 }
 
 expert = {
-	group    = { MALFORMED = "MALFORMED", PROTOCOL = "PROTOCOL" },
+	group    = { MALFORMED = "MALFORMED", PROTOCOL = "PROTOCOL",
+	             CHECKSUM = "CHECKSUM" },
 	severity = { ERROR = "ERROR", WARN = "WARN", NOTE = "NOTE",
 	             CHAT = "CHAT" },
 }
