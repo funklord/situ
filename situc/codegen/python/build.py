@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -550,6 +550,24 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"\tsitu_at += {part.bytes}",
 		        f"\tsitu_little_{part.placement.name} = "
 		        f"{local} in {part.little!r}"]
+	if part.role == BETWEEN:
+		# C's: zeros to where the reader puts the member after it, every
+		# field that offset reads being down (26.1024, 26.1026).
+		assert part.reaches is not None
+		path = part.placement.path
+		held = f"situ_schema.{py_name(struct.name)}"
+		after = py_name(traverse.local_name(struct, part.reaches))
+		return ["\tsitu_whole = "
+		        f"{held}.at(Message(memoryview(situ_out)), 0"
+		        + ("" if struct.layout.is_fixed_size else ", len(situ_out)")
+		        + ")",
+		        f"\tsitu_to = situ_whole.{after}_offset",
+		        "\tif situ_to < situ_at:",
+		        f'\t\traise ConstraintError("{path}: the member after it '
+		        'is behind the cursor")',
+		        *_room("situ_to - situ_at", path),
+		        "\tsitu_out[situ_at:situ_to] = bytes(situ_to - situ_at)",
+		        "\tsitu_at = situ_to"]
 	if part.role == LOCATED:
 		# C's: where the offset already written puts it, as the reader
 		# finds it over the whole backing; zeros up to there, and an offset

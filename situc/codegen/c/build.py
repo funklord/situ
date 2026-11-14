@@ -238,6 +238,8 @@ class Part:
 		#: backwards: checked against the reader's `_len` once the message
 		#: is whole (26.1016).
 		self.verify = False
+		#: The member a BETWEEN pad runs up to (26.1024, 26.1026).
+		self.reaches: Placement | None = None
 		#: What a run of an argued struct hands each element, as C values
 		#: in the element's parameter order (26.1017).
 		self.args: tuple[str, ...] = ()
@@ -1773,6 +1775,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					# it does, and every field it reads is down by now
 					# (26.1024). Zeros to there.
 					parts.append(Part(BETWEEN, held, local, inner=reached))
+					parts[-1].reaches = after
 					continue
 				why = _member_refusal(held, None,
 				                      declined.get(held.path))

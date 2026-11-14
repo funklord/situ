@@ -22,7 +22,7 @@ import re
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
@@ -582,6 +582,19 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        f" {local} as u64);",
 		        f"\tsitu_at += {part.bytes};",
 		        f"\tlet situ_little_{part.placement.name} = {little};"]
+	if part.role == BETWEEN:
+		# C's: zeros to where the reader puts the member after it, every
+		# field that offset reads being down (26.1024, 26.1026).
+		assert part.reaches is not None
+		held  = _pascal(struct.name)
+		after = traverse.local_name(struct, part.reaches)
+		return [f"\tlet situ_to = {held}::new(&situ_out[..])"
+		        f".map_err(|_| Error::Bounds)?.{after}_offset();",
+		        "\tif situ_to < situ_at {",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        *_room("situ_to - situ_at"),
+		        "\tsitu_out[situ_at..situ_to].fill(0);",
+		        "\tsitu_at = situ_to;"]
 	if part.role == LOCATED:
 		# C's: where the offset already written puts it, as the reader
 		# finds it over the whole backing; zeros up to there (26.1015,

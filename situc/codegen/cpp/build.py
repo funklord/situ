@@ -21,7 +21,7 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.c.names import bare_name, c_name
@@ -646,6 +646,28 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		         f"static_cast<std::uint{bits}_t>({part.local}));"),
 		        f"\tsitu_at += {part.bytes}u;",
 		        f"\tconst bool situ_little_{part.placement.name} = ({little});"]
+	if part.role == BETWEEN:
+		# C's: zeros to where the reader puts the member after it, every
+		# field that offset reads being down (26.1024, 26.1026).
+		assert part.reaches is not None
+		held  = f"::situ::{class_name(struct)}"
+		after = traverse.local_name(struct, part.reaches)
+		size  = "" if struct.layout.is_fixed_size else " situ_cap,"
+		return ["\t{",
+		        "\t\t::situ::rt::message situ_backing(situ_out, situ_cap);",
+		        f"\t\t{held} situ_whole;",
+		        "",
+		        f"\t\tif ({held}::at(situ_backing, 0,{size} situ_whole)"
+		        " != ::situ::rt::err::ok) {",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        f"\t\tconst std::uint32_t situ_to = situ_whole.{after}_offset();",
+		        "\t\tif (situ_to < situ_at) {",
+		        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+		        "\t\tif (situ_cap - situ_at < situ_to - situ_at) {",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        "\t\tstd::memset(situ_out + situ_at, 0, situ_to - situ_at);",
+		        "\t\tsitu_at = situ_to;",
+		        "\t}"]
 	if part.role == LOCATED:
 		# C's: where the offset already written puts it, as the reader
 		# finds it over the whole backing; zeros up to there (26.1015,

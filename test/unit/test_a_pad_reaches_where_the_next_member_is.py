@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,46 @@ def test_cpio_reads_what_the_builder_wrote(tmp_path: Path) -> None:
 	                        capture_output = True, timeout = 60)
 	assert listed.returncode == 0, listed.stderr
 	assert listed.stdout.split() == [b"hi.txt"], listed.stdout
+	extracted = subprocess.run([CPIO, "-i", "--to-stdout", "--quiet",
+	                            "hi.txt"], input = data,
+	                           capture_output = True, timeout = 60)
+	assert extracted.returncode == 0, extracted.stderr
+	assert extracted.stdout == b"hi\n"
+
+
+def test_python_writes_the_same_archive(tmp_path: Path) -> None:
+	"""26.1026: Python's builder pads by its reader's `data_offset`: the
+	same two entries, the same 248 bytes and padding, read by cpio."""
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build",
+		 str(ROOT / "example" / "cpio" / "cpio.situ"), "--target", "python",
+		 "--layer", "edit", "--out", str(out)],
+		cwd = ROOT, capture_output = True, text = True)
+	assert done.returncode == 0, done.stderr
+	(out / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding = "ascii"), encoding = "ascii")
+	(out / "run.py").write_text("""import sys
+sys.path.insert(0, ".")
+import cpio_build
+archive = bytearray()
+for name, mode, data in ((b"hi.txt", 0o100644, b"hi\\n"), (b"TRAILER!!!", 0, b"")):
+	header = bytearray(110)
+	cpio_build.build_cpio_header(header, b"070701", 1, mode, 0, 0, 1, 0,
+	                             len(data), 0, 0, 0, 0, len(name) + 1, 0)
+	entry = bytearray(512)
+	n = cpio_build.build_cpio_entry(entry, bytes(header), name + b"\\0", data)
+	archive += entry[:n]
+sys.stdout.buffer.write(archive)
+""", encoding = "ascii")
+	ran = subprocess.run([sys.executable, "-I", "run.py"], cwd = out,
+	                     capture_output = True)
+	assert ran.returncode == 0, ran.stderr
+	data = ran.stdout
+	assert len(data) == 248 and data[117:120] == b"\0\0\0", data
+	if CPIO is None:
+		pytest.skip("no cpio to read it")
 	extracted = subprocess.run([CPIO, "-i", "--to-stdout", "--quiet",
 	                            "hi.txt"], input = data,
 	                           capture_output = True, timeout = 60)
