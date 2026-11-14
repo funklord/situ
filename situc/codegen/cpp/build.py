@@ -293,7 +293,9 @@ def _nested(part: Part, inner: str) -> list[str]:
 		f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS, "\t}",
 		# An arm that ends the message: its bytes are one whole value
 		# however long, if they validate as one (26.973).
-		*(["\t{",
+		# Unless it takes arguments only the message supplies, which the
+		# closing validation then checks it with (26.1022).
+		*([] if part.deferred else ["\t{",
 		   "\t\tconst situ_view_t situ_raw = {const_cast<std::uint8_t *>"
 		   f"({local}), {local}_len, 0u, nullptr}};",
 		   f"\t\tif ({local}_len < ::situ::{inner}::size_min"

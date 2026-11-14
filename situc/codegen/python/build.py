@@ -166,7 +166,9 @@ def _nested(part: Part) -> list[str]:
 			refuse]),
 		# An arm that ends the message: its bytes are one whole value
 		# however long, if they validate as one (26.973).
-		*(["\ttry:",
+		# Unless it takes arguments only the message supplies, which the
+		# closing validation then checks it with (26.1022).
+		*([] if part.deferred else ["\ttry:",
 		   f"\t\t{inner}.at(situ_schema.Message(bytearray({local})), 0,"
 		   f" len({local})).validate()",
 		   "\texcept SituError:",

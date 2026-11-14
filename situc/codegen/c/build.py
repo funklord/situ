@@ -205,6 +205,11 @@ class Part:
 		# bytes, so they are checked by validating the struct over all of
 		# them rather than by its `_required`, which it has none of (26.973).
 		self.tail = False
+		#: A tail whose struct takes arguments the message supplies --
+		#: MQTT's PUBLISH body, handed `qos` from the fixed header's flags:
+		#: its content is checked by the whole message's validation, which
+		#: derives them as the reader does, and not alone (26.1022).
+		self.deferred = False
 					# the discriminant an arm's first
 					# byte answers to
 		self.others    = others		# values that would make the message
@@ -808,6 +813,10 @@ def packed(placement: Placement) -> bool:
 		return False
 	if placement.offset_bits is None or placement.peek:
 		return False		# a peek writes nothing, so it joins no group
+	if placement.parameter:
+		return False		# nor does an argument, which is no bytes at
+					# all: MQTT's `u2 qos` was refused as a group
+					# off a byte boundary (26.1022)
 	return bool(placement.size_bits % BITS_PER_BYTE
 	            or placement.offset_bits % BITS_PER_BYTE)
 
@@ -1009,8 +1018,12 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		# At the cursor, which is the holder's: an arm's pad is measured from
 		# the struct the variant is in, as the reader measures it.
 		return Part(PAD, inner, bare_name(inner.name or "pad")), None
-	tail = _ends_the_message(struct, inner, shape)
-	argued = None if tail else argued_bytes(struct, inner, shape)
+	# Argued first: an arm whose extent is its argument (26.1012) that also
+	# ends the message -- DNS's RDATA -- keeps its length check, which a
+	# tail taking arguments would leave to the closing validation alone
+	# (26.1022).
+	argued = argued_bytes(struct, inner, shape)
+	tail = argued is None and _ends_the_message(struct, inner, shape)
 	why = None if tail or argued else _arm_refusal(inner, shape.header,
 	                                               shape.prefix, shape.structs)
 	if why:
@@ -1023,6 +1036,9 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	        if tail or argued else
 	        _arm_part(struct, inner, shape.header, shape.prefix, shape.structs))
 	part.tail = tail
+	held = (shape.structs or {}).get(inner.type_name or "")
+	part.deferred = tail and held is not None and bool(
+		traverse.arguments(held))
 	if argued is not None:
 		part.equals = _local(struct, argued)
 	# Where the discriminant is peeked, nothing was written for it and
@@ -1058,8 +1074,7 @@ def _ends_the_message(struct: ResolvedStruct, inner: Placement,
 	if held is None or held.layout.is_fixed_size \
 			or frames_itself(shape.header, ident(shape.prefix, held.name)):
 		return False
-	if ends_before_a_byte_it_does_not_own(held) \
-			or any(entry.placement.parameter for entry in held.entries):
+	if ends_before_a_byte_it_does_not_own(held):
 		return False
 	found = traverse.enclosing_arm(struct, inner)
 	members = traverse.own_members(struct)
@@ -1105,8 +1120,18 @@ def _tail_check(part: Part, local: str, held: Placement) -> list[str]:
 	"""A tail arm's bytes are one whole value however long, if they validate.
 
 	Taken as the arm's struct over all of them, which is the reading a
-	receiver makes of the datagram's end (26.973).
+	receiver makes of the datagram's end (26.973) -- except where it takes
+	arguments, which only the whole message supplies (26.1022).
 	"""
+	if part.deferred:
+		return [
+			f"\t/* {local}: one whole `{held.type_name}`, which ends the",
+			"\t * message and takes arguments the message supplies, so its",
+			"\t * content is checked by the closing validation. */",
+			f"\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
 	return [
 		f"\t/* {local}: one whole `{held.type_name}`, which ends the",
 		"\t * message: its extent is the bytes the caller handed over, so",

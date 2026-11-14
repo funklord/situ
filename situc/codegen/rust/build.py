@@ -267,7 +267,10 @@ def _nested(part: Part) -> list[str]:
 			*refuse]),
 		# An arm that ends the message: its bytes are one whole value
 		# however long, if they validate as one (26.973).
-		*([f"\tif {inner}::new({local}).and_then(|held| held.validate())"
+		# Unless it takes arguments only the message supplies, which the
+		# closing validation then checks it with (26.1022).
+		*([] if part.deferred else
+		  [f"\tif {inner}::new({local}).and_then(|held| held.validate())"
 		   ".is_err() {",
 		   *refuse] if part.tail else [
 		f"\tmatch {inner}::required({local}) {{",

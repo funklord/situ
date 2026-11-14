@@ -152,11 +152,12 @@ def test_every_struct_the_builder_serves_round_trips(
 def test_what_it_does_not_build_is_named(tmp_path: Path) -> None:
 	"""The other cell: a struct outside the class is on stderr.
 
-	`example/mqtt` is the witness because it holds both -- structs it builds
-	and a variant whose arms hold structs whose own bytes do not state
-	their extent, which is C's refusal and passes through unchanged.
+	`example/matroska` is the witness because it holds both -- structs it
+	builds and `open_cluster`, a `before` run, which is C's refusal and
+	passes through unchanged. It was MQTT until 26.1022 built PUBLISH, the
+	last struct there with a refusal of C's.
 	"""
-	schema = CORPUS_ROOT / "example" / "mqtt" / "mqtt.situ"
+	schema = CORPUS_ROOT / "example" / "matroska" / "matroska.situ"
 	emitted = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(schema),
 		 "--target", "python", "--layer", "edit", "--out", str(tmp_path)],
@@ -164,7 +165,7 @@ def test_what_it_does_not_build_is_named(tmp_path: Path) -> None:
 	assert emitted.returncode == 0, emitted.stderr[-800:]
 
 	said = emitted.stderr
-	assert "no builder for `packet.publish`" in said, said
+	assert "no builder for `open_cluster`" in said, said
 	# ...and the increment's OWN boundary, which is not C's refusal.
 	assert "no builder for `" in said, said
-	assert (tmp_path / "mqtt_build.py").exists()
+	assert (tmp_path / "matroska_build.py").exists()

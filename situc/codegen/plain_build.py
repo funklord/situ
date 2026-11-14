@@ -77,7 +77,8 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	if part.role in (NESTED, REPEAT) and held.arguments \
 			and not (part.role == REPEAT and part.args) \
 			and not (part.role == NESTED and part.equals
-			         and part.peeked is None and not part.others):
+			         and part.peeked is None and not part.others) \
+			and not (part.role == NESTED and part.deferred):
 		return False		# a run's are the caller's values (26.1018),
 					# an arm's its own length field's (26.1020)
 	if part.role == REPEAT and part.value == 1 and sum(
