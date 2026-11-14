@@ -248,6 +248,10 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		# 26.1021's test reaches it inline: several delimiters and an
 		# escape, which no corpus schema has.
 		"delimiters and escapes, so which of them an escape protects",
+		# USB's five-bit CRC was its population until 26.1027 wrote a tag
+		# packed into bits; a whole-byte tag the runtime has no word for --
+		# BLE's CRC-24 -- still reaches it, in 26.1027's test.
+		"-bit tag, and the runtime stores",
 		"is minimal and ends at any of",
 		"is minimal and does not consume its delimiter",
 		"repeats while a condition holds and this schema emits no count",

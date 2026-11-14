@@ -238,6 +238,10 @@ class Part:
 		#: backwards: checked against the reader's `_len` once the message
 		#: is whole (26.1016).
 		self.verify = False
+		#: A tag packed into bits -- USB's five-bit CRC -- by its reader's
+		#: `_store`: written as zeros with its group, then computed over
+		#: the whole message and stored (26.1027).
+		self.tagged = ""
 		#: The member a BETWEEN pad runs up to (26.1024, 26.1026).
 		self.reaches: Placement | None = None
 		#: What a run of an argued struct hands each element, as C values
@@ -1428,7 +1432,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	groups = _packed_groups(members)
 
 	parts: list[Part] = []
+	tagged = ""		# the packed tag this member is, if it is one
 	for index, held in enumerate(members):
+		tagged = ""
 		local = _local(struct, held)
 
 		if held.varint is not None:
@@ -1495,21 +1501,32 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "no codec, so there is nothing to compute it " \
 				           "from"
 			size = _whole_bytes(held)
-			if size is None or held.size_bits not in (8, 16, 32, 64):
+			if (size is None or held.size_bits not in (8, 16, 32, 64)) \
+					and packed(held) and not computes_over_a_prefix(
+						header, name) \
+					and f"static inline void {name}_store(situ_view_t " \
+					"view" in header:
+				# USB's `checksum u5 crc`: bits in a packed group, which
+				# the group writes as zeros and the reader's own `_store`
+				# fills once the message is whole (26.1027).
+				tagged = name
+			elif size is None or held.size_bits not in (8, 16, 32, 64):
 				return [], f"`{local_name}` is a {held.size_bits}-bit tag, " \
 				           "and the runtime stores 8, 16, 32 and 64"
-			if held.tag_codec_endian is None:
-				return [], f"`{local_name}` has no byte order for its " \
-				           "codec's output"
-			part = Part(TAG, held, local, size, inner=name)
-			# The pseudo-header is the caller's: it is not in the message,
-			# and 14.2a's `prefix(...)` says as much. situ emits a builder
-			# for the struct that holds it, so the two compose -- build the
-			# pseudo-header, hand it over, and this writer never has to
-			# know what an address is.
-			part.opens = computes_over_a_prefix(header, name)
-			parts.append(part)
-			continue
+			if not tagged:
+				if held.tag_codec_endian is None:
+					return [], f"`{local_name}` has no byte order for its " \
+					           "codec's output"
+				assert size is not None		# refused above otherwise
+				part = Part(TAG, held, local, size, inner=name)
+				# The pseudo-header is the caller's: it is not in the message,
+				# and 14.2a's `prefix(...)` says as much. situ emits a builder
+				# for the struct that holds it, so the two compose -- build the
+				# pseudo-header, hand it over, and this writer never has to
+				# know what an address is.
+				part.opens = computes_over_a_prefix(header, name)
+				parts.append(part)
+				continue
 
 		if packed(held):
 			if index not in groups:
@@ -1517,7 +1534,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "into a group that does not start on a byte " \
 				           "boundary or does not span whole bytes"
 			bit_at, span, first = groups[index]
-			if held.kind not in ("field", "reserved"):
+			if held.kind not in ("field", "reserved") and not tagged:
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"packed {held.kind}"
 			assert held.scalar is not None
@@ -1530,6 +1547,11 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			            closes=not held.shares_byte
 			            and (index + 1 not in groups
 			                 or groups[index + 1][2] != first))
+			if tagged:
+				# Zeros now; the reader's `_store` fills it once the
+				# message is whole (26.1027).
+				part.stated = 0
+				part.tagged = tagged
 			if held.name in tags and arm is not None:
 				# The arm decides it, or `present = 0` goes out ahead of a
 				# body the reader then steps over. The default arm's value
@@ -2719,6 +2741,31 @@ def _tags(parts: list[Part], structs: Mapping[str, ResolvedStruct] | None,
 				"\t * reproduced. */",
 				f"\tif ({part.inner_count}({VIEW}) != {COUNT}) {{",
 				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			]
+			continue
+		if part.tagged:
+			# A tag packed into bits: the reader's own `_store` puts the
+			# computed value where its accessor reads it, and `_check`
+			# proves the store (26.1027).
+			bits = part.placement.size_bits or 8
+			kind = next(f"uint{w}_t" for w in (8, 16, 32, 64) if bits <= w)
+			lines += [
+				f"\t/* {part.placement.name}: {bits} bits, computed over what"
+				" was",
+				"\t * written and stored through the reader, then checked. */",
+				"\t{",
+				f"\t\tuint32_t {TAGV} = 0u;",
+				"",
+				f"\t\t{ERR} = {part.tagged}_compute({VIEW}, &{TAGV});",
+				f"\t\tif ({ERR} != SITU_OK) {{",
+				f"\t\t\treturn {ERR};",
+				"\t\t}",
+				f"\t\t{part.tagged}_store({VIEW}, ({kind}){TAGV});",
+				f"\t\t{ERR} = {part.tagged}_check({VIEW});",
+				f"\t\tif ({ERR} != SITU_OK) {{",
+				f"\t\t\treturn {ERR};",
+				"\t\t}",
 				"\t}",
 			]
 			continue

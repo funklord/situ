@@ -8787,6 +8787,10 @@ Moved to `doc/decision/26.1025-the-other-three-write-where-an-offset-puts-it.md`
 
 Moved to `doc/decision/26.1026-the-other-three-pad-to-the-next-member.md`.
 
+### 26.1027 A tag in bits is stored by its reader
+
+Moved to `doc/decision/26.1027-a-tag-in-bits-is-stored-by-its-reader.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
