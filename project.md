@@ -8851,6 +8851,10 @@ Moved to `doc/decision/26.1037-a-wide-located-offset-is-computed-wide.md`.
 
 Moved to `doc/decision/26.1038-a-vector-is-one-whole-message.md`.
 
+### 26.1039 A resend interval beside a total wait
+
+Moved to `doc/decision/26.1039-a-resend-interval-beside-a-total-wait.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

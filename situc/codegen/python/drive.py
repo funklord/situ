@@ -97,14 +97,30 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	from situc.codegen.c.drive import resend_of
+
+	if any(resend_of(relation) for relation, _, _ in ready):
+		lines += [
+			"",
+			"",
+			"def _sooner(a: int, b: int, now_ms: int) -> int:",
+			'	"""The sooner of two deadlines, serially from `now_ms`."""',
+			"	return a if (a - now_ms) & 0xFFFFFFFF < (b - now_ms) & 0xFFFFFFFF"
+			" else b",
+		]
+
 	for relation, (timeout, retries), layout in ready:
 		request, response = layout.request, layout.response
+		resend = resend_of(relation)
 		name = py_name(relation.name)
 		first, second = relation.params
 		lines += [
 			"",
 			f"{name.upper()}_TIMEOUT_MS = {timeout}",
 			f"{name.upper()}_RETRIES = {retries}",
+			*([f"{name.upper()}_RESEND_MS = {resend}",
+			   "# TIMEOUT_MS is the whole exchange's wait with a resend",
+			   "# interval: C's (26.1039)."] if resend else []),
 			"",
 			"",
 			f"class {name}_driver:",
@@ -115,11 +131,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			'\t"""',
 			"",
 			"\t__slots__ = (\"_cap\", \"_live\", \"_submit\", \"_timeout\", \"_retries\",",
-			"\t             \"_resend\")",
+			("\t             \"_resend\", \"_interval\")" if resend else
+			 "\t             \"_resend\")"),
 			"",
 			"\tdef __init__(self, submit: Callable[[bytes], None], cap: int,",
 			f"\t             timeout_ms: int = {timeout},",
-			f"\t             retries: int = {retries}, *,",
+			f"\t             retries: int = {retries}, *,"
+			if not resend else
+			f"\t             retries: int = {retries},"
+			f"\n\t             resend_ms: int = {resend}, *,",
 			"\t             resend: Callable[[int, bytes], None] | None = None"
 			") -> None:",
 			"\t\t# `resend` is told which exchange a retransmission is, so a",
@@ -130,6 +150,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tself._cap     = cap",
 			"\t\tself._timeout = timeout_ms",
 			"\t\tself._retries = retries",
+			*(["\t\tself._interval = resend_ms"] if resend else []),
 			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
 			 "list[object]] = {}"),
 			"",
@@ -142,9 +163,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\traise BoundsError(",
 			f"\t\t\t\t\"{relation.name}: {{}} exchanges already pending\""
 			".format(self._cap), self._cap)",
-			"\t\tself._live[key] = [data, id,",
-			"\t\t                   (now_ms + self._timeout) & 0xFFFFFFFF,",
-			"\t\t                   self._retries]",
+			*(["\t\tend = (now_ms + self._timeout) & 0xFFFFFFFF",
+			   "\t\tfirst = end if self._retries == 0 else _sooner(",
+			   "\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, end, now_ms)",
+			   "\t\tself._live[key] = [data, id, first, self._retries, end]"]
+			  if resend else
+			  ["\t\tself._live[key] = [data, id,",
+			   "\t\t                   (now_ms + self._timeout) & 0xFFFFFFFF,",
+			   "\t\t                   self._retries]"]),
 			"\t\tself._submit(data)",
 			"",
 			f"\tdef on_message(self, {second.name}: "
@@ -183,18 +209,29 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tdue: list[tuple[int, bytes]] = []",
 			"",
 			"\t\tfor key in list(self._live):",
-			"\t\t\tdata, _id, deadline, left = self._live[key]",
+			("\t\t\tdata, _id, deadline, left, end = self._live[key]" if resend
+			 else "\t\t\tdata, _id, deadline, left = self._live[key]"),
 			# Serially, modulo 2^32, as the other three: a 32-bit clock
 			# wraps, and the four agree about when it does (26.1008).
 			"\t\t\tif (now_ms - int(deadline)) & 0xFFFFFFFF < 0x80000000:"
 			"  # type: ignore[call-overload]",
-			"\t\t\t\tif int(left) == 0:  # type: ignore[call-overload]",
+			("\t\t\t\tif int(left) == 0 or (now_ms - int(end)) & 0xFFFFFFFF"
+			 " < 0x80000000:  # type: ignore[call-overload]" if resend else
+			 "\t\t\t\tif int(left) == 0:  # type: ignore[call-overload]"),
 			"\t\t\t\t\tdel self._live[key]",
 			"\t\t\t\t\texpired += 1",
 			"\t\t\t\t\tcontinue",
-			"\t\t\t\tdeadline = (now_ms + self._timeout) & 0xFFFFFFFF",
-			"\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
-			"\t\t\t\tself._live[key] = [data, _id, deadline, left]",
+			*(["\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
+			   "\t\t\t\tdeadline = int(end) if left == 0 else _sooner("
+			   "  # type: ignore[call-overload]",
+			   "\t\t\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, int(end),"
+			   "  # type: ignore[call-overload]",
+			   "\t\t\t\t\tnow_ms)",
+			   "\t\t\t\tself._live[key] = [data, _id, deadline, left, end]"]
+			  if resend else
+			  ["\t\t\t\tdeadline = (now_ms + self._timeout) & 0xFFFFFFFF",
+			   "\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
+			   "\t\t\t\tself._live[key] = [data, _id, deadline, left]"]),
 			"\t\t\t\tdue.append((int(_id), bytes(data)))"
 			"  # type: ignore[arg-type, call-overload]",
 			"\t\t\tat = int(deadline)  # type: ignore[call-overload]",

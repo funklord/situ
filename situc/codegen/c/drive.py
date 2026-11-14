@@ -42,6 +42,21 @@ from situc import __version__
 __all__ = ["driven", "generate", "refusals"]
 
 
+def resend_of(relation: ast.Relation) -> int | None:
+	"""`resend_ms` where the exchange states one (26.1039).
+
+	With it, `timeout_ms` is the exchange's total wait: fuzznet resends
+	every 600 ms at most three times and gives up at 3 s whatever happened,
+	which one per-attempt timeout cannot say. Without it, nothing changes:
+	every driver generates exactly what it did before.
+	"""
+	for attr in relation.attrs:
+		value = getattr(attr.value, "value", None)
+		if attr.name == "resend_ms" and isinstance(value, int):
+			return value
+	return None
+
+
 def policy_of(relation: ast.Relation) -> tuple[int, int] | None:
 	"""`(timeout_ms, retries)` where the exchange states one.
 
@@ -108,6 +123,7 @@ def refusals(schema: ast.Schema,
 def _machine(relation: ast.Relation, policy: tuple[int, int],
 		prefix: str) -> list[str]:
 	timeout, retries = policy
+	resend = resend_of(relation)
 	name  = ident(prefix, "drive", relation.name)
 	table = ident(prefix, "conv", relation.name)
 	first, second = relation.params
@@ -125,12 +141,19 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		" */",
 		f"#define {macro(prefix, relation.name, 'TIMEOUT_MS')} {timeout}u",
 		f"#define {macro(prefix, relation.name, 'RETRIES')} {retries}u",
+		*([f"#define {macro(prefix, relation.name, 'RESEND_MS')} {resend}u",
+		   "/* With a resend interval, TIMEOUT_MS is the whole exchange's",
+		   " * wait: a retransmission every RESEND_MS, at most RETRIES of",
+		   " * them, and the exchange given up at TIMEOUT_MS whatever",
+		   " * happened (26.1039). */"] if resend else []),
 		"",
 		"typedef struct {",
 		"\tconst uint8_t *bytes;\t/* yours; kept for the retransmission */",
 		"\tuint32_t len;",
 		"\tuint32_t id;",
 		"\tuint32_t deadline_ms;",
+		*(["\tuint32_t end_ms;\t\t/* the whole exchange's end */"]
+		  if resend else []),
 		"\tuint32_t left;\t\t/* retransmissions remaining */",
 		"\tuint8_t  live;",
 		f"}} {name}_slot_t;",
@@ -140,6 +163,7 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		"\tuint32_t cap;",
 		"\tuint32_t timeout_ms;",
 		"\tuint32_t retries;",
+		*(["\tuint32_t resend_ms;"] if resend else []),
 		f"\t{table}_t pending;",
 		"\tsitu_io_t io;",
 		"\t/* Optional: told which exchange a retransmission is, so a",
@@ -149,12 +173,23 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		"\t                     uint32_t len);",
 		f"}} {name}_t;",
 		"",
+		*([f"/* The sooner of two deadlines, serially from `now_ms`: the clock",
+		   " * wraps, and so do the deadlines (26.1008). */",
+		   f"static inline uint32_t {name}_sooner(uint32_t a, uint32_t b,",
+		   "                                     uint32_t now_ms)",
+		   "{",
+		   "\treturn (uint32_t)(a - now_ms) < (uint32_t)(b - now_ms) ? a : b;",
+		   "}",
+		   ""] if resend else []),
 		f"static inline void {name}_init({name}_t *drive,",
 		f"                               {name}_slot_t *slots,",
 		f"                               {table}_slot_t *keys, uint32_t cap,",
 		"                               situ_io_t io, uint32_t timeout_ms,",
-		"                               uint32_t retries)",
+		("                               uint32_t retries, uint32_t resend_ms)"
+		 if resend else
+		 "                               uint32_t retries)"),
 		"{",
+		*(["\tdrive->resend_ms  = resend_ms;"] if resend else []),
 		"\tdrive->slots      = slots;",
 		"\tdrive->cap        = cap;",
 		"\tdrive->timeout_ms = timeout_ms;",
@@ -199,7 +234,13 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		"\t\t\tdrive->slots[i].bytes       = bytes;",
 		"\t\t\tdrive->slots[i].len         = len;",
 		"\t\t\tdrive->slots[i].id          = id;",
-		"\t\t\tdrive->slots[i].deadline_ms = now_ms + drive->timeout_ms;",
+		*(["\t\t\tdrive->slots[i].end_ms      = now_ms + drive->timeout_ms;",
+		   "\t\t\tdrive->slots[i].deadline_ms = drive->retries == 0u",
+		   "\t\t\t\t? drive->slots[i].end_ms",
+		   f"\t\t\t\t: {name}_sooner(now_ms + drive->resend_ms,",
+		   "\t\t\t\t              drive->slots[i].end_ms, now_ms);"]
+		  if resend else
+		  ["\t\t\tdrive->slots[i].deadline_ms = now_ms + drive->timeout_ms;"]),
 		"\t\t\tdrive->slots[i].left        = drive->retries;",
 		"\t\t\tdrive->slots[i].live        = 1u;",
 		"\t\t\treturn drive->io.submit(drive->io.ctx, bytes, len);",
@@ -268,13 +309,22 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		# it was sent -- fuzznet, after 49.7 days of uptime (26.1008).
 		"\t\tif ((uint32_t)(now_ms - drive->slots[i].deadline_ms)"
 		" < 0x80000000u) {",
-		"\t\t\tif (drive->slots[i].left == 0u) {",
+		("\t\t\tif (drive->slots[i].left == 0u"
+		 "\n\t\t\t    || (uint32_t)(now_ms - drive->slots[i].end_ms)"
+		 " < 0x80000000u) {"
+		 if resend else
+		 "\t\t\tif (drive->slots[i].left == 0u) {"),
 		"\t\t\t\tdrive->slots[i].live = 0u;",
 		"\t\t\t\t*expired += 1u;",
 		"\t\t\t\tcontinue;",
 		"\t\t\t}",
 		"\t\t\tdrive->slots[i].left        -= 1u;",
-		"\t\t\tdrive->slots[i].deadline_ms  = now_ms + drive->timeout_ms;",
+		*(["\t\t\tdrive->slots[i].deadline_ms  = drive->slots[i].left == 0u",
+		   "\t\t\t\t? drive->slots[i].end_ms",
+		   f"\t\t\t\t: {name}_sooner(now_ms + drive->resend_ms,",
+		   "\t\t\t\t              drive->slots[i].end_ms, now_ms);"]
+		  if resend else
+		  ["\t\t\tdrive->slots[i].deadline_ms  = now_ms + drive->timeout_ms;"]),
 		"\t\t\tif (drive->resend != NULL) {",
 		"\t\t\t\t(void)drive->resend(drive->io.ctx, drive->slots[i].id,",
 		"\t\t\t\t                     drive->slots[i].bytes,",

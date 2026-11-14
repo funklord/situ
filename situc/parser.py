@@ -225,6 +225,9 @@ ATTRIBUTE_NAMES = frozenset({
 	# these, which is why they are schema rather than a command-line flag
 	# (decision 0032).
 	"timeout_ms", "retries",
+	# 26.1039: a resend interval beside them, which makes `timeout_ms` the
+	# exchange's total wait rather than each attempt's.
+	"resend_ms",
 	# section 14: cryptographic model
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
 	# section 14.2: a checksum that covers its own bytes, taken as this
@@ -253,7 +256,7 @@ ATTRIBUTE_NAMES = frozenset({
 #: lone `[escape]` means something, and so does a lone `[secret]`.
 VALUE_ATTRIBUTES = frozenset({
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
-	"retries", "timeout_ms", "must_eq", "encoding", "endian", "bit_order",
+	"retries", "timeout_ms", "resend_ms", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds",
 })
 

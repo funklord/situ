@@ -132,7 +132,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	from situc.codegen.c.drive import resend_of
+
 	for relation, (timeout, retries), layout in ready:
+		resend = resend_of(relation)
 		request, response = layout.request, layout.response
 		held = _pascal(relation.name)
 		first, second = relation.params
@@ -141,6 +144,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines += [
 			f"pub const {held.upper()}_TIMEOUT_MS: u32 = {timeout};",
 			f"pub const {held.upper()}_RETRIES: u32 = {retries};",
+			*([f"pub const {held.upper()}_RESEND_MS: u32 = {resend};",
+			   "/// `TIMEOUT_MS` is the whole exchange's wait with a resend",
+			   "/// interval: C's (26.1039)."] if resend else []),
 			"",
 			f"/// One outstanding `{relation.name}`.",
 			"///",
@@ -156,6 +162,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tdeadline_ms: u32,",
 			"\tleft: u32,",
 			"\tlive: bool,",
+			*(["\tend_ms: u32,"] if resend else []),
 			"}",
 			"",
 			f"impl Default for {held}Slot<'_> {{",
@@ -164,7 +171,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			 if layout.packed else
 			 f"\t\tSelf {{ bytes: &[], key: [0u8; {layout.total_bytes}], "
 			 "id: 0, deadline_ms: 0,"),
-			"\t\t       left: 0, live: false }",
+			("\t\t       left: 0, live: false, end_ms: 0 }" if resend else
+			 "\t\t       left: 0, live: false }"),
 			"\t}",
 			"}",
 			"",
@@ -177,16 +185,27 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tio: I,",
 			"\ttimeout_ms: u32,",
 			"\tretries: u32,",
+			*(["\tresend_ms: u32,"] if resend else []),
 			"}",
 			"",
 			f"impl<'s, 'a, I: Io> {held}Driver<'s, 'a, I> {{",
 			f"\tpub fn new(slots: &'s mut [{held}Slot<'a>], io: I,",
-			"\t           timeout_ms: u32, retries: u32) -> Self {",
+			("\t           timeout_ms: u32, retries: u32, resend_ms: u32)"
+			 " -> Self {" if resend else
+			 "\t           timeout_ms: u32, retries: u32) -> Self {"),
 			"\t\tfor slot in slots.iter_mut() {",
 			"\t\t\tslot.live = false;",
 			"\t\t}",
-			"\t\tSelf { slots, io, timeout_ms, retries }",
+			("\t\tSelf { slots, io, timeout_ms, retries, resend_ms }"
+			 if resend else
+			 "\t\tSelf { slots, io, timeout_ms, retries }"),
 			"\t}",
+			*(["",
+			   "\t/// The sooner of two deadlines, serially from `now_ms`.",
+			   "\tfn sooner(a: u32, b: u32, now_ms: u32) -> u32 {",
+			   "\t\tif a.wrapping_sub(now_ms) < b.wrapping_sub(now_ms) { a }"
+			   " else { b }",
+			   "\t}"] if resend else []),
 			"",
 			f"\t/// Send `{first.name}` and remember it until it is answered.",
 			f"\tpub fn send(&mut self, {first.name}: &{req}, bytes: &'a [u8],",
@@ -199,8 +218,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\tif !slot.live {",
 			f"\t\t\t\t*slot = {held}Slot {{",
 			"\t\t\t\t\tbytes, key, id,",
-			"\t\t\t\t\tdeadline_ms: now_ms.wrapping_add(self.timeout_ms),",
-			"\t\t\t\t\tleft: self.retries, live: true,",
+			*(["\t\t\t\t\tdeadline_ms: if self.retries == 0 {",
+			   "\t\t\t\t\t\tnow_ms.wrapping_add(self.timeout_ms)",
+			   "\t\t\t\t\t} else {",
+			   "\t\t\t\t\t\tSelf::sooner(now_ms.wrapping_add(self.resend_ms),",
+			   "\t\t\t\t\t\t       now_ms.wrapping_add(self.timeout_ms), now_ms)",
+			   "\t\t\t\t\t},",
+			   "\t\t\t\t\tleft: self.retries, live: true,",
+			   "\t\t\t\t\tend_ms: now_ms.wrapping_add(self.timeout_ms),"]
+			  if resend else
+			  ["\t\t\t\t\tdeadline_ms: now_ms.wrapping_add(self.timeout_ms),",
+			   "\t\t\t\t\tleft: self.retries, live: true,"]),
 			"\t\t\t\t};",
 			"\t\t\t\treturn self.io.submit(bytes);",
 			"\t\t\t}",
@@ -264,13 +292,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			# Serially, modulo 2^32: C's (26.1008). And wrapping, where
 			# `+` panicked in a debug build at the wrap.
 			"\t\t\tif now_ms.wrapping_sub(slot.deadline_ms) < 0x8000_0000 {",
-			"\t\t\t\tif slot.left == 0 {",
+			("\t\t\t\tif slot.left == 0"
+			 " || now_ms.wrapping_sub(slot.end_ms) < 0x8000_0000 {" if resend else
+			 "\t\t\t\tif slot.left == 0 {"),
 			"\t\t\t\t\tslot.live = false;",
 			"\t\t\t\t\texpired += 1;",
 			"\t\t\t\t\tcontinue;",
 			"\t\t\t\t}",
 			"\t\t\t\tslot.left -= 1;",
-			"\t\t\t\tslot.deadline_ms = now_ms.wrapping_add(self.timeout_ms);",
+			*(["\t\t\t\tslot.deadline_ms = if slot.left == 0 {",
+			   "\t\t\t\t\tslot.end_ms",
+			   "\t\t\t\t} else {",
+			   "\t\t\t\t\tSelf::sooner(now_ms.wrapping_add(self.resend_ms),"
+			   " slot.end_ms, now_ms)",
+			   "\t\t\t\t};"]
+			  if resend else
+			  ["\t\t\t\tslot.deadline_ms = now_ms.wrapping_add(self.timeout_ms);"]),
 			"\t\t\t\tif n < due.len() {",
 			"\t\t\t\t\tdue[n] = Some((slot.id, slot.bytes));",
 			"\t\t\t\t\tn += 1;",

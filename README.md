@@ -851,6 +851,7 @@ The ones whose placement rule is the interesting part:
 | `[on_read = clear]` / `[on_write = ...]` | on an `mmio` register field: the side effect access has, which is why `effect` is an axis |
 | `[rsvd]` | on a register field: SystemRDL's reserved, which is not `reserved u2 [preserve]` |
 | `[timeout_ms = N]` / `[retries = N]` | on a `relation`: the retransmission and timing contract of an exchange, which both endpoints must agree on |
+| `[resend_ms = N]` | on a `relation` with `retries`: resend every N milliseconds within the total `timeout_ms`, rather than spending the whole wait on one attempt |
 
 A member may carry an access mode too -- `[rw]`, `[ro]`, `[wo]`, `[w1c]`,
 `[w0c]`, `[w1s]`, `[w0s]`, `[rc]`, `[rs]`, `[wo_once]` -- which is the

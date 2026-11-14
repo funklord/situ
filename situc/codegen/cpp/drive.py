@@ -155,8 +155,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	from situc.codegen.c.drive import resend_of
+
 	for relation, (timeout, retries), layout in ready:
 		request, response = layout.request, layout.response
+		resend = resend_of(relation)
 		name = f"{c_name(relation.name)}_driver"
 		first, second = relation.params
 		req  = class_name(resolved.structs[first.type_name])
@@ -164,6 +167,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines += [
 			f"#define SITU_{c_name(relation.name).upper()}_TIMEOUT_MS {timeout}u",
 			f"#define SITU_{c_name(relation.name).upper()}_RETRIES {retries}u",
+			*([f"#define SITU_{c_name(relation.name).upper()}_RESEND_MS {resend}u",
+			   "/* TIMEOUT_MS is the whole exchange's wait with a resend",
+			   " * interval: C's (26.1039). */"] if resend else []),
 			"",
 			f"/** Retransmission for `{relation.name}`. */",
 			f"class {name} {{",
@@ -177,6 +183,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tstd::uint32_t deadline_ms;",
 			"\t\tstd::uint32_t left;",
 			"\t\tbool          live;",
+			*(["\t\tstd::uint32_t end_ms;\t/* the whole exchange's end */"]
+			  if resend else []),
 			"\t};",
 			"",
 			# `store`, not `slots`: Qt defines `slots` as an empty macro, so a
@@ -186,9 +194,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			# under -Wall -Wextra. Measured: a segfault at construction. The
 			# member keeps its trailing underscore and is unaffected.
 			f"\t{name}(slot *store, std::uint32_t cap, ::situ::io &sink,",
-			"\t       std::uint32_t timeout_ms, std::uint32_t retries) noexcept",
+			("\t       std::uint32_t timeout_ms, std::uint32_t retries,"
+			 "\n\t       std::uint32_t resend_ms) noexcept"
+			 if resend else
+			 "\t       std::uint32_t timeout_ms, std::uint32_t retries) noexcept"),
 			"\t\t: slots_(store), cap_(cap), io_(sink),",
-			"\t\t  timeout_ms_(timeout_ms), retries_(retries)",
+			("\t\t  timeout_ms_(timeout_ms), retries_(retries),"
+			 " resend_ms_(resend_ms)" if resend else
+			 "\t\t  timeout_ms_(timeout_ms), retries_(retries)"),
 			"\t{",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			"\t\t\tslots_[i].live = false;",
@@ -208,7 +221,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			"\t\t\tif (!slots_[i].live) {",
 			*(["\t\t\t\tslots_[i] = slot{bytes, len, key, id,",
-			   "\t\t\t\t                 now_ms + timeout_ms_, retries_, true};"]
+			   "\t\t\t\t                 now_ms + timeout_ms_, retries_, true"
+			   + (", 0u};" if resend else "};")]
 			  if layout.packed else [
 			  "\t\t\t\tslots_[i].bytes = bytes;",
 			  "\t\t\t\tslots_[i].len   = len;",
@@ -219,6 +233,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			  "\t\t\t\tslots_[i].deadline_ms = now_ms + timeout_ms_;",
 			  "\t\t\t\tslots_[i].left        = retries_;",
 			  "\t\t\t\tslots_[i].live        = true;"]),
+			*(["\t\t\t\tslots_[i].end_ms      = now_ms + timeout_ms_;",
+			   "\t\t\t\tslots_[i].deadline_ms = retries_ == 0u ? slots_[i].end_ms",
+			   "\t\t\t\t\t: sooner(now_ms + resend_ms_, slots_[i].end_ms, now_ms);"]
+			  if resend else []),
 			"\t\t\t\treturn io_.submit(bytes, len);",
 			"\t\t\t}",
 			"\t\t}",
@@ -281,13 +299,19 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			# Serially, modulo 2^32: C's (26.1008).
 			"\t\t\tif (static_cast<std::uint32_t>(now_ms - slots_[i].deadline_ms)"
 			" < 0x80000000u) {",
-			"\t\t\t\tif (slots_[i].left == 0u) {",
+			("\t\t\t\tif (slots_[i].left == 0u || static_cast<std::uint32_t>("
+			 "now_ms - slots_[i].end_ms) < 0x80000000u) {" if resend else
+			 "\t\t\t\tif (slots_[i].left == 0u) {"),
 			"\t\t\t\t\tslots_[i].live = false;",
 			"\t\t\t\t\texpired += 1u;",
 			"\t\t\t\t\tcontinue;",
 			"\t\t\t\t}",
 			"\t\t\t\tslots_[i].left -= 1u;",
-			"\t\t\t\tslots_[i].deadline_ms = now_ms + timeout_ms_;",
+			*(["\t\t\t\tslots_[i].deadline_ms = slots_[i].left == 0u"
+			   " ? slots_[i].end_ms",
+			   "\t\t\t\t\t: sooner(now_ms + resend_ms_, slots_[i].end_ms, now_ms);"]
+			  if resend else
+			  ["\t\t\t\tslots_[i].deadline_ms = now_ms + timeout_ms_;"]),
 			"\t\t\t\t(void)io_.resend(slots_[i].id, slots_[i].bytes,"
 			" slots_[i].len);",
 			"\t\t\t}",
@@ -311,6 +335,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t::situ::io    &io_;",
 			"\tstd::uint32_t  timeout_ms_;",
 			"\tstd::uint32_t  retries_;",
+			*(["\tstd::uint32_t  resend_ms_;",
+			   "",
+			   "\t/* The sooner of two deadlines, serially from `now_ms`. */",
+			   "\tstatic std::uint32_t sooner(std::uint32_t a, std::uint32_t b,",
+			   "\t                            std::uint32_t now_ms) noexcept",
+			   "\t{",
+			   "\t\treturn static_cast<std::uint32_t>(a - now_ms)"
+			   " < static_cast<std::uint32_t>(b - now_ms) ? a : b;",
+			   "\t}"] if resend else []),
 			"};",
 			"",
 		]
