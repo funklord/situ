@@ -227,6 +227,10 @@ class Part:
 		#: The bytes a trimmed run's reader strips from either end, which
 		#: the writer therefore refuses there (26.1014).
 		self.trim: tuple[int, ...] = ()
+		#: A span whose length an expression states that cannot be run
+		#: backwards: checked against the reader's `_len` once the message
+		#: is whole (26.1016).
+		self.verify = False
 		#: A MARKER's literals for each order (26.1007).
 		self.little: tuple[int, ...] = ()
 		self.big: tuple[int, ...] = ()
@@ -1724,6 +1728,18 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		why = _member_refusal(held, accounted.get(held.path),
 		                      declined.get(held.path),
 		                      held.path in stated)
+		if why and held.size_expr is not None and held.path in declined \
+				and held.element_bits == BITS_PER_BYTE \
+				and held.scalar is not None and held.since is None \
+				and not traverse.arguments(struct) \
+				and not any(one.name == held.size_expr for one in members):
+			# RTP's `padding[padded_flag * last]`: no field to solve for,
+			# and none needed. The caller's bytes go down and, once the
+			# message is whole, the reader's own `_len` says how long it
+			# takes them to be -- a disagreement is refused (26.1016).
+			parts.append(Part(SPAN, held, local))
+			parts[-1].verify = True
+			continue
 		if why:
 			return [], f"`{traverse.local_name(struct, held)}` {why}"
 
@@ -2738,6 +2754,14 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
 		*_tags(parts, structs, prefix),
+		# A span its expression sizes, against the reader (26.1016).
+		*[line for part in every_part(parts) if part.verify for line in (
+			f"\t/* {part.local}: as long as the reader now says, its length",
+			"\t * being an expression the writer cannot run backwards. */",
+			f"\tif ({ident(prefix, struct.name, part.local, 'len')}({VIEW})"
+			f" != {part.local}_len) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}")],
 		# The struct's arguments go to `_validate` as well, because that
 		# is what the reader's own signature takes: a parameter is not in
 		# the message, so every accessor and the validation need it
@@ -2746,6 +2770,16 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW}"
 		+ "".join(f", {traverse.argument_name(held)}"
 		          for held in traverse.arguments(struct)) + ");",
+		# The reader's `_len` stops at the bytes there are, so a stated
+		# length running PAST a checked span's bytes passes the check
+		# above and reaches here as truncation. A writer holds the whole
+		# message: what it wrote cannot be cut short, and the caller's
+		# length disagreeing with their bytes is what it refuses
+		# (26.1016) -- the same answer as the disagreement the other way.
+		*([f"\tif ({ERR} == SITU_ERR_BOUNDS) {{",
+		   "\t\treturn SITU_ERR_CONSTRAINT;",
+		   "\t}"] if any(part.verify for part in every_part(parts))
+		  else []),
 		f"\tif ({ERR} != SITU_OK) {{",
 		f"\t\treturn {ERR};",
 		"\t}",
@@ -3221,7 +3255,12 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"\t * values rather than bytes, so the caller passes values "
 				"and",
 				"\t * the byte order is the writer's to apply. */",
-				f"\tif ({part.local} == NULL) {{",
+				# A caller's count of zero is an empty run -- RTP's CSRC
+				# list, nearly always -- and the loop below reads
+				# nothing then, so a null array is refused only where
+				# something would be read from it.
+				f"\tif ({part.local} == NULL) {{" if part.bytes else
+				f"\tif ({count} != 0u && {part.local} == NULL) {{",
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
 				# `count * each` on a caller's count can overflow, so the
