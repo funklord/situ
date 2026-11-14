@@ -88,6 +88,8 @@ LOCATED = "located"	# a trailing byte run where an offset already written
 			# puts it, read through the reader (26.1015)
 MARKER  = "marker"	# an endian marker: the caller's literal, whose value
 			# says the order of every field in its scope (26.1007)
+BETWEEN = "between"	# a pad whose length the reader's offset of the member
+			# after it says, once what it reads is down (26.1024)
 FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
 			# computes from what is already written (26.1004)
 
@@ -1754,6 +1756,23 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					# the whole struct, so its answer is this pad's end
 					# only where nothing follows it.
 					parts.append(Part(FRAMED, held, local))
+					continue
+				after = members[members.index(held) + 1] \
+					if held is not members[-1] else None
+				reached = ident(prefix, struct.name,
+				                traverse.local_name(struct, after),
+				                "offset") if after is not None else ""
+				if after is not None and held.size_ast is not None \
+						and traverse.reserved_policy(held.attrs) \
+						in (None, "must_be_zero", "ignore") \
+						and f"static inline uint32_t {reached}(situ_view_t " \
+						"view)" in header:
+					# cpio's name padding, `align_up(110 + namesize, 4) -
+					# (110 + namesize)`: not last, so `_required` does not
+					# answer it, but the reader's offset of the member after
+					# it does, and every field it reads is down by now
+					# (26.1024). Zeros to there.
+					parts.append(Part(BETWEEN, held, local, inner=reached))
 					continue
 				why = _member_refusal(held, None,
 				                      declined.get(held.path))
@@ -3654,6 +3673,35 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t\t\tmemcpy({OUT} + {NEED}_at, {part.local}, {part.local}_len);",
 				"\t\t}",
 				f"\t\t{AT} = {NEED}_at + {part.local}_len;",
+				"\t}",
+				"",
+			]
+		elif part.role == BETWEEN:
+			whole = ident(prefix, struct.name, "view")
+			lines += [
+				f"\t/* {local}: zeros to where the reader puts the member",
+				"\t * after it -- asked over the whole backing, every field",
+				"\t * that offset reads being down already (26.1024). */",
+				"\t{",
+				f"\t\tsitu_msg_t  {NEED}_msg;",
+				f"\t\tsitu_view_t {NEED}_whole;",
+				f"\t\tuint32_t    {NEED}_to;",
+				"",
+				f"\t\tsitu_msg_init(&{NEED}_msg, {OUT}, {CAP});",
+				f"\t\tif ({whole}(&{NEED}_msg, 0, "
+				+ ("" if struct.layout.is_fixed_size else f"{CAP}, ")
+				+ f"&{NEED}_whole) != SITU_OK) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\t{NEED}_to = {part.inner}({NEED}_whole);",
+				f"\t\tif ({NEED}_to < {AT}) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				f"\t\tif ({CAP} - {AT} < {NEED}_to - {AT}) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemset({OUT} + {AT}, 0, {NEED}_to - {AT});",
+				f"\t\t{AT} = {NEED}_to;",
 				"\t}",
 				"",
 			]

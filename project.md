@@ -8775,6 +8775,10 @@ Moved to `doc/decision/26.1022-a-publish-packet-is-built.md`.
 
 Moved to `doc/decision/26.1023-verify-checks-checksums.md`.
 
+### 26.1024 A pad reaches where the next member is
+
+Moved to `doc/decision/26.1024-a-pad-reaches-where-the-next-member-is.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
