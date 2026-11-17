@@ -110,10 +110,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		'\t"""One outstanding exchange: its bytes, id and schedule."""',
 		"",
 		"\t__slots__ = (\"data\", \"id\", \"deadline\", \"left\", \"end\","
-		" \"sent\", \"part\")",
+		" \"sent\", \"part\",",
+		"\t             \"retries\", \"interval\", \"part_interval\","
+		" \"part_retries\")",
 		"",
 		"\tdef __init__(self, data: bytes, id: int, deadline: int, left: int,",
-		"\t             end: int = 0, sent: int = 0) -> None:",
+		"\t             end: int = 0, sent: int = 0, interval: int = 0,",
+		"\t             part_interval: int = 0, part_retries: int = 0) -> None:",
 		"\t\tself.data     = data",
 		"\t\tself.id       = id",
 		"\t\tself.deadline = deadline",
@@ -121,6 +124,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"\t\tself.end      = end\t# the whole exchange's end, with `resend_ms`",
 		"\t\tself.sent     = sent\t# the last send, for the part schedule",
 		"\t\tself.part     = False",
+		"\t\t# This exchange's own numbers, which may not be the driver's",
+		"\t\t# (26.1055).",
+		"\t\tself.retries  = left",
+		"\t\tself.interval = interval",
+		"\t\tself.part_interval = part_interval",
+		"\t\tself.part_retries  = part_retries",
 	]
 
 	if any(resend_of(relation) for relation, _, _ in ready):
@@ -160,6 +169,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			'\t"""',
 			"",
 			"\t__slots__ = (\"_cap\", \"_live\", \"_submit\", \"_timeout\", \"_retries\",",
+			"\t             \"_expired\",",
 			("\t             \"_resend\", \"_interval\", \"_part_interval\","
 			 " \"_part_retries\")" if part else
 			 "\t             \"_resend\", \"_interval\")" if resend else
@@ -176,8 +186,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\n\t             resend_ms: int = {resend},"
 			f"\n\t             resend_part_ms: int = {part[0]},"
 			f"\n\t             retries_part: int = {part[1]}, *,",
-			"\t             resend: Callable[[int, bytes], None] | None = None"
+			"\t             resend: Callable[[int, bytes], None] | None = None,",
+			"\t             expired: Callable[[int], None] | None = None"
 			") -> None:",
+			"\t\t# `expired` is told each exchange that expires, by id, as",
+			"\t\t# `step` drops it (fuzznet, 26.1055).",
+			"\t\tself._expired = expired",
 			"\t\t# `resend` is told which exchange a retransmission is, so a",
 			"\t\t# caller sealing each send can reseal it (26.1036); without",
 			"\t\t# one the same bytes go to `submit` again.",
@@ -192,8 +206,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
 			 "_exchange] = {}"),
 			"",
-			f"\tdef send(self, {first.name}: {py_name(first.type_name)},",
-			"\t         data: bytes, id: int, now_ms: int) -> None:",
+			f"\tdef track(self, {first.name}: {py_name(first.type_name)},",
+			"\t          data: bytes, id: int, now_ms: int, *,",
+			"\t          timeout_ms: int | None = None,",
+			("\t          retries: int | None = None,"
+			 "\n\t          resend_ms: int | None = None,"
+			 "\n\t          resend_part_ms: int | None = None,"
+			 "\n\t          retries_part: int | None = None) -> None:"
+			 if part else
+			 "\t          retries: int | None = None,"
+			 "\n\t          resend_ms: int | None = None) -> None:"
+			 if resend else
+			 "\t          retries: int | None = None) -> None:"),
+			'\t\t"""Remember the request until it is answered, without sending',
+			"",
+			"\t\tit: one the caller sent already, or only awaits. The numbers",
+			'\t\toverride the driver\'s for this exchange (26.1055)."""',
 			*(_key(request, first.name) if layout.packed
 			  else _key_bytes(request, first.name)),
 			"",
@@ -201,16 +229,60 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\traise BoundsError(",
 			f"\t\t\t\t\"{relation.name}: {{}} exchanges already pending\""
 			".format(self._cap), self._cap)",
-			*(["\t\tend = (now_ms + self._timeout) & 0xFFFFFFFF",
-			   "\t\tfirst = end if self._retries == 0 else _sooner(",
-			   "\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, end, now_ms)",
-			   "\t\tself._live[key] = _exchange(data, id, first, self._retries,"
-			   " end, now_ms)"]
+			"\t\twait = self._timeout if timeout_ms is None else timeout_ms",
+			"\t\tleft = self._retries if retries is None else retries",
+			*(["\t\tevery = self._interval if resend_ms is None else resend_ms",
+			   "\t\tend = (now_ms + wait) & 0xFFFFFFFF",
+			   "\t\tfirst = end if left == 0 else _sooner(",
+			   "\t\t\t(now_ms + every) & 0xFFFFFFFF, end, now_ms)",
+			   "\t\tself._live[key] = _exchange(data, id, first, left, end, now_ms,",
+			   ("\t\t\tevery,"
+			    "\n\t\t\tself._part_interval if resend_part_ms is None"
+			    " else resend_part_ms,"
+			    "\n\t\t\tself._part_retries if retries_part is None"
+			    " else retries_part)" if part else "\t\t\tevery)")]
 			  if resend else
 			  ["\t\tself._live[key] = _exchange(",
-			   "\t\t\tdata, id, (now_ms + self._timeout) & 0xFFFFFFFF,"
-			   " self._retries)"]),
-			"\t\tself._submit(data)",
+			   "\t\t\tdata, id, (now_ms + wait) & 0xFFFFFFFF, left)"]),
+			"",
+			f"\tdef send(self, {first.name}: {py_name(first.type_name)},",
+			"\t         data: bytes, id: int, now_ms: int, *,",
+			"\t         timeout_ms: int | None = None,",
+			("\t         retries: int | None = None,"
+			 "\n\t         resend_ms: int | None = None,"
+			 "\n\t         resend_part_ms: int | None = None,"
+			 "\n\t         retries_part: int | None = None) -> None:"
+			 if part else
+			 "\t         retries: int | None = None,"
+			 "\n\t         resend_ms: int | None = None) -> None:"
+			 if resend else
+			 "\t         retries: int | None = None) -> None:"),
+			'\t\t"""`track`, then the first send -- through `resend`, told the',
+			"",
+			"\t\tid, where one was given, so a caller sealing every send under",
+			'\t\tit seals this one too (26.1055); through `submit` otherwise."""',
+			f"\t\tself.track({first.name}, data, id, now_ms, timeout_ms=timeout_ms,",
+			("\t\t           retries=retries, resend_ms=resend_ms,"
+			 "\n\t\t           resend_part_ms=resend_part_ms,"
+			 " retries_part=retries_part)" if part else
+			 "\t\t           retries=retries, resend_ms=resend_ms)"
+			 if resend else
+			 "\t\t           retries=retries)"),
+			"\t\tif self._resend is not None:",
+			"\t\t\tself._resend(id, data)",
+			"\t\telse:",
+			"\t\t\tself._submit(data)",
+			"",
+			"\tdef end(self, id: int) -> None:",
+			'\t\t"""End exchange `id` without a reply to match (26.1055).',
+			"",
+			'\t\tConstraintError where none is pending."""',
+			"\t\tfor key, one in self._live.items():",
+			"\t\t\tif one.id == id:",
+			"\t\t\t\tdel self._live[key]",
+			"\t\t\t\treturn",
+			"\t\traise ConstraintError(\"no exchange {} is outstanding\""
+			".format(id))",
 			"",
 			f"\tdef on_message(self, {second.name}: "
 			f"{py_name(second.type_name)}) -> int:",
@@ -257,17 +329,19 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			 " < 0x80000000:" if resend else
 			 "\t\t\t\tif one.left == 0:"),
 			"\t\t\t\t\tdel self._live[key]",
+			"\t\t\t\t\tif self._expired is not None:",
+			"\t\t\t\t\t\tself._expired(one.id)",
 			"\t\t\t\t\texpired += 1",
 			"\t\t\t\t\tcontinue",
 			"\t\t\t\tone.left -= 1",
 			*(["\t\t\t\tone.sent = now_ms",
-			   "\t\t\t\tevery = self._part_interval if one.part"
-			   " else self._interval",
+			   "\t\t\t\tevery = one.part_interval if one.part"
+			   " else one.interval",
 			   "\t\t\t\tone.deadline = one.end if one.left == 0 else _sooner(",
 			   "\t\t\t\t\t(now_ms + every) & 0xFFFFFFFF, one.end, now_ms)"]
 			  if part else
 			  ["\t\t\t\tone.deadline = one.end if one.left == 0 else _sooner(",
-			   "\t\t\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, one.end,"
+			   "\t\t\t\t\t(now_ms + one.interval) & 0xFFFFFFFF, one.end,"
 			   " now_ms)"]
 			  if resend else
 			  ["\t\t\t\tone.deadline = (now_ms + self._timeout) & 0xFFFFFFFF"]),
@@ -304,12 +378,12 @@ def _part_held(part: tuple[int, int] | None) -> list[str]:
 		"\t\t\tif one.id != id:",
 		"\t\t\t\tcontinue",
 		"\t\t\tif not one.part:",
-		"\t\t\t\tdone = self._retries - one.left",
-		"\t\t\t\tdue = (one.sent + self._part_interval) & 0xFFFFFFFF",
+		"\t\t\t\tdone = one.retries - one.left",
+		"\t\t\t\tdue = (one.sent + one.part_interval) & 0xFFFFFFFF",
 		"\t\t\t\tif (now_ms - due) & 0xFFFFFFFF < 0x80000000:",
 		"\t\t\t\t\tdue = now_ms",
 		"\t\t\t\tone.part = True",
-		"\t\t\t\tone.left = max(self._part_retries - done, 0)",
+		"\t\t\t\tone.left = max(one.part_retries - done, 0)",
 		"\t\t\t\tone.deadline = one.end if one.left == 0 else _sooner(",
 		"\t\t\t\t\tdue, one.end, now_ms)",
 		"\t\t\treturn",

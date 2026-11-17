@@ -11,7 +11,9 @@ retransmission is the same bytes through `submit`, as before.
 
 The case, in all four: send exchange 7 at 0 with an 800 ms timeout; a step
 at 800 retransmits it, and the hook is handed 7 and nothing reaches
-`submit` a second time.
+`submit`. Since 26.1055 the FIRST send goes through the hook too, which is
+what fuzznet asked for -- it seals every send under the exchange's id, the
+first included -- so with a hook set `submit` sees nothing at all.
 """
 
 from __future__ import annotations
@@ -89,9 +91,9 @@ int main(void)
 	situ_drive_response_to_init(&drive, slots, keys, 2u, io, 800u, 3u);
 	situ_drive_response_to_on_resend(&drive, again);
 	if (situ_drive_response_to_send(&drive, view, buf, 17u, 7u, 0u)
-	    != SITU_OK || sent != 1u) return 2;
+	    != SITU_OK || sent != 0u || resent != 1u) return 2;
 	if (situ_drive_response_to_step(&drive, 800u, &next, &expired)
-	    != SITU_OK || sent != 1u || resent != 1u || told != 7u) return 3;
+	    != SITU_OK || sent != 0u || resent != 2u || told != 7u) return 3;
 	return 0;
 }
 """, encoding = "ascii")
@@ -151,7 +153,7 @@ int main()
 	    != ::situ::rt::err::ok) return 2;
 	std::uint32_t next = 0u, expired = 0u;
 	if (driver.step(800u, next, expired) != ::situ::rt::err::ok
-	    || sink.submissions != 1u || sink.resends != 1u || sink.told != 7u)
+	    || sink.submissions != 0u || sink.resends != 2u || sink.told != 7u)
 		return 3;
 	return 0;
 }
@@ -220,7 +222,7 @@ fn main() {
 	driver.send(&query, &bytes, 7, 0).expect("a slot");
 	let (_, expired) = driver.step(800);
 	assert_eq!(expired, 0);
-	assert_eq!(seen.get(), 1);
+	assert_eq!(seen.get(), 0);
 	assert_eq!(told.get(), 7);
 }
 """, encoding = "ascii")
@@ -257,12 +259,12 @@ driver = t_drive.response_to_driver(sent.append, 2, 800, 3,
                                     resend=lambda id, data: resent.append(id))
 driver.send(view, bytes(buf), 7, 0)
 assert driver.step(800)[1] == 0
-assert len(sent) == 1, sent
-assert resent == [7], resent
+assert len(sent) == 0, sent
+assert resent == [7, 7], resent
 plain = t_drive.response_to_driver(sent.append, 2, 800, 3)
 plain.send(view, bytes(buf), 8, 0)
 plain.step(800)
-assert len(sent) == 3, sent
+assert len(sent) == 2, sent
 """, encoding = "ascii")
 	ran = subprocess.run(["python3", str(tmp_path / "run.py")],
 	                     capture_output = True, text = True, cwd = tmp_path)

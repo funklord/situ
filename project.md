@@ -8931,6 +8931,10 @@ Moved to `doc/decision/26.1053-the-differential-asks-an-argued-struct-to-validat
 
 Moved to `doc/decision/26.1054-an-expired-exchange-is-forgotten.md`.
 
+### 26.1055 A driver takes an exchange by id
+
+Moved to `doc/decision/26.1055-a-driver-takes-an-exchange-by-id.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
