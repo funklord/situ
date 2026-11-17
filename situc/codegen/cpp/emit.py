@@ -1333,8 +1333,17 @@ class Emitter:
 				f" ::{self.namespace}::{name} &out) noexcept",
 				"\t{",
 				"\t\tsitu_view_t raw;",
-				"\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
-				" size_bytes, &raw);",
+				# `[fills_frame]`: the rest of the message (26.1063); see C.
+				*(["\t\tconst situ_msg_t *const whole = owner.raw();",
+				   "\t\tif (offset > whole->size"
+				   " || whole->size - offset < size_bytes) {",
+				   "\t\t\treturn ::situ::rt::err::bounds;",
+				   "\t\t}",
+				   "\t\tconst situ_err_t e = situ_view_at(whole, offset,"
+				   " whole->size - offset, &raw);"]
+				  if traverse.takes_its_frame(self.schema, struct.name) else
+				  ["\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
+				   " size_bytes, &raw);"]),
 				"",
 				"\t\tif (e == SITU_OK) {",
 				f"\t\t\tout = ::{self.namespace}::{name}(raw{values});",

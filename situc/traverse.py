@@ -5146,3 +5146,34 @@ def let_source(expr: "ast.Expr", spell: LetSpelling,
 		return spell.binary(expr.op, let_source(expr.left, spell, consts),
 		                    let_source(expr.right, spell, consts))
 	raise ValueError(f"not a named value's arithmetic: {expr!r}")
+
+
+def takes_its_frame(schema: "ast.Schema", name: str) -> bool:
+	"""Whether a fixed-size struct's root view is the rest of the message
+	rather than its own size (26.1063).
+
+	A `when` that reads `remaining` -- the one `[fills_frame]` implies, or
+	one the author wrote (26.980) -- asks about the frame, and a fixed
+	struct's view was cut to the struct's size: the frame was the struct,
+	`remaining` could never exceed `size(s)`, and C, C++ and Python
+	accepted bytes after it that Rust and both walkers refused. Such a
+	struct's root view takes the rest of the message, which is what Rust's
+	`new` and the walkers already hand it; a nested one is still cut by its
+	parent to its own extent, where the rule holds by construction
+	(26.981)."""
+	return any(_reads_the_frame(when.expr) for when in messages(schema, name))
+
+
+def _reads_the_frame(expr: object) -> bool:
+	"""Whether `remaining` occurs anywhere in an expression."""
+	import dataclasses
+
+	if isinstance(expr, ast.Remaining):
+		return True
+	if isinstance(expr, (tuple, list)):
+		return any(_reads_the_frame(one) for one in expr)
+	if dataclasses.is_dataclass(expr) and not isinstance(expr, type):
+		return any(_reads_the_frame(getattr(expr, held.name))
+		           for held in dataclasses.fields(expr)
+		           if held.name != "span")
+	return False

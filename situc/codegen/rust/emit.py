@@ -4296,7 +4296,12 @@ class Emitter:
 				f" || self.bytes.len() - at < {nested}::SIZE {{",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
-				f"\t\tOk({nested} {{ bytes: &self.bytes[at..]"
+				# Cut to its own extent, as the other three cut it: a
+				# nested struct's frame is itself, which is what makes
+				# `[fills_frame]` hold there by construction (26.981). The
+				# rest of the parent made Rust alone refuse `holder.inner`
+				# for the byte after it (26.1063).
+				f"\t\tOk({nested} {{ bytes: &self.bytes[at..at + {nested}::SIZE]"
 				f"{self._child_fields(struct, placement)} }})",
 				"\t}",
 			]

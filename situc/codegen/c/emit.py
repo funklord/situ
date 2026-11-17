@@ -2025,8 +2025,18 @@ class Emitter:
 				f"static inline situ_err_t {ident(self.prefix, name, 'view')}"
 				"(const situ_msg_t *msg, uint32_t offset, situ_view_t *out)",
 				"{",
-				f"\treturn situ_view_at(msg, offset, "
-				f"{macro(self.prefix, name, 'SIZE_FIXED')}, out);",
+				# `[fills_frame]`: the frame is the rest of the message, so
+				# a byte after the struct is there to be refused (26.1063).
+				*([f"\tif (msg == NULL || offset > msg->size"
+				   f" || msg->size - offset < "
+				   f"{macro(self.prefix, name, 'SIZE_FIXED')}) {{",
+				   "\t\treturn SITU_ERR_BOUNDS;",
+				   "\t}",
+				   "\treturn situ_view_at(msg, offset, msg->size - offset,"
+				   " out);"]
+				  if traverse.takes_its_frame(self.schema, name) else
+				  [f"\treturn situ_view_at(msg, offset, "
+				   f"{macro(self.prefix, name, 'SIZE_FIXED')}, out);"]),
 				"}",
 			]
 

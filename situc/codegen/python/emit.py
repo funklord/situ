@@ -1579,8 +1579,19 @@ class Emitter:
 					"\t@classmethod",
 					f"\tdef at(cls, msg: Message, offset: int = 0) -> \"{py_name(struct.name)}\":",
 					'\t\t"""The one bounds check. Everything after it trusts the extent."""',
-					"\t\treturn acquire(cls, msg, offset, cls.SIZE_BYTES)"
-					f"  # type: ignore[return-value]",
+					# `[fills_frame]`: the rest of the message (26.1063).
+					*(["\t\tif offset < 0 or len(msg.buffer) - offset"
+					   " < cls.SIZE_BYTES:",
+					   "\t\t\traise BoundsError(",
+					   "\t\t\t\tf\"{cls.__name__} needs {cls.SIZE_BYTES}"
+					   " bytes at offset {offset}\")",
+					   "\t\treturn acquire(cls, msg, offset,"
+					   " len(msg.buffer) - offset)"
+					   "  # type: ignore[return-value]"]
+					  if traverse.takes_its_frame(self.schema, struct.name)
+					  else ["\t\treturn acquire(cls, msg, offset,"
+					        " cls.SIZE_BYTES)"
+					        "  # type: ignore[return-value]"]),
 				]
 			return [
 				f"\tSIZE_BYTES = {layout.size_bytes}",

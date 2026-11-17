@@ -8957,6 +8957,10 @@ Moved to `doc/decision/26.1059-the-walkers-read-a-named-value.md`.
 
 Moved to `doc/decision/26.1060-the-map-and-the-dissector-show-a-named-value.md`.
 
+### 26.1063 A fixed struct's frame is the message, and a nested one's itself
+
+Moved to `doc/decision/26.1063-a-fixed-struct-fills-its-frame.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.
