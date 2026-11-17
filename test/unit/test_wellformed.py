@@ -1619,6 +1619,28 @@ def test_a_located_scalar_run_or_one_struct_is_untouched(member: str) -> None:
 	recursive one is FS2's chain."""
 	parse_text(BUFFER + "struct t { u8 n; u8 d[n]; }\n"
 	           f"struct s {{ u8 off; u8 k; {member} }}\n", path="s.situ")
+@pytest.mark.parametrize("body,said", [
+	("plain h at off; u8 d[h.n];", "`h.n` is read here, and `h` is placed"),
+	("u8 v at off; u8 d[v];", "`v` is read here, and `v` is placed"),
+	("u8 v at off; u8 w [max = v];", "`v` is read here"),
+	("u8 v at off; u8 w at v;", "`v` is read here"),
+], ids=["struct-field", "scalar", "rule", "offset"])
+def test_nothing_reads_a_located_member_as_though_framed(body: str,
+		said: str) -> None:
+	"""A length, a rule and an offset are read over the frame: the first
+	read frame byte 2 in C, inside `d` itself, and the second built a header
+	calling a `_v_offset` nobody emits."""
+	text = rendered(BUFFER + "struct plain { u8 k; u8 n; }\n"
+	                f"struct s {{ u8 off; {body} }}\n")
+	assert said in text, text
+
+
+def test_a_length_beside_a_located_member_is_untouched() -> None:
+	"""The control: the field the offset is computed from is in the frame,
+	and so is anything else a length names."""
+	parse_text(BUFFER + "struct plain { u8 k; u8 n; }\n"
+	           "struct s { u8 off; u8 n; plain h at off; u8 d[n]; }\n",
+	           path="s.situ")
 
 
 # -- nonce reuse, the check 14.8 claimed and never had (26.127) -------------

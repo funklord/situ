@@ -3478,14 +3478,58 @@ def check_located_names(schema: ast.Schema) -> None:
 
 	for struct in schema.structs():
 		seen: set[str] = set()
+		placed: set[str] = set()
 		for member in _walk_members(struct.members):
+			_check_reads_no_located(member, placed)
 			located = getattr(member, "located", None)
 			if located is not None:
 				_check_located(member, located, seen | consts | enums)
 				_check_located_run(member, structs)
+				named = getattr(member, "name", None)
+				if named is not None:
+					placed.add(named)
 			named = getattr(member, "name", None)
 			if named is not None:
 				seen.add(named)
+
+
+def _check_reads_no_located(member: ast.Member, placed: set[str]) -> None:
+	"""A length, a rule or an offset may not read a member placed by `at`.
+
+	Each is read over this struct's frame, and a located member is wherever
+	the message puts it (9.8). Nothing refused it, and the backends read it
+	as though it were in the frame: `u8 d[h.n]` with `h` located read frame
+	byte 2, inside `d` itself, in C, and `u8 d[v]` with `v` located called a
+	`_v_offset` that a located member never gets -- `situc build` succeeding
+	over a header that did not compile. Found with `when` (26.1041's lens),
+	which crashed outright; no schema in the tree reads one.
+	"""
+	if not placed:
+		return
+	exprs: list[ast.Expr] = []
+	array = getattr(member, "array", None)
+	if array is not None and array.size is not None:
+		exprs.append(array.size)
+	exprs.extend(attr.value for attr in getattr(member, "attrs", ())
+	             if isinstance(attr.value, ast.Expr)
+	             and not isinstance(attr.value, ast.IntLiteral))
+	located = getattr(member, "located", None)
+	if located is not None:
+		exprs.append(located)
+	for expr in exprs:
+		for path in paths_in(expr):
+			head = path.split(".")[0].split("[")[0]
+			if head in placed:
+				raise error(
+					f"`{path}` is read here, and `{head}` is placed by `at`",
+					expr.span,
+					label = f"`{head}` is not in this struct's frame",
+					notes = ["a length, a rule and an offset are read over "
+					         "the struct's frame, and a located member is "
+					         "wherever the message puts it (9.8)",
+					         "read the field the offset is computed from, or "
+					         "a member of the frame"],
+				)
 
 
 def _check_located(member: ast.Member, located: ast.Expr,
