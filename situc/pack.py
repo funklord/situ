@@ -3090,7 +3090,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# can locate, having every member's offset and size already. A tag
 		# whose coverage is not one contiguous run carries `NONE` for both
 		# and a reader declines rather than checksumming a gap.
-		if placement.tag_covers:
+		# `covers(before)` names no region, and its span is the message's
+		# rather than the struct's: every byte from the first up to the tag
+		# (26.1050). So the row carries no members and says so in bit 1 of
+		# the flag word, and a reader takes the span from the message it
+		# holds (26.1062).
+		if placement.tag_covers or placement.tag_before:
 			# `traverse.covered_members` AND NOT A COPY HERE (26.609).
 			# This was a comprehension over the packer's own row table with
 			# an `in_arm` closure beside it, and rung 2's builder asks the
@@ -3114,7 +3119,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			covered_rows = [row_of[held.path] for held
 			                in traverse.covered_members(
 			                    resolved.structs[owner], placement)
-			                if held.path in row_of]
+			                if held.path in row_of] \
+				if placement.tag_covers else []
 			tags_blob += _struct.pack(
 				"<IIIIIII", at,
 				_u32(codec_index.get(placement.tag_codec or "")),
@@ -3131,8 +3137,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# addresses come from a layer this schema does not
 				# describe (14.2a). A reader without them must DECLINE,
 				# and without this field it would instead sum one span and
-				# report a confident wrong answer.
-				1 if placement.tag_prefix else 0,
+				# report a confident wrong answer. Bit 1: `covers(before)`,
+				# whose span is the message ahead of the tag (26.1062); a
+				# reader that predates it sees the word nonzero and
+				# declines, as it should.
+				(1 if placement.tag_prefix else 0)
+				| (2 if placement.tag_before else 0),
 				# The order the codec's OUTPUT is stored in. Not
 				# `placement.endian`, which is deliberately None on a
 				# `u8 crc[4]` because the member's own bytes have no
@@ -3372,7 +3382,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= SIGNED
 		if placement.marker is not None:
 			flags |= MARKER_GOVERNED
-		if placement.tag_covers:
+		if placement.tag_covers or placement.tag_before:
 			flags |= IS_TAG
 		# Bit 3 is packed decimal, and its digit count shares `radix_digits`
 		# with a text number's for the reason `_signed` gives one axis over:

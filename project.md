@@ -8957,6 +8957,10 @@ Moved to `doc/decision/26.1059-the-walkers-read-a-named-value.md`.
 
 Moved to `doc/decision/26.1060-the-map-and-the-dissector-show-a-named-value.md`.
 
+### 26.1062 A sum over the message ahead is walked, and refused past the frame
+
+Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.
+
 ### 26.1061 A named value splits back into its fields
 
 Moved to `doc/decision/26.1061-a-named-value-splits-back-into-its-fields.md`.

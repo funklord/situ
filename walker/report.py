@@ -392,13 +392,31 @@ def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
 	from walker import derived
 
 	held = image.tags.get(index)
-	if held is None or held.first == NONE or held.last == NONE \
-			or not derived.computes(image, index):
+	if held is None or not derived.computes(image, index):
 		return []
 	# Declined before the bytes are asked about: a sum that also runs over
 	# a pseudo-header cannot be computed from any message (14.2a), and the
 	# C walker says so first too.
 	if held.prefix:
+		return []
+	# `covers(before)`: every byte of the message ahead of the tag, from
+	# the first (26.1062). The view's buffer IS the message and `at` is
+	# absolute in it, so a tag in a nested struct sums what the backends'
+	# view owner and the dissector's root tvb both sum.
+	if held.before:
+		try:
+			start = offset_bits(view, index) // BITS_PER_BYTE
+			wide  = size_bits(view, index) // BITS_PER_BYTE
+			if view.at + start + wide > view.limit:
+				return [f"{local}.sum refused"]
+			value = derived.compute(image, index,
+			                        bytes(view.buffer[:view.at + start]))
+		except Refused:
+			return [f"{local}.sum refused"]
+		except derived.Uncomputable:
+			return []
+		return [f"{local}.sum {value}"]
+	if held.first == NONE or held.last == NONE:
 		return []
 	try:
 		first = offset_bits(view, held.first) // BITS_PER_BYTE

@@ -857,6 +857,8 @@ class Emitter:
 			        " its span and sum are",
 			        " * asked of the struct that declares it. */", *dirty]
 		where = self._base_expression(struct, placement)
+		wide  = ((placement.size_bits or 0) + BITS_PER_BYTE - 1) \
+			// BITS_PER_BYTE
 		lines = [
 			f"/* `{placement.name}` covers every byte of the MESSAGE ahead of"
 			" it, so",
@@ -867,6 +869,14 @@ class Emitter:
 			"(situ_view_t view, uint32_t *offset, uint32_t *len)",
 			"{",
 			"\tif (view.owner == NULL) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			# The tag's own bytes inside the frame (26.1062). Every offset
+			# ahead of it is taken from lengths the frame clamps, so a
+			# declared length that overruns puts the tag at the frame's
+			# end -- and the span, read off it, would be summed over bytes
+			# the message does not say are there.
+			f"\tif (!situ_in_bounds(view, {where}, {wide}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"\t*offset = 0u;",

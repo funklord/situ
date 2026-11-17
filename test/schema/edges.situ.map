@@ -19,11 +19,20 @@ codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=by
 codec extended_hamming derived expansion=ratio_exact(8,4) seekable=linear granularity=bit(4) systematic invertible deterministic
 codec held_aead unbound length_preserving seekable=linear granularity=byte authenticated invertible deterministic
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
+codec message_sum derived expansion=+1 seekable=linear granularity=block systematic deterministic
 codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec sealed_stuffing trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte authenticated invertible deterministic
 codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
 codec stuffed_apart trusted expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec summing derived expansion=+2 seekable=linear granularity=block systematic deterministic
+
+struct ahead_held size=5..260 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(inner.sum)
+  ahead_held.lead                        offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(inner.sum)
+  ahead_held.inner                       offset=AbsoluteStatic(0x02) size=Bounded(3, 258) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable auth=Covered(inner.sum)
+  ahead_held.inner.kind                  offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord auth=Covered(inner.sum)
+  ahead_held.inner.length                offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(inner.sum)
+  ahead_held.inner.data                  offset=AbsoluteStatic(0x04) size=Bounded(0, 255) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(inner.sum)
+  ahead_held.inner.sum                   offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
 
 struct arg_only size=0..255 mutate=Shifting
   arg_only.width                         parameter
@@ -931,6 +940,12 @@ struct stuffed_then_field size=4.. access=Sequential mutate=Shifting address=Uns
   stuffed_then_field.body                offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
   stuffed_then_field.body.content        offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
   stuffed_then_field.after               offset=Scanned size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential address=Unstable
+
+struct summed_ahead size=3..258 mutate=Immutable address=Unstable atomic=NonAtomic auth=Covered(sum)
+  summed_ahead.kind                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sum)
+  summed_ahead.length                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sum)
+  summed_ahead.data                      offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(sum)
+  summed_ahead.sum                       offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
 
 struct tagged_options size=1.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
   tagged_options.head                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

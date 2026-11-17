@@ -2673,6 +2673,11 @@ class Emitter:
 				"\t\tMESSAGE ahead of it, so the range starts at 0 of the",
 				'\t\tmessage rather than of this view (26.1050)."""',
 				"\t\tself._check()",
+				# The tag's own bytes inside the frame (26.1062); see C.
+				f"\t\tif ({start}) + {((placement.size_bits or 0) + 7) // 8}"
+				" > self._len:",
+				f'\t\t\traise BoundsError("{placement.name} does not fit'
+				' this frame")',
 				f"\t\treturn 0, self._at + ({start})",
 			])
 		run = covered_run(struct, placement)

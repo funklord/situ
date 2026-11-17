@@ -2062,6 +2062,11 @@ class Emitter:
 			"\t\tif here > msg.len() || msg.len() - here < self.bytes.len() {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
+			# The tag's own bytes inside the frame (26.1062); see C.
+			f"\t\tif ({start}) as usize + {((placement.size_bits or 0) + 7) // 8}"
+			" > self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
 			f"\t\tOk((0, here + ({start}) as usize))",
 			"\t}",
 		]

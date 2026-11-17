@@ -9633,6 +9633,12 @@ class Emitter:
 				"\t\tif (raw().owner == nullptr) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
+				# The tag's own bytes inside the frame (26.1062); see C.
+				f"\t\tif (!situ_in_bounds(raw(), "
+				f"{self._offset_expression(struct, placement) or '0'}, "
+				f"{((placement.size_bits or 0) + 7) // 8}u)) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
 				"\t\toffset = 0;",
 				"\t\tlen    = static_cast<std::uint32_t>(raw().base -"
 				" raw().owner->base)",

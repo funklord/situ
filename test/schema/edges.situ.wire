@@ -37,6 +37,8 @@ kernel crc7_mmc : polynomial(width = 7, poly = 0x09, init = 0x00)
 
 kernel crc5_usb : polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F, reflect)
 
+kernel message_sum : byte_sum(width = 8, negate)
+
 enum signature : u8[2] unknown=error
   bmp="BM" pe="MZ"
 
@@ -51,6 +53,11 @@ enum arm_kind : u8 unknown=error
 
 enum arm_shape : u8 unknown=error
   counted=17 fixed=34 bytes=51
+
+struct ahead_held size=5..260
+  @0x0000   2         u16        lead  big
+  @0x0002   3..258    summed_ahead inner  big
+  inner.sum covers: inner inner.data inner.kind inner.length lead
 
 struct arg_only size=0..255
   parameter -         u8         width [stream]
@@ -817,6 +824,13 @@ struct stuffed_then_field size=4..
   @0x0000   1         u8         n
   @0x0001   until:c0  stuffed_apart body  codec=stuffed_apart
   ~         2         u16        after  big
+
+struct summed_ahead size=3..258
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         length
+  @0x0002   0..255    u8         data  sized-by=length
+  ~         1         u8         sum  codec=message_sum
+  sum covers: data kind length
 
 struct tagged_options size=1..
   @0x0000   1         u8         head

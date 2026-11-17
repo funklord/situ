@@ -272,6 +272,11 @@ class Tag:
 	#: a `u8 crc[4]` has none, which is why the schema carries this
 	#: separately (`tag_codec_endian`). 0 unstated, 1 big, 2 little.
 	endian: int = 0
+	#: `covers(before)`: the sum runs over every byte of the MESSAGE ahead
+	#: of the tag -- PCI VPD's RV -- so `first` and `last` are `NONE` and
+	#: the span is the reader's to find from the message it holds
+	#: (26.1050, 26.1062).
+	before: bool = False
 
 
 @dataclass
@@ -880,7 +885,9 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				where, codec, first, last = _struct.unpack_from(
 					"<IIII", blob, at + i * stride)
 				fill, prefix, endian = NONE, 0, 0
-			image.tags[where] = Tag(codec, first, last, fill, prefix, endian)
+			# The flag word: bit 0 a prefix, bit 1 `covers(before)`.
+			image.tags[where] = Tag(codec, first, last, fill, prefix & 1,
+			                        endian, bool(prefix & 2))
 
 	if MARKERS in found:
 		at, records, stride = found[MARKERS]

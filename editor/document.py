@@ -612,10 +612,17 @@ class Document:
 		from walker import derived
 
 		notes: list[str] = []
+		mine = set(self.image.members(self.image.structs[self.view().struct]))
 		for tag, held in self.image.tags.items():
-			if held.first == NONE or held.last == NONE:
+			# `covers(before)` names no members: it covers whatever this
+			# struct places ahead of it, and its span is the message's
+			# from the first byte (26.1050, 26.1062).
+			if held.before:
+				if not (tag in mine and index in mine and index < tag):
+					continue
+			elif held.first == NONE or held.last == NONE:
 				continue
-			if not held.first <= index <= held.last:
+			elif not held.first <= index <= held.last:
 				continue
 
 			label = self.image.placement_names[tag] \
@@ -629,6 +636,14 @@ class Document:
 				continue
 
 			try:
+				if held.before:
+					start = offset_bits(self.view(), tag) // BITS_PER_BYTE
+					value = derived.compute(
+						self.image, tag, bytes(self.buffer[:self.at + start]))
+					self._store(tag, value)
+					notes.append(f"`{label}` recomputed over the "
+					             f"{self.at + start} bytes ahead of it")
+					continue
 				at, span = self._covered_span(held)
 				# `at` is view-relative, because `offset_bits` is, and
 				# the buffer is not: a document opened at offset 8 would

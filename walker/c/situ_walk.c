@@ -8533,9 +8533,16 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	const uint32_t last   = u32_at(row + 12);
 	const uint32_t fill   = image->tag_stride >= 28u ? u32_at(row + 16)
 	                                                 : SITU_WALK_NONE;
-	const uint32_t prefix = image->tag_stride >= 28u ? u32_at(row + 20) : 0u;
+	/* The flag word: bit 0 a prefix the message does not hold (14.2a), bit
+	 * 1 `covers(before)` -- every byte of the message ahead of the tag,
+	 * which names no members (26.1050, 26.1062). */
+	const uint32_t flags  = image->tag_stride >= 28u ? u32_at(row + 20) : 0u;
+	const uint32_t prefix = flags & 1u;
+	const int      before = (flags & 2u) != 0u;
 
-	if (codec == SITU_WALK_NONE || first == SITU_WALK_NONE || last == SITU_WALK_NONE
+	if (codec == SITU_WALK_NONE
+	                || (!before && (first == SITU_WALK_NONE
+	                                || last == SITU_WALK_NONE))
 	                || image->codecs == NULL || image->codec_stride < 32u
 	                || codec >= image->codec_count) {
 		return SITU_WALK_UNSUPPORTED;
@@ -8553,14 +8560,32 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	                && family != KERNEL_BYTE_SUM) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-	if (width == 0u || width > 32u || prefix != 0u || shift < 0) {
+	if (width == 0u || width > 32u || prefix != 0u || shift < 0
+	                || (flags & ~3u) != 0u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	/* Where the covered bytes are, from what the walk places. */
+	/* Where the covered bytes are, from what the walk places. A `before`
+	 * tag's run from the message's first byte to its own: `shape` is
+	 * acquired at the message's start, so that is offset 0 here. */
 	uint32_t from = 0u, end_at = 0u, end_bits = 0u, own = 0u, own_bits = 0u;
 	situ_walk_err err;
-	if ((err = situ_walk_offset_bits(image, message, len, shape, first, &from))
+	if (before) {
+		if ((err = situ_walk_offset_bits(image, message, len, shape, index,
+		                                 &own)) != SITU_WALK_OK
+		                || (err = situ_walk_size_bits(image, message, len,
+		                                              shape, index,
+		                                              &own_bits))
+		                != SITU_WALK_OK) {
+			return err;
+		}
+		if ((uint64_t)own / 8u + own_bits / 8u > len) {
+			return SITU_WALK_BOUNDS;
+		}
+		from     = 0u;
+		end_at   = own;
+		end_bits = 0u;
+	} else if ((err = situ_walk_offset_bits(image, message, len, shape, first, &from))
 	                != SITU_WALK_OK
 	                || (err = situ_walk_offset_bits(image, message, len, shape,
 	                                                last, &end_at))

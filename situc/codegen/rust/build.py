@@ -785,12 +785,19 @@ def _filled(struct: ResolvedStruct, held: str,
 		bits = part.bytes * BITS_PER_BYTE
 		at   = f"situ_tag_{part.local}"
 		over = f"{part.local}_prefix" if part.opens else ""
+		# `covers(before)` sums the message ahead of the tag, and a Rust
+		# view holds none, so it is handed one: here the bytes written so
+		# far, which begin where the message does (26.1062).
+		handed = ""
+		if part.placement.tag_before:
+			handed, over = "_in", "&situ_out[..situ_at]"
 		found.extend([
 			f"\tlet situ_tag = {held}::new(&situ_out[..situ_at]{_handed(parts)})?"
-			f".{name}_compute({over})?;",
+			f".{name}_compute{handed}({over})?;",
 			f"\tsitu_out[{at}..{at} + {part.bytes}].copy_from_slice("
 			f"&(situ_tag as u{bits}).to_{plain_build.tag_order(part)}_bytes());",
-			f"\t{held}::new(&situ_out[..situ_at]{_handed(parts)})?.{name}_check({over})?;"])
+			f"\t{held}::new(&situ_out[..situ_at]{_handed(parts)})?"
+			f".{name}_check{handed}({over})?;"])
 	return found
 
 

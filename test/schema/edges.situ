@@ -2728,3 +2728,22 @@ struct assembled {
 	let u8  m        = b & 3;
 	u8   tail[m];
 }
+
+// A sum over every byte of the message ahead of it -- PCI VPD's RV, which
+// makes the image from its first byte through itself sum to zero
+// (26.1050). In the corpus so the sweeps ask it: alone, where the message
+// is the struct, and nested behind two bytes, where it is not (26.1062).
+codec message_sum { kernel = byte_sum(width = 8, negate); }
+impl message_sum derived;
+
+struct summed_ahead {
+	u8   kind;
+	u8   length;
+	u8   data[length];
+	checksum u8 sum[1] covers(before) is message_sum;
+}
+
+struct ahead_held {
+	u16          lead;
+	summed_ahead inner;
+}

@@ -299,6 +299,10 @@ class Ask:
 	#: not what its own `extent` says: it was measured a level down, and a
 	#: message past `[depth]` measures differently from there (26.904).
 	recursive: bool = False
+	#: For `COVERED_RANGE` and `SUM`: the tag `covers(before)`, so its span
+	#: is the message's and Rust, whose views hold none, is handed it
+	#: (`_covered_in(&raw)`, 26.1050, 26.1062).
+	before: bool = False
 
 
 #: Whether to ask a run of STRUCTS for its count. **On.** It was held
@@ -448,7 +452,7 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				continue
 			found.append(Ask(Probe.SEALED, local, None, 0, False,
 			                 _gated(struct, placement),
-			                 _gated_bytes(struct, placement),
+			                 inside_bytes=_gated_bytes(struct, placement),
 			                 inside_arms=_gated_arms(struct, placement)))
 			continue
 
@@ -680,11 +684,17 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# Asked of the tag rather than inferred from the layout,
 			# because the whole point is that the four disagreed about
 			# it while agreeing with the layout they were built from.
-			if covered_run(struct, placement) is not None:
+			if placement.tag_before:
+				# The message ahead of the tag (26.1050): a range all four
+				# answer, and a sum the two walkers compute (26.1062).
+				found.append(Ask(Probe.COVERED_RANGE, local, before=True))
+				if placement.tag_codec in _COMPUTABLE \
+						and not (placement.size_bits or 0) % 8:
+					found.append(Ask(Probe.SUM, local, before=True))
+			elif covered_run(struct, placement) is not None:
 				found.append(Ask(Probe.COVERED_RANGE, local))
 				if placement.tag_codec in _COMPUTABLE \
 						and placement.tag_prefix is None \
-						and not placement.tag_before \
 						and not (placement.size_bits or 0) % 8:
 					found.append(Ask(Probe.SUM, local))
 		elif kind is Member.MARKER:
@@ -2867,12 +2877,14 @@ def _rust_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.LET:
 		return [f'\t\t\t\tprintln!("{ask.local} {{}}", view.{call}());']
 	if ask.probe is Probe.SUM:
-		return [f"\t\t\t\tmatch view.{call}_compute() {{",
+		handed = "_in(&raw)" if ask.before else "()"
+		return [f"\t\t\t\tmatch view.{call}_compute{handed} {{",
 		        f'\t\t\t\t\tOk(sum) => println!("{ask.local}.sum {{}}", sum),',
 		        f'\t\t\t\t\tErr(_) => println!("{ask.local}.sum refused"),',
 		        "\t\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
-		return [f"\t\t\t\tmatch view.{call}_covered() {{",
+		handed = "_in(&raw)" if ask.before else "()"
+		return [f"\t\t\t\tmatch view.{call}_covered{handed} {{",
 		        f'\t\t\t\t\tOk((at, len)) => println!("{ask.local}'
 		        '.covered {}+{}", at, len),',
 		        f'\t\t\t\t\tErr(_) => println!("{ask.local}'
