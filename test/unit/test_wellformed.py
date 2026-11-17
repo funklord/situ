@@ -1603,6 +1603,24 @@ def test_located_outside_an_arm_is_untouched() -> None:
 	           path="s.situ")
 
 
+@pytest.mark.parametrize("run", ["t items[k] at off;",
+                                 "t items[] while (items.n != 0) at off;"])
+def test_a_located_run_of_structs_is_refused(run: str) -> None:
+	"""Built, and compiled in no backend but Python, every accessor sizing
+	it as one element whatever the count said (26.1041)."""
+	text = rendered(BUFFER + "struct t { u8 n; u8 d[n]; }\n"
+	                f"struct s {{ u8 off; u8 k; {run} }}\n")
+	assert "a run of `t` placed by `at` is not implemented" in text
+
+
+@pytest.mark.parametrize("member", ["u16 words[k] at off;", "t one at off;"])
+def test_a_located_scalar_run_or_one_struct_is_untouched(member: str) -> None:
+	"""The controls: both build and run in all four backends, and a
+	recursive one is FS2's chain."""
+	parse_text(BUFFER + "struct t { u8 n; u8 d[n]; }\n"
+	           f"struct s {{ u8 off; u8 k; {member} }}\n", path="s.situ")
+
+
 # -- nonce reuse, the check 14.8 claimed and never had (26.127) -------------
 
 

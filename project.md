@@ -295,7 +295,7 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   is the spelling the grammar already has (PES and JSON write optional
   members that way) and is refused by name today. A located run,
   `following[head.next != K] at head.next`, is not the route: a located
-  array of structs builds and does not compile, with its count ignored.
+  run of structs compiled in no backend and is refused by name now.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed

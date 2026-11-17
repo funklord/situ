@@ -3400,12 +3400,15 @@ def check_located_names(schema: ast.Schema) -> None:
 	          for member in decl.members}
 	enums |= {decl.name for decl in schema.enums()}
 
+	structs = {decl.name for decl in schema.structs()}
+
 	for struct in schema.structs():
 		seen: set[str] = set()
 		for member in _walk_members(struct.members):
 			located = getattr(member, "located", None)
 			if located is not None:
 				_check_located(member, located, seen | consts | enums)
+				_check_located_run(member, structs)
 			named = getattr(member, "name", None)
 			if named is not None:
 				seen.add(named)
@@ -3454,6 +3457,37 @@ def _check_located(member: ast.Member, located: ast.Expr,
 			         "layout the solver is computing, and this is an input "
 			         "to it"],
 		)
+
+
+def _check_located_run(member: ast.Member, structs: set[str]) -> None:
+	"""A run of structs placed by `at` is refused, because it was built wrong.
+
+	`situc build` accepted `t items[k] at off;` and the output compiled in
+	no backend but Python: C called a `_fits` and an `_offset` it never
+	emitted, C++ and Rust likewise, and every located accessor sized the
+	member as ONE element whatever the count said. Found while looking for
+	a way to end openmlx4's FS2 chain (26.1041), where
+	`chain following[head.next != K] at head.next` looked like a spelling
+	for "zero or one more".
+
+	A located run of scalars is built and bounded by its count in all four,
+	so only a run of structs is refused. Refused rather than implemented:
+	the refusal turns output that does not compile into a diagnostic, and
+	implementing it later is additive.
+	"""
+	if not isinstance(member, ast.Field) or member.type_ref.name not in structs:
+		return
+	if member.array is None and member.until is None and member.repeat is None:
+		return
+	raise error(
+		f"a run of `{member.type_ref.name}` placed by `at` is not implemented",
+		member.span,
+		label = "every backend reads one element here, whatever the count",
+		notes = ["a located run of scalars is supported; one of structs is "
+		         "not, and the output would not compile (26.1041)",
+		         "place the run in the frame, or locate a struct that holds "
+		         "it"],
+	)
 
 
 def check_parameters(schema: ast.Schema) -> None:
