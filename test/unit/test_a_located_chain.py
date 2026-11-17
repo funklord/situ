@@ -154,9 +154,57 @@ UNBOUNDED: dict[str, tuple[bytes, str, int]] = {
 	name: (data, "depth" if verdict == "constraint" else verdict, nesting)
 	for name, (data, verdict, nesting) in ENDED.items()}
 
+#: FS2's link sits inside the section's `authenticated body`: plaintext,
+#: so an `at` reads it as a discriminant would (26.1046), and the CRC is the
+#: caller's to check, since `validate` computes no checksum (0051). A
+#: corrupt section's link is followed like any other.
+AUTHENTICATED = ("target buffer;\nendian big;\n"
+         "codec c8 {\n\tkernel = polynomial(width = 8, poly = 0x07);\n}\n"
+         "impl c8 derived;\n"
+         "struct hdr { u8 next; u8 len; }\n"
+         "struct section {\n\tauthenticated body { hdr h; }\n"
+         "\tchecksum u8 crc[1] covers(body) is c8;\n}\n"
+         "struct chain [limit = 8] {\n"
+         "\tsection one;\n"
+         "\tchain   following at one.h.next;\n"
+         "}\n")
+
+
+def _crc8(data: bytes) -> int:
+	crc = 0
+	for byte in data:
+		crc ^= byte
+		for _ in range(8):
+			crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+	return crc
+
+
+def _links(*pairs: tuple[int, int, bool]) -> bytes:
+	"""Three-byte sections at the given offsets: (at, next, crc good)."""
+	end = max(at + 3 for at, _, _ in pairs)
+	out = bytearray(end)
+	for at, nxt, good in pairs:
+		out[at:at + 2] = bytes([nxt, 1])
+		out[at + 2] = _crc8(bytes([nxt, 1])) ^ (0 if good else 0x5A)
+	return bytes(out)
+
+
+LINKED: dict[str, tuple[bytes, str, int]] = {
+	"three_then_out": (_links((0, 3, True), (3, 6, True), (6, 200, True)),
+	                   "bounds", 2),
+	"first_corrupt":  (_links((0, 3, False), (3, 6, True), (6, 200, True)),
+	                   "bounds", 2),
+	"second_corrupt": (_links((0, 3, True), (3, 6, False), (6, 200, True)),
+	                   "bounds", 2),
+	"loops":          (_links((0, 0, True)), "depth", 10),
+}
+
 SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED), (FORWARD, GONE), (FIXED, SAME),
-          (LIMITED, UNBOUNDED)]
-SHAPE_IDS = ("located", "sentinel", "forward", "fixed", "limited")
+          (LIMITED, UNBOUNDED), (AUTHENTICATED, LINKED)]
+SHAPE_IDS = ("located", "sentinel", "forward", "fixed", "limited", "authenticated")
+
+#: Shapes whose struct is one fixed length, so a view of one takes none.
+FIXED_SIZE = (FIXED, AUTHENTICATED)
 
 
 def _build(tmp_path: Path, target: str, text: str = SCHEMA) -> Path:
@@ -165,7 +213,28 @@ def _build(tmp_path: Path, target: str, text: str = SCHEMA) -> Path:
 	out = tmp_path / target
 	assert main(["build", str(schema), "--target", target,
 	             "--out", str(out)]) == 0
+	# A derived checksum's C (`chain_derived.c`), which C links as source
+	# and C++ as an object built against the C header beside it.
+	if "codec" in text and target == "c":
+		assert main(["gen-derived", str(schema), "--target", "c",
+		             "--out", str(out)]) == 0
+	if "codec" in text and target == "cpp":
+		side = tmp_path / "c-side"
+		assert main(["build", str(schema), "--target", "c",
+		             "--out", str(side)]) == 0
+		assert main(["gen-derived", str(schema), "--target", "c",
+		             "--out", str(side)]) == 0
+		made = subprocess.run(
+			["gcc", "-std=c99", "-Os", f"-I{RUNTIME / 'c'}", f"-I{side}", "-c",
+			 str(side / "chain_derived.c"), "-o", str(out / "chain_derived.o")],
+			capture_output=True, text=True)
+		assert made.returncode == 0, made.stderr
 	return out
+
+
+def _derived(out: Path) -> list[str]:
+	return [str(path) for path in sorted([*out.glob("*_derived.c"),
+	                                      *out.glob("*_derived.o")])]
 
 
 def _table(ran: "subprocess.CompletedProcess[str]") -> dict[str, tuple[str, int]]:
@@ -193,7 +262,7 @@ def test_c(tmp_path: Path, text: str,
 		cases: dict[str, tuple[bytes, str, int]]) -> None:
 	out = _build(tmp_path, "c", text)
 	# A fixed struct's view takes no length: the struct says it.
-	length = "" if text is FIXED else "cases[i].n, "
+	length = "" if text in FIXED_SIZE else "cases[i].n, "
 	rows = "\n".join(
 		f'\t{{ "{name}", (const uint8_t[]){_c_bytes(data)}, {len(data)}u }},'
 		for name, (data, _, _) in cases.items())
@@ -206,7 +275,8 @@ static const struct {{ const char *name; const uint8_t *data; uint32_t n; }} cas
 static const char *word(situ_err_t e)
 {{
 	return e == SITU_OK ? "ok" : e == SITU_ERR_BOUNDS ? "bounds"
-	     : e == SITU_ERR_CONSTRAINT ? "constraint" : e == SITU_ERR_DEPTH ? "depth" : "other";
+	     : e == SITU_ERR_CONSTRAINT ? "constraint" : e == SITU_ERR_DEPTH ? "depth"
+	     : e == SITU_ERR_CHECKSUM ? "checksum" : "other";
 }}
 int main(void)
 {{
@@ -231,7 +301,7 @@ int main(void)
 		["gcc", "-std=c99", "-Os", "-Wall", "-Wextra", "-Werror",
 		 f"-I{RUNTIME / 'c'}", f"-I{out}", str(out / "main.c"),
 		 str(out / "chain.c"), str(RUNTIME / "c" / "situ.c"),
-		 "-o", str(out / "r")], capture_output=True, text=True)
+		 *_derived(out), "-o", str(out / "r")], capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert _table(subprocess.run([str(out / "r")], capture_output=True,
 	                             text=True)) == _want(cases)
@@ -257,7 +327,8 @@ static const char *word(::situ::rt::err e)
 {{
 	return e == ::situ::rt::err::ok ? "ok" : e == ::situ::rt::err::bounds ? "bounds"
 	     : e == ::situ::rt::err::constraint ? "constraint"
-	     : e == ::situ::rt::err::depth ? "depth" : "other";
+	     : e == ::situ::rt::err::depth ? "depth"
+	     : e == ::situ::rt::err::checksum ? "checksum" : "other";
 }}
 int main()
 {{
@@ -278,7 +349,7 @@ int main()
 		["g++", "-std=c++17", "-Os", "-Wall", "-Wextra", "-Werror",
 		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{out}",
 		 str(out / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
-		 "-o", str(out / "r")], capture_output=True, text=True)
+		 *_derived(out), "-o", str(out / "r")], capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert _table(subprocess.run([str(out / "r")], capture_output=True,
 	                             text=True)) == _want(cases)
@@ -306,6 +377,7 @@ fn main() {{
 			Err(situ_rt::Error::Bounds) => "bounds",
 			Err(situ_rt::Error::Constraint) => "constraint",
 			Err(situ_rt::Error::Depth) => "depth",
+			Err(situ_rt::Error::Checksum) => "checksum",
 			Err(_) => "other",
 		}};
 		println!("{{}} {{}} {{}}", name, word, top.nesting());
@@ -328,7 +400,7 @@ def test_python(tmp_path: Path, text: str,
 	            out / "situ_runtime.py")
 	listed = ", ".join(f"({name!r}, {data!r})"
 	                   for name, (data, _, _) in cases.items())
-	length = "" if text is FIXED else ", len(data)"
+	length = "" if text in FIXED_SIZE else ", len(data)"
 	(out / "main.py").write_text(f'''import situ_runtime as rt
 import chain
 for name, data in [{listed}]:
@@ -342,6 +414,8 @@ for name, data in [{listed}]:
 		word = "constraint"
 	except rt.DepthError:
 		word = "depth"
+	except rt.ChecksumError:
+		word = "checksum"
 	print(name, word, top.nesting)
 ''', encoding="ascii")
 	assert _table(subprocess.run([sys.executable, str(out / "main.py")],
@@ -349,7 +423,8 @@ for name, data in [{listed}]:
 	                             cwd=out)) == _want(cases)
 
 
-@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD, FIXED, LIMITED],
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD, FIXED, LIMITED,
+                                  AUTHENTICATED],
                          ids=list(SHAPE_IDS))
 def test_python_type_checks(tmp_path: Path, text: str) -> None:
 	"""The probe's `try`/`else` is shaped for mypy: binding the element to
@@ -386,6 +461,10 @@ WALKED = {
 	          "ten": "cannot-say"},
 }
 WALKED["limited"] = WALKED["sentinel"]
+#: A link the walkers follow as the backends do; a chain looping back is
+#: past the walkers' depth, which they cannot say about (26.1043).
+WALKED["authenticated"] = {"three_then_out": "1", "first_corrupt": "1",
+                           "second_corrupt": "1", "loops": "cannot-say"}
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")

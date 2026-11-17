@@ -612,6 +612,19 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		             frame_end(view, index), child_args(view, index))
 		return struct_extent(inner, depth + 1) * BITS_PER_BYTE
 
+	# A FIXED-SIZE struct is as long as the struct says, whatever the row
+	# carries. A member naming its own struct is laid out while that
+	# struct is still in flight, so its row holds the solver's placeholder
+	# -- zero to unbounded -- and `size_bits` read 0: a chain of fixed
+	# three-byte links placed by `at` measured each link at nothing and
+	# refused it BOUNDS against its own minimum, where the C walker and
+	# all four backends followed it.
+	if placement.type_struct != NONE and placement.array_count == NONE \
+			and placement.size_code == NONE and placement.repeat_code == NONE:
+		inner_struct = view.image.structs[placement.type_struct]
+		if inner_struct.fixed and inner_struct.size_bits != NONE:
+			return inner_struct.size_bits
+
 	if placement.size_bits == NONE:
 		raise Refused(f"placement {index} has no size this image carries")
 	return placement.size_bits
