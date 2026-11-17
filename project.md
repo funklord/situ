@@ -8919,6 +8919,10 @@ Moved to `doc/decision/26.1050-a-checksum-may-cover-the-message-before-it.md`.
 
 Moved to `doc/decision/26.1051-a-parameter-s-own-bound-is-checked-by-no-backend-again.md`.
 
+### 26.1052 A sized arm beside a framed one
+
+Moved to `doc/decision/26.1052-a-sized-arm-beside-a-framed-one.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

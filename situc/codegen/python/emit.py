@@ -7013,6 +7013,23 @@ class Emitter:
 			elif member.is_fixed_size:
 				plan.append((arm, None,
 				             str(member.size_bits // BITS_PER_BYTE), ""))
+			elif not member.delimiters \
+					and not is_run(member, self.resolved.structs) \
+					and inner is None \
+					and (sized := self._length_expression(
+						struct, member, leaf_bounded=False)) is not None:
+				# An arm the data sizes -- VPD's small resource,
+				# `u8 small_data[item_low]` beside a large one that frames
+				# itself. Giving up on it sent the whole variant back to
+				# the EXTENT, which shrinks when the bytes run out: two
+				# bytes of a large resource answered 47, reading one byte
+				# of its `u16` length as the whole of it, where the other
+				# three answered 3 (26.1052). Its length reads fields as
+				# the other three read them, once the discriminant is in:
+				# a stricter guard answered netlink's need as 20 where
+				# all three read `nlmsg_len` and said 0x80000003.
+				plan.append((arm, None, sized.replace("self.", "probe."),
+				             "sized"))
 			else:
 				return None
 		if not any(call for _, call, _, _ in plan):
