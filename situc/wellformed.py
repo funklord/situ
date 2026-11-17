@@ -2124,6 +2124,19 @@ def _step_through(structs: dict[str, ast.StructDecl], struct: ast.StructDecl,
 				         "a run has no one element to name, and a scalar "
 				         "has no fields"],
 			)
+		# A STRUCT PLACED BY `at` is not in this struct's frame, and every
+		# backend's `when` reads the frame: `following.head.next` crashed
+		# `situc build` with an unknown name in all four rather than being
+		# refused (found asking FS2's "each `next` increases" of a chain).
+		if getattr(member, "located", None) is not None:
+			raise error(
+				f"`{held.name}` reads `{path}`, and `{step}` is placed by `at`",
+				held.span,
+				label = f"`{step}` is not in the frame `{here.name}` is",
+				notes = ["a `when` is evaluated over one struct's frame, and "
+				         "a located member is wherever the message puts it "
+				         "(9.8)"],
+			)
 		holder = _conditional_holder(here, step)
 		if holder is not None:
 			raise error(

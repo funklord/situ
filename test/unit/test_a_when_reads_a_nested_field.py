@@ -109,7 +109,12 @@ REFUSED = "target buffer;\nendian big;\n" \
 	("struct s { u8 n; variant w switch (n) { case 1: plain h;"
 	 " default: error; } }\nwhen s.h.k == 1 refuse x \"m\";",
 	 "which is inside"),
-], ids = ["no-last", "no-first", "scalar", "run", "child-arm", "own-arm"])
+	# Placed by `at`, so not in the frame a `when` reads: all four backends
+	# raised an unknown name for it, a traceback from `situc build`.
+	("struct s { u8 off; plain h at off; }\nwhen s.h.k == 1 refuse x \"m\";",
+	 "`h` is placed by `at`"),
+], ids = ["no-last", "no-first", "scalar", "run", "child-arm", "own-arm",
+          "located"])
 def test_what_a_path_cannot_step_through(text: str, wanted: str) -> None:
 	"""Each was a traceback or, through a scalar, a rule reading nothing."""
 	with pytest.raises(SituError) as caught:
