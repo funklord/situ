@@ -228,6 +228,9 @@ class Probe(Enum):
 	#: The stored value says what the sender computed; this says whether
 	#: the four compute alike, which nothing asked before.
 	SUM = "sum"
+	#: `name <n>` -- a value the struct's fields assemble, through each
+	#: backend's getter (26.1059); signed where the `let` is.
+	LET = "let"
 	#: `name ok=<0|1> len=<n> first=<byte|-1>` -- a byte run whose POSITION
 	#: comes from a field, so its bytes are at an offset in the MESSAGE
 	#: rather than in this frame.
@@ -335,6 +338,26 @@ ASKS_STRUCT_RUN_COUNT = True
 #: Python all write (26.1058). Empty elsewhere, so `asks` called on its own
 #: -- as the walker comparison does -- asks no sum.
 _COMPUTABLE: frozenset[str] = frozenset()
+
+
+#: Each struct's `let`s as `(name, bits, signed)`, set by `generate` for the
+#: schema at hand (26.1059). A named value is not in `struct.members` -- it
+#: occupies no bytes -- so `asks` cannot find it in the resolved struct.
+_LETS: dict[str, tuple[tuple[str, int, bool], ...]] = {}
+
+
+def lets_of(schema: ast.Schema) -> dict[str, tuple[tuple[str, int, bool], ...]]:
+	"""What `_LETS` holds for `schema` (26.1059)."""
+	found: dict[str, tuple[tuple[str, int, bool], ...]] = {}
+	for decl in schema.structs():
+		held = []
+		for let in decl.lets:
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			held.append((let.name, scalar.bits, scalar.signed))
+		if held:
+			found[decl.name] = tuple(held)
+	return found
 
 
 def computable(schema: ast.Schema) -> frozenset[str]:
@@ -704,6 +727,8 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				found.append(Ask(Probe.IDENTITIES, local,
 				                 inner = grammar.identity))
 
+	for name, bits, signed in _LETS.get(struct.name, ()):
+		found.append(Ask(Probe.LET, name, bits=bits, signed=signed))
 	return found
 
 
@@ -1492,12 +1517,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
 	# an argument -- which all four backends can now be handed -- needs it
 	# back rather than needing it removed.
 
-	global _COMPUTABLE
+	global _COMPUTABLE, _LETS
 	_COMPUTABLE = computable(schema)
+	_LETS = lets_of(schema)
 	try:
 		return _render(schema, resolved, target, prefix)
 	finally:
 		_COMPUTABLE = frozenset()
+		_LETS = {}
 
 
 def _render(schema: ast.Schema, resolved: ResolvedSchema, target: str,
@@ -1868,6 +1895,11 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        "\t\t\t\t\theld == NULL ? 0 : 1, len,",
 		        "\t\t\t\t\tlen == 0u ? -1 : (int)held[0]);",
 		        "\t\t\t}"]
+	if ask.probe is Probe.LET:
+		form, cast = (("%lld", "long long") if ask.signed
+		              else ("%llu", "unsigned long long"))
+		return [f'\t\t\tprintf("{ask.local} {form}\\n",'
+		        f" ({cast}){call.format('get')}(view));"]
 	if ask.probe is Probe.SUM:
 		return ["\t\t\t{",
 		        "\t\t\t\tuint32_t sum = 0u;",
@@ -2389,6 +2421,11 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\tstatic_cast<std::uint32_t>(held.size()),",
 		        "\t\t\t\t\theld.empty() ? -1 : static_cast<int>(held[0]));",
 		        "\t\t\t}"]
+	if ask.probe is Probe.LET:
+		form, cast = (("%lld", "long long") if ask.signed
+		              else ("%llu", "unsigned long long"))
+		return [f'\t\t\tstd::printf("{ask.local} {form}\\n",'
+		        f" static_cast<{cast}>(view.{call}()));"]
 	if ask.probe is Probe.SUM:
 		return ["\t\t\t{",
 		        "\t\t\t\tstd::uint32_t sum = 0u;",
@@ -2827,6 +2864,8 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\t\tif held.is_empty() { -1i32 }"
 		        " else { held[0] as i32 });",
 		        "\t\t\t\t}"]
+	if ask.probe is Probe.LET:
+		return [f'\t\t\t\tprintln!("{ask.local} {{}}", view.{call}());']
 	if ask.probe is Probe.SUM:
 		return [f"\t\t\t\tmatch view.{call}_compute() {{",
 		        f'\t\t\t\t\tOk(sum) => println!("{ask.local}.sum {{}}", sum),',
@@ -3161,6 +3200,8 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f'print("{ask.local} present=%d bytes=%d first=%d"',
 		        "\t% (0 if len(held) == 0 else 1, len(held),",
 		        "\t   -1 if len(held) == 0 else held[0]))"]
+	if ask.probe is Probe.LET:
+		return [f'print("{ask.local} %d" % view.{call})']
 	if ask.probe is Probe.SUM:
 		return ["try:",
 		        f'\tprint("{ask.local}.sum %d" % view.{call}_compute())',

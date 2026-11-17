@@ -2714,7 +2714,32 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 				# it the same way is the difference between agreeing and
 				# being absent.
 				lines.append(f"{local} len=0 first=-1")
+	lines.extend(_lets(image, view, struct_index))
 	return lines
+
+
+def _lets(image: Image, view: View, struct_index: int) -> list[str]:
+	"""`name <value>`: what each `let` assembles (26.1059), held to its
+	width and sign as the backends' getter is -- the differential's `LET`.
+
+	Nothing where a field it reads is not in the frame: the backends' getter
+	answers there anyway, and a line this walk could not have computed is
+	not a disagreement."""
+	from walker.walk import _evaluate
+
+	found: list[str] = []
+	for held in image.lets:
+		if held.owner != struct_index:
+			continue
+		try:
+			value = _evaluate(view, held.code)
+		except (Refused, vm.VmError):
+			continue
+		value &= (1 << held.bits) - 1
+		if held.signed and value >> (held.bits - 1):
+			value -= 1 << held.bits
+		found.append(f"{_string_at(image.strings, held.name)} {value}")
+	return found
 
 
 def _run_line(view: View, index: int, local: str, shape: str) -> str:

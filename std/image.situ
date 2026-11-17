@@ -74,6 +74,7 @@ enum image_section_tag : u16 {
 	arguments    = 28,     // what a parent hands a child (0068)
 	holds        = 29,     // the struct a run of bytes holds (26.898)
 	orderings    = 30,     // a run whose keys ascend (26.985, 26.988)
+	lets         = 31,     // a value a struct's fields assemble (26.1059)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -684,6 +685,18 @@ struct image_message {
 	u32  code;                        // offset into the code section
 	u8   severity;                    // image_severity
 	u8   message_pad[3];
+}
+
+// A value a struct's fields assemble (26.1056, 26.1059): its name, the
+// struct whose fields it reads, its program -- which opens with `wrap` --
+// and the width and sign it is held to.
+struct image_let {
+	u32  name;                        // string id
+	u32  owner;                       // the struct it reads
+	u32  code;                        // offset into the code section
+	u8   bits;
+	u8   is_signed [max = 1];
+	u8   let_pad[2];
 }
 
 // The three of 0051, and no fourth: a fourth would be situ adopting one

@@ -30,6 +30,7 @@
 #define TAG_WHITESPACE    23u
 #define TAG_TAGS          26u
 #define TAG_KERNEL_TABLES 27u
+#define TAG_LETS          31u
 /* Bit 0 of a directory entry's flags: a tag a walker may skip (26.991). */
 #define SECTION_ANCILLARY  1u
 #define TAG_RELATIONS  18u
@@ -347,6 +348,14 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->kernel_tables       = image + offset;
 			out->kernel_table_count  = items;
 			out->kernel_table_stride = stride;
+		} else if (kind == TAG_LETS) {
+			/* `(name, owner, code, bits, signed)`: three words, two bytes. */
+			if (stride < 14u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->lets       = image + offset;
+			out->let_count  = items;
+			out->let_stride = stride;
 		} else if (kind == TAG_STRINGS || kind == TAG_WHITESPACE) {
 			/* Known, and not read by this walker: a member that needs one
 			 * of these is declined where it is reached, as it always was.
@@ -7999,6 +8008,9 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_TAG 0x09u
 #define OP_SUM 0x0Au
 #define OP_HERE 0x0Bu
+/* The rest of the program computes as a named value does (26.1059): modulo
+ * 2^64 on the bits, `/` `%` `>>` unsigned, `/` and `%` by zero 0. */
+#define OP_WRAP 0x0Cu
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -8082,6 +8094,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 	int64_t  stack[STACK_DEPTH];
 	unsigned depth = 0u;
 	uint32_t pc    = at;
+	int      wrapping = 0;
 
 	/* The loop terminates because the program counter only ever advances
 	 * and the program has a length: that is section 10 being total, and it
@@ -8096,6 +8109,11 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			}
 			*out = stack[0];
 			return SITU_WALK_OK;
+		}
+
+		if (op == OP_WRAP) {
+			wrapping = 1;
+			continue;
 		}
 
 		if (op == OP_PUSH) {
@@ -8267,6 +8285,12 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (depth < 1u) {
 				return SITU_WALK_MALFORMED;
 			}
+			if (wrapping) {
+				const uint64_t bits = (uint64_t)stack[depth - 1u];
+				stack[depth - 1u] = (int64_t)((op == 0x1au) ? 0u - bits
+				                                            : ~bits);
+				continue;
+			}
 			stack[depth - 1u] = (op == 0x1au) ? -stack[depth - 1u]
 			                                  : ~stack[depth - 1u];
 			continue;
@@ -8292,6 +8316,31 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 		const int64_t right = stack[--depth];
 		const int64_t left  = stack[depth - 1u];
 		int64_t answer      = 0;
+
+		/* A named value's arithmetic, on the bits as the four backends'
+		 * getters compute it (26.1059). */
+		if (wrapping) {
+			const uint64_t a = (uint64_t)left;
+			const uint64_t b = (uint64_t)right;
+			uint64_t       r = 0u;
+
+			switch (op) {
+			case 0x10u: r = a + b; break;
+			case 0x11u: r = a - b; break;
+			case 0x12u: r = a * b; break;
+			case 0x13u: r = b == 0u ? 0u : a / b; break;
+			case 0x14u: r = b == 0u ? 0u : a % b; break;
+			case 0x15u: r = a & b; break;
+			case 0x16u: r = a | b; break;
+			case 0x17u: r = a ^ b; break;
+			case 0x18u: r = b < 64u ? a << b : 0u; break;
+			case 0x19u: r = b < 64u ? a >> b : 0u; break;
+			default:
+				return SITU_WALK_UNSUPPORTED;
+			}
+			stack[depth - 1u] = (int64_t)r;
+			continue;
+		}
 
 		switch (op) {
 		case 0x10u: answer = left + right; break;
@@ -8608,5 +8657,78 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	}
 	total = (total ^ xorout) & 0xFFFFu;
 	*out = (reflect != 0 && total == 0u) ? 0xFFFFu : (uint32_t)total;
+	return SITU_WALK_OK;
+}
+
+
+/* -- Named values (26.1059) ------------------------------------------------ */
+
+situ_walk_err situ_walk_let_count(const situ_walk_image *image,
+                                  uint32_t shape, uint32_t *count)
+{
+	if (image == NULL || count == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+	uint32_t n = 0u;
+	for (uint32_t i = 0u; image->lets != NULL && i < image->let_count; i++) {
+		if (u32_at(image->lets + i * image->let_stride + 4u) == shape) {
+			n++;
+		}
+	}
+	*count = n;
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_let(const situ_walk_image *image,
+                            const uint8_t *message, uint32_t len,
+                            uint32_t shape, uint32_t which, int64_t *out,
+                            int *is_signed)
+{
+	if (image == NULL || message == NULL || out == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+	const uint8_t *row = NULL;
+	uint32_t       seen = 0u;
+	for (uint32_t i = 0u; image->lets != NULL && i < image->let_count; i++) {
+		const uint8_t *at = image->lets + i * image->let_stride;
+		if (u32_at(at + 4u) != shape) {
+			continue;
+		}
+		if (seen == which) {
+			row = at;
+			break;
+		}
+		seen++;
+	}
+	if (row == NULL) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	const uint32_t bits   = row[12];
+	const int      signed_ = row[13] != 0u;
+	if (bits == 0u || bits > 64u) {
+		return SITU_WALK_MALFORMED;
+	}
+
+	walk_ctx      ctx  = {image, message, len, shape, 0u};
+	int64_t       held = 0;
+	situ_walk_err err  = situ_walk_eval(image, u32_at(row + 8u), ctx_load,
+	                                    &ctx, (int64_t)len, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	/* Held to the declared width, and read back signed where the `let`
+	 * is -- the getter's own type. */
+	uint64_t value = (uint64_t)held;
+	if (bits < 64u) {
+		value &= ((uint64_t)1 << bits) - 1u;
+		if (signed_ && (value >> (bits - 1u)) != 0u) {
+			value |= ~(((uint64_t)1 << bits) - 1u);
+		}
+	}
+	*out = (int64_t)value;
+	if (is_signed != NULL) {
+		*is_signed = signed_;
+	}
 	return SITU_WALK_OK;
 }

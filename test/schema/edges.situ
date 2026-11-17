@@ -2705,3 +2705,26 @@ struct counted_by_bits {
 	u8   values[popcount(present)];
 	u8   after;
 }
+
+// Values its fields assemble (26.1056), in every arithmetic a `let` takes:
+// the 48-bit offset, a signed read widened, a zero divisor, a shift wider
+// than the value, a literal past 2^63, and one sizing a later member.
+struct assembled {
+	u16  high;
+	u32  low;
+	i8   a;
+	u8   b;
+	u8   zero;
+	u8   big;
+	let u64 offset   = (high << 32) | low;
+	let i16 diff     = a - b;
+	let u32 quotient = low / zero;
+	let u32 rest     = low % b;
+	let u64 shifted  = low << big;
+	let u16 down     = high >> (big & 7);
+	let u8  wrapped  = a * b;
+	let u64 flipped  = ~low ^ 0xFFFF000000000000;
+	let i32 negated  = -a;
+	let u8  m        = b & 3;
+	u8   tail[m];
+}

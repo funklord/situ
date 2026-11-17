@@ -132,6 +132,7 @@ DEPTH_BYTES		= 12
 RELATION_BYTES		= 24
 RELATION_MUST_BYTES	= 8
 MESSAGE_BYTES		= 20
+LET_BYTES		= 16
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
@@ -162,9 +163,13 @@ SECTION_RELATION_MUSTS	= 19
 SECTION_PINNED_RUNS	= 20
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
+#: A value a struct's fields assemble (26.1059): `image_let`, one row per
+#: `let`. Ancillary: a walker that does not know it reads every member
+#: exactly as before, a named value occupying no bytes.
+SECTION_LETS		= 31
 #: Read only to print -- names and capability vectors, under `--metadata`.
 #: A walker that cannot print them walks the same.
-ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS})
+ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_LETS})
 #: A tag and what computes it (26.579), and the kernel tables a polynomial
 #: codec needs. Both are additive: a reader that does not know them reads
 #: every other section exactly as before.
@@ -322,6 +327,11 @@ class Op:
 	MAX		= 0x31
 	ALIGN_UP	= 0x32
 	POPCOUNT	= 0x33
+	#: The rest of the program computes as a named value does (26.1056):
+	#: modulo 2^64 on the bits, unsigned `/` `%` `>>`, and `/` and `%` by
+	#: zero 0 -- the four backends' `traverse.LetSpelling`, not the
+	#: section 10 arithmetic a length is computed in (26.1059).
+	WRAP		= 0x0C
 
 
 BINARY = {
@@ -423,7 +433,13 @@ class Program:
 		known: dict[str, int] = consts or {}
 		folded: dict[str, int] = enum_members or {}
 		if isinstance(expr, ast.IntLiteral):
-			self.emit(Op.PUSH, expr.value, "<q")
+			# A literal of 2^63 or more is only reachable in a named
+			# value's wrapping arithmetic, where its two's complement is
+			# the same bits (26.1059); everywhere else it did not pack.
+			value = expr.value
+			if value >= 1 << 63:
+				value -= 1 << 64
+			self.emit(Op.PUSH, value, "<q")
 			return
 		if isinstance(expr, ast.CharLiteral):
 			# A character is a compile-time constant like any other, and the
@@ -1811,6 +1827,38 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			"<IIIIBxxx", strings.intern(when.name), strings.intern(when.text),
 			shape_of[owner] or 0, start, severities[when.severity])
 		coverage.messages += 1
+
+	# What a struct's `let`s assemble (26.1059), so both walkers read the
+	# value the four backends' getters return. `WRAP` first: the program
+	# computes in the backends' arithmetic rather than a length's.
+	lets_blob = bytearray()
+	for let_owner in schema.structs():
+		if not let_owner.lets or shape_of.get(let_owner.name) is None:
+			continue
+		owner_name = let_owner.name
+
+		def in_owner(path: str | None,
+				owner: str = owner_name) -> tuple[int, int] | None:
+			return resolve_path(path, owner)
+
+		for let in let_owner.lets:
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			start = len(program.code)
+			program.emit(Op.WRAP)
+			try:
+				program.compile(
+					let.expr,
+					in_owner,
+					consts, enum_members)
+			except PackError as why:
+				del program.code[start:]
+				coverage.unencodable[f"let {let_owner.name}.{let.name}"] = str(why)
+				continue
+			program.emit(Op.END)
+			lets_blob += _struct.pack(
+				"<IIIBBxx", strings.intern(let.name), shape_of[let_owner.name] or 0,
+				start, scalar.bits, 1 if scalar.signed else 0)
 
 	validatable: dict[str, bool] = {name: True for name, _ in order}
 	nests: dict[str, set[str]] = {}
@@ -3292,7 +3340,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_RELATIONS, relations_blob, RELATION_BYTES),
 			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES),
 			(SECTION_PINNED_RUNS, pinned_blob, PINNED_BYTES),
-			(SECTION_MESSAGES, messages_blob, MESSAGE_BYTES)):
+			(SECTION_MESSAGES, messages_blob, MESSAGE_BYTES),
+			(SECTION_LETS, lets_blob, LET_BYTES)):
 		if blob:
 			sections.append((section, bytes(blob), stride))
 

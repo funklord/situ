@@ -8949,6 +8949,10 @@ Moved to `doc/decision/26.1057-the-differential-asks-an-argued-struct-everything
 
 Moved to `doc/decision/26.1058-every-reader-computes-a-checksum.md`.
 
+### 26.1059 The walkers read a named value, and six readers compare it
+
+Moved to `doc/decision/26.1059-the-walkers-read-a-named-value.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

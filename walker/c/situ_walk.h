@@ -248,6 +248,13 @@ typedef struct {
 	uint32_t       kernel_table_count;
 	uint32_t       kernel_table_stride;
 
+	/* What each struct's `let`s assemble (26.1059): one row per named
+	 * value, its program opening with `wrap`. NULL where the image carries
+	 * none, which is every image of a schema without one. */
+	const uint8_t *lets;
+	uint32_t       let_count;
+	uint32_t       let_stride;
+
 	/* The arguments this walk was acquired with (decision 0050), in the
 	 * order the schema declares its `parameter` members. `arg_count` is
 	 * what says how many there are; NULL and zero both mean none, and a
@@ -619,6 +626,18 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
  * also runs over a prefix the message does not hold (14.2a). Comparing the
  * result with the stored value is the caller's: situ guards bytes, and a
  * mismatch is an answer rather than an error. */
+/* How many `let`s `shape` names, and the `which`-th one's value (26.1059),
+ * in declaration order: computed as the four backends' getters compute it,
+ * held to its width; `*is_signed` (where not NULL) says whether to read
+ * `*out` as signed or its bits as unsigned. A field it reads that is not in
+ * the message refuses, as a read of that field would. */
+situ_walk_err situ_walk_let_count(const situ_walk_image *image,
+                                  uint32_t shape, uint32_t *count);
+situ_walk_err situ_walk_let(const situ_walk_image *image,
+                            const uint8_t *message, uint32_t len,
+                            uint32_t shape, uint32_t which, int64_t *out,
+                            int *is_signed);
+
 situ_walk_err situ_walk_sum(const situ_walk_image *image,
                                 const uint8_t *message, uint32_t len,
                                 uint32_t shape, uint32_t index,

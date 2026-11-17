@@ -29,6 +29,7 @@ SECTION_BYTES	= 16
 STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 TAGS, KERNEL_TABLES                = 26, 27
+LETS                              = 31
 SKIPS                             = 22
 WHITESPACE                        = 23
 TLV_RULES                         = 24
@@ -54,7 +55,7 @@ KNOWN_SECTIONS = frozenset({
 	VARINTS, TLVS, INDEXES, NAMES, VECTORS, MARKERS, CONSTRAINTS,
 	ENUM_VALUES, VERSIONS, RELATIONS, RELATION_MUSTS, PINNED_RUNS, DEPTHS,
 	SKIPS, WHITESPACE, TLV_RULES, MESSAGES, TAGS, KERNEL_TABLES, ARGUMENTS,
-	HOLDS, ORDERINGS,
+	HOLDS, ORDERINGS, LETS,
 })
 SECTION_ANCILLARY = 1
 
@@ -346,6 +347,22 @@ class Message:
 	severity: int
 
 
+@dataclass(frozen=True)
+class Let:
+	"""A value a struct's fields assemble (26.1056, 26.1059).
+
+	`name` is a string id, `owner` the struct whose fields it reads, and
+	`code` its program, which opens with `WRAP`; the value is held to `bits`
+	and read as signed where `signed` says so -- the backends' getter type.
+	"""
+
+	name: int
+	owner: int
+	code: int
+	bits: int
+	signed: bool
+
+
 @dataclass
 class Image:
 	"""One loaded image: the tables, and the names where they were kept."""
@@ -361,6 +378,7 @@ class Image:
 	#: declaration order. Absent from an image packed before the section
 	#: existed, which a walker skips rather than failing to load.
 	messages: list[Message]			= field(default_factory=list)
+	lets: list[Let]				= field(default_factory=list)
 	strings: bytes				= b""
 	#: placement index -> the byte runs it may hold (0052). One for a
 	#: `[must_eq]` or a `preamble`, one per arm for a byte-run enum. Keyed
@@ -645,6 +663,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			name, text, owner, code, severity = _struct.unpack_from(
 				"<IIIIB", blob, at + i * stride)
 			image.messages.append(Message(name, text, owner, code, severity))
+
+	if LETS in found:
+		at, records, stride = found[LETS]
+		for i in range(records):
+			name, owner, code, bits, signed = _struct.unpack_from(
+				"<IIIBB", blob, at + i * stride)
+			image.lets.append(Let(name, owner, code, bits, bool(signed)))
 
 	if PINNED_RUNS in found:
 		at, records, stride = found[PINNED_RUNS]

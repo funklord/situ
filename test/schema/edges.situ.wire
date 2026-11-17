@@ -85,6 +85,15 @@ struct arm_run size=2..8
   body case 34: pinned i16
   body case 51: raw u8
 
+struct assembled size=10..13
+  @0x0000   2         u16        high  big
+  @0x0002   4         u32        low  big
+  @0x0006   1         i8         a
+  @0x0007   1         u8         b
+  @0x0008   1         u8         zero
+  @0x0009   1         u8         big
+  @0x000a   0..3      u8         tail  sized-by=b&3
+
 struct beacon size=3
   @0x0000   2         u16        seq  big
   @0x0002   1         u8         flags

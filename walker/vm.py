@@ -51,6 +51,38 @@ TAG = 9
 ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, SHL, SHR, NEG, NOT = range(0x10, 0x1C)
 EQ, NE, LT, LE, GT, GE, LAND, LOR = range(0x20, 0x28)
 MIN, MAX, ALIGN_UP, POPCOUNT = range(0x30, 0x34)
+#: The rest of the program computes as a named value does (26.1059):
+#: modulo 2^64 on the bits, `/` `%` `>>` unsigned, and `/` and `%` by zero
+#: 0 -- `traverse.LetSpelling`, which all four backends spell. A length is
+#: never computed this way: its division by zero is still refused.
+WRAP = 0x0C
+_U64 = (1 << 64) - 1
+
+
+def _wrapped(op: int, left: int, right: int) -> int:
+	"""One binary operator in a named value's arithmetic."""
+	a, b = left & _U64, right & _U64
+	if op == ADD:
+		return (a + b) & _U64
+	if op == SUB:
+		return (a - b) & _U64
+	if op == MUL:
+		return (a * b) & _U64
+	if op == DIV:
+		return 0 if b == 0 else a // b
+	if op == MOD:
+		return 0 if b == 0 else a % b
+	if op == AND:
+		return a & b
+	if op == OR:
+		return a | b
+	if op == XOR:
+		return a ^ b
+	if op == SHL:
+		return (a << b) & _U64 if b < 64 else 0
+	if op == SHR:
+		return a >> b if b < 64 else 0
+	raise VmError(f"opcode {op:#04x} is not a named value's arithmetic")
 
 
 class VmError(Exception):
@@ -131,6 +163,7 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 	"""
 	stack: list[int] = []
 	pc = at
+	wrapping = False
 	while True:
 		if pc >= len(code):
 			raise VmError("program ran off the end without END")
@@ -140,7 +173,10 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 		if op == END:
 			if len(stack) != 1:
 				raise VmError(f"END with {len(stack)} values on the stack")
-			return stack[0]
+			return stack[0] & _U64 if wrapping else stack[0]
+		if op == WRAP:
+			wrapping = True
+			continue
 		if op == PUSH:
 			stack.append(_struct.unpack_from("<q", code, pc)[0])
 			pc += 8
@@ -196,7 +232,10 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			if not stack:
 				raise VmError("unary operator on an empty stack")
 			value = stack.pop()
-			stack.append(-value if op == NEG else ~value)
+			if wrapping:
+				stack.append((-value if op == NEG else ~value) & _U64)
+			else:
+				stack.append(-value if op == NEG else ~value)
 			continue
 		if op == POPCOUNT:
 			if not stack:
@@ -211,4 +250,5 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			raise VmError("binary operator without two values")
 		right = stack.pop()
 		left  = stack.pop()
-		stack.append(operator(left, right))
+		stack.append(_wrapped(op, left, right) if wrapping
+		             else operator(left, right))
