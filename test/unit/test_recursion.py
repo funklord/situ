@@ -39,6 +39,7 @@ import subprocess
 from pathlib import Path
 
 from collections.abc import Callable
+from typing import Any
 
 from situc.parser import parse, parse_text
 from situc.resolve import ResolvedSchema, resolve
@@ -205,7 +206,8 @@ def test_every_backend_generates_for_a_recursive_type() -> None:
 			             "--out", tmp]) == 0, target
 
 
-def test_verify_reports_a_compiler_fault_as_one(tmp_path: Path) -> None:
+def test_verify_reports_a_compiler_fault_as_one(tmp_path: Path,
+		monkeypatch: pytest.MonkeyPatch) -> None:
 	"""The crash is the smaller half; the verdict is the bug.
 
 	`verify` caught every exception from the generated module and rendered it
@@ -215,17 +217,28 @@ def test_verify_reports_a_compiler_fault_as_one(tmp_path: Path) -> None:
 	the bytes -- which is where openmlx4 went, for two probes, before doubting
 	the compiler.
 
-	A recursive *located* member is the case that produces it. Pinned on the
-	rendering rather than on the crash, because the crash is a gap that will
-	close and the rendering is a rule that must not.
+	A recursive *located* member was the case that produced it, and this
+	test was pinned on the rendering rather than on the crash because the
+	crash was a gap that would close. It closed (test_a_located_chain.py),
+	so the fault is now injected: the generated module gains a `validate`
+	reading a member that does not exist, which is the crash's own shape.
 	"""
+	from situc.codegen import python as generate_py
+	from situc.codegen.python.emit import Generated
+	real = generate_py.generate
+
+	def broken(*args: Any, **kwargs: Any) -> Generated:
+		made = real(*args, **kwargs)
+		made.module += ("\ndef _broken(self: object) -> None:\n"
+		                "\tself.following_count  # type: ignore[attr-defined]\n"
+		                "chain.validate = _broken  # type: ignore[assignment]\n")
+		return made
+
+	# The module `verify` calls through, so the patch is the one it sees.
+	monkeypatch.setattr(generate_py, "generate", broken)
 	schema = tmp_path / "chain.situ"
-	schema.write_text(PREAMBLE + "struct hdr { u32 size; u32 next; }\n"
-	                  "struct chain [depth = 8] {\n"
-	                  "\thdr   head;\n"
-	                  "\tu8    data[head.size];\n"
-	                  "\tchain following at head.next;\n"
-	                  "}\n", encoding="ascii")
+	schema.write_text(PREAMBLE + "struct chain { u32 size; u32 next; }\n",
+	                  encoding="ascii")
 	vectors = tmp_path / "chain.vectors"
 	vectors.write_text("chain one 00 00 00 00 00 00 00 00\n", encoding="ascii")
 

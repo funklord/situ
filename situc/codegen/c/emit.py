@@ -4842,6 +4842,34 @@ class Emitter:
 				])
 				continue
 
+			if placement.located is not None:
+				# Placed by `at`, so it is reached from the MESSAGE, as
+				# `validate` reaches it, through the view's owner -- not from
+				# this frame, which does not contain it (openmlx4's FS2:
+				# `chain following at head.next`). The accessor's view is
+				# sized by one element's extent, which no longer walks the
+				# chain, so it does not close before the bound as a frame
+				# window would. A view with no message has no chain to follow.
+				lines.extend([
+					"\t{",
+					"\t\tsitu_view_t element;",
+					"",
+					"\t\tif (view.owner != NULL",
+					f"\t\t\t\t&& {ident(self.prefix, struct.name, local, 'view')}"
+					"(view.owner, view, &element) == SITU_OK",
+					*([] if guard is None else [f"\t\t\t\t&& ({guard})"]),
+					"\t\t\t\t) {",
+					f"\t\t\tconst uint32_t found = {peer}_at(element,"
+					f" depth + 1u{handed});",
+					"",
+					"\t\t\tif (found > deepest) {",
+					"\t\t\t\tdeepest = found;",
+					"\t\t\t}",
+					"\t\t}",
+					"\t}",
+				])
+				continue
+
 			base = self._base_expression(struct, placement, gated=False)
 
 			if self._is_nested_member(placement):

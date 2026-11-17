@@ -2547,6 +2547,13 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	variable: list[Placement] = []
 
 	for placement in own_members(struct):
+		# A located member sits where a field says, measured from the start
+		# of the message, so none of its bytes are this instance's: the
+		# layout's minimum already leaves it out, and summing it here made
+		# a recursive chain `chain following at head.next` call an extent
+		# for itself the backends never emit (openmlx4's FS2).
+		if placement.located is not None:
+			continue
 		if occupies_fixed_bytes(placement) \
 				and not has_a_versioned_arm(struct, placement):
 			constant_bits += fixed_span_bits(placement)

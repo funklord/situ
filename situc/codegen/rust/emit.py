@@ -11012,10 +11012,24 @@ class Emitter:
 		cap = min(depth_limit(self.schema, struct.name),
 		          declared_depth(self.schema, struct.name)) + 1
 		# `cap + 1` in the sentence below is deliberate: it is the value it SATURATES at, which is one above the depth the walk stops descending at -- measured, not read off the guard: a chain of four returns 5 and so does a chain of nine. Naming the guard here instead said 4 for a function that returns 5, in three backends, while C said 5.
+		# A chain placed by `at` is reached from the MESSAGE, which this
+		# backend's views do not hold, so a struct whose checks already take
+		# one (`validate_in`) gets a probe that takes it too; `nesting_at`
+		# hands it the view's own bytes, as `validate` does (openmlx4's FS2).
+		taking = self._reaches_located(struct)
+
+		def descend(name: str) -> str:
+			peer = self.resolved.structs.get(name)
+			if taking and peer is not None and self._reaches_located(peer):
+				return "nesting_in_at(msg, depth + 1)"
+			return "nesting_at(depth + 1)"
+
 		lines = [
 			"",
 			f"\t/// How deep this `{struct.name}` nests, capped at {cap + 1}.",
-			"\tpub fn nesting_at(&self, depth: usize) -> usize {",
+			*(["\tpub fn nesting_in_at(&self, msg: &[u8], depth: usize)"
+			   " -> usize {"] if taking else
+			  ["\tpub fn nesting_at(&self, depth: usize) -> usize {"]),
 			"\t\tlet mut deepest = depth;",
 			"",
 			f"\t\tif depth > {cap} {{",
@@ -11031,10 +11045,22 @@ class Emitter:
 			target = placement.type_name or ""
 			base  = c_name(local_name(struct, placement))
 			inner = _pascal(target)
+			if placement.located is not None:
+				reach = (f"let Ok(element) = self.{_ident(base + '_view')}(msg)"
+				         + ("" if guard is None else f" && ({guard})"))
+				lines.extend([
+					f"\t\tif {reach} {{",
+					f"\t\t\tlet found = element.{descend(target)};",
+					"\t\t\tif found > deepest {",
+					"\t\t\t\tdeepest = found;",
+					"\t\t\t}",
+					"\t\t}",
+				])
+				continue
 			if holds_of(placement) in cycle:
 				lines.extend([
 					f"\t\tif let Ok(element) = self.{_ident(base + '_view')}() {{",
-					"\t\t\tlet found = element.nesting_at(depth + 1);",
+					f"\t\t\tlet found = element.{descend(holds_of(placement) or '')};",
 					"\t\t\tif found > deepest {",
 					"\t\t\t\tdeepest = found;",
 					"\t\t\t}",
@@ -11053,7 +11079,7 @@ class Emitter:
 					f"\t\tif {reach} {{",
 					f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]"
 					f"{self._child_fields(struct, placement)} }};",
-					"\t\t\tlet found = element.nesting_at(depth + 1);",
+					f"\t\t\tlet found = element.{descend(target)};",
 					"\t\t\tif found > deepest {",
 					"\t\t\t\tdeepest = found;",
 					"\t\t\t}",
@@ -11071,7 +11097,7 @@ class Emitter:
 				"\t\t\t\t}",
 				f"\t\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]"
 				f"{self._child_fields(struct, placement)} }};",
-				"\t\t\t\tlet found = element.nesting_at(depth + 1);",
+				f"\t\t\t\tlet found = element.{descend(target)};",
 				"\t\t\t\tif found > deepest {",
 				"\t\t\t\t\tdeepest = found;",
 				"\t\t\t\t}",
@@ -11083,8 +11109,20 @@ class Emitter:
 				"\t\t\t}",
 				"\t\t}",
 			])
-		lines.extend(["\t\tdeepest", "\t}",
-		              "",
+		lines.extend(["\t\tdeepest", "\t}"])
+		if taking:
+			# The recursion may run through the frame while only some other
+			# member is located, and then nothing below reads the message.
+			opened = lines.index("\t\tlet mut deepest = depth;")
+			if not any("msg" in one for one in lines[opened:]):
+				lines.insert(opened, "\t\tlet _ = msg;")
+			lines.extend(["",
+			              "\tpub fn nesting_at(&self, depth: usize) -> usize {",
+			              "\t\tself.nesting_in_at(self.bytes, depth)", "\t}",
+			              "",
+			              "\tpub fn nesting_in(&self, msg: &[u8]) -> usize {",
+			              "\t\tself.nesting_in_at(msg, 0)", "\t}"])
+		lines.extend(["",
 		              "\tpub fn nesting(&self) -> usize {",
 		              "\t\tself.nesting_at(0)", "\t}"])
 		return lines
@@ -11123,6 +11161,10 @@ class Emitter:
 			return []
 		declared = declared_depth(self.schema, struct.name)
 		limit    = depth_limit(self.schema, struct.name)
+		# Through the message where the probe follows a chain `at` places,
+		# since `nesting()` over the view alone has no message to reach it in.
+		nesting  = ("self.nesting_in(msg)" if self._reaches_located(struct)
+		            else "self.nesting()")
 		if limit < declared:
 			return [
 				f"\t\t// This build follows only {limit} (`[limit]`) where"
@@ -11133,7 +11175,7 @@ class Emitter:
 				" against the format's",
 				"\t\t// depth: finding that out costs the frames the limit"
 				" saves.",
-				f"\t\tif self.nesting() > {limit} {{",
+				f"\t\tif {nesting} > {limit} {{",
 				"\t\t\treturn Err(Error::Depth);",
 				"\t\t}",
 			]
@@ -11141,7 +11183,7 @@ class Emitter:
 			f"\t\t// `{struct.name}` nests at most {declared} deep, so past"
 			" it the message",
 			"\t\t// is malformed as a thirteenth month is.",
-			f"\t\tif self.nesting() > {declared} {{",
+			f"\t\tif {nesting} > {declared} {{",
 			"\t\t\treturn Err(Error::Constraint);",
 			"\t\t}",
 		]

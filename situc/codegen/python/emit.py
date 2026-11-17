@@ -7672,6 +7672,23 @@ class Emitter:
 		for placement, guard in self._recursive_members(struct, cycle):
 			name  = py_name(local_name(struct, placement)).replace(".", "_")
 			made, handed = self._child(struct, placement)
+			if placement.located is not None:
+				# Placed by `at`: reached from the message, as `validate`
+				# reaches it, and a chain pointing outside it is no level --
+				# `validate` refuses that itself. See the C backend's probe.
+				held = f"_element_{name}"
+				lines.extend([
+					"\t\ttry:",
+					f"\t\t\t{held} = self.{name}_view",
+					"\t\texcept BoundsError:",
+					"\t\t\tpass",
+					"\t\telse:",
+					f"\t\t\tif {'True' if guard is None else guard}:",
+					f"\t\t\t\tfound = {held}.nesting_at(depth + 1)",
+					"\t\t\t\tif found > deepest:",
+					"\t\t\t\t\tdeepest = found",
+				])
+				continue
 			if holds_of(placement) in cycle:
 				lines.extend([
 					f"\t\tfound = self.{name}_view.nesting_at(depth + 1)",

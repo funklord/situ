@@ -281,21 +281,21 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   claims a 65-section FS2 image is malformed, which is false and blames the
   image rather than the reader.
 
-  **And the chain itself is not built by any backend, measured
-  2026-11-14.** FS2's section list is a recursive member placed by `at`:
-  `chain following at head.next;` under `[depth = 8]`. `situc build`
-  succeeds and the output does not compile -- C 4 errors (it calls a
-  `_following_span_at` it never emits), C++ 2, Rust 3 -- and the Python
-  reader's `required` and `nesting_at` read a `following_count` that does
-  not exist, which is the crash `situc verify` renders as a fault in situc
-  (test_recursion pins that rendering). The work, in order: a located
-  member adds nothing to its struct's extent, so `required` and `_extent`
-  must not walk it; depth is counted along the chain the way a nested
-  member's is; and openmlx4's sentinel end (`next == 0xFF000000`, its
-  item 3) needs a way to say the chain stops, which the 0-or-1 count
-  spelling `following[head.next != K]` reaches only as a constraint-shaped
-  count section 10 does not document. Until then a refusal by name would be
-  more honest than output that does not compile.
+  **The chain itself builds and runs in all four backends since 26.1041**
+  (2026-11-17). FS2's section list is a recursive member placed by `at`:
+  `chain following at head.next;` under `[depth = 8]`, and every backend
+  had walked it as though it followed `data` inside the frame, so nothing
+  compiled. A located member adds nothing to its struct's extent now, and
+  the depth probe follows it through the message as `validate` does, so a
+  chain that loops back is CONSTRAINT rather than a hang. **What is still
+  missing is a way to say the chain stops**: openmlx4's sentinel
+  (`next == 0xFF000000`, its item 3). Without one no such chain validates,
+  since its last `next` points somewhere. A located arm in a variant,
+  `default: chain following at head.next;` beside `case K: nothing none;`,
+  is the spelling the grammar already has (PES and JSON write optional
+  members that way) and is refused by name today. A located run,
+  `following[head.next != K] at head.next`, is not the route: a located
+  array of structs builds and does not compile, with its count ignored.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -8868,9 +8868,11 @@ Moved to `doc/decision/26.1040-a-variant-states-its-size.md`.
 
 Open after it, for the next session: a builder that chooses among arms, or
 a variant size written as arithmetic, is declined rather than computed; the
-generated checks build no baseline for a struct holding one. The next goal-gap
-item is recursion through `at` (openmlx4's FS2): a recursive located chain
-builds in no backend, as f715cd8c records.
+generated checks build no baseline for a struct holding one.
+
+### 26.1041 A located chain is followed through the message
+
+Moved to `doc/decision/26.1041-a-located-chain-is-followed-through-the-message.md`.
 
 Asked by fuzznet (inbox, 2026-11-14), and not yet decided: a second resend
 schedule for once part of a reply is held. Measured there on a 960 KB fetch

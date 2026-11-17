@@ -10451,6 +10451,28 @@ class Emitter:
 					"\t\t}",
 				])
 				continue
+			if placement.located is not None:
+				# Placed by `at`: reached from the message through the view's
+				# owner, as `validate` reaches it. See the C backend's probe.
+				reach = ("raw_.owner != nullptr && this->"
+				         f"{name}_view(raw_.owner, element)"
+				         " == ::situ::rt::err::ok")
+				lines.extend([
+					"\t\t{",
+					f"\t\t\t{inner} element;",
+					"",
+					f"\t\t\tif ({reach}"
+					+ ("" if guard is None else f" && ({guard})") + ") {",
+					"\t\t\t\tconst std::uint32_t found ="
+					" element.nesting_at(depth + 1);",
+					"",
+					"\t\t\t\tif (found > deepest) {",
+					"\t\t\t\t\tdeepest = found;",
+					"\t\t\t\t}",
+					"\t\t\t}",
+					"\t\t}",
+				])
+				continue
 			start = self._offset_expression(struct, placement)
 			if start is None:
 				continue
