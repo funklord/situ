@@ -424,7 +424,8 @@ def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
 		         + size_bits(view, held.last) // BITS_PER_BYTE)
 		start = offset_bits(view, index) // BITS_PER_BYTE
 		wide  = size_bits(view, index) // BITS_PER_BYTE
-		if end < first or view.at + end > view.limit:
+		if end < first or view.at + end > view.limit \
+				or _covered_overruns(view, held.first, held.last):
 			return [f"{local}.sum refused"]
 		hole = (None if start < first or start + wide > end
 		        else (start - first, wide))
@@ -436,6 +437,29 @@ def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
 	except derived.Uncomputable:
 		return []
 	return [f"{local}.sum {value}"]
+
+
+def _covered_overruns(view: View, first: int, last: int) -> bool:
+	"""Whether a member between `first` and `last` declares more than the
+	frame holds.
+
+	Every backend's `_covered` asks each declared length in the span to fit
+	(26.1058), and the end of the LAST member is not that question: TCP's
+	`options[(data_offset - 5) * 4]` can run past the frame while the
+	`payload[remaining]` after it is placed back inside it, so a span ending
+	in the frame summed a segment whose header says it is longer. Measured
+	when the walkers were first handed TCP's pseudo-header and four backends
+	refused what both walkers summed. A member this walk cannot place is
+	not asked here; the span's own end check covers what follows it.
+	"""
+	for index in range(first, last + 1):
+		try:
+			end = offset_bits(view, index) + size_bits(view, index)
+		except Refused:
+			continue
+		if view.at + (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE > view.limit:
+			return True
+	return False
 
 
 def _while_runs(image: Image, struct_index: int) -> list[int]:

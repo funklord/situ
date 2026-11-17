@@ -8608,6 +8608,23 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	if (hi < lo || hi > len) {
 		return SITU_WALK_BOUNDS;
 	}
+	/* Every declared length in the span has to fit, as each backend's
+	 * `_covered` asks (26.1058): TCP's options can run past the frame while
+	 * the `remaining` payload after them is placed back inside it, so the
+	 * last member's end is not the question. A member this walk cannot
+	 * place is skipped; the span's end above covers what follows it. */
+	for (uint32_t i = first; !before && i <= last; i++) {
+		uint32_t at_bits = 0u, wide_bits = 0u;
+		if (situ_walk_offset_bits(image, message, len, shape, i, &at_bits)
+		                != SITU_WALK_OK
+		                || situ_walk_size_bits(image, message, len, shape, i,
+		                                       &wide_bits) != SITU_WALK_OK) {
+			continue;
+		}
+		if (((uint64_t)at_bits + wide_bits + 7u) / 8u > len) {
+			return SITU_WALK_BOUNDS;
+		}
+	}
 	const uint32_t span = (uint32_t)(hi - lo);
 	const int      inside = mine >= lo && mine + wide <= hi;
 

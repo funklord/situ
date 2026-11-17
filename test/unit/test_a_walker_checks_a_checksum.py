@@ -113,6 +113,50 @@ def test_both_walkers_compute_the_published_checksum(
 	assert c_said == py_said
 
 
+#: A declared run inside the coverage, then a run to the end of the frame.
+OVERRUN = """codec internet_checksum {
+	kernel = ones_complement(width = 16, complement);
+}
+impl internet_checksum derived;
+target buffer;
+endian big;
+
+struct segment {
+	authenticated summed {
+		u8 count;
+		checksum u8 checksum[2] covers(summed) is internet_checksum
+			[self_as = 0];
+		u8 options[count];
+		u8 text[remaining];
+	}
+}
+"""
+
+
+@pytest.mark.parametrize("message,refused", [
+	("0a0000aabb", True),
+	("020000aabbcc", False),
+], ids=["options-past-the-frame", "options-inside-it"])
+def test_a_covered_member_past_the_frame_refuses_the_sum(message: str,
+		refused: bool, tmp_path: Path) -> None:
+	"""Ten bytes of options declared in a five-byte frame: every backend's
+	`_covered` refuses the span (26.1058), and both walkers summed the
+	five bytes there, because `text[remaining]` is placed back inside the
+	frame and only the last member's end was asked. Found by TCP's options
+	once the walkers were handed its pseudo-header (26.1066)."""
+	from situc.pack import pack
+	source   = parse(Source("overrun.situ", OVERRUN))
+	resolved = resolve(source, solve(source))
+	blob     = pack(source, resolved)[0]
+	held     = bytes.fromhex(message)
+
+	drive  = _build_driver(tmp_path, blob, SUMS)
+	c_said = _run_driver(drive, tmp_path, held, 0, by_line=True)
+	assert c_said == python_sums(blob, held, 0)
+	assert ("refused" in c_said) is refused, c_said
+	assert any(one.startswith("sum=") for one in c_said) is not refused
+
+
 def _computable(path: Path) -> bool:
 	text = path.read_text(encoding="ascii")
 	if "checksum" not in text or "covers" not in text:
