@@ -2445,7 +2445,14 @@ class Emitter:
 		"""
 		name   = py_name(local_name(struct, placement))
 		start  = self._offset_expression(struct, placement)
-		length = self._length_expression(struct, placement)
+		# A FIXED region's length is its size: it has no expression, since
+		# nothing in the message sizes it, and asking for one answered
+		# nothing -- `opaque reserved[16]` got no accessor in three backends
+		# and a length of 0 in C, at a static offset (26.1049).
+		length = (str(placement.size_bits // BITS_PER_BYTE)
+		          if placement.is_fixed_size
+		          and placement.size_bits % BITS_PER_BYTE == 0
+		          else self._length_expression(struct, placement))
 		if start is None or length is None:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
 			        " where the region is."]

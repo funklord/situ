@@ -3393,6 +3393,14 @@ class Emitter:
 		placement = entry.placement
 		local     = c_name(self._local(struct, placement))
 		base      = self._base_expression(struct, placement)
+		# A FIXED region's length is its size: it has no expression, since
+		# nothing in the message sizes it, and asking for one answered
+		# nothing -- `opaque reserved[16]` got no accessor in three backends
+		# and a length of 0 in C, at a static offset (26.1049).
+		length    = (f"{placement.size_bits // BITS_PER_BYTE}u"
+		             if placement.is_fixed_size
+		             and placement.size_bits % BITS_PER_BYTE == 0
+		             else self._length_expression(struct, placement))
 
 		return [
 			"/* Treat-as-bytes, which is the whole of what an `opaque` region",
@@ -3401,7 +3409,8 @@ class Emitter:
 			f"static inline uint32_t "
 			f"{ident(self.prefix, struct.name, local, 'len')}(situ_view_t view)",
 			"{",
-			f"	return {self._length_expression(struct, placement)};",
+			*(["	(void)view;"] if placement.is_fixed_size else []),
+			f"	return {length};",
 			"}",
 			f"static inline uint8_t *"
 			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
