@@ -123,7 +123,9 @@ RUST_CENSUS = {
 	# with those two structs cut gives 25, so both sites are the
 	# construct's; one is `_covered_in`'s `msg.len() - here`, behind
 	# `here > msg.len()` (26.1050).
-	"edges.situ": 27,
+	# 27 -> 28 the same day, when `unbounded_nest`, `exact_frame` and
+	# `scrambled_summed` joined: read the same way, 27 with them cut.
+	"edges.situ": 28,
 	"ethernet.situ": 2,
 	"header.situ": 1,
 	"http.situ": 2,

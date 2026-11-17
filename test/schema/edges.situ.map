@@ -282,6 +282,10 @@ struct escaped_run size=1.. access=Sequential mutate=Shifting address=Unstable c
   escaped_run.field                      offset=AbsoluteStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   escaped_run.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct exact_frame size=3 repr=ValueConverted atomic=NonAtomic
+  exact_frame.kind                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  exact_frame.value                      offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+
 struct externally_stuffed size=1.. access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
   externally_stuffed.body                offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
   externally_stuffed.body.content        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
@@ -812,6 +816,14 @@ struct scrambled size=7 repr=ValueConverted atomic=NonAtomic
   scrambled.body.payload                 offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   scrambled.tail                         offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
+struct scrambled_summed size=8 mutate=Immutable atomic=NonAtomic
+  scrambled_summed.head                  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sum)
+  scrambled_summed.kind                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sum)
+  scrambled_summed.flags                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sum)
+  scrambled_summed.body                  offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  scrambled_summed.body.payload          offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  scrambled_summed.sum                   offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
 struct sealed_leaf size=8.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   sealed_leaf.commitment                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   sealed_leaf.ciphertext                 offset=AbsoluteStatic(0x04) size=Unbounded align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
@@ -1025,6 +1037,18 @@ struct typed_kind size=3 atomic=NonAtomic
   typed_kind.held.named                  offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   typed_kind.held.raw                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   typed_kind.tail                        offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+
+struct unbounded_nest size=2.. mutate=Shifting address=Unstable atomic=NonAtomic
+  unbounded_nest.n                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  unbounded_nest.kids                    offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  unbounded_nest.end                     offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
+struct unbounded_nests size=3.. mutate=Shifting address=Unstable atomic=NonAtomic
+  unbounded_nests.root                   offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  unbounded_nests.root.n                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  unbounded_nests.root.kids              offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  unbounded_nests.root.end               offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  unbounded_nests.after                  offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
 struct unknown_reserved size=4 repr=ValueConverted canonical=NonCanonical
   unknown_reserved.version               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

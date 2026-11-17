@@ -2747,3 +2747,30 @@ struct ahead_held {
 	u16          lead;
 	summed_ahead inner;
 }
+
+// Three constructs with tests of their own and no corpus schema, put here so
+// the sweeps ask them: a recursion that states only how deep this build
+// follows it (26.1047), a struct its frame holds exactly (26.981), and a
+// checksum over a `coded` region, which has to say whether it covers the
+// transform's input or its output (0037).
+struct unbounded_nest [limit = 2] {
+	u8              n;
+	unbounded_nest  kids[n / 200];
+	u8              end;
+}
+
+struct unbounded_nests {
+	unbounded_nest  root;
+	u8              after;
+}
+
+struct exact_frame [fills_frame] {
+	u8   kind;
+	u16  value;
+}
+
+struct scrambled_summed {
+	authenticated head { u8 kind; u8 flags; }
+	coded body(masking) covers(head) [tag_order = after] { u8 payload[4]; }
+	checksum u8  sum[2] covers(head) is summing;
+}

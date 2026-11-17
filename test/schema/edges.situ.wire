@@ -269,6 +269,11 @@ struct escaped_run size=1..
   @0x0000   until:2c  u8         field  escape=0x5c cap=64
   ~         0..       u8         rest  sized-by=remaining
 
+struct exact_frame size=3
+  @0x0000   1         u8         kind
+  @0x0001   2         u16        value  big
+  exact_frame refuses: exact_frame_bytes_after when size(exact_frame) < remaining
+
 struct externally_stuffed size=1..
   @0x0000   until:c0  stuffed_apart body  codec=stuffed_apart
 
@@ -701,6 +706,14 @@ struct scrambled size=7
   @0x0001   4         scramble   body  codec=scramble
   @0x0005   2         u16        tail  big
 
+struct scrambled_summed size=8
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         flags
+  @0x0002   4         masking    body  codec=masking
+  @0x0006   2         u8         sum  codec=summing
+  body covers: body head
+  sum covers: flags head kind
+
 struct sealed_leaf size=8..
   @0x0000   4         u8         commitment  big
   @0x0004   0..       u8         ciphertext  sized-by=remaining leaves=4
@@ -906,6 +919,15 @@ struct typed_kind size=3
   held case 1: named arm_kind
   held case 2: raw u8
   held case default: error
+
+struct unbounded_nest size=2..
+  @0x0000   1         u8         n
+  @0x0001   0..       unbounded_nest kids  sized-by=n/200
+  ~         1         u8         end
+
+struct unbounded_nests size=3..
+  @0x0000   2..       unbounded_nest root  big
+  ~         1         u8         after
 
 struct unknown_reserved size=4
   @0x0000   1         u8         version
