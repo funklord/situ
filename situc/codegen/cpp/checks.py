@@ -804,6 +804,8 @@ def _nested_start(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return []
 	if placement.sized_by is not None or placement.sealed_by is not None:
 		return []
+	if data_sized(placement):
+		return []		# `T x[n / 200]`, a run counted by arithmetic
 	if placement.repeat_while is not None or placement.delimiters:
 		return []
 	if placement.offset_bits % BITS_PER_BYTE:

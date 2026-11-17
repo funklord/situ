@@ -1099,7 +1099,7 @@ def _nested_start(basename: str, resolved: ResolvedSchema,
 		reason = "it is an array, whose elements the two kinds above hold"
 	elif placement.repeat_while is not None or placement.delimiters:
 		reason = "it is a run, reached through an `at` rather than a property"
-	elif placement.sized_by is not None:
+	elif placement.sized_by is not None or data_sized(placement):
 		reason = "its extent is driven by another member"
 	elif placement.sealed_by is not None:
 		reason = "it is reached through a gate, which has its own checks"

@@ -2653,9 +2653,12 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.repeat_while is not None:
 		return _run(resolved, struct, placement, field, seek)
 
-	# A nested struct gets its own dissector and its own subtree.
+	# A nested struct gets its own dissector and its own subtree. Not a run
+	# counted by arithmetic, `T x[n / 200]`, which has neither of the two
+	# fields below and was dissected as one element, placing every member
+	# after it wrong (26.188's shape, met by `unbounded_nest` in `edges`).
 	if placement.type_name in resolved.structs and placement.array_count is None \
-			and placement.sized_by is None:
+			and placement.sized_by is None and not data_sized(placement):
 		nested = resolved.structs[placement.type_name]
 
 		# A variable-size struct was handed `size_bytes`, which is its

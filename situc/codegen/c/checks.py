@@ -948,6 +948,29 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 			             f" {chosen[placement.sized_by]}u);")
 		return lines
 
+	# A run of records counted by arithmetic, `T x[n / 200]`: neither
+	# `sized_by` nor `array_count`, so it reached the nested-struct branch
+	# below and asked a `_view` a run does not have -- 26.188's shape,
+	# met by `unbounded_nest` the day it entered `edges`. What the count
+	# comes to over a zeroed instance is the expression's business, so
+	# it is asked the way a `while` run is.
+	if placement.scalar is None and data_sized(placement):
+		at    = ident(prefix, struct.name, local, "at")
+		count = ident(prefix, struct.name, local, "count")
+		first = f"first_{local}"
+		lines.extend([
+			f"\tsitu_view_t {first};",
+			f"\tif ({count}(view) > 0u) {{",
+			f"\t\tsitu_check_eq({at}(view, 0u, &{first}), SITU_OK);",
+			f"\t\tsitu_check_eq((uint32_t)({first}.base - view.base),"
+			f" {offset}u);",
+			"\t} else {",
+			f"\t\tsitu_check_eq({at}(view, 0u, &{first}),"
+			" SITU_ERR_BOUNDS);",
+			"\t}",
+		])
+		return lines
+
 	if placement.scalar is None and placement.type_name:
 		inner = f"inner_{local}"
 		view  = ident(prefix, struct.name, local, "view")
@@ -1474,6 +1497,11 @@ def _nested_placement_check(suite: Suite, resolved: ResolvedSchema,
 	if placement.offset_bits is None or placement.array_count is not None:
 		return
 	if placement.sized_by is not None or placement.type_name is None:
+		return
+	# The third spelling of a counted run, `T x[n / 200]`: neither of the
+	# two above, so it was taken for one nested struct and handed a `_view`
+	# it does not have (26.188's shape, met again by `unbounded_nest`).
+	if data_sized(placement):
 		return
 	# A run is not a nested struct, however few elements it has. It carried a
 	# false `array_count = 1` and was excluded above for the wrong reason; the
