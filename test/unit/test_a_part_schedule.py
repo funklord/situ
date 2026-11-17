@@ -305,6 +305,39 @@ for event in {{EVENTS!r}}:
 	assert ran.returncode == 0, ran.stdout + ran.stderr
 
 
+@pytest.mark.parametrize("attrs", [
+	"[timeout_ms = 800, retries = 3]",
+	"[timeout_ms = 3000, retries = 3, resend_ms = 600]",
+	"[timeout_ms = 3000, retries = 3, resend_ms = 600,"
+	" resend_part_ms = 300, retries_part = 8]",
+])
+def test_the_python_driver_type_checks(tmp_path: Path, attrs: str) -> None:
+	"""All three schedules. The table held `list[object]`, so every read was
+	an `int(object)` under a `type: ignore`, three of them naming the wrong
+	code: the driver failed `mypy --strict` as generated, before this
+	schedule existed. A typed record needs no ignore at all."""
+	if subprocess.run(["python3", "-m", "mypy", "--version"],
+	                  capture_output = True).returncode != 0:
+		pytest.skip("no mypy")
+	schema, resolved = analysed(
+		POLICY.replace("[timeout_ms = 800, retries = 3]", attrs))
+	for name, text in generate_py(schema, resolved, "t").files().items():
+		(tmp_path / name).write_text(text, encoding = "ascii")
+	for module in (relate_py, converse_py, drive_py):
+		for name, text in module.generate(schema, resolved, "t").items():
+			(tmp_path / name).write_text(text, encoding = "ascii")
+	(tmp_path / "situ_runtime.py").write_text(
+		(ROOT / "runtime" / "python" / "situ_runtime.py").read_text(
+			encoding = "ascii"), encoding = "ascii")
+	assert "type: ignore" not in (tmp_path / "t_drive.py").read_text(
+		encoding = "ascii")
+	checked = subprocess.run(
+		["python3", "-m", "mypy", "--strict", "--no-pretty",
+		 "--no-error-summary", "t_drive.py"],
+		capture_output = True, text = True, cwd = tmp_path)
+	assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
 def test_without_a_part_schedule_nothing_changes() -> None:
 	"""The driver 26.1039 generates is the one generated without the two."""
 	plain = POLICY.replace("[timeout_ms = 800, retries = 3]",

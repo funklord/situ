@@ -99,6 +99,30 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	from situc.codegen.c.drive import part_of, resend_of
 
+	# One outstanding exchange, typed. The table held `list[object]`, so every
+	# read was an `int(object)` under a `type: ignore` -- and three of those
+	# named the wrong error code, so the module failed `mypy --strict` as
+	# generated (26.1042). A record with typed fields needs none of them.
+	lines += [
+		"",
+		"",
+		"class _exchange:",
+		'\t"""One outstanding exchange: its bytes, id and schedule."""',
+		"",
+		"\t__slots__ = (\"data\", \"id\", \"deadline\", \"left\", \"end\","
+		" \"sent\", \"part\")",
+		"",
+		"\tdef __init__(self, data: bytes, id: int, deadline: int, left: int,",
+		"\t             end: int = 0, sent: int = 0) -> None:",
+		"\t\tself.data     = data",
+		"\t\tself.id       = id",
+		"\t\tself.deadline = deadline",
+		"\t\tself.left     = left",
+		"\t\tself.end      = end\t# the whole exchange's end, with `resend_ms`",
+		"\t\tself.sent     = sent\t# the last send, for the part schedule",
+		"\t\tself.part     = False",
+	]
+
 	if any(resend_of(relation) for relation, _, _ in ready):
 		lines += [
 			"",
@@ -166,7 +190,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(["\t\tself._part_interval = resend_part_ms",
 			   "\t\tself._part_retries  = retries_part"] if part else []),
 			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
-			 "list[object]] = {}"),
+			 "_exchange] = {}"),
 			"",
 			f"\tdef send(self, {first.name}: {py_name(first.type_name)},",
 			"\t         data: bytes, id: int, now_ms: int) -> None:",
@@ -180,13 +204,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(["\t\tend = (now_ms + self._timeout) & 0xFFFFFFFF",
 			   "\t\tfirst = end if self._retries == 0 else _sooner(",
 			   "\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, end, now_ms)",
-			   (f"\t\tself._live[key] = [data, id, first, self._retries, end,"
-			    " now_ms, False]" if part else
-			    "\t\tself._live[key] = [data, id, first, self._retries, end]")]
+			   "\t\tself._live[key] = _exchange(data, id, first, self._retries,"
+			   " end, now_ms)"]
 			  if resend else
-			  ["\t\tself._live[key] = [data, id,",
-			   "\t\t                   (now_ms + self._timeout) & 0xFFFFFFFF,",
-			   "\t\t                   self._retries]"]),
+			  ["\t\tself._live[key] = _exchange(",
+			   "\t\t\tdata, id, (now_ms + self._timeout) & 0xFFFFFFFF,"
+			   " self._retries)"]),
 			"\t\tself._submit(data)",
 			"",
 			f"\tdef on_message(self, {second.name}: "
@@ -197,7 +220,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",
 			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
-			"\t\treturn int(self._live.pop(key)[1])  # type: ignore[arg-type]",
+			"\t\treturn self._live.pop(key).id",
 			"",
 			f"\tdef peek(self, {second.name}: "
 			f"{py_name(second.type_name)}) -> int:",
@@ -210,7 +233,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",
 			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
-			"\t\treturn int(self._live[key][1])  # type: ignore[arg-type]",
+			"\t\treturn self._live[key].id",
 			"",
 			*_part_held(part),
 			"\tdef step(self, now_ms: int) -> tuple[int | None, int]:",
@@ -226,44 +249,30 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tdue: list[tuple[int, bytes]] = []",
 			"",
 			"\t\tfor key in list(self._live):",
-			("\t\t\tdata, _id, deadline, left, end, _sent, held = self._live[key]"
-			 if part else
-			 "\t\t\tdata, _id, deadline, left, end = self._live[key]" if resend
-			 else "\t\t\tdata, _id, deadline, left = self._live[key]"),
+			"\t\t\tone = self._live[key]",
 			# Serially, modulo 2^32, as the other three: a 32-bit clock
 			# wraps, and the four agree about when it does (26.1008).
-			"\t\t\tif (now_ms - int(deadline)) & 0xFFFFFFFF < 0x80000000:"
-			"  # type: ignore[call-overload]",
-			("\t\t\t\tif int(left) == 0 or (now_ms - int(end)) & 0xFFFFFFFF"
-			 " < 0x80000000:  # type: ignore[call-overload]" if resend else
-			 "\t\t\t\tif int(left) == 0:  # type: ignore[call-overload]"),
+			"\t\t\tif (now_ms - one.deadline) & 0xFFFFFFFF < 0x80000000:",
+			("\t\t\t\tif one.left == 0 or (now_ms - one.end) & 0xFFFFFFFF"
+			 " < 0x80000000:" if resend else
+			 "\t\t\t\tif one.left == 0:"),
 			"\t\t\t\t\tdel self._live[key]",
 			"\t\t\t\t\texpired += 1",
 			"\t\t\t\t\tcontinue",
-			*(["\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
-			   "\t\t\t\tdeadline = int(end) if left == 0 else _sooner("
-			   "  # type: ignore[call-overload]",
-			   "\t\t\t\t\t(now_ms + (self._part_interval if held"
-			   " else self._interval)) & 0xFFFFFFFF, int(end),"
-			   "  # type: ignore[call-overload]",
-			   "\t\t\t\t\tnow_ms)",
-			   "\t\t\t\tself._live[key] = [data, _id, deadline, left, end,"
-			   " now_ms, held]"]
+			"\t\t\t\tone.left -= 1",
+			*(["\t\t\t\tone.sent = now_ms",
+			   "\t\t\t\tevery = self._part_interval if one.part"
+			   " else self._interval",
+			   "\t\t\t\tone.deadline = one.end if one.left == 0 else _sooner(",
+			   "\t\t\t\t\t(now_ms + every) & 0xFFFFFFFF, one.end, now_ms)"]
 			  if part else
-			  ["\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
-			   "\t\t\t\tdeadline = int(end) if left == 0 else _sooner("
-			   "  # type: ignore[call-overload]",
-			   "\t\t\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, int(end),"
-			   "  # type: ignore[call-overload]",
-			   "\t\t\t\t\tnow_ms)",
-			   "\t\t\t\tself._live[key] = [data, _id, deadline, left, end]"]
+			  ["\t\t\t\tone.deadline = one.end if one.left == 0 else _sooner(",
+			   "\t\t\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, one.end,"
+			   " now_ms)"]
 			  if resend else
-			  ["\t\t\t\tdeadline = (now_ms + self._timeout) & 0xFFFFFFFF",
-			   "\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
-			   "\t\t\t\tself._live[key] = [data, _id, deadline, left]"]),
-			"\t\t\t\tdue.append((int(_id), bytes(data)))"
-			"  # type: ignore[arg-type, call-overload]",
-			"\t\t\tat = int(deadline)  # type: ignore[call-overload]",
+			  ["\t\t\t\tone.deadline = (now_ms + self._timeout) & 0xFFFFFFFF"]),
+			"\t\t\t\tdue.append((one.id, one.data))",
+			"\t\t\tat = one.deadline",
 			"\t\t\tif soonest is None or (at - now_ms) & 0xFFFFFFFF"
 			" < (soonest - now_ms) & 0xFFFFFFFF:",
 			"\t\t\t\tsoonest = at",
@@ -291,23 +300,18 @@ def _part_held(part: tuple[int, int] | None) -> list[str]:
 		"\t\tretransmission is due `resend_part_ms` after the last send, and",
 		"\t\t`retries_part` bounds them all. ConstraintError where no such",
 		'\t\texchange is outstanding."""',
-		"\t\tfor entry in self._live.values():",
-		"\t\t\tif int(entry[1]) != id:  # type: ignore[call-overload]",
+		"\t\tfor one in self._live.values():",
+		"\t\t\tif one.id != id:",
 		"\t\t\t\tcontinue",
-		"\t\t\tif not entry[6]:",
-		"\t\t\t\tdone = self._retries - int(entry[3])"
-		"  # type: ignore[call-overload]",
-		"\t\t\t\tdue = (int(entry[5]) + self._part_interval) & 0xFFFFFFFF"
-		"  # type: ignore[call-overload]",
+		"\t\t\tif not one.part:",
+		"\t\t\t\tdone = self._retries - one.left",
+		"\t\t\t\tdue = (one.sent + self._part_interval) & 0xFFFFFFFF",
 		"\t\t\t\tif (now_ms - due) & 0xFFFFFFFF < 0x80000000:",
 		"\t\t\t\t\tdue = now_ms",
-		"\t\t\t\tleft = max(self._part_retries - done, 0)",
-		"\t\t\t\tentry[3] = left",
-		"\t\t\t\tentry[6] = True",
-		"\t\t\t\tentry[2] = int(entry[4]) if left == 0 else _sooner("
-		"  # type: ignore[call-overload]",
-		"\t\t\t\t\tdue, int(entry[4]), now_ms)"
-		"  # type: ignore[call-overload]",
+		"\t\t\t\tone.part = True",
+		"\t\t\t\tone.left = max(self._part_retries - done, 0)",
+		"\t\t\t\tone.deadline = one.end if one.left == 0 else _sooner(",
+		"\t\t\t\t\tdue, one.end, now_ms)",
 		"\t\t\treturn",
 		"\t\traise ConstraintError(\"no exchange {} is outstanding\""
 		".format(id))",
