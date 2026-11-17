@@ -8941,6 +8941,10 @@ Moved to `doc/decision/26.1055-a-driver-takes-an-exchange-by-id.md`.
 
 Moved to `doc/decision/26.1056-a-struct-may-name-a-value-its-fields-assemble.md`.
 
+### 26.1057 The differential asks an argued struct everything
+
+Moved to `doc/decision/26.1057-the-differential-asks-an-argued-struct-everything.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

@@ -352,6 +352,10 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		if index >= stop:
 			break
 		placement = entry.placement
+		# A `parameter` occupies no bytes and has no accessor in any
+		# backend; it is what the driver hands the view (26.1057).
+		if placement.parameter:
+			continue
 		kind      = classify(struct, placement, structs)
 		local     = c_name(local_name(struct, placement))
 
@@ -1456,10 +1460,71 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
 	# an argument -- which all four backends can now be handed -- needs it
 	# back rather than needing it removed.
 
+	if target == "c":
+		return _with_argument_tails(_c(resolved, prefix),
+		                            _c_argument_tails(schema, resolved, prefix),
+		                            resolved)
 	renderer = {
-		"c": _c, "cpp": _cpp, "rust": _rust, "python": _python,
+		"cpp": _cpp, "rust": _rust, "python": _python,
 	}[target]
 	return renderer(resolved, prefix)
+
+
+def _c_argument_tails(schema: ast.Schema, resolved: ResolvedSchema,
+		prefix: str) -> dict[str, list[str]]:
+	"""Each generated C function that takes a struct's arguments, and their
+	names in order (26.1057).
+
+	Read off the header the C backend wrote rather than decided again here:
+	C hands an argument only to the accessors whose bodies read one
+	(`_argument_tail_in`), so whether a call takes the tail is a fact about
+	the emitted text, and a second derivation of it is a second answer."""
+	from situc.codegen.c import generate as generate_c
+	built = generate_c(schema, resolved, "unit", prefix=prefix)
+	text  = built.header + "\n" + built.source
+	found: dict[str, list[str]] = {}
+	for name, params in re.findall(
+			rf"\b({re.escape(prefix)}_\w+)\(([^;{{()]*)\)\s*[;{{]", text,
+			re.S):
+		names = [re.split(r"[\s*]+", one.strip())[-1]
+		         for one in params.split(",") if one.strip()]
+		tail: list[str] = []
+		for one in reversed(names):
+			if not one.startswith("arg_"):
+				break
+			tail.insert(0, one)
+		if tail:
+			found[name] = tail
+	return found
+
+
+def _with_argument_tails(text: str, tails: dict[str, list[str]],
+		resolved: ResolvedSchema) -> str:
+	"""Every call to a function in `tails`, handed the argued values."""
+	if not tails:
+		return text
+	values = {f"arg_{c_name(name)}": value
+	          for struct in skipped_of(resolved)
+	          for name, value in argued(struct)}
+	pattern = re.compile(r"\b(" + "|".join(
+		re.escape(name) for name in sorted(tails, key=len, reverse=True))
+		+ r")\(")
+	# Every closing parenthesis first, then the insertions from the end, so
+	# a call inside another's arguments moves nothing still to be placed.
+	inserts: list[tuple[int, str]] = []
+	for found in pattern.finditer(text):
+		depth, end = 1, found.end()
+		while depth:
+			if text[end] == "(":
+				depth += 1
+			elif text[end] == ")":
+				depth -= 1
+			end += 1
+		inserts.append((end - 1, "".join(f", {values.get(one, 1)}"
+		                                 for one in tails[found.group(1)])))
+	for close, handed in sorted(inserts, reverse=True):
+		text = text[:close] + handed + text[close:]
+	return text
 
 
 #: How many prefixes of the buffer each `required` line answers for: every
@@ -1608,7 +1673,8 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 	for struct in skipped_of(resolved):
 		name  = struct.name
 		fixed = struct.layout.is_fixed_size
-		handed = "".join(f", {value}" for _, value in argued(struct))
+		# The arguments reach each call through `_with_argument_tails`,
+		# which reads off the header which calls take them (26.1057).
 		lines.extend([
 			"\t{",
 			"\t\tsitu_view_t view;",
@@ -1617,8 +1683,12 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 			f"{'' if fixed else ', n'}, &view) != SITU_OK) {{",
 			'\t\t\tprintf("no-view\\n");',
 			"\t\t} else {",
+		])
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
+			lines.extend(_c_ask(prefix, name, ask))
+		lines.extend([
 			f'\t\t\tprintf("validate %d\\n",'
-			f" (int){ident(prefix, name, 'validate')}(view{handed}));",
+			f" (int){ident(prefix, name, 'validate')}(view));",
 			"\t\t}",
 			"\t}",
 		])
@@ -2082,6 +2152,10 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 			" != ::situ::rt::err::ok) {",
 			'\t\t\tstd::printf("no-view\\n");',
 			"\t\t} else {",
+		])
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
+			lines.extend(_cpp_ask(ask))
+		lines.extend([
 			'\t\t\tstd::printf("validate %d\\n",'
 			" static_cast<int>(view.validate()));",
 			"\t\t}",
@@ -2563,6 +2637,10 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 			f"\t\tmatch unit::{_pascal(name)}::new(&raw{handed}) {{",
 			"\t\t\tErr(_) => println!(\"no-view\"),",
 			"\t\t\tOk(view) => {",
+		])
+		for ask in asks(struct, set(resolved.structs), resolved.structs):
+			lines.extend(_rust_ask(ask))
+		lines.extend([
 			'\t\t\t\tprintln!("validate {}", match view.validate() {',
 			"\t\t\t\t\tOk(())                          => 0,",
 			"\t\t\t\t\tErr(situ_rt::Error::Bounds)     => 1,",
@@ -2908,6 +2986,9 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 			"except situ_runtime.BoundsError:",
 			'\tprint("no-view")',
 			"else:",
+			*(f"\t{line}" for ask in asks(struct, set(resolved.structs),
+			                              resolved.structs)
+			  for line in _python_ask(ask)),
 			"\ttry:",
 			"\t\tview.validate()",
 			'\t\tprint("validate 0")',
