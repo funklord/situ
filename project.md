@@ -8915,6 +8915,10 @@ Moved to `doc/decision/26.1049-an-opaque-region-has-its-size.md`.
 
 Moved to `doc/decision/26.1050-a-checksum-may-cover-the-message-before-it.md`.
 
+### 26.1051 A parameter's own bound is checked by no backend, again
+
+Moved to `doc/decision/26.1051-a-parameter-s-own-bound-is-checked-by-no-backend-again.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

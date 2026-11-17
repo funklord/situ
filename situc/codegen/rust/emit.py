@@ -11623,6 +11623,15 @@ class Emitter:
 		scalar    = placement.scalar
 		name      = _ident(local_name(struct, placement))
 
+		# A parameter's own bound is the solver's, and `validate` reads the
+		# message, not the argument (26.805). This checked it against the
+		# BYTE at the parameter's nominal offset -- which is the next
+		# member's, since a parameter occupies nothing -- so `struct t {
+		# parameter u8 b [max = 10]; u8 x; }` refused every `x` above 10,
+		# and the check took id 0 where C's `x` holds it (26.1051).
+		if placement.parameter:
+			return out
+
 		check = classify_check(struct, placement, self.structs)
 		# A marker states one of its two orders; anything else is a header
 		# that names none, which every read would take as big (26.964).

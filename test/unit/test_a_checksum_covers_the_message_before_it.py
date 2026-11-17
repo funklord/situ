@@ -281,3 +281,94 @@ print(msg.dirty & img.DIRTY_SECOND_BODY_RV_SUM == img.DIRTY_SECOND_BODY_RV_SUM)
 	ran = subprocess.run([sys.executable, str(out / "main.py")],
 	                     capture_output=True, text=True, cwd=out)
 	assert ran.stdout.split() == ["0", "True"], ran.stdout + ran.stderr
+
+
+#: openmlx4's VPD as vpd.c walks it, with RV stated: the resource list, the
+#: VPD-R resource's bytes held as its keyword fields, RV's value the arm
+#: whose first byte is the sum. RV ends VPD-R, which is what `while` says.
+VPD = """target buffer;
+endian little;
+bit_order msb_first;
+
+codec vpd_sum {
+	kernel = byte_sum(width = 8, negate);
+}
+impl vpd_sum derived;
+
+struct rv_value {
+	parameter u8 n [stream, min = 1];
+	checksum u8 sum[1] covers(before) is vpd_sum;
+	u8 reserved[n - 1];
+}
+
+struct vpd_field {
+	u16  keyword;
+	u8   length;
+	variant value switch (keyword) {
+		case 0x5652: rv_value(n = length) rv;
+		default:     u8 data[length];
+	}
+}
+
+struct vpd_fields {
+	vpd_field items[] while (keyword != 0x5652) | end;
+}
+
+struct vpd_large_body {
+	u16  length;
+	u8   data[length] [holds = vpd_fields];
+}
+
+struct vpd_resource [allow_straddle] {
+	bit  is_large;
+	u4   item_high;
+	u3   item_low;
+	variant body switch (is_large) {
+		case 1:  vpd_large_body large;
+		default: u8 small_data[item_low];
+	}
+}
+
+struct vpd {
+	vpd_resource items[] while (is_large == 1 || item_high != 0x0F) max 32768;
+}
+"""
+
+
+def _vpd_image(good: bool = True) -> bytes:
+	ident = bytes([0x82, 4, 0]) + b"ABCD"
+	pn    = b"PN" + bytes([3]) + b"X1Y"
+	rv_kw = b"RV" + bytes([2])
+	size  = len(pn) + len(rv_kw) + 2
+	head  = ident + bytes([0x90, size & 0xFF, size >> 8]) + pn + rv_kw
+	rv    = (-sum(head) + (0 if good else 1)) & 0xFF
+	return head + bytes([rv, 0, 0x78])
+
+
+def test_pci_vpd_states_its_rv_checksum(tmp_path: Path) -> None:
+	"""The real shape: three resources, two keyword fields in VPD-R, and
+	the image summing to zero from its first byte through RV."""
+	schema = tmp_path / "vpd.situ"
+	schema.write_text(VPD, encoding="ascii")
+	out = tmp_path / "python"
+	assert main(["build", str(schema), "--target", "python", "--out", str(out)]) == 0
+	shutil.copy(RUNTIME / "python" / "situ_runtime.py", out / "situ_runtime.py")
+	(out / "main.py").write_text(f'''import situ_runtime as rt
+import vpd
+for data in ({_vpd_image()!r}, {_vpd_image(False)!r}):
+	image = vpd.vpd.at(rt.Message(bytearray(data)), 0, len(data))
+	image.validate()
+	fields = image.items(1).body_large.data_view
+	tag = fields.items(1).value_rv
+	try:
+		tag.sum_check()
+		word = "ok"
+	except rt.ChecksumError:
+		word = "checksum"
+	print(image.items_count, fields.items_count, tag.sum_covered()[1], word)
+''', encoding="ascii")
+	ran = subprocess.run([sys.executable, str(out / "main.py")],
+	                     capture_output=True, text=True, cwd=out)
+	assert ran.stdout.splitlines() == ["3 2 19 ok", "3 2 19 checksum"], \
+		ran.stdout + ran.stderr
+	assert sum(_vpd_image()[:20]) % 256 == 0

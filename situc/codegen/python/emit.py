@@ -10335,6 +10335,14 @@ class Emitter:
 			return self._fits_check(struct, placement)
 
 		read = f"{name}_value" if versioned else f"self.{name}"
+		# A PARAMETER's own bound is the solver's, and no backend checks it
+		# in `validate`, which reads the message and not the argument
+		# (26.805). This emitted one anyway, reading `self.n` -- a
+		# property that does not exist -- so `validate` over `rv_value(n =
+		# length)` raised AttributeError, and its check took id 0 where C's
+		# `x` holds it (26.1051).
+		if placement.parameter:
+			return []
 		# Placed by `at`: its value is `_value`, read where the message
 		# places it, and raising BoundsError where the message does not
 		# reach it -- as both walkers refuse it. `self.w > 9` compared a
