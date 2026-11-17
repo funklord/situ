@@ -815,6 +815,27 @@ def _u32(value: int | None) -> int:
 	return NONE if value is None else min(value, NONE - 1)
 
 
+#: The largest prefix size the tag row's flag word can carry (bits 8-31).
+PREFIX_SIZE_MAX = (1 << 24) - 1
+
+
+def _prefix_size_bits(resolved: ResolvedSchema, placement: Placement) -> int:
+	"""Bit 2 and the size in bits 8-31, for a fixed-size `prefix(...)`.
+
+	Zero for no prefix and for one whose struct has no constant size, which
+	a reader then declines to sum (26.1066): the backends check a handed
+	prefix's length only where the size is fixed, and a walker that summed
+	whatever it was handed would answer where they have nothing to hold
+	the length to."""
+	held = resolved.structs.get(placement.tag_prefix or "")
+	if held is None or not held.layout.is_fixed_size:
+		return 0
+	size = held.layout.size_bytes
+	if size is None or size > PREFIX_SIZE_MAX:
+		return 0
+	return 4 | size << 8
+
+
 class _Pool:
 	"""The image's one string pool, in the order the strings were needed.
 
@@ -3141,8 +3162,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# whose span is the message ahead of the tag (26.1062); a
 				# reader that predates it sees the word nonzero and
 				# declines, as it should.
+				#
+				# Bit 2 and bits 8-31: the prefix's size in bytes, where its
+				# struct is fixed-size (26.1066). A reader handed a
+				# pseudo-header holds it to this length as the backends
+				# hold theirs to `PREFIX_BYTES`, and without it would sum a
+				# short one confidently. A reader older than this sees bits
+				# it does not know and declines.
 				(1 if placement.tag_prefix else 0)
-				| (2 if placement.tag_before else 0),
+				| (2 if placement.tag_before else 0)
+				| _prefix_size_bits(resolved, placement),
 				# The order the codec's OUTPUT is stored in. Not
 				# `placement.endian`, which is deliberately None on a
 				# `u8 crc[4]` because the member's own bytes have no

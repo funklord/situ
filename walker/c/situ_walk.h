@@ -625,7 +625,8 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
  * refuses it -- and `UNSUPPORTED` where the image names no kernel, or the sum
  * also runs over a prefix the message does not hold (14.2a). Comparing the
  * result with the stored value is the caller's: situ guards bytes, and a
- * mismatch is an answer rather than an error. */
+ * mismatch is an answer rather than an error.
+ * `situ_walk_sum_prefixed` below is the one that takes the prefix. */
 /* How many `let`s `shape` names, and the `which`-th one's value (26.1059),
  * in declaration order: computed as the four backends' getters compute it,
  * held to its width; `*is_signed` (where not NULL) says whether to read
@@ -642,6 +643,18 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
                                 const uint8_t *message, uint32_t len,
                                 uint32_t shape, uint32_t index,
                                 uint32_t *out);
+
+/* The same sum with a `prefix(...)` checksum's pseudo-header handed over
+ * (26.1066): `prefix` is summed ahead of the covered bytes, as each
+ * backend's `_compute` sums the one it is given. `BOUNDS` where its length
+ * is not the size the schema fixes, `UNSUPPORTED` where the schema fixes
+ * none; a tag that names no prefix ignores it, so one pseudo-header may be
+ * handed to every tag in a message. */
+situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     const uint8_t *prefix,
+                                     uint32_t prefix_len, uint32_t *out);
 
 /* An endian marker's verdict: whether its field, read big-endian, equals the
  * `little` sentinel the schema gave it -- 1 for little, 0 otherwise.

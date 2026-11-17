@@ -303,6 +303,10 @@ class Ask:
 	#: is the message's and Rust, whose views hold none, is handed it
 	#: (`_covered_in(&raw)`, 26.1050, 26.1062).
 	before: bool = False
+	#: For `SUM`: the size of the pseudo-header a `prefix(...)` checksum
+	#: also sums, 0 for none. Each driver hands it `handed_prefix(prefix)`
+	#: and both walkers are handed the same bytes (26.1066).
+	prefix: int = 0
 
 
 #: Whether to ask a run of STRUCTS for its count. **On.** It was held
@@ -348,6 +352,50 @@ _COMPUTABLE: frozenset[str] = frozenset()
 #: schema at hand (26.1059). A named value is not in `struct.members` -- it
 #: occupies no bytes -- so `asks` cannot find it in the resolved struct.
 _LETS: dict[str, tuple[tuple[str, int, bool], ...]] = {}
+
+
+def handed_prefix(size: int) -> bytes:
+	"""The pseudo-header every reader is handed for a `prefix(...)` sum.
+
+	No message holds one (14.2a), so the differential supplies it: the same
+	bytes to the four drivers and the two walkers, which is all a comparison
+	needs. Not zeros, which would let a reader that skipped the prefix agree
+	with one that summed it -- a zero word adds nothing to RFC 1071's sum
+	(26.1066).
+	"""
+	return bytes((0x0A + 0x3B * i) & 0xFF for i in range(size))
+
+
+def prefix_size(placement: Placement,
+		structs_by_name: dict[str, ResolvedStruct]) -> int | None:
+	"""The fixed size of the struct a tag's `prefix(...)` names, if any."""
+	held = structs_by_name.get(placement.tag_prefix or "")
+	if held is None or not held.layout.is_fixed_size:
+		return None
+	return held.layout.size_bytes
+
+
+def schema_prefix(resolved: ResolvedSchema) -> bytes | None:
+	"""The one pseudo-header this schema's sums are compared over.
+
+	The first fixed-size prefix any tag names, in declaration order. A
+	walker takes one prefix per message, so a sum whose prefix is another
+	size is not asked at all rather than compared against a refusal that
+	says only that the harness chose a length (26.1066).
+	"""
+	size = _schema_prefix_size(resolved.structs)
+	return None if size is None else handed_prefix(size)
+
+
+def _schema_prefix_size(structs_by_name: dict[str, ResolvedStruct]
+		) -> int | None:
+	for struct in structs_by_name.values():
+		for entry in own_entries(struct):
+			if entry.placement.tag_prefix is not None:
+				size = prefix_size(entry.placement, structs_by_name)
+				if size is not None:
+					return size
+	return None
 
 
 def lets_of(schema: ast.Schema) -> dict[str, tuple[tuple[str, int, bool], ...]]:
@@ -693,10 +741,18 @@ def asks(struct: ResolvedStruct, structs: set[str],
 					found.append(Ask(Probe.SUM, local, before=True))
 			elif covered_run(struct, placement) is not None:
 				found.append(Ask(Probe.COVERED_RANGE, local))
-				if placement.tag_codec in _COMPUTABLE \
-						and placement.tag_prefix is None \
+				# A sum over a pseudo-header too, handed the same bytes in
+				# all six readers (26.1066) -- where its size is fixed and
+				# is the one the schema's walkers are handed.
+				ahead = 0
+				if placement.tag_prefix is not None:
+					ahead = prefix_size(placement, structs_by_name) or 0
+					if not ahead \
+							or ahead != _schema_prefix_size(structs_by_name):
+						ahead = -1
+				if placement.tag_codec in _COMPUTABLE and ahead >= 0 \
 						and not (placement.size_bits or 0) % 8:
-					found.append(Ask(Probe.SUM, local))
+					found.append(Ask(Probe.SUM, local, prefix=ahead))
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:
@@ -1854,6 +1910,17 @@ def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
 	]
 
 
+def _c_prefix(ask: Ask, byte: str) -> tuple[list[str], str]:
+	"""The pseudo-header a C or C++ `SUM` hands `_compute`, and the
+	arguments naming it -- nothing for a tag without one (26.1066)."""
+	if not ask.prefix:
+		return [], ""
+	held = ", ".join(f"0x{b:02x}u" for b in handed_prefix(ask.prefix))
+	return ([f"\t\t\t\tstatic const {byte} ahead[{ask.prefix}] ="
+	         f" {{ {held} }};"],
+	        f" ahead, {ask.prefix}u,")
+
+
 def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	# The stem, with the suffix left to `format`. Built from the parts rather
 	# than by handing `ident` a `{}` to flatten: `c_name` maps anything that
@@ -1911,9 +1978,12 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		return [f'\t\t\tprintf("{ask.local} {form}\\n",'
 		        f" ({cast}){call.format('get')}(view));"]
 	if ask.probe is Probe.SUM:
+		ahead, handed = _c_prefix(ask, "uint8_t")
 		return ["\t\t\t{",
 		        "\t\t\t\tuint32_t sum = 0u;",
-		        f"\t\t\t\tif ({call.format('compute')}(view, &sum) == SITU_OK) {{",
+		        *ahead,
+		        f"\t\t\t\tif ({call.format('compute')}(view,{handed} &sum)"
+		        " == SITU_OK) {",
 		        f'\t\t\t\t\tprintf("{ask.local}.sum %u\\n", (unsigned)sum);',
 		        "\t\t\t\t} else {",
 		        f'\t\t\t\t\tprintf("{ask.local}.sum refused\\n");',
@@ -2437,9 +2507,12 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\tstd::printf("{ask.local} {form}\\n",'
 		        f" static_cast<{cast}>(view.{call}()));"]
 	if ask.probe is Probe.SUM:
+		ahead, handed = _c_prefix(ask, "std::uint8_t")
 		return ["\t\t\t{",
 		        "\t\t\t\tstd::uint32_t sum = 0u;",
-		        f"\t\t\t\tif (view.{call}_compute(sum) == ::situ::rt::err::ok) {{",
+		        *ahead,
+		        f"\t\t\t\tif (view.{call}_compute({handed.lstrip()}"
+		        f"{' ' if handed else ''}sum) == ::situ::rt::err::ok) {{",
 		        f'\t\t\t\t\tstd::printf("{ask.local}.sum %u\\n",'
 		        " static_cast<unsigned>(sum));",
 		        "\t\t\t\t} else {",
@@ -2878,6 +2951,9 @@ def _rust_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\t\tprintln!("{ask.local} {{}}", view.{call}());']
 	if ask.probe is Probe.SUM:
 		handed = "_in(&raw)" if ask.before else "()"
+		if ask.prefix:
+			handed = ("(&[" + ", ".join(f"0x{b:02x}u8" for b in
+			                            handed_prefix(ask.prefix)) + "])")
 		return [f"\t\t\t\tmatch view.{call}_compute{handed} {{",
 		        f'\t\t\t\t\tOk(sum) => println!("{ask.local}.sum {{}}", sum),',
 		        f'\t\t\t\t\tErr(_) => println!("{ask.local}.sum refused"),',
@@ -3215,8 +3291,10 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.LET:
 		return [f'print("{ask.local} %d" % view.{call})']
 	if ask.probe is Probe.SUM:
+		handed = (f'bytes.fromhex("{handed_prefix(ask.prefix).hex()}")'
+		          if ask.prefix else "")
 		return ["try:",
-		        f'\tprint("{ask.local}.sum %d" % view.{call}_compute())',
+		        f'\tprint("{ask.local}.sum %d" % view.{call}_compute({handed}))',
 		        "except situ_runtime.SituError:",
 		        f'\tprint("{ask.local}.sum refused")']
 	if ask.probe is Probe.COVERED_RANGE:

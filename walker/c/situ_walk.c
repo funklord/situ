@@ -8497,15 +8497,18 @@ static uint64_t width_mask(uint32_t width)
 	return width >= 64u ? ~(uint64_t)0 : (((uint64_t)1 << width) - 1u);
 }
 
-/* The covered byte at `i`, with the tag's own bytes read as `fill`. */
-static uint32_t covered_byte(const uint8_t *span, uint32_t i, int holed,
+/* The summed byte at `i` of the prefix then the span, with the tag's own
+ * bytes read as `fill`: the hole is measured against the two together, as
+ * every backend's `situ_span_byte` measures it (26.1066). */
+static uint32_t covered_byte(const uint8_t *ahead, uint32_t ahead_len,
+                             const uint8_t *span, uint32_t i, int holed,
                              uint32_t hole_at, uint32_t hole_len,
                              uint32_t fill)
 {
 	if (holed && i >= hole_at && i - hole_at < hole_len) {
 		return fill & 0xFFu;
 	}
-	return span[i];
+	return i < ahead_len ? ahead[i] : span[i - ahead_len];
 }
 
 situ_walk_err situ_walk_sum(const situ_walk_image *image,
@@ -8513,7 +8516,18 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
                                 uint32_t shape, uint32_t index,
                                 uint32_t *out)
 {
-	if (image == NULL || message == NULL || out == NULL) {
+	return situ_walk_sum_prefixed(image, message, len, shape, index, NULL,
+	                              0u, out);
+}
+
+situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     const uint8_t *prefix,
+                                     uint32_t prefix_len, uint32_t *out)
+{
+	if (image == NULL || message == NULL || out == NULL
+	                || (prefix == NULL && prefix_len != 0u)) {
 		return SITU_WALK_MALFORMED;
 	}
 
@@ -8535,9 +8549,10 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	                                                 : SITU_WALK_NONE;
 	/* The flag word: bit 0 a prefix the message does not hold (14.2a), bit
 	 * 1 `covers(before)` -- every byte of the message ahead of the tag,
-	 * which names no members (26.1050, 26.1062). */
+	 * which names no members (26.1050, 26.1062) -- and bit 2 the prefix's
+	 * fixed size, in bits 8-31 (26.1066). */
 	const uint32_t flags  = image->tag_stride >= 28u ? u32_at(row + 20) : 0u;
-	const uint32_t prefix = flags & 1u;
+	const int      prefixed = (flags & 1u) != 0u;
 	const int      before = (flags & 2u) != 0u;
 
 	if (codec == SITU_WALK_NONE
@@ -8560,9 +8575,24 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	                && family != KERNEL_BYTE_SUM) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-	if (width == 0u || width > 32u || prefix != 0u || shift < 0
-	                || (flags & ~3u) != 0u) {
+	if (width == 0u || width > 32u || shift < 0 || (flags & 0xF8u) != 0u) {
 		return SITU_WALK_UNSUPPORTED;
+	}
+	/* A pseudo-header is summed only when handed over, and only where the
+	 * schema fixes its size: a wrong length is BOUNDS, which is what each
+	 * backend's `_compute` answers with `PREFIX_BYTES` (26.1066). One
+	 * handed to a tag that names none is not this tag's and is ignored. */
+	const uint8_t *ahead     = NULL;
+	uint32_t       ahead_len = 0u;
+	if (prefixed) {
+		if (prefix == NULL || (flags & 4u) == 0u || before) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		if (prefix_len != flags >> 8) {
+			return SITU_WALK_BOUNDS;
+		}
+		ahead     = prefix;
+		ahead_len = prefix_len;
 	}
 
 	/* Where the covered bytes are, from what the walk places. A `before`
@@ -8633,11 +8663,16 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 	if (inside && fill == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
 	}
+	if ((uint64_t)span + ahead_len > UINT32_MAX) {
+		return SITU_WALK_BOUNDS;
+	}
 	const int      holed    = inside;
-	const uint32_t hole_at  = inside ? (uint32_t)(mine - lo) : 0u;
+	const uint32_t hole_at  = inside ? (uint32_t)(mine - lo) + ahead_len
+	                                 : 0u;
 	const uint32_t hole_len = inside ? (uint32_t)wide : 0u;
 	const uint8_t *bytes    = message + lo;
 	const uint64_t mask     = width_mask(width);
+	const uint32_t total_len = span + ahead_len;
 
 	if (family == KERNEL_POLYNOMIAL) {
 		if (image->kernel_tables == NULL || table == SITU_WALK_NONE
@@ -8648,9 +8683,10 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 		                       + table * image->kernel_table_stride;
 		const uint64_t reg = shift != 0 ? 0xFFu : mask;
 		uint64_t       crc = start;
-		for (uint32_t i = 0u; i < span; i++) {
-			const uint32_t b = covered_byte(bytes, i, holed, hole_at,
-			                                hole_len, fill);
+		for (uint32_t i = 0u; i < total_len; i++) {
+			const uint32_t b = covered_byte(ahead, ahead_len, bytes, i,
+			                                holed, hole_at, hole_len,
+			                                fill);
 			if (reflect != 0) {
 				crc = (u32_at(words + 4u * ((crc ^ b) & 0xFFu))
 				       ^ (crc >> 8)) & reg;
@@ -8671,8 +8707,9 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 
 	if (family == KERNEL_BYTE_SUM) {
 		uint64_t total = 0u;
-		for (uint32_t i = 0u; i < span; i++) {
-			total += covered_byte(bytes, i, holed, hole_at, hole_len, fill);
+		for (uint32_t i = 0u; i < total_len; i++) {
+			total += covered_byte(ahead, ahead_len, bytes, i, holed,
+			                      hole_at, hole_len, fill);
 		}
 		*out = (uint32_t)((reflect != 0 ? (uint64_t)0 - total : total)
 		                  & mask);
@@ -8685,12 +8722,12 @@ situ_walk_err situ_walk_sum(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 	uint64_t total = 0u;
-	for (uint32_t i = 0u; i < span; i += 2u) {
-		const uint32_t high = covered_byte(bytes, i, holed, hole_at,
-		                                   hole_len, fill);
-		const uint32_t low  = i + 1u < span
-		                      ? covered_byte(bytes, i + 1u, holed, hole_at,
-		                                     hole_len, fill)
+	for (uint32_t i = 0u; i < total_len; i += 2u) {
+		const uint32_t high = covered_byte(ahead, ahead_len, bytes, i,
+		                                   holed, hole_at, hole_len, fill);
+		const uint32_t low  = i + 1u < total_len
+		                      ? covered_byte(ahead, ahead_len, bytes, i + 1u,
+		                                     holed, hole_at, hole_len, fill)
 		                      : 0u;
 		total += (uint64_t)(high << 8 | low);
 	}

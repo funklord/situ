@@ -2,6 +2,9 @@
 """situ-walk: answer questions about bytes, using a packed layout image.
 
     situ-walk <image> <hex>        every struct, every member it can read
+    situ-walk <image> <hex> --prefix <hex>
+                                   and a `prefix(...)` checksum summed over
+                                   this pseudo-header first (26.1066)
 
 The entry point is deliberately small. What this program is for is being a
 fifth column: the same questions the four backends answer, from a table
@@ -54,7 +57,15 @@ except ImportError as _why:			# pragma: no cover - a layout fault
 
 
 def main(argv: list[str]) -> int:
-	if len(argv) != 3:
+	prefix = None
+	if len(argv) == 5 and argv[3] == "--prefix":
+		try:
+			prefix = bytes.fromhex(argv[4])
+		except ValueError:
+			print(f"situ-walk: --prefix wants hex, not {argv[4]!r}",
+			      file=sys.stderr)
+			return 2
+	elif len(argv) != 3:
 		print(__doc__, file=sys.stderr)
 		return 2
 	try:
@@ -62,7 +73,7 @@ def main(argv: list[str]) -> int:
 	except (ImageError, OSError) as why:
 		print(f"situ-walk: {why}", file=sys.stderr)
 		return 1
-	sys.stdout.write(listing(image, bytes.fromhex(argv[2])))
+	sys.stdout.write(listing(image, bytes.fromhex(argv[2]), prefix=prefix))
 	return 0
 
 

@@ -277,6 +277,11 @@ class Tag:
 	#: the span is the reader's to find from the message it holds
 	#: (26.1050, 26.1062).
 	before: bool = False
+	#: The prefix's size in bytes, where its struct has a constant one
+	#: (26.1066); `NONE` otherwise. A pseudo-header handed to a reader is
+	#: held to it, as every backend holds one to `PREFIX_BYTES`, and a
+	#: prefix of no known size is not summed at all.
+	prefix_bytes: int = NONE
 
 
 @dataclass
@@ -885,9 +890,11 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				where, codec, first, last = _struct.unpack_from(
 					"<IIII", blob, at + i * stride)
 				fill, prefix, endian = NONE, 0, 0
-			# The flag word: bit 0 a prefix, bit 1 `covers(before)`.
+			# The flag word: bit 0 a prefix, bit 1 `covers(before)`, bit 2
+			# the prefix's size in bits 8-31 (26.1066).
 			image.tags[where] = Tag(codec, first, last, fill, prefix & 1,
-			                        endian, bool(prefix & 2))
+			                        endian, bool(prefix & 2),
+			                        prefix >> 8 if prefix & 4 else NONE)
 
 	if MARKERS in found:
 		at, records, stride = found[MARKERS]

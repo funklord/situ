@@ -10,6 +10,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "situ_walk.h"
 
@@ -21,6 +22,10 @@
 
 static uint8_t image_bytes[IMAGE_MAX];
 static uint8_t message_bytes[MESSAGE_MAX];
+/* A `prefix(...)` checksum's pseudo-header (26.1066). TCP's and UDP's are
+ * twelve and forty bytes; this is a ceiling, not a guess at either. */
+#define PREFIX_MAX  256u
+static uint8_t prefix_bytes[PREFIX_MAX];
 
 static const char *why(situ_walk_err err)
 {
@@ -98,9 +103,24 @@ static int from_hex(const char *text, uint8_t *out, uint32_t cap,
 
 int main(int argc, char **argv)
 {
+	/* `--prefix <hex>` last: the pseudo-header a `prefix(...)` checksum
+	 * sums ahead of the message, which no message holds (26.1066). Taken
+	 * off the end so the positional arguments keep their places. */
+	const uint8_t *prefix     = NULL;
+	uint32_t       prefix_len = 0u;
+	if (argc >= 5 && strcmp(argv[argc - 2], "--prefix") == 0) {
+		if (from_hex(argv[argc - 1], prefix_bytes, PREFIX_MAX, &prefix_len)
+		                != HEX_OK) {
+			fprintf(stderr, "situ-walk-c: the prefix is not a run of at "
+			        "most %u hex digit pairs\n", PREFIX_MAX);
+			return 2;
+		}
+		prefix  = prefix_bytes;
+		argc   -= 2;
+	}
 	if (argc < 3) {
 		fprintf(stderr, "usage: situ-walk-c <image> <hex> [struct] "
-		                "[arg...]\n");
+		                "[arg...] [--prefix <hex>]\n");
 		return 2;
 	}
 
@@ -211,9 +231,9 @@ int main(int argc, char **argv)
 		 * beside the stored value above: equal is a tag that verifies.
 		 * Nothing where the image names no codec this walker computes. */
 		uint32_t sum = 0u;
-		const situ_walk_err summed = situ_walk_sum(&image, message_bytes,
-		                                           len, shape, first + i,
-		                                           &sum);
+		const situ_walk_err summed = situ_walk_sum_prefixed(&image,
+		        message_bytes, len, shape, first + i, prefix, prefix_len,
+		        &sum);
 		if (summed == SITU_WALK_OK) {
 			printf("  [%u] sum = %u\n", i, sum);
 		} else if (summed != SITU_WALK_UNSUPPORTED) {

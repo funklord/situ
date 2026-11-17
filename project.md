@@ -8970,6 +8970,10 @@ Moved to `doc/decision/26.1064-a-driver-tracks-an-exchange-by-id-alone.md`.
 
 Moved to `doc/decision/26.1065-blockwise-is-a-local-permutation.md`.
 
+### 26.1066 The walkers sum a pseudo-header they are handed
+
+Moved to `doc/decision/26.1066-the-walkers-sum-a-pseudo-header-they-are-handed.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.

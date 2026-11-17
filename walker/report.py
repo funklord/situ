@@ -380,7 +380,8 @@ def _tags(image: Image, struct_index: int) -> list[int]:
 	        and _offset_computable(image, struct_index, index)]
 
 
-def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
+def _sum(image: Image, view: View, index: int, local: str,
+		prefix: bytes | None = None) -> list[str]:
 	"""`name.sum <n>`: what the tag's codec makes of the bytes it covers,
 	from the image's kernel tables (26.1058) -- the differential's `SUM`.
 
@@ -395,10 +396,13 @@ def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
 	if held is None or not derived.computes(image, index):
 		return []
 	# Declined before the bytes are asked about: a sum that also runs over
-	# a pseudo-header cannot be computed from any message (14.2a), and the
-	# C walker says so first too.
-	if held.prefix:
+	# a pseudo-header cannot be computed from the message alone (14.2a),
+	# and the C walker says so first too. Handed one, it is summed ahead of
+	# the span (26.1066); a prefix of no fixed size is declined in
+	# `compute`, which says why.
+	if held.prefix and prefix is None:
 		return []
+	ahead = prefix if held.prefix else None
 	# `covers(before)`: every byte of the message ahead of the tag, from
 	# the first (26.1062). The view's buffer IS the message and `at` is
 	# absolute in it, so a tag in a nested struct sums what the backends'
@@ -431,8 +435,8 @@ def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
 		        else (start - first, wide))
 		value = derived.compute(
 			image, index, bytes(view.buffer[view.at + first:view.at + end]),
-			hole)
-	except Refused:
+			hole, ahead)
+	except (Refused, derived.WrongPrefix):
 		return [f"{local}.sum refused"]
 	except derived.Uncomputable:
 		return []
@@ -743,7 +747,8 @@ def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 	return found
 
 
-def listing(image: Image, buffer: bytes, args: Sequence[int] = ()) -> str:
+def listing(image: Image, buffer: bytes, args: Sequence[int] = (),
+		prefix: bytes | None = None) -> str:
 	"""What this schema says about this buffer, one struct at a time.
 
 	`args` are the schema's `parameter` members (0050), positionally. One
@@ -751,6 +756,11 @@ def listing(image: Image, buffer: bytes, args: Sequence[int] = ()) -> str:
 	-- and a struct that takes a different number of them gets
 	`needs-arguments` rather than a view, because the alternative is reading
 	a layout the caller did not choose.
+
+	`prefix` is the pseudo-header a `prefix(...)` checksum also sums
+	(14.2a), the same per-stream kind of fact: handed to every such tag,
+	and refused by one whose schema fixes another size, as the backends
+	refuse it (26.1066). Without it those sums are not listed at all.
 	"""
 	lines: list[str] = []
 	for struct_index, _ in enumerate(image.structs):
@@ -770,7 +780,7 @@ def listing(image: Image, buffer: bytes, args: Sequence[int] = ()) -> str:
 		except Refused:
 			lines.append("no-view")
 			continue
-		lines.extend(_members(image, view, struct_index))
+		lines.extend(_members(image, view, struct_index, prefix))
 		verdict = _validate(image, view, struct_index)
 		if verdict is not None:
 			lines.append(f"validate {verdict}")
@@ -2508,7 +2518,8 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 	return found
 
 
-def _members(image: Image, view: View, struct_index: int) -> list[str]:
+def _members(image: Image, view: View, struct_index: int,
+		prefix: bytes | None = None) -> list[str]:
 	lines = []
 	for index in _scalars(image, struct_index):
 		local = _local(image, index)
@@ -2584,7 +2595,7 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			             f"first={span[0] if span else -1}")
 		except Refused:
 			lines.append(f"{local} present=0 bytes=0 first=-1")
-		lines.extend(_sum(image, view, index, local))
+		lines.extend(_sum(image, view, index, local, prefix))
 
 	for index in _while_runs(image, struct_index):
 		local = _local(image, index)

@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
 from walker.image import NONE, Image, load                 # noqa: E402
 from situc.codegen.differ import writes as differ_writes  # noqa: E402
+from situc.codegen.differ import schema_prefix     # noqa: E402
 from walker import walk as walk_module             # noqa: E402
 from walker.walk import (BITS_PER_BYTE, Refused, View,  # noqa: E402
                          acquire, offset_bits, parameters_of, read_scalar,
@@ -322,10 +323,15 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	# every verdict they had, so this can only reach what nothing reached.
 	stamped = [planted(rng, parsed, resolved, draw(rng)) for _ in range(6)]
 
+	# The pseudo-header C's driver hands a `prefix(...)` sum (26.1066):
+	# without the same bytes here, the walker prints no such line and the
+	# key-intersection below would skip TCP's and UDP's sums in silence.
+	ahead = schema_prefix(resolved)
+
 	for packet in [draw(rng) for _ in range(12)] + versioned + stamped:
 		answer   = answers(command["c"], packet, tmp_path)
 		compiled = _by_member(answer)
-		walked   = _by_member(report.listing(image, packet))
+		walked   = _by_member(report.listing(image, packet, prefix=ahead))
 
 		# AND THE WRITES, which no differential compared (26.589). This
 		# walker was the fifth READER and the four backends compared their

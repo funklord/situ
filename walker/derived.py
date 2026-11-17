@@ -53,6 +53,15 @@ class Uncomputable(Exception):
 	"""
 
 
+class WrongPrefix(Exception):
+	"""The pseudo-header handed over is not the size the schema fixes.
+
+	Its own class rather than `Uncomputable`, because it is an answer and
+	not a silence: every backend's `_compute` refuses the same call with
+	BOUNDS, so a listing prints `refused` where they do (26.1066).
+	"""
+
+
 def computes(image: Image, tag: int) -> bool:
 	"""Whether the image says what computes this tag's checksum.
 
@@ -69,7 +78,8 @@ def computes(image: Image, tag: int) -> bool:
 
 
 def compute(image: Image, tag: int, covered: bytes,
-		hole: tuple[int, int] | None = None) -> int:
+		hole: tuple[int, int] | None = None,
+		prefix: bytes | None = None) -> int:
 	"""The checksum of `covered`, by the kernel the image names.
 
 	`hole` is where the tag's OWN bytes sit inside `covered`, as
@@ -86,6 +96,11 @@ def compute(image: Image, tag: int, covered: bytes,
 	both directions -- a tag that needs a hole and was given none would
 	sum its own stale bytes, and one given a hole its schema does not
 	declare would sum bytes that are really there.
+
+	`prefix` is the bytes a `prefix(...)` names -- TCP's and UDP's
+	pseudo-header -- which no message holds and the caller builds from the
+	IP layer (14.2a). Summed ahead of `covered`, the hole measured against
+	the two together, as every backend's `_spans` does (26.1066).
 	"""
 	held = image.tags.get(tag)
 	if held is None or held.codec == NONE:
@@ -97,14 +112,25 @@ def compute(image: Image, tag: int, covered: bytes,
 
 	# `prefix(...)`: bytes ahead of the message that the message does not
 	# contain. TCP's and UDP's pseudo-header carries the IP addresses, and
-	# a reader holding one datagram cannot know them -- so this declines,
-	# where summing the single span it has would answer confidently and
-	# wrongly (14.2a).
+	# a reader holding one datagram cannot know them -- so without them
+	# this declines, where summing the single span it has would answer
+	# confidently and wrongly (14.2a). Handed them, it sums them first,
+	# held to the size the schema fixes (26.1066).
 	if held.prefix:
-		raise Uncomputable("its sum also runs over a prefix the message "
-		                   "does not contain -- a pseudo-header, whose "
-		                   "bytes come from a layer this schema does not "
-		                   "describe (14.2a)")
+		if prefix is None:
+			raise Uncomputable("its sum also runs over a prefix the "
+			                   "message does not contain -- a "
+			                   "pseudo-header, whose bytes come from a "
+			                   "layer this schema does not describe "
+			                   "(14.2a)")
+		if held.prefix_bytes == NONE:
+			raise Uncomputable("its prefix has no constant size, so "
+			                   "nothing says how long the one handed "
+			                   "over should be")
+		if len(prefix) != held.prefix_bytes:
+			raise WrongPrefix(f"the prefix is {held.prefix_bytes} bytes, "
+			                  f"not {len(prefix)}")
+	ahead = bytes(prefix) if held.prefix and prefix is not None else b""
 
 	if held.fill == NONE and hole is not None:
 		raise Uncomputable("its own bytes are inside what it covers and "
@@ -114,6 +140,7 @@ def compute(image: Image, tag: int, covered: bytes,
 			raise Uncomputable("it covers its own bytes and the caller did "
 			                   "not say where they sit in the span")
 		covered = _filled(covered, hole, held.fill)
+	covered = ahead + covered
 
 	if kernel.family == KERNEL_POLYNOMIAL:
 		return _polynomial(image, kernel, covered)
