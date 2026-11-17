@@ -53,6 +53,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	LetSpelling,
 	let_source,
+	let_split,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -585,6 +586,7 @@ class Emitter:
 		lines.extend(self._offsets(struct))
 		lines.extend(self._handed_arguments(struct))
 		lines.extend(self._lets(struct))
+		lines.extend(self._let_setters(struct))
 
 		# After `_offsets`, for the reason `_struct_extent` above gives and
 		# from the same failure. A tag's covered span may end at a member's
@@ -878,6 +880,47 @@ class Emitter:
 				and placement.tag_codec not in self._underivable_codecs() \
 				and not (placement.size_bits or 0) % BITS_PER_BYTE:
 			lines += self._checksum_codec(struct, placement, local)
+		return lines
+
+	def _let_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""A setter per named value that splits back into its fields
+		(26.1061): `traverse.let_split` decides which, once for all four. A
+		value with a bit none of the fields holds is refused, not cut."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		lines: list[str] = []
+		for let in decl.lets:
+			split = let_split(decl, let, struct)
+			if split is None:
+				continue
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			mask = 0
+			for _, shift, bits in split:
+				mask |= ((1 << bits) - 1) << shift
+			names = ", ".join(name for name, _, _ in split)
+			ctype = f"uint{scalar.bits}_t"
+			lines += [
+				"",
+				f"/* {struct.name}.{let.name}: split back into {names}"
+				" (26.1061). */",
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, c_name(let.name), 'set')}"
+				f"(situ_view_t view, {ctype} value)",
+				"{",
+				f"\tif (((uint64_t)value & ~UINT64_C({mask:#x})) != 0u) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			]
+			for name, shift, bits in split:
+				width = next(w for w in (8, 16, 32, 64) if w >= bits)
+				lines.append(
+					f"\t{ident(self.prefix, struct.name, c_name(name), 'set')}"
+					f"(view, (uint{width}_t)(((uint64_t)value >> {shift}u)"
+					f" & UINT64_C({(1 << bits) - 1:#x})));")
+			lines += ["\treturn SITU_OK;", "}"]
 		return lines
 
 	def _lets(self, struct: ResolvedStruct) -> list[str]:

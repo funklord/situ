@@ -5060,6 +5060,75 @@ class LetSpelling:
 	invert: Callable[[str], str]
 
 
+def let_split(decl: "ast.StructDecl", let: "ast.Let",
+		struct: "ResolvedStruct") -> "list[tuple[str, int, int]] | None":
+	"""How a named value splits back into its fields, or None (26.1061).
+
+	`(field, shift, bits)` for each term of an `|` of unsigned fields, each
+	alone or shifted left by a constant: `.mfa`'s `(high << 32) | low` is
+	`[("high", 32, 16), ("low", 0, 32)]`. Offered only where the split is
+	the getter's exact inverse -- the terms' bits disjoint and every one
+	inside the value's width, an unsigned value, plain fields with no
+	attribute deciding what may be stored -- so setting `v` and reading
+	back gives `v` for every `v` whose bits the fields hold, and a value
+	with any other bit set is refused rather than silently cut. Anything
+	else (`a - b`, a mask, a field twice) has no setter, which is what
+	26.1056 said of all of them.
+
+	And each field's own setter has to be the plain one in every backend:
+	not one a checksum covers, whose C setter takes the message for its
+	dirty bit, and not one a version gates, which can refuse. A named value
+	over either is declined here rather than spelt four ways.
+	"""
+	scalar = let.type_ref.scalar
+	if scalar is None or scalar.signed:
+		return None
+	fields = {member.name: member for member in decl.members
+	          if isinstance(member, ast.Field)}
+
+	terms: list[tuple[str, int]] = []
+
+	def gather(node: "ast.Expr") -> bool:
+		if isinstance(node, ast.Binary) and node.op == "|":
+			return gather(node.left) and gather(node.right)
+		shift = 0
+		if isinstance(node, ast.Binary) and node.op == "<<" \
+				and isinstance(node.right, ast.IntLiteral):
+			shift = node.right.value
+			node = node.left
+		if not isinstance(node, ast.NameRef):
+			return False
+		terms.append((node.name, shift))
+		return True
+
+	if not gather(let.expr):
+		return None
+	split: list[tuple[str, int, int]] = []
+	taken = 0
+	for name, shift in terms:
+		held = fields.get(name)
+		if held is None or held.attrs or held.type_ref.scalar is None \
+				or held.type_ref.scalar.signed or held.array is not None \
+				or held.radix is not None or held.pin is not None \
+				or held.until is not None or held.repeat is not None:
+			return None
+		placed = next((entry.placement for entry in struct.entries
+		               if entry.placement.path == f"{struct.name}.{name}"),
+		              None)
+		if placed is None or placed.kind != "field" or placed.covered_by \
+				or placed.since:
+			return None
+		bits = held.type_ref.scalar.bits
+		if shift < 0 or shift + bits > scalar.bits:
+			return None
+		mask = ((1 << bits) - 1) << shift
+		if taken & mask:
+			return None
+		taken |= mask
+		split.append((name, shift, bits))
+	return split
+
+
 def let_source(expr: "ast.Expr", spell: LetSpelling,
 		consts: dict[str, int]) -> str:
 	"""A named value's definition in one language (26.1056); `check_lets`

@@ -52,6 +52,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	LetSpelling,
 	let_source,
+	let_split,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -2441,6 +2442,43 @@ class Emitter:
 		lines.append(f"\tDIRTY_MASK = {hex((1 << len(held)) - 1)}")
 		return lines
 
+	def _let_setters(self, struct: ResolvedStruct,
+			only: str | None = None) -> list[str]:
+		"""A setter per named value that splits back into its fields
+		(26.1061): `traverse.let_split` decides which, once for all four. A
+		value with a bit none of the fields holds is refused, not cut."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		lines: list[str] = []
+		for let in decl.lets:
+			if only is not None and let.name != only:
+				continue
+			split = let_split(decl, let, struct)
+			if split is None:
+				continue
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			mask = 0
+			for _, shift, bits in split:
+				mask |= ((1 << bits) - 1) << shift
+			names = ", ".join(name for name, _, _ in split)
+			lines += [
+				"",
+				f"\t@{py_name(let.name)}.setter",
+				f"\tdef {py_name(let.name)}(self, value: int) -> None:",
+				f'\t\t"""Split back into {names} (26.1061)."""',
+				f"\t\tif value < 0 or value & ~{mask:#x}:",
+				"\t\t\traise ConstraintError(",
+				f'\t\t\t\tf"{let.name}: {{value:#x}} sets a bit none of'
+				f' {names} holds")',
+			]
+			for name, shift, bits in split:
+				lines.append(f"\t\tself.{py_name(name)} ="
+				             f" (value >> {shift}) & {(1 << bits) - 1:#x}")
+		return lines
+
 	def _lets(self, struct: ResolvedStruct) -> list[str]:
 		"""A property per named value (26.1056). Python's integers do not
 		wrap, so each operation is masked to 64 bits -- which is what makes
@@ -2499,6 +2537,9 @@ class Emitter:
 				*([f"\t\treturn value - {1 << bits:#x} if value >> {bits - 1}"
 				   " else value"] if scalar.signed else ["\t\treturn value"]),
 			]
+			# Directly after its getter, which is where a type checker
+			# requires a property's setter to be.
+			lines += self._let_setters(struct, only=let.name)
 		return lines
 
 	def _opaque(self, struct: ResolvedStruct, placement: Placement) -> list[str]:

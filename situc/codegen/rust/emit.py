@@ -52,6 +52,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	LetSpelling,
 	let_source,
+	let_split,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -758,6 +759,7 @@ class Emitter:
 			f"{self._argument_copies(struct)} }}",
 			"\t}",
 		])
+		lines.extend(self._let_setters(struct))
 
 		lines.extend(self._dirty_constants(struct))
 
@@ -1725,6 +1727,42 @@ class Emitter:
 			"\t}",
 			"}",
 		]
+
+	def _let_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""A setter per named value that splits back into its fields
+		(26.1061): `traverse.let_split` decides which, once for all four. A
+		value with a bit none of the fields holds is refused, not cut."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		lines: list[str] = []
+		for let in decl.lets:
+			split = let_split(decl, let, struct)
+			if split is None:
+				continue
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			mask = 0
+			for _, shift, bits in split:
+				mask |= ((1 << bits) - 1) << shift
+			names = ", ".join(name for name, _, _ in split)
+			lines += [
+				"",
+				f"\t/// `{let.name}` split back into {names} (26.1061).",
+				f"\tpub fn set_{_ident(let.name)}(&mut self,"
+				f" value: u{scalar.bits}) -> Result<()> {{",
+				f"\t\tif (value as u64) & !{mask:#x}u64 != 0 {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			]
+			for name, shift, bits in split:
+				width = next(w for w in (8, 16, 32, 64) if w >= bits)
+				lines.append(
+					f"\t\tself.set_{_ident(name)}((((value as u64) >> {shift})"
+					f" & {(1 << bits) - 1:#x}u64) as u{width});")
+			lines += ["\t\tOk(())", "\t}"]
+		return lines
 
 	def _lets(self, struct: ResolvedStruct) -> list[str]:
 		"""A getter per named value (26.1056): wrapping arithmetic on `u64`,

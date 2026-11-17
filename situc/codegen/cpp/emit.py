@@ -55,6 +55,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	LetSpelling,
 	let_source,
+	let_split,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -752,6 +753,7 @@ class Emitter:
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._offsets(struct))
 		lines.extend(self._lets(struct))
+		lines.extend(self._let_setters(struct))
 		lines.extend(self._walked(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
@@ -10257,6 +10259,46 @@ class Emitter:
 			"\t\t(void)at;",
 			"\t}",
 		]
+
+	def _let_setters(self, struct: ResolvedStruct) -> list[str]:
+		"""A setter per named value that splits back into its fields
+		(26.1061): `traverse.let_split` decides which, once for all four. A
+		value with a bit none of the fields holds is refused, not cut."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		lines: list[str] = []
+		for let in decl.lets:
+			split = let_split(decl, let, struct)
+			if split is None:
+				continue
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			mask = 0
+			for _, shift, bits in split:
+				mask |= ((1 << bits) - 1) << shift
+			names = ", ".join(name for name, _, _ in split)
+			ctype = f"std::uint{scalar.bits}_t"
+			lines += [
+				"",
+				f"\t/** {let.name}: split back into {names} (26.1061). */",
+				f"\t[[nodiscard]] ::situ::rt::err set_{bare_name(let.name)}"
+				f"({ctype} value) noexcept",
+				"\t{",
+				f"\t\tif ((static_cast<std::uint64_t>(value)"
+				f" & ~std::uint64_t{{{mask:#x}u}}) != 0u) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			]
+			for name, shift, bits in split:
+				width = next(w for w in (8, 16, 32, 64) if w >= bits)
+				lines.append(
+					f"\t\tset_{bare_name(name)}(static_cast<std::uint{width}_t>("
+					f"(static_cast<std::uint64_t>(value) >> {shift}u)"
+					f" & std::uint64_t{{{(1 << bits) - 1:#x}u}}));")
+			lines += ["\t\treturn ::situ::rt::err::ok;", "\t}"]
+		return lines
 
 	def _lets(self, struct: ResolvedStruct) -> list[str]:
 		"""A getter per named value (26.1056); see C's for the arithmetic."""
