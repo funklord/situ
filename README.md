@@ -558,6 +558,7 @@ struct cannot describe:
 | `variant v switch (e) { case 1: ... default: error }` | one of several layouts, chosen by a field already read |
 | `peek u8 kind;` | a discriminant read at the cursor and not spent, so the arm it selects owns the byte |
 | `parameter u8 block_size;` | an argument the *caller* supplies: zero bytes wide, read by every expression a field is read by |
+| `let u64 offset = (high << 32) \| low;` | a value the struct's fields assemble, named: zero bytes wide, a getter in every reader, and usable by any expression after it -- computed modulo 2^64 and held to its width, so the four agree |
 | `indexed (base = region) { ... }` | members reached through an offset table |
 | `tlv name (tag_decode = ..., value_size = ...)` | a run of tag-length-value items, with the item grammar declared |
 | `opaque name [ n ]` | bytes with no described interior |

@@ -49,7 +49,10 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
+from situc.unparse import expr_to_source
 from situc.traverse import (
+	LetSpelling,
+	let_source,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -581,6 +584,7 @@ class Emitter:
 		lines.extend(self._required(struct))
 		lines.extend(self._offsets(struct))
 		lines.extend(self._handed_arguments(struct))
+		lines.extend(self._lets(struct))
 
 		# After `_offsets`, for the reason `_struct_extent` above gives and
 		# from the same failure. A tag's covered span may end at a member's
@@ -874,6 +878,68 @@ class Emitter:
 				and placement.tag_codec not in self._underivable_codecs() \
 				and not (placement.size_bits or 0) % BITS_PER_BYTE:
 			lines += self._checksum_codec(struct, placement, local)
+		return lines
+
+	def _lets(self, struct: ResolvedStruct) -> list[str]:
+		"""A getter per named value the struct's fields assemble (26.1056).
+
+		Modulo 2^64, each read widened first -- `data_offset_high << 32` on
+		a promoted `u16` is undefined -- and `/`, `%` by zero and a shift by
+		64 or more are 0, which `traverse.LetSpelling` sets for all four."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		fields = {getattr(member, "name", None): member
+		          for member in decl.members}
+
+		def read(name: str) -> str:
+			held = fields[name]
+			assert isinstance(held, ast.Field) \
+				and held.type_ref.scalar is not None
+			signed = held.type_ref.scalar.signed
+			got = (f"{ident(self.prefix, struct.name, c_name(name), 'get')}"
+			       "(view)")
+			return (f"(uint64_t)(int64_t){got}" if signed
+			        else f"(uint64_t){got}")
+
+		def binary(op: str, left: str, right: str) -> str:
+			if op in ("/", "%"):
+				return (f"({right} == 0u ? (uint64_t)0u"
+				        f" : (uint64_t)({left} {op} {right}))")
+			if op in ("<<", ">>"):
+				# A literal shift below 64 needs no guard.
+				held = re.fullmatch(r"UINT64_C\((\d+)\)", right)
+				if held is not None and int(held.group(1)) < 64:
+					return f"(uint64_t)({left} {op} {held.group(1)}u)"
+				return (f"({right} >= 64u ? (uint64_t)0u"
+				        f" : (uint64_t)({left} {op} {right}))")
+			return f"(uint64_t)({left} {op} {right})"
+
+		spell = LetSpelling(
+			read = read,
+			literal = lambda value: f"UINT64_C({value})",
+			binary = binary,
+			negate = lambda inner: f"(uint64_t)(0u - {inner})",
+			invert = lambda inner: f"(uint64_t)~{inner}")
+		consts = dict(self.resolved.layout.env.consts)
+		lines: list[str] = []
+		for let in decl.lets:
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			ctype = f"{'int' if scalar.signed else 'uint'}{scalar.bits}_t"
+			lines += [
+				"",
+				f"/* {struct.name}.{let.name}: a value its fields assemble,",
+				f" *   {expr_to_source(let.expr)}",
+				" * computed modulo 2^64 and held to its width (26.1056). */",
+				f"static inline {ctype} "
+				f"{ident(self.prefix, struct.name, c_name(let.name), 'get')}"
+				"(situ_view_t view)",
+				"{",
+				f"\treturn ({ctype}){let_source(let.expr, spell, consts)};",
+				"}",
+			]
 		return lines
 
 	def _nested_tag(self, struct: ResolvedStruct, placement: Placement

@@ -48,7 +48,10 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
+from situc.unparse import expr_to_source
 from situc.traverse import (
+	LetSpelling,
+	let_source,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -725,6 +728,7 @@ class Emitter:
 		lines.extend(self._region_runs(struct))
 		lines.extend(self._nested_text_values(struct))
 		lines.extend(self._arm_accessors(struct))
+		lines.extend(self._lets(struct))
 		lines.extend(self._walked(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
@@ -1721,6 +1725,66 @@ class Emitter:
 			"\t}",
 			"}",
 		]
+
+	def _lets(self, struct: ResolvedStruct) -> list[str]:
+		"""A getter per named value (26.1056): wrapping arithmetic on `u64`,
+		which is C's modulo 2^64, and the guards that keep a division by
+		zero or a shift by 64 from panicking where C would be undefined."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		fields = {getattr(member, "name", None): member
+		          for member in decl.members}
+
+		def read(name: str) -> str:
+			held = fields[name]
+			assert isinstance(held, ast.Field) \
+				and held.type_ref.scalar is not None
+			got = f"self.{_ident(name)}()"
+			if held.type_ref.scalar.signed:
+				return f"(({got} as i64) as u64)"
+			return f"({got} as u64)"
+
+		def binary(op: str, left: str, right: str) -> str:
+			wrapping = {"+": "wrapping_add", "-": "wrapping_sub",
+			            "*": "wrapping_mul"}
+			if op in wrapping:
+				# A method argument in parentheses is `unused_parens`,
+				# which `-D warnings` refuses.
+				return f"{left}.{wrapping[op]}({self._unparen(right)})"
+			if op in ("/", "%"):
+				return (f"(if {right} == 0 {{ 0u64 }} else"
+				        f" {{ {left} {op} {right} }})")
+			if op in ("<<", ">>"):
+				held = re.fullmatch(r"(\d+)u64", right)
+				if held is not None and int(held.group(1)) < 64:
+					return f"({left} {op} {held.group(1)})"
+				return (f"(if {right} >= 64 {{ 0u64 }} else"
+				        f" {{ {left} {op} {right} }})")
+			return f"({left} {op} {right})"
+
+		spell = LetSpelling(
+			read = read,
+			literal = lambda value: f"{value}u64",
+			binary = binary,
+			negate = lambda inner: f"{inner}.wrapping_neg()",
+			invert = lambda inner: f"(!{inner})")
+		consts = dict(self.resolved.layout.env.consts)
+		lines: list[str] = []
+		for let in decl.lets:
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			rtype = f"{'i' if scalar.signed else 'u'}{scalar.bits}"
+			lines += [
+				"",
+				f"\t/// `{let.name}`: `{expr_to_source(let.expr)}`, computed",
+				"\t/// modulo 2^64 and held to its width (26.1056).",
+				f"\tpub fn {_ident(let.name)}(&self) -> {rtype} {{",
+				f"\t\t({let_source(let.expr, spell, consts)}) as {rtype}",
+				"\t}",
+			]
+		return lines
 
 	def _opaque(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		"""Treat-as-bytes, the whole of what an `opaque` region supports (9.4).

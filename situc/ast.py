@@ -1731,6 +1731,27 @@ class RegisterInfo:
 
 
 @dataclass(frozen=True)
+class Let(Node):
+	"""`let u64 data_offset = data_offset_high << 32 | data_offset_low;`
+
+	A value the struct's fields assemble, named (26.1056). It occupies no
+	bytes: every reader gets a getter for it, and every expression after it
+	in the struct may name it, which reads as its definition -- substituted
+	at parse time, so nothing downstream of the parser meets the name.
+	openmlx4's `.mfa` table of contents keeps one 48-bit offset in two
+	fields twenty bytes apart; the assembly was a shift in each caller.
+	"""
+
+	span: Span
+	name: str
+	type_ref: TypeRef
+	expr: Expr
+	#: How many of the struct's members precede it, so a use before it is
+	#: refused rather than reading a value its fields may not reach.
+	after: int = 0
+
+
+@dataclass(frozen=True)
 class StructDecl(Decl):
 	span: Span
 	name: str
@@ -1740,6 +1761,10 @@ class StructDecl(Decl):
 	# holds; codegen reads this to decide it is emitting bus transactions
 	# rather than buffer accessors.
 	register: RegisterInfo | None = None
+	#: The struct's named values (26.1056). Beside the members rather than
+	#: among them: they occupy nothing, and every pass that walks members
+	#: would otherwise have to learn to skip them.
+	lets: tuple[Let, ...] = ()
 
 
 class RequirementKind(Enum):

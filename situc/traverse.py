@@ -5041,3 +5041,39 @@ def decode_bound(codec: object, placement: Placement) -> int | None:
 	# bound, and the accessor that sizes a buffer from it is better absent
 	# (26.53).
 	return None if bound >= 1 << 32 else bound
+
+
+@dataclass(frozen=True)
+class LetSpelling:
+	"""How one language spells a named value's arithmetic (26.1056).
+
+	Every reader computes modulo 2^64 with each field read widened to 64
+	bits, so the four agree: `/` and `%` by zero are 0 and a shift by 64 or
+	more is 0, where C would be undefined and Rust would panic. `binary`
+	takes (op, left, right) and returns the spelling; `read` takes a field
+	name and returns its widened read; `literal` a number."""
+
+	read: Callable[[str], str]
+	literal: Callable[[int], str]
+	binary: Callable[[str, str, str], str]
+	negate: Callable[[str], str]
+	invert: Callable[[str], str]
+
+
+def let_source(expr: "ast.Expr", spell: LetSpelling,
+		consts: dict[str, int]) -> str:
+	"""A named value's definition in one language (26.1056); `check_lets`
+	has held it to what this can spell."""
+	if isinstance(expr, ast.IntLiteral):
+		return spell.literal(expr.value & 0xFFFF_FFFF_FFFF_FFFF)
+	if isinstance(expr, ast.NameRef):
+		if expr.name in consts:
+			return spell.literal(consts[expr.name] & 0xFFFF_FFFF_FFFF_FFFF)
+		return spell.read(expr.name)
+	if isinstance(expr, ast.Unary):
+		inner = let_source(expr.operand, spell, consts)
+		return spell.negate(inner) if expr.op == "-" else spell.invert(inner)
+	if isinstance(expr, ast.Binary):
+		return spell.binary(expr.op, let_source(expr.left, spell, consts),
+		                    let_source(expr.right, spell, consts))
+	raise ValueError(f"not a named value's arithmetic: {expr!r}")

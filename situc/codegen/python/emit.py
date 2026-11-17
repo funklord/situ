@@ -48,7 +48,10 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
+from situc.unparse import expr_to_source
 from situc.traverse import (
+	LetSpelling,
+	let_source,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -1112,6 +1115,7 @@ class Emitter:
 
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
+		lines.extend(self._lets(struct))
 		lines.extend(self._walked(struct))
 		lines.extend(self._extent_property(struct))
 		lines.extend(self._required(struct))
@@ -2435,6 +2439,66 @@ class Emitter:
 		lines.extend(f"\tDIRTY_{py_name(one.local).upper()} = {hex(1 << one.bit)}"
 		             for one in held)
 		lines.append(f"\tDIRTY_MASK = {hex((1 << len(held)) - 1)}")
+		return lines
+
+	def _lets(self, struct: ResolvedStruct) -> list[str]:
+		"""A property per named value (26.1056). Python's integers do not
+		wrap, so each operation is masked to 64 bits -- which is what makes
+		this agree with the three that do -- and a division by zero or a
+		shift by 64 is 0, as in all four."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		fields = {getattr(member, "name", None): member
+		          for member in decl.members}
+		mask = "0xFFFFFFFFFFFFFFFF"
+
+		def read(name: str) -> str:
+			held = fields[name]
+			assert isinstance(held, ast.Field) \
+				and held.type_ref.scalar is not None
+			got = f"self.{py_name(name)}"
+			if held.type_ref.scalar.signed:
+				return f"({got} & {mask})"
+			return got
+
+		def binary(op: str, left: str, right: str) -> str:
+			if op in ("/", "%"):
+				spelled = "//" if op == "/" else "%"
+				return f"(0 if {right} == 0 else {left} {spelled} {right})"
+			if op in ("<<", ">>"):
+				shifted = (f"(({left} << {right}) & {mask})" if op == "<<"
+				           else f"({left} >> {right})")
+				if re.fullmatch(r"\d+", right) and int(right) < 64:
+					return shifted
+				return f"(0 if {right} >= 64 else {shifted})"
+			return f"(({left} {op} {right}) & {mask})"
+
+		spell = LetSpelling(
+			read = read,
+			literal = lambda value: f"{value}",
+			binary = binary,
+			negate = lambda inner: f"((-{inner}) & {mask})",
+			invert = lambda inner: f"((~{inner}) & {mask})")
+		consts = dict(self.resolved.layout.env.consts)
+		lines: list[str] = []
+		for let in decl.lets:
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			bits = scalar.bits
+			held = f"({let_source(let.expr, spell, consts)}) & {(1 << bits) - 1:#x}"
+			lines += [
+				"",
+				"\t@property",
+				f"\tdef {py_name(let.name)}(self) -> int:",
+				f'\t\t"""`{expr_to_source(let.expr)}`, computed modulo 2^64 and',
+				"",
+				'\t\theld to its width (26.1056)."""',
+				f"\t\tvalue = {held}",
+				*([f"\t\treturn value - {1 << bits:#x} if value >> {bits - 1}"
+				   " else value"] if scalar.signed else ["\t\treturn value"]),
+			]
 		return lines
 
 	def _opaque(self, struct: ResolvedStruct, placement: Placement) -> list[str]:

@@ -51,7 +51,10 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
+from situc.unparse import expr_to_source
 from situc.traverse import (
+	LetSpelling,
+	let_source,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -748,6 +751,7 @@ class Emitter:
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._arm_accessors(struct))
 		lines.extend(self._offsets(struct))
+		lines.extend(self._lets(struct))
 		lines.extend(self._walked(struct))
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
@@ -10227,6 +10231,63 @@ class Emitter:
 			"\t\t(void)at;",
 			"\t}",
 		]
+
+	def _lets(self, struct: ResolvedStruct) -> list[str]:
+		"""A getter per named value (26.1056); see C's for the arithmetic."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		if decl is None or not decl.lets:
+			return []
+		fields = {getattr(member, "name", None): member
+		          for member in decl.members}
+		wide = "std::uint64_t"
+
+		def read(name: str) -> str:
+			held = fields[name]
+			assert isinstance(held, ast.Field) \
+				and held.type_ref.scalar is not None
+			got = f"this->{bare_name(name)}()"
+			if held.type_ref.scalar.signed:
+				return (f"static_cast<{wide}>(static_cast<std::int64_t>"
+				        f"({got}))")
+			return f"static_cast<{wide}>({got})"
+
+		def binary(op: str, left: str, right: str) -> str:
+			if op in ("/", "%"):
+				return (f"({right} == 0u ? {wide}{{0u}}"
+				        f" : static_cast<{wide}>({left} {op} {right}))")
+			if op in ("<<", ">>"):
+				held = re.fullmatch(r"\(std::uint64_t\{(\d+)u\}\)", right)
+				if held is not None and int(held.group(1)) < 64:
+					return (f"static_cast<{wide}>({left} {op}"
+					        f" {held.group(1)}u)")
+				return (f"({right} >= 64u ? {wide}{{0u}}"
+				        f" : static_cast<{wide}>({left} {op} {right}))")
+			return f"static_cast<{wide}>({left} {op} {right})"
+
+		spell = LetSpelling(
+			read = read,
+			literal = lambda value: f"({wide}{{{value}u}})",
+			binary = binary,
+			negate = lambda inner: f"static_cast<{wide}>(0u - {inner})",
+			invert = lambda inner: f"static_cast<{wide}>(~{inner})")
+		consts = dict(self.resolved.layout.env.consts)
+		lines: list[str] = []
+		for let in decl.lets:
+			scalar = let.type_ref.scalar
+			assert scalar is not None
+			ctype = f"std::{'int' if scalar.signed else 'uint'}{scalar.bits}_t"
+			lines += [
+				"",
+				f"\t/** {let.name}: {expr_to_source(let.expr)}, computed",
+				"\t *  modulo 2^64 and held to its width (26.1056). */",
+				f"\t[[nodiscard]] {ctype} {bare_name(let.name)}() const noexcept",
+				"\t{",
+				f"\t\treturn static_cast<{ctype}>("
+				f"{let_source(let.expr, spell, consts)});",
+				"\t}",
+			]
+		return lines
 
 	def _opaque(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		"""Treat-as-bytes, which is the whole of what an `opaque` region

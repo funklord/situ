@@ -11,6 +11,8 @@ diagnostics are the product.
 
 from __future__ import annotations
 
+import dataclasses
+
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from collections.abc import Callable
@@ -284,6 +286,77 @@ def _alignment_pad(span: Span, unit: int) -> ast.Pad:
 def _without_alignment(member: ast.Field) -> ast.Field:
 	return replace(member, attrs=tuple(one for one in member.attrs
 	                                   if one.name != "align"))
+
+
+def _substitute(node: object, names: dict[str, "ast.Expr"]) -> object:
+	"""`node` with every bare name in `names` replaced by its definition.
+
+	A walk over the frozen dataclasses rather than one per member kind, so
+	a member kind added later is covered without anybody remembering this
+	(26.1056). Types are `TypeRef`s, not `NameRef`s, so a struct named like
+	a value is untouched."""
+	if isinstance(node, ast.NameRef):
+		return names.get(node.name, node)
+	if isinstance(node, tuple):
+		return tuple(_substitute(one, names) for one in node)
+	if dataclasses.is_dataclass(node) and not isinstance(node, type):
+		changed = {}
+		for field in dataclasses.fields(node):
+			held = getattr(node, field.name)
+			if isinstance(held, (ast.Node, tuple)):
+				new = _substitute(held, names)
+				if new is not held:
+					changed[field.name] = new
+		return dataclasses.replace(node, **changed) if changed else node
+	return node
+
+
+def _names_in(node: object) -> set[str]:
+	if isinstance(node, ast.NameRef):
+		return {node.name}
+	if isinstance(node, tuple):
+		return set().union(*(_names_in(one) for one in node)) if node else set()
+	if dataclasses.is_dataclass(node) and not isinstance(node, type):
+		found: set[str] = set()
+		for field in dataclasses.fields(node):
+			held = getattr(node, field.name)
+			if isinstance(held, (ast.Node, tuple)):
+				found |= _names_in(held)
+		return found
+	return set()
+
+
+def _lets_expanded(lets: tuple["ast.Let", ...]) -> tuple["ast.Let", ...]:
+	"""Each value's definition with the values before it substituted."""
+	done: list[ast.Let] = []
+	names: dict[str, ast.Expr] = {}
+	for let in lets:
+		expr = _substitute(let.expr, names)
+		assert isinstance(expr, ast.Expr)
+		done.append(dataclasses.replace(let, expr=expr))
+		names[let.name] = expr
+	return tuple(done)
+
+
+def _expand_lets(members: tuple["ast.Member", ...],
+		lets: tuple["ast.Let", ...]) -> tuple["ast.Member", ...]:
+	"""Every member's expressions with the struct's values substituted, and a
+	use before the value's declaration refused (26.1056)."""
+	expanded = _lets_expanded(lets)
+	for let in lets:
+		for member in members[:let.after]:
+			if let.name in _names_in(member):
+				raise error(
+					f"`{let.name}` is used before its `let`",
+					member.span,
+					label = "declared further down",
+					notes = ["a value reads the fields before it, so a member "
+					         "ahead of it cannot name it; move the `let` up "
+					         "(26.1056)"])
+	names = {let.name: let.expr for let in expanded}
+	out = _substitute(members, names)
+	assert isinstance(out, tuple)
+	return out
 
 
 def _lower_alignment(member: ast.Member) -> tuple[ast.Member, ...]:
@@ -1749,12 +1822,17 @@ class Parser:
 		attrs = self.parse_attrs()
 		self.expect_symbol("{", "to open the struct body")
 
-		members = self.parse_members()
+		lets: list[ast.Let] = []
+		members = self.parse_members(lets)
 
 		self.expect_symbol("}", "to close the struct body")
-		return ast.StructDecl(self.span_from(start), name.text, members, attrs)
+		if lets:
+			members = _expand_lets(members, tuple(lets))
+		return ast.StructDecl(self.span_from(start), name.text, members, attrs,
+		                      lets=_lets_expanded(tuple(lets)))
 
-	def parse_members(self) -> tuple[ast.Member, ...]:
+	def parse_members(self, lets: list[ast.Let] | None = None
+			) -> tuple[ast.Member, ...]:
 		members: list[ast.Member] = []
 		while not self.current.is_symbol("}"):
 			if self.current.kind is TokenKind.EOF:
@@ -1763,8 +1841,36 @@ class Parser:
 					self.current.span,
 					label = "expected `}`",
 				)
+			if self.current.is_ident("let"):
+				if lets is None:
+					raise error(
+						"`let` inside a block",
+						self.current.span,
+						label = "a struct's named value is the struct's",
+						notes = ["write it at the struct's top level, after "
+						         "the fields it reads (26.1056)"])
+				lets.append(self.parse_let(len(members)))
+				continue
 			members.extend(_lower_alignment(self.parse_member()))
 		return tuple(members)
+
+	def parse_let(self, after: int) -> ast.Let:
+		"""`let u64 offset = high << 32 | low;` (26.1056)."""
+		start = self.advance()
+		type_ref = self.parse_type_ref()
+		name = self.expect_ident("the value's name")
+		self.expect_symbol("=", "before the value's definition")
+		expr = self.parse_expr()
+		self.expect_symbol(";", "after the value's definition")
+		if type_ref.scalar is None or type_ref.scalar.kind.name not in (
+				"UINT", "SINT"):
+			raise error(
+				f"`let {type_ref.name}` is not an integer",
+				type_ref.span,
+				label = "a named value is a number its fields assemble",
+				notes = ["say its width as an integer type: u8 to u64, i8 "
+				         "to i64 (26.1056)"])
+		return ast.Let(self.span_from(start), name.text, type_ref, expr, after)
 
 	def parse_member(self) -> ast.Member:
 		token = self.current

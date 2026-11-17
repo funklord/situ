@@ -95,6 +95,7 @@ def check(schema: ast.Schema) -> None:
 	check_endian_from(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
+	check_lets(schema)
 	check_delimiters(schema)
 	check_tlv_grammar(schema)
 	check_known_names(schema)
@@ -6459,6 +6460,81 @@ def _arm_edge(cycle: list[str], structs: Structs) -> tuple[str, str] | None:
 def _declared_depth(decl: ast.StructDecl) -> int | None:
 	"""The `[depth = N]` a struct declares, or None."""
 	return _declared_attr(decl, "depth")
+
+
+#: What a named value may compute with (26.1056): the integer arithmetic
+#: every backend spells alike once each read is widened to 64 bits.
+LET_BINARY = ("+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^")
+LET_UNARY  = ("-", "~")
+
+
+def check_lets(schema: ast.Schema) -> None:
+	"""A named value reads integer fields declared before it, constants and
+	integer literals, through `LET_BINARY` and `LET_UNARY` (26.1056).
+
+	Nothing else, because every reader computes it the same way: each read
+	widened to 64 bits, the operators the four languages share, the result
+	held to the declared width. An array, a struct, a field placed by `at`,
+	a parameter or a call has no such single reading, so each is refused by
+	name rather than given four."""
+	consts = {decl.name for decl in schema.consts()}
+	for struct in schema.structs():
+		names = {getattr(member, "name", None) for member in struct.members}
+		lets_seen: set[str] = set()
+		for let in struct.lets:
+			scalar = let.type_ref.scalar
+			if scalar is None or scalar.bits not in (8, 16, 32, 64):
+				raise error(f"`let {let.type_ref.name}` is not 8, 16, 32 or 64 "
+				            "bits wide", let.type_ref.span,
+				            label = "every reader holds the value in a "
+				            "native integer of its declared width (26.1056)")
+			if let.name in names or let.name in lets_seen:
+				raise error(f"`{let.name}` is already a member of "
+				            f"`{struct.name}`", let.span,
+				            label = "a named value needs a name of its own")
+			ahead = {getattr(member, "name", None): member
+			         for member in struct.members[:let.after]}
+			_check_let_expr(let, let.expr, ahead, consts)
+			lets_seen.add(let.name)
+
+
+def _check_let_expr(let: ast.Let, expr: ast.Expr,
+		ahead: dict[str | None, ast.Member], consts: set[str]) -> None:
+	def refuse(why: str, span: object) -> SituError:
+		return error(f"`let {let.name}` {why}", span,  # type: ignore[arg-type]
+		             label = "not something every reader computes alike",
+		             notes = ["a named value reads integer fields declared "
+		                      "before it, constants and literals, through "
+		                      + " ".join(LET_BINARY) + " and unary - ~ "
+		                      "(26.1056)"])
+	if isinstance(expr, ast.IntLiteral):
+		return
+	if isinstance(expr, ast.Binary):
+		if expr.op not in LET_BINARY:
+			raise refuse(f"uses `{expr.op}`", expr.span)
+		_check_let_expr(let, expr.left, ahead, consts)
+		_check_let_expr(let, expr.right, ahead, consts)
+		return
+	if isinstance(expr, ast.Unary):
+		if expr.op not in LET_UNARY:
+			raise refuse(f"uses `{expr.op}`", expr.span)
+		_check_let_expr(let, expr.operand, ahead, consts)
+		return
+	if isinstance(expr, ast.NameRef):
+		if expr.name in consts:
+			return
+		held = ahead.get(expr.name)
+		if not isinstance(held, ast.Field):
+			raise refuse(f"reads `{expr.name}`, which is not a field declared "
+			             "before it", expr.span)
+		scalar = held.type_ref.scalar
+		if held.array is not None or held.parameter \
+				or getattr(held, "located", None) is not None \
+				or scalar is None or scalar.kind.name not in ("UINT", "SINT"):
+			raise refuse(f"reads `{expr.name}`, which is not one integer "
+			             "in the frame", expr.span)
+		return
+	raise refuse("is not integer arithmetic over its fields", expr.span)
 
 
 def check_depth_bounds(schema: ast.Schema) -> None:

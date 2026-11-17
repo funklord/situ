@@ -347,6 +347,10 @@ def _struct_lines(decl: ast.StructDecl) -> list[str]:
 	header = f"struct {decl.name}{_attrs_to_source(decl.attrs)} {{"
 	lines  = [header]
 	lines.extend(member_lines(decl.members, depth=1))
+	# Last: every member already reads a value's definition rather than its
+	# name (26.1056), so after them all each still reads only fields.
+	lines.extend(f"\tlet {let.type_ref.name} {let.name} = "
+	             f"{expr_to_source(let.expr)};" for let in decl.lets)
 	lines.append("}")
 	return lines
 
