@@ -2028,6 +2028,18 @@ def _check_path_members(root: str, rest: str, param: ast.RelationParam,
 			)
 
 		walked = f"{walked}.{component}"
+		# Placed by `at`: the relation reads its parameter's frame, and a
+		# located member is not in it. `must b.id == a.v` with `v` located
+		# built a `_converse.h` calling a `_v_get` nobody emits.
+		if getattr(member, "located", None) is not None:
+			raise error(
+				f"`{walked}` is placed by `at`",
+				must.span,
+				label = f"`{component}` is not in the frame `{param.name}` views",
+				notes = ["a relation reads each message's frame, and a "
+				         "located member is wherever the message puts it "
+				         "(9.8)"],
+			)
 		type_ref = getattr(member, "type_ref", None)
 		struct = (None if type_ref is None or type_ref.is_scalar
 		          else structs.get(type_ref.name))

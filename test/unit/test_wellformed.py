@@ -1635,6 +1635,17 @@ def test_nothing_reads_a_located_member_as_though_framed(body: str,
 	assert said in text, text
 
 
+@pytest.mark.parametrize("read", ["a.v", "a.h.k"], ids=["scalar", "struct"])
+def test_a_relation_reads_no_located_member(read: str) -> None:
+	"""`must b.id == a.v` with `v` located built a `_converse.h` calling a
+	`_v_get` nobody emits."""
+	text = rendered(BUFFER + "struct plain { u8 k; u8 n; }\n"
+	                "struct q { u8 id; u8 off; u8 v at off; plain h at off; }\n"
+	                "struct r { u8 id; }\n"
+	                f"relation rr(a: q, b: r) {{ must b.id == {read}; }}\n")
+	assert "is placed by `at`" in text, text
+
+
 def test_a_length_beside_a_located_member_is_untouched() -> None:
 	"""The control: the field the offset is computed from is in the frame,
 	and so is anything else a length names."""
