@@ -8923,6 +8923,10 @@ Moved to `doc/decision/26.1051-a-parameter-s-own-bound-is-checked-by-no-backend-
 
 Moved to `doc/decision/26.1052-a-sized-arm-beside-a-framed-one.md`.
 
+### 26.1053 The differential asks an argued struct to validate
+
+Moved to `doc/decision/26.1053-the-differential-asks-an-argued-struct-to-validate.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

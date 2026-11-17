@@ -619,7 +619,10 @@ def lean_driver(schema: object, resolved: object, target: str,
 	with mock.patch.object(differ, "asks", lambda *_: []), \
 			mock.patch.object(differ, "FRAMING_PREFIXES", 0), \
 			mock.patch.object(differ, "structs_of", lambda *_: [
-				one for one in held if one.name == top]):
+				one for one in held if one.name == top]), \
+			mock.patch.object(differ, "skipped_of", lambda *_: []):
+		# No argued structs either (26.1053): their `validate` runs over
+		# invented arguments, which re-frame the message this measures.
 		return differ.generate(schema, resolved, target)  # type: ignore[arg-type]
 
 

@@ -53,7 +53,8 @@ ONLY_PARAMETERISED = HEAD + (
 #: from the generator, which would be the generator agreeing with itself:
 #: what is asserted is that the note reaches the OUTPUT in each language, and
 #: a renderer that learned the filter and forgot the note fails here.
-NOTE = "-- skipped framed: takes a parameter (0050)"
+NOTE = ("-- skipped framed: takes a parameter (0050);"
+        " validate only, with n = 1")
 
 SAID = {
 	"c":      f'\tprintf("{NOTE}\\n");',
@@ -135,7 +136,8 @@ def test_every_driver_says_which_struct_it_skipped(target: str) -> None:
 
 @pytest.mark.parametrize("target", TARGETS)
 def test_the_skipped_struct_is_named_nowhere_else(target: str) -> None:
-	"""No section, no probe, no write pass -- one line saying it is gone.
+	"""No section of probes, no write pass -- the note, and its `validate`
+	under the arguments the note names (26.1051), and nothing else.
 
 	The half that catches a skip applied to the section loop and not to
 	the write loop, which reads the same list and is written separately in
@@ -145,7 +147,11 @@ def test_the_skipped_struct_is_named_nowhere_else(target: str) -> None:
 	text = differ.generate(schema, resolved, target)
 
 	rest = text.replace(SAID[target], "")
-	assert "framed" not in rest
+	assert "-- argued framed" in rest
+	head, _, block = rest.partition("-- argued framed")
+	assert "framed" not in head
+	assert "write framed" not in block
+	assert block.count("validate") >= 2		# the call and its verdict
 
 
 @pytest.mark.parametrize("target", TARGETS)

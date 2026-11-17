@@ -1397,8 +1397,40 @@ def _skip_notes(resolved: ResolvedSchema) -> list[str]:
 	`-- frame`, `-- write frame` -- and a member is free to be called
 	`skipped`, whose probe line would otherwise read as this one.
 	"""
-	return [f"-- skipped {struct.name}: takes a parameter (0050)"
+	return [f"-- skipped {struct.name}: takes a parameter (0050);"
+	        f" validate only, with {_shown(argued(struct))}"
 	        for struct in skipped_of(resolved)]
+
+
+def argued(struct: ResolvedStruct) -> list[tuple[str, int]]:
+	"""The arguments every driver hands a struct that takes them, so its
+	`validate` is compared at least (26.1051).
+
+	One value per argument, the same in all four: its `[min]` where it
+	states one, else 1, held under its `[max]`. Invented, which the note
+	says -- and a verdict over invented arguments is still a verdict four
+	readers have to agree on. What this caught first: Rust checked a
+	parameter's own bound against the byte at its nominal offset, which
+	is the next member's, and Python against a property that does not
+	exist, while C and C++ checked nothing, as 26.805 settled.
+	"""
+	found: list[tuple[str, int]] = []
+	for held in arguments(struct):
+		value, ceiling = 1, None
+		for attr in held.attrs:
+			if isinstance(attr.value, ast.IntLiteral):
+				if attr.name == "min":
+					value = attr.value.value
+				elif attr.name == "max":
+					ceiling = attr.value.value
+		if ceiling is not None:
+			value = min(value, ceiling)
+		found.append((held.name, value))
+	return found
+
+
+def _shown(values: list[tuple[str, int]]) -> str:
+	return ", ".join(f"{name} = {value}" for name, value in values)
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
@@ -1572,6 +1604,24 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 		])
 		if name in framing:
 			lines.extend(_c_framing(prefix, name))
+
+	for struct in skipped_of(resolved):
+		name  = struct.name
+		fixed = struct.layout.is_fixed_size
+		handed = "".join(f", {value}" for _, value in argued(struct))
+		lines.extend([
+			"\t{",
+			"\t\tsitu_view_t view;",
+			f'\t\tprintf("-- argued {name}\\n");',
+			f"\t\tif ({ident(prefix, name, 'view')}(&msg, 0"
+			f"{'' if fixed else ', n'}, &view) != SITU_OK) {{",
+			'\t\t\tprintf("no-view\\n");',
+			"\t\t} else {",
+			f'\t\t\tprintf("validate %d\\n",'
+			f" (int){ident(prefix, name, 'validate')}(view{handed}));",
+			"\t\t}",
+			"\t}",
+		])
 
 	lines.extend(_c_writes(resolved, prefix))
 	lines.extend(["\treturn 0;", "}"])
@@ -2018,6 +2068,25 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 		])
 		if name in framing:
 			lines.extend(_cpp_framing(name))
+
+	for struct in skipped_of(resolved):
+		name  = struct.name
+		fixed = struct.layout.is_fixed_size
+		handed = "".join(f"{value}, " for _, value in argued(struct))
+		lines.extend([
+			"\t{",
+			f'\t\tstd::printf("-- argued {name}\\n");',
+			f"\t\t::situ::{c_name(name)} view;",
+			f"\t\tif (::situ::{c_name(name)}::at(msg, 0"
+			f"{'' if fixed else ', n'}, {handed}view)"
+			" != ::situ::rt::err::ok) {",
+			'\t\t\tstd::printf("no-view\\n");',
+			"\t\t} else {",
+			'\t\t\tstd::printf("validate %d\\n",'
+			" static_cast<int>(view.validate()));",
+			"\t\t}",
+			"\t}",
+		])
 
 	lines.extend(_cpp_writes(resolved))
 	lines.extend([
@@ -2485,6 +2554,27 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 		if name in framing:
 			lines.extend(_rust_framing(name))
 
+	for struct in skipped_of(resolved):
+		name = struct.name
+		handed = "".join(f", {value}" for _, value in argued(struct))
+		lines.extend([
+			"\t{",
+			f'\t\tprintln!("-- argued {name}");',
+			f"\t\tmatch unit::{_pascal(name)}::new(&raw{handed}) {{",
+			"\t\t\tErr(_) => println!(\"no-view\"),",
+			"\t\t\tOk(view) => {",
+			'\t\t\t\tprintln!("validate {}", match view.validate() {',
+			"\t\t\t\t\tOk(())                          => 0,",
+			"\t\t\t\t\tErr(situ_rt::Error::Bounds)     => 1,",
+			"\t\t\t\t\tErr(situ_rt::Error::Constraint) => 2,",
+			"\t\t\t\t\tErr(situ_rt::Error::Version)    => 3,",
+			"\t\t\t\t\tErr(_)                          => 9,",
+			"\t\t\t\t});",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		])
+
 	lines.extend(_rust_writes(resolved))
 	lines.extend(["}"])
 	return "\n".join(lines) + "\n"
@@ -2804,6 +2894,33 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 		if name in framing:
 			lines.extend(_python_framing(name))
 		lines.append("")
+
+	for struct in skipped_of(resolved):
+		name  = struct.name
+		fixed = struct.layout.is_fixed_size
+		handed = "".join(f", arg_{c_name(arg)}={value}"
+		                 for arg, value in argued(struct))
+		lines.extend([
+			f'print("-- argued {name}")',
+			"try:",
+			f"\tview = unit.{c_name(name)}.at(msg, 0"
+			f"{'' if fixed else ', len(raw)'}{handed})",
+			"except situ_runtime.BoundsError:",
+			'\tprint("no-view")',
+			"else:",
+			"\ttry:",
+			"\t\tview.validate()",
+			'\t\tprint("validate 0")',
+			"\texcept situ_runtime.BoundsError:",
+			'\t\tprint("validate 1")',
+			"\texcept situ_runtime.ConstraintError:",
+			'\t\tprint("validate 2")',
+			"\texcept situ_runtime.VersionError:",
+			'\t\tprint("validate 3")',
+			"\texcept situ_runtime.SituError:",
+			'\t\tprint("validate 9")',
+			"",
+		])
 
 	lines.extend(_python_writes(resolved))
 	return "\n".join(lines) + "\n"

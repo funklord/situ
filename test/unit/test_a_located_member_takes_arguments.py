@@ -106,7 +106,9 @@ def test_all_four_read_the_directory(tmp_path: Path) -> None:
 		first = next(iter(given.values()))
 		assert all(answer == first for answer in given.values()), \
 			(label, given)
-		said = [one for one in first.splitlines()
+		# The sections the probes ask, not the argued structs' blocks
+		# after them (26.1053), whose arguments are invented.
+		said = [one for one in first.split("\n-- argued ")[0].splitlines()
 		        if one.startswith("validate ")]
 		assert said[-1] == f"validate {verdict}", (label, first)
 
@@ -139,7 +141,9 @@ def test_a_fixed_array_hands_its_elements_the_argument(tmp_path: Path) -> None:
 		         for name, argv in command.items()}
 		first = next(iter(given.values()))
 		assert all(answer == first for answer in given.values()), given
-		said = [one for one in first.splitlines()
+		# The sections the probes ask, not the argued structs' blocks
+		# after them (26.1053), whose arguments are invented.
+		said = [one for one in first.split("\n-- argued ")[0].splitlines()
 		        if one.startswith("validate ")]
 		assert said[-1] == f"validate {verdict}", (packet, first)
 
@@ -191,7 +195,9 @@ def test_a_short_is_read_in_the_handed_order(tmp_path: Path) -> None:
 		         for name, argv in command.items()}
 		first = next(iter(given.values()))
 		assert all(answer == first for answer in given.values()), given
-		said = [one for one in first.splitlines()
+		# The sections the probes ask, not the argued structs' blocks
+		# after them (26.1053), whose arguments are invented.
+		said = [one for one in first.split("\n-- argued ")[0].splitlines()
 		        if one.startswith("validate ")]
 		assert said[-1] == "validate 0", (order, first)
 
