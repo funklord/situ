@@ -8903,6 +8903,10 @@ Moved to `doc/decision/26.1046-an-at-reads-no-sealed-or-coded-interior.md`.
 
 Moved to `doc/decision/26.1047-a-format-with-no-maximum-states-only-the-limit.md`.
 
+### 26.1048 A nested checksum is its own struct's
+
+Moved to `doc/decision/26.1048-a-nested-checksum-is-its-structs.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

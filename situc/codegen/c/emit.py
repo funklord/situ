@@ -821,6 +821,123 @@ class Emitter:
 		lines.append("")
 		return lines
 
+	def _nested_tag(self, struct: ResolvedStruct, placement: Placement
+			) -> tuple[list[tuple[str, str]], ResolvedStruct, Placement] | None:
+		"""The plain nested members leading to the struct that owns this tag,
+		that struct, and the tag as it sees it -- or None for a tag that is
+		this struct's own, or one no single view reaches."""
+		parts = placement.path.split(".")[1:]
+		if len(parts) < 2:
+			return None
+		steps: list[tuple[str, str]] = []
+		owner = struct
+		for step in parts[:-1]:
+			held = next((entry.placement for entry in owner.entries
+			             if entry.placement.path == f"{owner.name}.{step}"),
+			            None)
+			inner = self.resolved.structs.get(
+				(held.type_name or "") if held is not None else "")
+			if held is None or inner is None or held.array_count is not None \
+					or held.located is not None \
+					or self._child_args(owner, held):
+				return None
+			steps.append((owner.name, step))
+			owner = inner
+		tag = next((entry.placement for entry in owner.entries
+		            if entry.placement.path == f"{owner.name}.{parts[-1]}"),
+		           None)
+		if tag is None or self._argument_args(owner):
+			return None
+		return steps, owner, tag
+
+	def _nested_tag_support(self, struct: ResolvedStruct, placement: Placement,
+			local: str, steps: list[tuple[str, str]], owner: ResolvedStruct,
+			tag: Placement) -> list[str]:
+		"""`covered`, `compute` and `check` for a nested struct's tag, each
+		the nested struct's own over the nested view, plus this struct's
+		dirty bit. Emitted only where the nested struct emits them."""
+		inner_local = c_name(self._local(owner, tag))
+		reach = ["\tsitu_err_t e;"]
+		held  = "view"
+		for depth, (holder, step) in enumerate(steps):
+			reach += [f"\tsitu_view_t held{depth};",
+			          f"\te = {ident(self.prefix, holder, c_name(step), 'view')}"
+			          f"({held}, &held{depth});",
+			          "\tif (e != SITU_OK) {",
+			          "\t\treturn e;",
+			          "\t}"]
+			held = f"held{depth}"
+		plain = (tag.tag_prefix is None
+		         and not self._covered_tail(owner, tag)
+		         and covered_bit_span(owner, tag) is None
+		         and self._covered_spans(owner, tag) is not None)
+		bit = self._tag_bit(struct, self._local(struct, placement))
+		lines: list[str] = []
+		if plain:
+			lines += [
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'covered')}"
+				"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+				"{",
+				*reach,
+				f"\te = {ident(self.prefix, owner.name, inner_local, 'covered')}"
+				f"({held}, offset, len);",
+				"\tif (e != SITU_OK) {",
+				"\t\treturn e;",
+				"\t}",
+				f"\t*offset += (uint32_t)(situ_base({held}) - situ_base(view));",
+				"\treturn SITU_OK;",
+				"}",
+			]
+		else:
+			lines += [f"/* No covered-span accessor for `{placement.name}`"
+			          " here: ask the nested struct's own. */"]
+		lines += [
+			f"static inline int "
+			f"{ident(self.prefix, struct.name, local, 'is_dirty')}"
+			"(const situ_msg_t *msg)",
+			"{",
+			f"\treturn (msg->dirty & {bit}) != 0u;",
+			"}",
+			f"static inline void "
+			f"{ident(self.prefix, struct.name, local, 'finalize')}(situ_msg_t *msg)",
+			"{",
+			f"\tsitu_msg_clear_dirty(msg, {bit});",
+			"}",
+		]
+		sums = (plain and tag.tag_codec is not None
+		        and tag.tag_codec not in self._underivable_codecs()
+		        and not ((tag.size_bits or 0) % BITS_PER_BYTE
+		                 and tag.offset_bits is None))
+		if sums:
+			lines += [
+				"",
+				f"/** {tag.tag_codec} over `{placement.name}`'s coverage, as"
+				f" {ident(self.prefix, owner.name, inner_local, 'compute')}()"
+				" computes it. */",
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'compute')}"
+				"(situ_view_t view, uint32_t *out)",
+				"{",
+				*reach,
+				f"\treturn {ident(self.prefix, owner.name, inner_local, 'compute')}"
+				f"({held}, out);",
+				"}",
+				"",
+				f"/** Whether `{placement.name}` matches its bytes, as"
+				f" {ident(self.prefix, owner.name, inner_local, 'check')}()"
+				" says. */",
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'check')}"
+				"(situ_view_t view)",
+				"{",
+				*reach,
+				f"\treturn {ident(self.prefix, owner.name, inner_local, 'check')}"
+				f"({held});",
+				"}",
+			]
+		return lines
+
 	def _tag_support(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""What a tag needs beyond its bytes: its coverage, and finalize.
 
@@ -843,6 +960,18 @@ class Emitter:
 			f" * call {ident(self.prefix, struct.name, local, 'finalize')}(), which",
 			" * clears the dirty bit. Until then the message is not transmittable. */",
 		]
+
+		# A tag of a NESTED struct is that struct's, and so are its span and
+		# its sum: answered over the nested view rather than re-derived here.
+		# Derived here, the span was asked in this struct's terms, where the
+		# region it covers is no member -- FS2's `gph_chain` handed out
+		# `section.crc`'s coverage as bytes 0 to 0, and `check` called a
+		# `_section_crc_offset` nothing emits, so the header did not
+		# compile once the CRC sat behind a variable-length payload.
+		nested = self._nested_tag(struct, placement)
+		if nested is not None:
+			return [*lines, *self._nested_tag_support(struct, placement,
+			                                          local, *nested)]
 
 		# A prefix the message does not contain (14.2a). Situ knows its layout
 		# and its size and cannot know its contents, so it says both and stops
