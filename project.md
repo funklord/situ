@@ -606,7 +606,9 @@ enum_decl     = "enum" ident ":" scalar_type [ "[" expr "]" ]
                 "{" enum_body "}" ;
 enum_body     = { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
-struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
+struct_decl   = "struct" ident [ attrs ] "{" { member | let } "}" ;
+
+let           = "let" ( uint | sint ) ident "=" expr ";" ;
 
 member        = field | parameter | reserved | preamble | marker_field
               | block | variant | tag_field | pad ;

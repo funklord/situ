@@ -346,11 +346,17 @@ def _struct_lines(decl: ast.StructDecl) -> list[str]:
 
 	header = f"struct {decl.name}{_attrs_to_source(decl.attrs)} {{"
 	lines  = [header]
-	lines.extend(member_lines(decl.members, depth=1))
-	# Last: every member already reads a value's definition rather than its
-	# name (26.1056), so after them all each still reads only fields.
-	lines.extend(f"\tlet {let.type_ref.name} {let.name} = "
-	             f"{expr_to_source(let.expr)};" for let in decl.lets)
+	# Each value where it was written: `after` counts the members before it
+	# and is part of the tree, so a value moved to the end reparses as a
+	# different struct. A member already reads a value's definition rather
+	# than its name (26.1056), so where the value sits changes no member.
+	start = 0
+	for let in decl.lets:
+		lines.extend(member_lines(decl.members[start:let.after], depth=1))
+		lines.append(f"\tlet {let.type_ref.name} {let.name} = "
+		             f"{expr_to_source(let.expr)};")
+		start = let.after
+	lines.extend(member_lines(decl.members[start:], depth=1))
 	lines.append("}")
 	return lines
 

@@ -84,7 +84,13 @@ enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
  * and a token set's must not, which is what it is for. *)
 tokens_decl	= "tokens" ident [ attrs ] "{" enum_body "}" ;
 
-struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
+struct_decl	= "struct" ident [ attrs ] "{" { member | let } "}" ;
+
+(* Decision 26.1056. `let u64 offset = high << 32 | low;` -- a value the
+ * struct's fields assemble, occupying nothing. At the struct's top level
+ * only, after the fields it reads, and an integer: u8 to u64, i8 to i64.
+ * A use of the name reads its definition. *)
+let		= "let" ( uint | sint ) ident "=" expr ";" ;
 
 member		= field | parameter | reserved | preamble | marker_field
 	| block | variant | tag_field | pad ;
