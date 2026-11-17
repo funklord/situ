@@ -210,12 +210,33 @@ function Tree:add(field, item, value)
 	-- A value handed with the range is what Wireshark shows instead of the
 	-- range's bytes: a varint's decoded number (26.941), which the bytes
 	-- are not. The real API checks its type, as `UInt64` below says.
+	--
+	-- And a value with NO range, which the real API takes too: a generated
+	-- item -- a named value its fields assemble (26.1060), a conversation's
+	-- other frame -- covers no bytes, so it is a row at 0 of length 0.
+	if field.abbr ~= nil and item ~= nil and type(item) ~= "table"
+			or field.abbr ~= nil and type(item) == "table"
+			and item.offset == nil then
+		local text = item
+		if math.type(item) == "float" and item == math.floor(item) then
+			text = math.tointeger(item)
+		end
+		rows[#rows + 1] = ("%s\t%d\t%d\t%s"):format(
+			field.abbr, 0, 0, tostring(text))
+		return tree()
+	end
 	if field.abbr ~= nil and item ~= nil then
 		local text = value ~= nil and tostring(value) or shown(field, item)
 		rows[#rows + 1] = ("%s\t%d\t%d\t%s"):format(
 			field.abbr, item.base + item.offset, item.length, text)
 	end
 	return tree()
+end
+
+--- A generated item is marked so in Wireshark's tree and is otherwise a row
+--- like any other; the mark changes nothing a test compares.
+function Tree:set_generated()
+	return self
 end
 
 --- No mask arm of its own: `display` has one, and no schema in the tree hands

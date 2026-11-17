@@ -155,9 +155,10 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 	lines.extend(_layer_lines(schema))
 	lines.extend(_codec_lines(schema))
 
+	lets = {decl.name: tuple(decl.lets) for decl in schema.structs()}
 	for name in sorted(resolved.structs):
 		lines.append("")
-		lines.extend(_struct(name, resolved))
+		lines.extend(_struct(name, resolved, lets.get(name, ())))
 
 	return "\n".join(lines) + "\n"
 
@@ -196,7 +197,8 @@ def _extent(bits: int) -> str:
 	return f"{whole}" if not over else f"{bits}bit"
 
 
-def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
+def _struct(name: str, resolved: ResolvedSchema,
+		lets: "tuple[ast.Let, ...]" = ()) -> list[str]:
 	struct  = resolved.structs[name]
 	layout  = struct.layout
 	size    = _struct_size(layout)
@@ -220,6 +222,16 @@ def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
 	             f"bytes={held.size_bytes}" for held in layout.material)
 	for entry in struct.entries:
 		lines.append(_entry(entry.placement, entry.vector))
+	# A value the fields assemble (26.1056): no bytes and so no axes, named
+	# with what it is, as a parameter is -- a reader of the map sees that
+	# every reader offers it and what it computes (26.1060).
+	from situc.unparse import expr_to_source
+	for let in lets:
+		scalar = let.type_ref.scalar
+		assert scalar is not None
+		kind = f"{'i' if scalar.signed else 'u'}{scalar.bits}"
+		lines.append(f"  {f'{name}.{let.name}'.ljust(PATH_WIDTH)} let {kind}"
+		             f" = {expr_to_source(let.expr)}")
 	return lines
 
 

@@ -64,6 +64,16 @@ struct assembled size=10..13 mutate=Shifting repr=ValueConverted atomic=NonAtomi
   assembled.zero                         offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   assembled.big                          offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   assembled.tail                         offset=AbsoluteStatic(0x0A) size=Bounded(0, 3) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  assembled.offset                       let u64 = high << 32 | low
+  assembled.diff                         let i16 = a - b
+  assembled.quotient                     let u32 = low / zero
+  assembled.rest                         let u32 = low % b
+  assembled.shifted                      let u64 = low << big
+  assembled.down                         let u16 = high >> (big & 7)
+  assembled.wrapped                      let u8 = a * b
+  assembled.flipped                      let u64 = ~low ^ 0xFFFF000000000000
+  assembled.negated                      let i32 = -a
+  assembled.m                            let u8 = b & 3
 
 struct beacon size=3 repr=ValueConverted
   beacon.seq                             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

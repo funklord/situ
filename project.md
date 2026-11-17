@@ -8953,6 +8953,10 @@ Moved to `doc/decision/26.1058-every-reader-computes-a-checksum.md`.
 
 Moved to `doc/decision/26.1059-the-walkers-read-a-named-value.md`.
 
+### 26.1060 The map and the dissector show a named value
+
+Moved to `doc/decision/26.1060-the-map-and-the-dissector-show-a-named-value.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

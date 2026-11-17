@@ -127,6 +127,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	_MARKERS.update({decl.name: decl for decl in schema.markers()})
 	_CODECS.clear()
 	_CODECS.update({decl.name: decl for decl in schema.codecs()})
+	_LETS.clear()
+	_LETS.update({decl.name: list(decl.lets) for decl in schema.structs()
+	              if decl.lets})
 
 	lines = _preamble(basename)
 
@@ -177,7 +180,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	lines.extend(_varint_functions(schema, resolved))
 	if any(_shows_value(entry.placement)
 	       for struct in resolved.structs.values()
-	       for entry in struct.entries):
+	       for entry in struct.entries) \
+			or any(_let_value(resolved.structs[name], let) is not None
+			       and _let_bits(let)[0] == 64
+			       for name, lets in _LETS.items()
+			       if name in resolved.structs for let in lets):
 		lines.extend(U64_HELPER)
 	# After the varints, which an extent reads: an answer cached before them
 	# would be one that could not read a varint.
@@ -1352,6 +1359,7 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# every dissect function closes over it as an upvalue.
 	lines.append(f"{proto}.fields = {{}}")
 	lines.extend(fields)
+	lines.extend(_let_fields(struct))
 	lines.extend(_check_fields(struct))
 	lines.extend(_conversation_fields(struct))
 	lines.extend(_experts(struct))
@@ -2074,6 +2082,7 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		if not lost:
 			lines.extend(_check_marks(struct, checked, placement, "after"))
 
+	lines.extend(_let_rows(struct))
 	lines.extend(_conversation_calls(resolved, struct))
 	lines.extend(_message_calls(struct, lost))
 	lines.extend(["", "\treturn at", "end"])
@@ -3150,6 +3159,9 @@ _STRUCTS: dict[str, ResolvedStruct] = {}
 
 #: Every codec, for a region's expansion (26.965).
 _CODECS: dict[str, ast.CodecDecl] = {}
+#: Each struct's `let`s (26.1056), which the body shows as generated rows
+#: where `_let_value` can compute them exactly (26.1060).
+_LETS: dict[str, "list[ast.Let]"] = {}
 
 #: The tags each struct's dissector checks, by struct name (26.1031).
 _CHECKED: dict[str, list["Checked"]] = {}
@@ -3257,6 +3269,70 @@ def _little_literals(decl: ast.EndianMarkerDecl | None) -> list[int]:
 #: first version of this matched the halves and declined every run walk in the
 #: file.
 _UNSPELLABLE = re.compile(r"/|\^|<<|>>|(?<!&)&(?!&)|(?<!\|)\|(?!\|)")
+
+
+def _let_bits(let: "ast.Let") -> tuple[int, bool]:
+	scalar = let.type_ref.scalar
+	assert scalar is not None
+	return scalar.bits, scalar.signed
+
+
+def _let_value(struct: ResolvedStruct, let: "ast.Let") -> str | None:
+	"""A named value as Lua arithmetic, where that is exactly the backends'
+	answer, or None (26.1060).
+
+	The backends compute modulo 2^64 and hold the result to its width; Lua
+	here computes in numbers exact to 2^53 and has no bit operators
+	(0021). The two agree where the value can only set bits the width
+	holds, below 2^53 and clear of a signed value's sign bit -- which
+	`_bit_range` proves from the fields' widths alone, and which is the
+	shape a value assembled from two places has: `.mfa`'s 48-bit offset,
+	`(high << 32) | low`. Anything else is declined rather than shown wrong.
+	"""
+	bits, signed = _let_bits(let)
+	widths = {entry.placement.path[len(struct.name) + 1:]:
+	          entry.placement.size_bits
+	          for entry in struct.entries
+	          if entry.placement.scalar is not None
+	          and not entry.placement.scalar.signed}
+	held = _bit_range(let.expr, widths)
+	if held is None or held[1] > min(bits - (1 if signed else 0), 53):
+		return None
+	return _over_fields(struct, expr_to_source(let.expr), "0",
+	                    tree=let.expr)
+
+
+def _let_fields(struct: ResolvedStruct) -> list[str]:
+	"""A `ProtoField` for each named value the body can show (26.1060)."""
+	proto = _lua(struct.name)
+	owner = re.sub(r"\W", "_", struct.name)
+	lines: list[str] = []
+	for let in _LETS.get(struct.name, []):
+		if _let_value(struct, let) is None:
+			continue
+		bits, signed = _let_bits(let)
+		kind = f"{'int' if signed else 'uint'}{bits}"
+		lines.append(f"{proto}.fields.{_lua(let.name)} = ProtoField.{kind}("
+		             f"\"situ.{owner}.{let.name}\", \"{let.name}\", base.DEC)")
+	return lines
+
+
+def _let_rows(struct: ResolvedStruct) -> list[str]:
+	"""Each named value as a generated row: not bytes in the packet, a
+	number its fields assemble (26.1056, 26.1060)."""
+	proto = _lua(struct.name)
+	lines: list[str] = []
+	for let in _LETS.get(struct.name, []):
+		value = _let_value(struct, let)
+		if value is None:
+			lines.append(f"\t-- {struct.name}.{let.name}: not shown, a value"
+			             " this dissector cannot compute exactly")
+			continue
+		bits, _ = _let_bits(let)
+		shown = f"situ_u64({value})" if bits == 64 else value
+		lines.append(f"\tsubtree:add({proto}.fields.{_lua(let.name)},"
+		             f" {shown}):set_generated()")
+	return lines
 
 
 def _over_fields(struct: ResolvedStruct, source: str, base: str,
