@@ -3196,6 +3196,24 @@ class Emitter:
 			        " accessor, and a pad", "\t/// is a run the message"
 			        " sizes, so there is no value to hand back."]
 
+		# AN ARM PLACED BY `at`: the located member, behind the arm's test.
+		# See the C backend (26.1044).
+		if placement.located is not None:
+			located = self._located(struct, placement)
+			opened  = next(at for at, line in enumerate(located)
+			               if line.startswith("\tpub fn ") and "<'m>(&self, msg"
+			               in line and "_view" not in line)
+			return [
+				"",
+				f"\t/// `{placement.path}`, present when the discriminant selects",
+				f"\t/// `{arm_label(arm)}`; `Error::Version` otherwise.",
+				*located[:opened + 1],
+				f"\t\tif {self._unparen(test)} {{",
+				"\t\t\treturn Err(Error::Version);",
+				"\t\t}",
+				*located[opened + 1:],
+			]
+
 		name   = _ident(c_name(local_name(struct, placement)))
 		scalar = placement.scalar
 		start  = self._offset_expression(struct, placement)
@@ -7652,8 +7670,13 @@ class Emitter:
 			"\t\t// carries its own constraints, and its own validator is",
 			"\t\t// what knows them. A different arm is nothing to check;",
 			"\t\t// this arm not fitting the frame is malformed.",
-			f"\t\tmatch self.{name}() {{",
-			"\t\t\tOk(arm) => arm.validate()?,",
+			# A located arm is placed from the message, which `validate_in`
+			# carries and hands on (26.1044).
+			*([f"\t\tmatch self.{name}_view(msg) {{",
+			   "\t\t\tOk(arm) => arm.validate_in(msg)?,"]
+			  if placement.located is not None else
+			  [f"\t\tmatch self.{name}() {{",
+			   "\t\t\tOk(arm) => arm.validate()?,"]),
 			"\t\t\tErr(Error::Version) => {}",
 			"\t\t\tErr(other) => return Err(other),",
 			"\t\t}",
@@ -8899,7 +8922,9 @@ class Emitter:
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
 				continue		# `default: error`; falls to the zero above
-			if member.is_fixed_size:
+			if member.located is not None:
+				length = "0"	# placed from the message, not in the frame
+			elif member.is_fixed_size:
 				length = str(member.size_bits // BITS_PER_BYTE)
 			elif is_unmeasured_run(self.resolved.structs, member):
 				# A delimited run of RECORDS is not a delimited byte run:
@@ -10896,6 +10921,15 @@ class Emitter:
 		"""
 		if struct.name in seen:
 			return False
+		# A STRUCT ARM placed by `at` is reached from the message too, and its
+		# check passes the message on (26.1044).
+		for variant in own_members(struct):
+			if variant.kind != "variant":
+				continue
+			for _arm, member in arm_members(struct, variant):
+				if member is not None and member.located is not None \
+						and member.type_name in self.resolved.structs:
+					return True
 		for held in own_members(struct):
 			if held.located is not None:
 				if held.type_name in self.resolved.structs:
@@ -11046,10 +11080,11 @@ class Emitter:
 			base  = c_name(local_name(struct, placement))
 			inner = _pascal(target)
 			if placement.located is not None:
-				reach = (f"let Ok(element) = self.{_ident(base + '_view')}(msg)"
-				         + ("" if guard is None else f" && ({guard})"))
+				# The arm's own test refuses another arm with `Version`, so
+				# no guard is needed beside it -- and `if let ... &&` is not
+				# stable in edition 2021.
 				lines.extend([
-					f"\t\tif {reach} {{",
+					f"\t\tif let Ok(element) = self.{_ident(base + '_view')}(msg) {{",
 					f"\t\t\tlet found = element.{descend(target)};",
 					"\t\t\tif found > deepest {",
 					"\t\t\t\tdeepest = found;",

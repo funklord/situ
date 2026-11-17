@@ -3805,6 +3805,21 @@ class Emitter:
 			return [""] + self._pad_arm_note(placement)
 
 		name   = py_name(local_name(struct, placement))
+		# AN ARM PLACED BY `at`: the located member, behind the arm's test.
+		# See the C backend (26.1044).
+		if placement.located is not None:
+			located = self._located(struct, placement)
+			opened  = located.index(f"\tdef {name}(self) -> memoryview:")
+			closed  = next(at for at in range(opened + 1, len(located))
+			               if located[at].rstrip().endswith('"""'))
+			return [
+				*located[:closed + 1],
+				f"\t\tif {test}:",
+				f'\t\t\traise VersionError("{placement.path}: that arm is not'
+				' the one present")',
+				*located[closed + 1:],
+			]
+
 		scalar = placement.scalar
 		start  = self._offset_expression(struct, placement)
 		if start is None:
@@ -7676,17 +7691,20 @@ class Emitter:
 				# Placed by `at`: reached from the message, as `validate`
 				# reaches it, and a chain pointing outside it is no level --
 				# `validate` refuses that itself. See the C backend's probe.
+				# An arm's guard comes first, since the view of another arm
+				# raises VersionError (26.1044).
 				held = f"_element_{name}"
+				pad  = "\t" if guard is not None else ""
 				lines.extend([
-					"\t\ttry:",
-					f"\t\t\t{held} = self.{name}_view",
-					"\t\texcept BoundsError:",
-					"\t\t\tpass",
-					"\t\telse:",
-					f"\t\t\tif {'True' if guard is None else guard}:",
-					f"\t\t\t\tfound = {held}.nesting_at(depth + 1)",
-					"\t\t\t\tif found > deepest:",
-					"\t\t\t\t\tdeepest = found",
+					*([f"\t\tif {guard}:"] if guard is not None else []),
+					f"\t\t{pad}try:",
+					f"\t\t\t{pad}{held} = self.{name}_view",
+					f"\t\t{pad}except BoundsError:",
+					f"\t\t\t{pad}pass",
+					f"\t\t{pad}else:",
+					f"\t\t\t{pad}found = {held}.nesting_at(depth + 1)",
+					f"\t\t\t{pad}if found > deepest:",
+					f"\t\t\t\t{pad}deepest = found",
 				])
 				continue
 			if holds_of(placement) in cycle:
@@ -8615,7 +8633,9 @@ class Emitter:
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
 				continue		# `default: error`; falls to the zero above
-			if member.is_fixed_size:
+			if member.located is not None:
+				length = "0"	# placed from the message, not in the frame
+			elif member.is_fixed_size:
 				length = str(member.size_bits // BITS_PER_BYTE)
 			else:
 				# The depth travels into the arm too, or a tagged tree
@@ -9801,7 +9821,7 @@ class Emitter:
 			# and caught here it read as another arm and the message as whole,
 			# where the other three refuse it (26.904).
 			"\t\ttry:",
-			f"\t\t\t_arm_{name} = self.{name}",
+			f"\t\t\t_arm_{name} = self.{name}" + ("_view" if placement.located is not None else ""),
 			"\t\texcept VersionError:",
 			f"\t\t\tpass\t\t# not the arm this message carries",
 			"\t\telse:",

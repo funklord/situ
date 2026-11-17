@@ -26,7 +26,7 @@ from walker import vm
 from walker.image import FRAME_CAP, LITTLE, NONE, Image, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          says_little,
-                         Unsupplied, View, child_args,
+                         Unsupplied, View, child_args, frame_end,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
@@ -902,7 +902,7 @@ def _nesting_within(view: View, depth: int = 0) -> None:
 			elif is_run(image, index):
 				spans = _run_elements(view, index) or []
 			else:
-				spans = [(at, view.limit - at)]
+				spans = [(at, frame_end(view, index) - at)]
 			handed = child_args(view, index)
 		except TooDeep:
 			raise
@@ -1395,7 +1395,7 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			# extent past the limit, so a broken rule inside a truncated
 			# member is never reached. Clamping the inner frame instead
 			# answered CONSTRAINT for it.
-			if inner_at + reach > view.limit:
+			if inner_at + reach > frame_end(view, index):
 				return fail(ERR_BOUNDS, index)
 			inner = View(image, view.buffer, placement.type_struct,
 			             inner_at, inner_at + reach,
@@ -1412,8 +1412,12 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			if floor != NONE and reach * BITS_PER_BYTE < floor:
 				return fail(ERR_BOUNDS, index)
 
+			# None is "cannot say", and a struct this walker cannot judge
+			# makes the whole answer one it cannot give: read as a pass, a
+			# chain looping back on itself was OK here where the four
+			# backends refuse it and the C walker cannot say (26.1043).
 			verdict = _validate(image, inner, placement.type_struct)
-			if verdict:
+			if verdict is None or verdict:
 				return verdict
 
 		# A VARIANT'S SELECTED ARM, which this never looked at (26.578).
@@ -1452,7 +1456,12 @@ def _validate_here(image: Image, view: View, struct_index: int,
 						and arm_placement.size_code == NONE \
 						and arm_placement.array_count == NONE \
 						and arm_placement.repeat_code == NONE \
+						and arm_placement.located_code == NONE \
 						and arm not in image.delimiters:
+					# Not one placed by `at`, which is not where the variant
+					# is: `_arm_validates` places it from the message
+					# (26.1044).
+					#
 					# THE VARIANT'S offset and span, not the arm's, which
 					# is `_arm_bits`' own rule: "the arm starts where the
 					# variant does ... and asking `offset_bits` for the
@@ -2135,6 +2144,36 @@ def _arm_validates(image: Image, view: View, index: int,
 	arm_type = image.placements[chosen].type_struct
 	if arm_type != NONE and not image.structs[arm_type].measurable:
 		return OK
+
+	# AN ARM PLACED BY `at` (26.1044) is where the message puts it, not
+	# where the variant sits: the variant measures it as nothing, and the
+	# struct is validated over its own extent from that offset, bounded by
+	# the message -- as a located nested member is (26.1043). This is how
+	# a chain ends on a sentinel.
+	if image.placements[chosen].located_code != NONE and arm_type != NONE:
+		try:
+			start = _evaluate(view, image.placements[chosen].located_code)
+		except TooDeep:
+			return None
+		except (Refused, Unplaceable):
+			return ERR_BOUNDS
+		end = len(view.buffer)
+		if start < 0 or start > end:
+			return ERR_BOUNDS
+		handed = child_args(view, chosen)
+		try:
+			reach = struct_extent(View(image, view.buffer, arm_type, start,
+			                           end, handed))
+		except TooDeep:
+			return None
+		except (Refused, Unplaceable):
+			return ERR_BOUNDS
+		floor = image.structs[arm_type].size_min_bits
+		if start + reach > end \
+				or (floor != NONE and reach * BITS_PER_BYTE < floor):
+			return ERR_BOUNDS
+		return _validate(image, View(image, view.buffer, arm_type, start,
+		                             start + reach, handed), arm_type)
 
 	# Measured through the variant *member*, not the arm: an arm is not in
 	# the struct's member chain, so asking `offset_bits` for one refuses.

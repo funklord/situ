@@ -2191,6 +2191,12 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
+	/* Placed by `at`, so none of its bytes are the variant's (26.1044):
+	 * the four backends measure such an arm as nothing. */
+	if (held.located_code != SITU_WALK_NONE) {
+		*out = 0u;
+		return SITU_WALK_OK;
+	}
 
 	/* From where the variant starts, as a struct arm is below: asking the
 	 * chain for the arm walks the variant whose extent this is. Clamped to
@@ -5406,6 +5412,51 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 
+	/* AN ARM PLACED BY `at` (26.1044) is where the message puts it, not
+	 * where the variant sits: the variant measures it as nothing, and the
+	 * struct is validated over its own extent from that offset, from the
+	 * root and bounded by the message -- as a located nested member is
+	 * (26.1043). This is how a chain ends on a sentinel. */
+	if (arm.located_code != SITU_WALK_NONE && arm_type != SITU_WALK_NONE
+	    && image->root != NULL) {
+		int64_t         values[SITU_WALK_ARGUMENTS_MAX];
+		situ_walk_image placed;
+		walk_ctx        ctx   = {image, message, len, shape, depth};
+		int64_t         where = 0;
+		uint32_t        reach = 0u;
+
+		err = situ_walk_eval(image, arm.located_code, ctx_load, &ctx,
+		                     (int64_t)len, &where);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK || where < 0
+		    || (uint64_t)where > image->root_len) {
+			record(why, chosen, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		err = child_binding(image, message, len, shape, chosen, depth,
+		                    arm_type, values, &placed);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		err = struct_extent(&placed, image->root + where,
+		                    image->root_len - (uint32_t)where, arm_type,
+		                    depth + 1u, &reach);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK
+		    || reach > image->root_len - (uint32_t)where) {
+			record(why, chosen, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		return validate_deep(&placed, image->root + where, reach, arm_type,
+		                     depth + 1u, verdict, why);
+	}
+
 	err = situ_walk_offset_bits(image, message, len, shape, index, &at);
 	if (err == SITU_WALK_UNSUPPORTED) {
 		return err;
@@ -5662,7 +5713,11 @@ situ_walk_err situ_walk_validate(const situ_walk_image *image,
                                  const uint8_t *message, uint32_t len,
                                  uint32_t shape, situ_walk_err *verdict)
 {
-	return validate_deep(image, message, len, shape, 0u, verdict, NULL);
+	situ_walk_image rooted = *image;
+
+	rooted.root     = message;
+	rooted.root_len = len;
+	return validate_deep(&rooted, message, len, shape, 0u, verdict, NULL);
 }
 
 situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
@@ -5677,7 +5732,13 @@ situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
 		why->placement = SITU_WALK_NONE;
 		why->check     = SITU_WALK_NO_CHECK;
 	}
-	return validate_deep(image, message, len, shape, 0u, verdict, why);
+	{
+		situ_walk_image rooted = *image;
+
+		rooted.root     = message;
+		rooted.root_len = len;
+		return validate_deep(&rooted, message, len, shape, 0u, verdict, why);
+	}
 }
 
 /* Whether every element a counted run declares is inside the frame.
@@ -6672,6 +6733,60 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		                    && held.size_code == SITU_WALK_NONE
 		                    && delimiter_rules(image, index) == NULL
 		                    && arm_rows(image, index, &on_arms) == NULL);
+
+		/* A STRUCT PLACED BY `at`, validated where the message puts it:
+		 * from the root, not from this struct's own bytes, and bounded by
+		 * the message rather than this frame -- a located member reaches
+		 * past the frame by construction (9.8, 26.446). `report.py` asks
+		 * the same of `frame_end` (26.1043). */
+		if (nested && held.located_code != SITU_WALK_NONE
+		    && image->root != NULL) {
+			situ_walk_err   inner = SITU_WALK_OK;
+			int64_t         values[SITU_WALK_ARGUMENTS_MAX];
+			situ_walk_image bound;
+			walk_ctx        ctx   = {image, message, len, shape, depth};
+			int64_t         where = 0;
+			uint32_t        span  = 0u;
+
+			err = situ_walk_eval(image, held.located_code, ctx_load, &ctx,
+			                     (int64_t)len, &where);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK || where < 0
+			    || (uint64_t)where > image->root_len) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			err = child_binding(image, message, len, shape, index, depth,
+			                    held.type_struct, values, &bound);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			err = struct_extent(&bound, image->root + where,
+			                    image->root_len - (uint32_t)where,
+			                    held.type_struct, depth + 1u, &span);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK
+			    || span > image->root_len - (uint32_t)where) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			err = validate_deep(&bound, image->root + where, span,
+			                    held.type_struct, depth + 1u, &inner, why);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (inner != SITU_WALK_OK) {
+				*verdict = inner;
+				return SITU_WALK_OK;
+			}
+			continue;
+		}
 
 		/* Every member is *placed*, not only the constrained ones: a struct
 		 * whose later members the frame does not reach is BOUNDS before any

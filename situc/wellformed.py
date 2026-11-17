@@ -6097,17 +6097,30 @@ def check_variant_exhaustiveness(schema: ast.Schema) -> None:
 	discriminant is a malleability surface, and silently accepting one is what
 	situ refuses to do.
 	"""
-	enums = {decl.name: decl for decl in schema.enums()}
+	enums   = {decl.name: decl for decl in schema.enums()}
+	structs = {decl.name for decl in schema.structs()}
 
 	for struct in schema.structs():
 		for variant in _variants(struct.members):
 			_check_one_variant(variant, struct, enums)
 			for arm in variant.arms:
-				_check_arm_member_is_not_located(arm)
+				_check_arm_member_is_not_located(arm, structs)
 
 
-def _check_arm_member_is_not_located(arm: ast.VariantArm) -> None:
-	"""`at expr` on an arm member is refused, because it was ignored.
+def _check_arm_member_is_not_located(arm: ast.VariantArm,
+		structs: set[str]) -> None:
+	"""`at expr` on an arm member is refused, unless the member is a struct.
+
+	**One struct placed by `at` is an arm since 26.1044**, because that is
+	how a chain ends on a sentinel -- openmlx4's FS2:
+	`case 0xFF000000: nothing none; default: chain following at head.next;`.
+	The arm occupies nothing in the frame, so the variant measures it as
+	zero, and every reader reaches it from the message as it reaches a
+	located member. The overlap the paragraph below defers is no new
+	question for such an arm: a located member may already land anywhere,
+	the discriminant included.
+
+	What follows is why every other located arm is still refused.
 
 	Every backend's arm path resolves the member's offset by summing what
 	precedes it, and none consults `located` -- the C emitter hard-coded the
@@ -6125,6 +6138,10 @@ def _check_arm_member_is_not_located(arm: ast.VariantArm) -> None:
 	member = arm.member
 	if member is None or getattr(member, "located", None) is None:
 		return
+	if isinstance(member, ast.Field) and member.type_ref.name in structs \
+			and member.array is None and member.until is None \
+			and member.repeat is None:
+		return
 	raise error(
 		"`at` on a variant arm member is not implemented",
 		member.span,
@@ -6132,6 +6149,8 @@ def _check_arm_member_is_not_located(arm: ast.VariantArm) -> None:
 		notes = ["every backend places an arm member after the discriminant "
 		         "and none consults `at`, so the schema would state what the "
 		         "generated code does not do (project.md 26.124)",
+		         "one struct placed by `at` is supported as an arm, which is "
+		         "how a chain ends on a sentinel (26.1044)",
 		         "move the member out of the variant, or leave its offset to "
 		         "the arm"],
 	)

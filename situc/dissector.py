@@ -3934,6 +3934,9 @@ def _variant_length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# Where the variant starts, as `_length` measures any member: an arm
 		# after a variable member was measured from the struct's start.
 		one = _length(resolved, struct, member, base, where)
+		# Placed by `at`, so none of its bytes are the variant's (26.1044).
+		if member.located is not None:
+			one = "0"
 		if one is None:
 			return None
 		chain = one if arm.value is None \
@@ -3985,6 +3988,10 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# where nothing follows the variant -- fuzznet's call `frame`, whose
 		# body ends in `u8 media[remaining]`, and with it the whole variant
 		# was declined (26.981).
+		# Placed by `at` (26.1044): its bytes are where the message puts
+		# them, not here, so the cursor does not move over them.
+		if member.located is not None:
+			length = "0"
 		if length is None and last \
 				and member.type_name in resolved.structs \
 				and ends_in_the_frame(resolved.structs,
@@ -3998,7 +4005,8 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		field = f"{_lua(struct.name)}.fields.{name}"
 		test  = ("else" if arm.value is None
 		         else f"{'if' if first else 'elseif'} arm == {arm.value} then")
-		shown = bool(_field(resolved, struct, member))
+		shown = bool(_field(resolved, struct, member)) \
+			and member.located is None
 		# Little-endian as a member outside an arm is: this said `add`
 		# for every arm, so radiotap's `mactime` read byte-reversed in
 		# Wireshark once its arms were reached (26.932).
@@ -4012,7 +4020,7 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 			         "(subtree, ")
 		# One struct goes to its own dissector, as a nested member does;
 		# it was stepped over, so radiotap's channel was never shown.
-		nested = (not shown
+		nested = (not shown and member.located is None
 		          and nests_one_struct(resolved.structs, member))
 		call   = (f"Dissector.get(\"{member.type_name}\"):call("
 		          "tvb(at, n):tvb(), pinfo, subtree)")

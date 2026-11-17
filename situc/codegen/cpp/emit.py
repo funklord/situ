@@ -5180,7 +5180,9 @@ class Emitter:
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
 				continue		# `default: error`; falls to the zero above
-			if member.is_fixed_size:
+			if member.located is not None:
+				length = "0u"	# placed from the message, not in the frame
+			elif member.is_fixed_size:
 				length = f"{member.size_bits // BITS_PER_BYTE}u"
 			elif is_unmeasured_run(self.resolved.structs, member):
 				# A delimited run of RECORDS is not a delimited byte run:
@@ -7472,6 +7474,25 @@ class Emitter:
 		older = self._arm_since(struct, placement, selected=False)
 		if older:
 			test = f"({test}{older})"
+
+		# AN ARM PLACED BY `at`: the located member, behind the arm's test.
+		# See the C backend (26.1044).
+		if placement.located is not None:
+			located = self._located(struct, placement)
+			opened  = located.index("\t{")
+			return [
+				"",
+				f"\t/* {placement.path}, present when the discriminant selects"
+				f" `{arm_label(arm)}`. */",
+				*located[:opened + 1],
+				f"\t\tif ({test}) {{",
+				"\t\t\treturn ::situ::rt::err::version;",
+				"\t\t}",
+				"\t\tif (msg == nullptr) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				*located[opened + 1:],
+			]
 
 		name   = bare_name(local_name(struct, placement))
 		scalar = placement.scalar
@@ -11833,7 +11854,11 @@ class Emitter:
 			"\t\t * this arm not fitting the frame is malformed. */",
 			"\t\t{",
 			f"\t\t\t::{self.namespace}::{class_name(inner)} arm;",
-			f"\t\t\tconst ::situ::rt::err got = {name}(arm);",
+			# A located arm is reached from the message, through the
+			# view's owner (26.1044).
+			(f"\t\t\tconst ::situ::rt::err got = {name}_view(raw_.owner, arm);"
+			 if placement.located is not None else
+			 f"\t\t\tconst ::situ::rt::err got = {name}(arm);"),
 			"",
 			"\t\t\tif (got == ::situ::rt::err::ok) {",
 			"\t\t\t\tconst ::situ::rt::err inner = arm.validate();",

@@ -77,9 +77,50 @@ CASES: dict[str, tuple[bytes, str, int]] = {
 }
 
 
-def _build(tmp_path: Path, target: str) -> Path:
+#: The chain ended on a sentinel (26.1044): FS2's `next == 0xFF000000`,
+#: spelled as an arm placed by `at` beside a `nothing` arm, which is how
+#: situ writes an optional member elsewhere.
+SENTINEL = ("target buffer;\nendian big;\n"
+            "struct nothing { }\n"
+            "struct hdr { u32 size; u32 next; }\n"
+            "struct chain [depth = 8] {\n"
+            "\thdr   head;\n"
+            "\tu8    data[head.size];\n"
+            "\tvariant rest switch (head.next) {\n"
+            "\t\tcase 0xFF000000: nothing none;\n"
+            "\t\tdefault:         chain following at head.next;\n"
+            "\t}\n"
+            "}\n")
+
+END = 0xFF000000
+
+#: The same questions with an end to say. Nine sections nest eight deep,
+#: which `[depth = 8]` allows; ten do not.
+ENDED: dict[str, tuple[bytes, str, int]] = {
+	"one":       (_sections((0, 2, END)), "ok", 0),
+	"three":     (_sections((0, 2, 10), (10, 1, 19), (19, 0, END)), "ok", 2),
+	"three_then_out": (_sections((0, 2, 10), (10, 1, 19), (19, 0, 200)),
+	                   "bounds", 2),
+	"loops_to_itself": (_sections((0, 2, 0)), "constraint", 10),
+	"nine":      (_sections(*((8 * i, 0, 8 * (i + 1)) for i in range(8)),
+	                        (64, 0, END)), "ok", 8),
+	"ten":       (_sections(*((8 * i, 0, 8 * (i + 1)) for i in range(9)),
+	                        (72, 0, END)), "constraint", 9),
+	# Not adjacent, with a section-shaped header in the gap claiming 1000
+	# bytes: a reader that measured the arm where the variant sits reads
+	# that header as the next section. Every other case here puts the next
+	# section right after the frame, where the two readings agree.
+	"apart":     (_sections((0, 2, 30), (10, 1000, 0), (30, 0, END))[:38],
+	              "ok", 1),
+}
+
+SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED)]
+SHAPE_IDS = ("located", "sentinel")
+
+
+def _build(tmp_path: Path, target: str, text: str = SCHEMA) -> Path:
 	schema = tmp_path / "chain.situ"
-	schema.write_text(SCHEMA, encoding="ascii")
+	schema.write_text(text, encoding="ascii")
 	out = tmp_path / target
 	assert main(["build", str(schema), "--target", target,
 	             "--out", str(out)]) == 0
@@ -95,9 +136,10 @@ def _table(ran: "subprocess.CompletedProcess[str]") -> dict[str, tuple[str, int]
 	return rows
 
 
-def _want() -> dict[str, tuple[str, int]]:
+def _want(cases: dict[str, tuple[bytes, str, int]]
+		) -> dict[str, tuple[str, int]]:
 	return {name: (verdict, nesting)
-	        for name, (_, verdict, nesting) in CASES.items()}
+	        for name, (_, verdict, nesting) in cases.items()}
 
 
 def _c_bytes(data: bytes) -> str:
@@ -105,11 +147,13 @@ def _c_bytes(data: bytes) -> str:
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
-def test_c(tmp_path: Path) -> None:
-	out = _build(tmp_path, "c")
+@pytest.mark.parametrize("text,cases", SHAPES, ids=list(SHAPE_IDS))
+def test_c(tmp_path: Path, text: str,
+		cases: dict[str, tuple[bytes, str, int]]) -> None:
+	out = _build(tmp_path, "c", text)
 	rows = "\n".join(
 		f'\t{{ "{name}", (const uint8_t[]){_c_bytes(data)}, {len(data)}u }},'
-		for name, (data, _, _) in CASES.items())
+		for name, (data, _, _) in cases.items())
 	(out / "main.c").write_text(f'''#include <stdio.h>
 #include <string.h>
 #include "chain.h"
@@ -147,16 +191,18 @@ int main(void)
 		 "-o", str(out / "r")], capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert _table(subprocess.run([str(out / "r")], capture_output=True,
-	                             text=True)) == _want()
+	                             text=True)) == _want(cases)
 
 
 @pytest.mark.skipif(shutil.which("g++") is None, reason="no C++ compiler")
-def test_cpp(tmp_path: Path) -> None:
-	out = _build(tmp_path, "cpp")
+@pytest.mark.parametrize("text,cases", SHAPES, ids=list(SHAPE_IDS))
+def test_cpp(tmp_path: Path, text: str,
+		cases: dict[str, tuple[bytes, str, int]]) -> None:
+	out = _build(tmp_path, "cpp", text)
 	rows = "\n".join(
 		f'\t{{ "{name}", {{{", ".join(f"0x{b:02x}" for b in data)}}},'
 		f' {len(data)}u }},'
-		for name, (data, _, _) in CASES.items())
+		for name, (data, _, _) in cases.items())
 	(out / "main.cpp").write_text(f'''#include <cstdio>
 #include <cstring>
 #include "chain.hpp"
@@ -191,16 +237,18 @@ int main()
 		 "-o", str(out / "r")], capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert _table(subprocess.run([str(out / "r")], capture_output=True,
-	                             text=True)) == _want()
+	                             text=True)) == _want(cases)
 
 
 @pytest.mark.skipif(shutil.which("rustc") is None, reason="no Rust compiler")
-def test_rust(tmp_path: Path) -> None:
-	out = _build(tmp_path, "rust")
+@pytest.mark.parametrize("text,cases", SHAPES, ids=list(SHAPE_IDS))
+def test_rust(tmp_path: Path, text: str,
+		cases: dict[str, tuple[bytes, str, int]]) -> None:
+	out = _build(tmp_path, "rust", text)
 	shutil.copy(RUNTIME / "rust" / "situ_rt.rs", out / "situ_rt.rs")
 	rows = "\n".join(
 		f'\t\t("{name}", vec![{", ".join(str(b) for b in data)}]),'
-		for name, (data, _, _) in CASES.items())
+		for name, (data, _, _) in cases.items())
 	(out / "main.rs").write_text(f'''mod situ_rt;
 mod chain;
 fn main() {{
@@ -224,18 +272,20 @@ fn main() {{
 		 str(out / "main.rs")], capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert _table(subprocess.run([str(out / "r")], capture_output=True,
-	                             text=True)) == _want()
+	                             text=True)) == _want(cases)
 
 
-def test_python(tmp_path: Path) -> None:
-	out = _build(tmp_path, "python")
+@pytest.mark.parametrize("text,cases", SHAPES, ids=list(SHAPE_IDS))
+def test_python(tmp_path: Path, text: str,
+		cases: dict[str, tuple[bytes, str, int]]) -> None:
+	out = _build(tmp_path, "python", text)
 	shutil.copy(RUNTIME / "python" / "situ_runtime.py",
 	            out / "situ_runtime.py")
-	cases = ", ".join(f"({name!r}, {data!r})"
-	                  for name, (data, _, _) in CASES.items())
+	listed = ", ".join(f"({name!r}, {data!r})"
+	                   for name, (data, _, _) in cases.items())
 	(out / "main.py").write_text(f'''import situ_runtime as rt
 import chain
-for name, data in [{cases}]:
+for name, data in [{listed}]:
 	top = chain.chain.at(rt.Message(bytearray(data)), 0, len(data))
 	try:
 		top.validate()
@@ -248,16 +298,17 @@ for name, data in [{cases}]:
 ''', encoding="ascii")
 	assert _table(subprocess.run([sys.executable, str(out / "main.py")],
 	                             capture_output=True, text=True,
-	                             cwd=out)) == _want()
+	                             cwd=out)) == _want(cases)
 
 
-def test_python_type_checks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL], ids=list(SHAPE_IDS))
+def test_python_type_checks(tmp_path: Path, text: str) -> None:
 	"""The probe's `try`/`else` is shaped for mypy: binding the element to
 	`None` on a miss would retype a variable `mypy` reads as the struct."""
 	if subprocess.run([sys.executable, "-m", "mypy", "--version"],
 	                  capture_output=True).returncode != 0:
 		pytest.skip("no mypy")
-	out = _build(tmp_path, "python")
+	out = _build(tmp_path, "python", text)
 	shutil.copy(RUNTIME / "python" / "situ_runtime.py",
 	            out / "situ_runtime.py")
 	checked = subprocess.run(
@@ -265,3 +316,168 @@ def test_python_type_checks(tmp_path: Path) -> None:
 		 "--no-error-summary", str(out / "chain.py")],
 		capture_output=True, text=True)
 	assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+#: What the two walkers answer, which is the backends' verdict but for a
+#: message past the depth: there they say they cannot say rather than give
+#: one, as for every recursion (26.286). `nine` is OK to the backends and
+#: past the walkers' ceiling only because `hdr`, nested in each section,
+#: counts as a level there -- an open walker gap, not this construct's.
+WALKED = {
+	"located": {"loops_to_itself": "cannot-say", "three_then_out": "1",
+	            "six_then_out": "1", "twelve": "cannot-say",
+	            "loops_after_three": "cannot-say"},
+	"sentinel": {"one": "0", "three": "0", "three_then_out": "1",
+	             "loops_to_itself": "cannot-say", "nine": "cannot-say",
+	             "ten": "cannot-say", "apart": "0"},
+}
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
+@pytest.mark.parametrize("text,cases", SHAPES, ids=list(SHAPE_IDS))
+def test_both_walkers(tmp_path: Path, text: str,
+		cases: dict[str, tuple[bytes, str, int]]) -> None:
+	"""The walkers place a located struct from the message too (26.1043):
+	bounded by the parent's frame, every link that pointed outside its own
+	section was BOUNDS, and the C walker measured the offset from the
+	nested struct rather than from the message."""
+	from test_walker_c import (VERDICT, _build_driver, c_verdict,
+	                           image_for, python_verdict, shape_named)
+
+	schema = tmp_path / "chain.situ"
+	schema.write_text(text, encoding="ascii")
+	image = image_for(schema)
+	shape = shape_named(schema, "chain")
+	(tmp_path / "img").write_bytes(image)
+	drive = _build_driver(tmp_path, image, VERDICT)
+	want  = WALKED[SHAPE_IDS[SHAPES.index((text, cases))]]
+	said  = {name: (python_verdict(image, data, shape),
+	                c_verdict(tmp_path, image, data, shape, drive))
+	         for name, (data, _, _) in cases.items()}
+	assert said == {name: (word, word) for name, word in want.items()}
+
+
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL], ids=list(SHAPE_IDS))
+def test_the_dissector_steps_over_the_frame_alone(tmp_path: Path,
+		text: str) -> None:
+	"""The sixth reader. The next section is not this one's bytes, so the
+	dissector steps over head and data and no further: a located arm was
+	read as nine bytes of the frame where the four measure it as none."""
+	from test_dissector import LUA, read_back
+	from situc.cli import analyse
+	from situc.dissector import generate
+	from situc.parser import parse
+
+	if LUA is None:
+		pytest.skip("no Lua interpreter")
+	schema = tmp_path / "chain.situ"
+	schema.write_text(text, encoding="ascii")
+	source, resolved, _ = analyse(schema)
+	lua = tmp_path / "chain.lua"
+	lua.write_text(generate(parse(source), resolved, "chain"),
+	               encoding="ascii")
+	message = _sections((0, 2, 10), (10, 1, 19), (19, 0, END))
+	used, rows = read_back(lua, "chain", message)
+	assert used == 10, rows
+	assert [name for name, *_ in rows] == ["hdr.size", "hdr.next",
+	                                       "chain.data"], rows
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL], ids=list(SHAPE_IDS))
+def test_c_frames_a_section_by_its_own_bytes(tmp_path: Path,
+		text: str) -> None:
+	"""`required` asks for this section's bytes and no more: the next one
+	is wherever `next` says, and a stream framer that waited for it would
+	wait for a section that may sit anywhere -- or, here, for the 1000
+	bytes a header in the gap claims. Both shapes, since `required` walked
+	the located member and the located arm alike."""
+	out = _build(tmp_path, "c", text)
+	message = _sections((0, 2, 30), (10, 1000, 0), (30, 0, END))[:38]
+	(out / "main.c").write_text(f'''#include <stdio.h>
+#include "chain.h"
+static const uint8_t message[] = {_c_bytes(message)};
+int main(void)
+{{
+	uint32_t need = 0u;
+	const situ_err_t err = situ_chain_required(message, sizeof message, &need);
+	printf("%d %u\\n", (int)err, need);
+	return 0;
+}}
+''', encoding="ascii")
+	built = subprocess.run(
+		["gcc", "-std=c99", "-Os", "-Wall", "-Wextra", "-Werror",
+		 f"-I{RUNTIME / 'c'}", f"-I{out}", str(out / "main.c"),
+		 str(out / "chain.c"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(out / "r")], capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(out / "r")], capture_output=True, text=True)
+	assert ran.stdout.split() == ["0", "10"], ran.stdout
+
+
+#: A located arm beside a variable one, so the variant's size is computed
+#: per message and the arm placed by `at` has to count as nothing in it.
+#: FS2's shape never reaches that sum: `nothing` and the located arm are both
+#: zero bytes in the frame, so the layout makes the variant a fixed zero.
+MIXED = ("target buffer;\nendian big;\n"
+         "struct t { u8 a; u8 b; }\n"
+         "struct s {\n"
+         "\tu8 k;\n"
+         "\tu8 n;\n"
+         "\tvariant v switch (k) {\n"
+         "\t\tcase 0:  u8 run[n];\n"
+         "\t\tdefault: t far at n;\n"
+         "\t}\n"
+         "\tu8 tail;\n"
+         "}\n")
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
+def test_c_places_what_follows_a_located_arm(tmp_path: Path) -> None:
+	"""`tail` follows the variant, which holds no bytes when its located arm
+	is selected: at offset 2, not 2 plus the two bytes `far` occupies at 4."""
+	out = _build(tmp_path, "c", MIXED)
+	(out / "main.c").write_text('''#include <stdio.h>
+#include "chain.h"
+int main(void)
+{
+	uint8_t     buf[] = {1, 4, 0x7e, 0, 0xaa, 0xbb};
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    need = 0u;
+
+	situ_msg_init(&msg, buf, sizeof buf);
+	if (situ_s_view(&msg, 0u, sizeof buf, &view) != SITU_OK) {
+		return 1;
+	}
+	(void)situ_s_required(buf, sizeof buf, &need);
+	printf("%u %u %d\\n", situ_s_tail_get(view), need, (int)situ_s_validate(view));
+	return 0;
+}
+''', encoding="ascii")
+	built = subprocess.run(
+		["gcc", "-std=c99", "-Os", "-Wall", "-Wextra", "-Werror",
+		 f"-I{RUNTIME / 'c'}", f"-I{out}", str(out / "main.c"),
+		 str(out / "chain.c"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(out / "r")], capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(out / "r")], capture_output=True, text=True)
+	assert ran.stdout.split() == ["126", "3", "0"], ran.stdout
+
+
+def test_python_places_what_follows_a_located_arm(tmp_path: Path) -> None:
+	"""The C case above, in Python."""
+	out = _build(tmp_path, "python", MIXED)
+	shutil.copy(RUNTIME / "python" / "situ_runtime.py",
+	            out / "situ_runtime.py")
+	(out / "main.py").write_text('''import situ_runtime as rt
+import chain
+buf = bytearray([1, 4, 0x7e, 0, 0xaa, 0xbb])
+one = chain.s.at(rt.Message(buf), 0, len(buf))
+one.validate()
+print(one.tail, chain.s.required(bytes(buf)))
+''', encoding="ascii")
+	ran = subprocess.run([sys.executable, str(out / "main.py")],
+	                     capture_output=True, text=True, cwd=out)
+	assert ran.returncode == 0, ran.stderr
+	assert ran.stdout.split()[0] == "126", ran.stdout

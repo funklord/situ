@@ -3374,6 +3374,31 @@ class Emitter:
 			        " a pad is a run", " * the message sizes, so there is no"
 			        " value to hand back. */"]
 
+		# AN ARM PLACED BY `at` (26.1044): the member a located field
+		# would be, behind the arm's test. It occupies nothing in the
+		# frame, so the variant measures it as zero, and it is reached
+		# from the message as any located member is -- which is how a
+		# chain ends on a sentinel: `case K: nothing none; default: chain
+		# following at head.next;`.
+		if placement.located is not None:
+			located = self._located_accessor(struct, placement)
+			opened  = located.index("{")
+			return [
+				"",
+				f"/* {placement.path}, present when the discriminant selects"
+				f" `{arm}`. */",
+				*located[:opened + 1],
+				f"\tif ({test}) {{",
+				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+				# `validate` hands the view's owner, which a view acquired
+				# without a message has not got.
+				"\tif (msg == NULL) {",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				*located[opened + 1:],
+			]
+
 		local  = c_name(self._local(struct, placement))
 		scalar = placement.scalar
 		base   = self._base_expression(struct, placement)
@@ -10154,7 +10179,9 @@ class Emitter:
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
 				continue		# `default: error`; falls to the zero above
-			if member.is_fixed_size:
+			if member.located is not None:
+				length = "0u"	# placed from the message, not in the frame
+			elif member.is_fixed_size:
 				length = f"{member.size_bits // BITS_PER_BYTE}u"
 			elif not self._has_length(struct, member):
 				return None
@@ -13073,8 +13100,13 @@ class Emitter:
 			"\t\tsitu_view_t arm;",
 			# `_member_args` against the accessor's `_member_tail`: one
 			# question, so the call and the definition cannot disagree.
-			f"\t\tconst situ_err_t got = {ident(self.prefix, struct.name, local, 'view')}"
-			f"(view, &arm{self._member_args(struct, placement)});",
+			# A located arm is reached from the message, through the view's
+			# owner, as a located member is (26.1044).
+			(f"\t\tconst situ_err_t got = {ident(self.prefix, struct.name, local, 'view')}"
+			 f"(view.owner, view, &arm{self._member_args(struct, placement)});"
+			 if placement.located is not None else
+			 f"\t\tconst situ_err_t got = {ident(self.prefix, struct.name, local, 'view')}"
+			 f"(view, &arm{self._member_args(struct, placement)});"),
 			"",
 			"\t\tif (got == SITU_OK) {",
 			f"\t\t\tconst situ_err_t err = "

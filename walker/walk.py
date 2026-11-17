@@ -609,7 +609,7 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 				"from its own bytes")
 		inner = View(view.image, view.buffer, placement.type_struct,
 		             view.at + offset_bits(view, index) // BITS_PER_BYTE,
-		             view.limit, child_args(view, index))
+		             frame_end(view, index), child_args(view, index))
 		return struct_extent(inner, depth + 1) * BITS_PER_BYTE
 
 	if placement.size_bits == NONE:
@@ -737,6 +737,10 @@ def _arm_bits(view: View, variant: int, chosen: int, depth: int) -> int:
 	`size_bits` is there.
 	"""
 	placement = view.image.placements[chosen]
+	# Placed by `at`, so none of its bytes are the variant's (26.1044): the
+	# four backends measure such an arm as nothing.
+	if placement.located_code != NONE:
+		return 0
 	if placement.pad_to:
 		# From where the variant starts, for the reason above.
 		unit = placement.pad_to * BITS_PER_BYTE
@@ -2971,6 +2975,22 @@ def _at_view(view: View, struct: int, at: int) -> View | None:
 		return None
 
 
+def frame_end(view: View, index: int) -> int:
+	"""Where member `index`'s bytes may run to: the frame, or the message.
+
+	A located member is placed from the start of the MESSAGE and reaches
+	past the frame by construction (9.8, 26.446), so a nested struct placed
+	by `at` is measured and bounded against the message's end. Bounded by
+	the parent's frame instead, every link of a chain like openmlx4's FS2
+	(`chain following at head.next`) was BOUNDS unless it pointed back inside
+	its own section -- and the one that did was followed until the ceiling
+	(26.1043).
+	"""
+	if view.image.placements[index].located_code != NONE:
+		return len(view.buffer)
+	return view.limit
+
+
 def _sub_view(view: View, index: int, depth: int) -> View | None:
 	"""A view over a nested struct or the arm a discriminant selects.
 
@@ -2997,11 +3017,12 @@ def _sub_view(view: View, index: int, depth: int) -> View | None:
 		here = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	except (Refused, Unplaceable):
 		return None
-	if here > view.limit:
+	end = frame_end(view, index)
+	if here > end:
 		return None
 	try:
 		return acquire(view.image, view.buffer, target, (),
-		               at=here, limit=view.limit)
+		               at=here, limit=end)
 	except Refused:
 		return None
 

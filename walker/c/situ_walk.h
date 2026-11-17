@@ -269,6 +269,16 @@ typedef struct {
 	 * during a measurement measured the recursion over, and a level cost
 	 * twice the level below it (26.909). NULL outside a measurement. */
 	struct situ_walk_sizes *sizes;
+
+	/* The whole message a validation began over, which a member placed by
+	 * `at` is measured from (9.8). Every nested walk is handed its own
+	 * struct's bytes as `message`, so without this a located member inside
+	 * one was placed from the nested start: openmlx4's FS2 chain,
+	 * `chain following at head.next`, was read from the wrong byte at every
+	 * link after the first (26.1043). NULL means `message` is the root, as
+	 * it is for every entry point but `validate`'s descent. */
+	const uint8_t *root;
+	uint32_t       root_len;
 } situ_walk_image;
 
 /* One member, as the image describes it. */

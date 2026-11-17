@@ -287,15 +287,14 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   had walked it as though it followed `data` inside the frame, so nothing
   compiled. A located member adds nothing to its struct's extent now, and
   the depth probe follows it through the message as `validate` does, so a
-  chain that loops back is CONSTRAINT rather than a hang. **What is still
-  missing is a way to say the chain stops**: openmlx4's sentinel
-  (`next == 0xFF000000`, its item 3). Without one no such chain validates,
-  since its last `next` points somewhere. A located arm in a variant,
-  `default: chain following at head.next;` beside `case K: nothing none;`,
-  is the spelling the grammar already has (PES and JSON write optional
-  members that way) and is refused by name today. A located run,
-  `following[head.next != K] at head.next`, is not the route: a located
-  run of structs compiled in no backend and is refused by name now.
+  chain that loops back is CONSTRAINT rather than a hang. **And it ends
+  on a sentinel since 26.1044**: one struct placed by `at` may be a
+  variant arm, so openmlx4's `next == 0xFF000000` is
+  `case 0xFF000000: nothing none; default: chain following at
+  head.next;` -- the grammar's own spelling of an optional member. All
+  six readers agree on such a chain but for depth, where the walkers
+  cannot say (26.1043). A located run of structs, the other spelling
+  that looked possible, compiled in no backend and is refused by name.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -8877,6 +8876,14 @@ Moved to `doc/decision/26.1041-a-located-chain-is-followed-through-the-message.m
 ### 26.1042 A second resend schedule once part is held
 
 Moved to `doc/decision/26.1042-a-second-resend-schedule-once-part-is-held.md`.
+
+### 26.1043 The walkers place a located struct from the message
+
+Moved to `doc/decision/26.1043-the-walkers-place-a-located-struct-from-the-message.md`.
+
+### 26.1044 A chain ends on a sentinel
+
+Moved to `doc/decision/26.1044-a-chain-ends-on-a-sentinel.md`.
 
 ### 26.929 The offset cache counts bits
 
