@@ -83,6 +83,7 @@ from situc.traverse import (
 	decode_ratio,
 	decodes_here,
 	depth_limit,
+	format_allows,
 	dynamic_frame_owner,
 	element_bytes,
 	enforceable_max,
@@ -5041,7 +5042,7 @@ class Emitter:
 			return [
 				f"\t/* This build follows `{struct.name}` only {limit} deep"
 				f" (`[limit]`), where",
-				f"\t * the format allows {declared} (`[depth]`). Past the"
+				f"\t * {format_allows(self.schema, struct.name)}. Past the"
 				" limit the message",
 				"\t * is refused as more than this reader will spend --"
 				" which is a",

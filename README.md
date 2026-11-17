@@ -1613,15 +1613,17 @@ text files a reviewer can read.
   supply memory, and `--layer edit` is the explicit way to ask for more.
   Python allocates because its data model gives it no other spelling, bounded
   by the schema's own `max`.
-- No *unbounded* recursion. A recursive struct that states a depth is
-  described -- `struct value [depth = 64]` is how `example/json` holds a
-  value inside an array inside an object -- and one that states none is
-  refused, because a format whose nesting nobody has bounded is a finding
-  rather than a gap in this language. `[depth = N]` is the format's own
-  limit and a deeper message is malformed; `[limit = N]` is this reader's
-  cap and a deeper message is well formed and refused anyway, with an
-  error class of its own so that a receiver does not log its own
-  configuration as an attack (decision 0054).
+- No *unbounded* recursion in the code it generates. A recursive struct
+  states how deep it is followed -- `struct value [depth = 64]` is how
+  `example/json` holds a value inside an array inside an object -- and one
+  that states nothing is refused, because a reader with no bound has no
+  stack to budget. `[depth = N]` is the format's own limit and a deeper
+  message is malformed; `[limit = N]` is this reader's cap and a deeper
+  message is well formed and refused anyway, with an error class of its
+  own so that a receiver does not log its own configuration as an attack
+  (decision 0054). A format that sets no maximum, such as a list that ends
+  on a sentinel, states `[limit]` alone, and no nesting of it is ever
+  called malformed (26.1047).
 - No grammar inside a field. A field whose text holds an expression language
   is not a layout; situ describes the layout around it (section 8.6.5).
 - **No transform that has to allocate.** A codec whose output is not a view

@@ -144,8 +144,19 @@ SAME: dict[str, tuple[bytes, str, int]] = {
 	"ten":       ENDED["ten"],
 }
 
-SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED), (FORWARD, GONE), (FIXED, SAME)]
-SHAPE_IDS = ("located", "sentinel", "forward", "fixed")
+#: FS2 as it is: a format that sets no maximum section count, so the schema
+#: states only how far this build follows it (26.1047). The verdicts are the
+#: sentinel chain's but for depth: past `[limit]` the image is refused as
+#: more than this reader spends, never as malformed.
+LIMITED = SENTINEL.replace("[depth = 8]", "[limit = 8]")
+
+UNBOUNDED: dict[str, tuple[bytes, str, int]] = {
+	name: (data, "depth" if verdict == "constraint" else verdict, nesting)
+	for name, (data, verdict, nesting) in ENDED.items()}
+
+SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED), (FORWARD, GONE), (FIXED, SAME),
+          (LIMITED, UNBOUNDED)]
+SHAPE_IDS = ("located", "sentinel", "forward", "fixed", "limited")
 
 
 def _build(tmp_path: Path, target: str, text: str = SCHEMA) -> Path:
@@ -245,7 +256,8 @@ static const one cases[] = {{
 static const char *word(::situ::rt::err e)
 {{
 	return e == ::situ::rt::err::ok ? "ok" : e == ::situ::rt::err::bounds ? "bounds"
-	     : e == ::situ::rt::err::constraint ? "constraint" : "other";
+	     : e == ::situ::rt::err::constraint ? "constraint"
+	     : e == ::situ::rt::err::depth ? "depth" : "other";
 }}
 int main()
 {{
@@ -293,6 +305,7 @@ fn main() {{
 			Ok(()) => "ok",
 			Err(situ_rt::Error::Bounds) => "bounds",
 			Err(situ_rt::Error::Constraint) => "constraint",
+			Err(situ_rt::Error::Depth) => "depth",
 			Err(_) => "other",
 		}};
 		println!("{{}} {{}} {{}}", name, word, top.nesting());
@@ -327,6 +340,8 @@ for name, data in [{listed}]:
 		word = "bounds"
 	except rt.ConstraintError:
 		word = "constraint"
+	except rt.DepthError:
+		word = "depth"
 	print(name, word, top.nesting)
 ''', encoding="ascii")
 	assert _table(subprocess.run([sys.executable, str(out / "main.py")],
@@ -334,7 +349,7 @@ for name, data in [{listed}]:
 	                             cwd=out)) == _want(cases)
 
 
-@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD, FIXED],
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD, FIXED, LIMITED],
                          ids=list(SHAPE_IDS))
 def test_python_type_checks(tmp_path: Path, text: str) -> None:
 	"""The probe's `try`/`else` is shaped for mypy: binding the element to
@@ -370,6 +385,7 @@ WALKED = {
 	          "loops_to_itself": "cannot-say", "nine": "cannot-say",
 	          "ten": "cannot-say"},
 }
+WALKED["limited"] = WALKED["sentinel"]
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")

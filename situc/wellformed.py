@@ -6378,8 +6378,11 @@ def _check_cycle(cycle: list[str], structs: Structs) -> None:
 	"""What a cycle has to say about itself before it is describable."""
 	members = cycle[:-1]
 
+	# A bound is `[depth]`, the format's, or `[limit]` alone where the
+	# format sets none (26.1047): either gives the walk a stack to budget.
 	undeclared = [name for name in members
-	              if _declared_depth(structs[name]) is None]
+	              if _declared_depth(structs[name]) is None
+	              and _declared_attr(structs[name], "limit") is None]
 	if undeclared:
 		raise _recursion_error(cycle, structs, undeclared)
 
@@ -6402,19 +6405,39 @@ def _check_cycle(cycle: list[str], structs: Structs) -> None:
 				         "spend a different number",
 				         "state the same one on every struct in the cycle"],
 			)
-		if attr == "limit" and values and len(stated) != len(
+		if values and len(stated) != len(
 				[v for v in stated.values() if v is not None]):
 			missing = [name for name in members if stated[name] is None]
+			# `[depth]` partly stated was unreachable before 26.1047, when
+			# every struct of a cycle had to state it.
+			other = ("the format's own `[depth]`" if attr == "limit"
+			         else "only this build's `[limit]`")
 			raise error(
-				"the cycle states `[limit]` on some of its structs",
+				f"the cycle states `[{attr}]` on some of its structs",
 				structs[missing[0]].span,
-				label = "no `[limit]` here",
+				label = f"no `[{attr}]` here",
 				notes = [f"cycle: {' -> '.join(cycle)}",
 				         f"`{missing[0]}` does not state one, so a walk "
-				         "entering there would follow the format's own "
-				         "`[depth]` and a walk entering elsewhere would not",
+				         f"entering there would follow {other} and a walk "
+				         "entering elsewhere would not",
 				         "state it on every struct in the cycle, or on none"],
 			)
+
+
+def _recursive(name: str, structs: Structs) -> bool:
+	"""Whether `name` reaches itself, through a variant arm or not."""
+	seen: set[str] = set()
+	todo = list(_referenced_structs(structs[name].members, structs, in_arm=True))
+	while todo:
+		here = todo.pop()
+		if here == name:
+			return True
+		if here in seen or here not in structs:
+			continue
+		seen.add(here)
+		todo.extend(_referenced_structs(structs[here].members, structs,
+		                                in_arm=True))
+	return False
 
 
 def _arm_edge(cycle: list[str], structs: Structs) -> tuple[str, str] | None:
@@ -6446,6 +6469,7 @@ def check_depth_bounds(schema: ast.Schema) -> None:
 	Both must be positive. A depth of zero describes a type that cannot
 	contain itself, which is a struct without the attribute.
 	"""
+	structs = {decl.name: decl for decl in schema.structs()}
 	for decl in schema.structs():
 		depth = _declared_depth(decl)
 		limit = None
@@ -6464,16 +6488,19 @@ def check_depth_bounds(schema: ast.Schema) -> None:
 					         "without the attribute"],
 				)
 
-		if depth is None and limit is not None:
+		# `[limit]` alone is a recursion whose format sets no bound, which
+		# FS2's sentinel-ended chain is (26.1047, superseding 0054's
+		# refusal). It is still refused where nothing recurses, since there
+		# is then nothing for it to cap.
+		if depth is None and limit is not None \
+				and not _recursive(decl.name, structs):
 			raise error(
-				"`[limit]` without `[depth]`",
+				"`[limit]` on a struct that does not contain itself",
 				decl.span,
 				label = "declared here",
-				notes = ["`limit` is this build's cap on a recursion the "
-				         "format bounds with `depth`, and there is no "
-				         "recursion here to cap",
-				         "a struct that names itself needs `depth` to be "
-				         "describable at all"],
+				notes = ["`limit` is this build's cap on how deep a "
+				         "recursion is followed, and there is no recursion "
+				         "here to cap"],
 			)
 
 		if depth is not None and limit is not None and limit > depth:
@@ -6563,6 +6590,8 @@ def _recursion_error(cycle: list[str], structs: Structs,
 		summary = f"struct `{cycle[0]}` is recursive through {chain}"
 
 	remedy = ", ".join(f"`struct {name} [depth = N]`" for name in undeclared)
+	remedy += (" -- or, where the format sets no bound, `[limit = N]` for "
+	           "how deep this build follows it")
 	return error(
 		summary,
 		decl.span,

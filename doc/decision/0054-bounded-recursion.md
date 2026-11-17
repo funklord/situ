@@ -95,11 +95,16 @@ the sentence `SITU_ERR_TRUNCATED` already exists for. It does not
 participate in size computation: `size_max` follows `depth`, always, or the
 declared footprint would change when somebody hardened a reader.
 
-Both are optional and their absence is not a default. A recursive struct
+Both are optional and their absence is not a default. ~~A recursive struct
 with no `depth` is refused as it is today, with the same diagnostic plus the
 remedy -- because a format whose nesting is genuinely unbounded is one whose
 worst case nobody has thought about, and that is the finding rather than a
-gap in this language.
+gap in this language.~~ **Amended 2026-11-17 (26.1047): a recursive struct
+needs `depth` or `limit`, and `limit` alone is a format that sets no
+maximum.** The sentence above mistook the reader's need for the format's:
+FS2 ends its list on a sentinel and states no count, and nobody failed to
+think about it. What the generated code needs is a stack to budget, and
+`limit` is exactly that number.
 
 ## Why two rather than one
 

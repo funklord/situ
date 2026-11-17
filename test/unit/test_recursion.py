@@ -130,6 +130,10 @@ def test_a_mutual_cycle_is_described() -> None:
 	(MUTUAL.replace("struct expr [depth = 8]",
 	                "struct expr [depth = 8, limit = 4]")
 	        .format(item_attrs=" [depth = 8]"), "some of its structs"),
+	# And `[depth]` on one and only `[limit]` on the other: one end bounds
+	# the format and the other says the format sets no bound (26.1047).
+	(MUTUAL.replace("struct expr [depth = 8]", "struct expr [limit = 8]")
+	        .format(item_attrs=" [depth = 8]"), "states `\\[depth\\]` on some"),
 	# A cycle through a variant arm with no bound on it. The arm shape is
 	# permitted -- it is how a tagged tree is written and `SHAPES["arm"]`
 	# builds one -- and what is refused here is the same thing refused of
@@ -160,24 +164,27 @@ def test_the_two_depths_are_held_to_what_they_can_mean(
 		attrs: str, why: str) -> None:
 	"""`limit` above `depth` can never fire, so it sits in a schema looking
 	like a defence; a depth of zero describes a type that cannot contain
-	itself; and a `limit` alone caps a recursion the format does not bound.
-	Each is refused rather than warned, because a schema stating what the
+	itself. Each is refused rather than warned, because a schema stating what the
 	generated code does not enforce is worse than one stating nothing."""
 	with pytest.raises(SituError, match=why):
 		layout(NODE.replace("[depth = 32]", attrs))
 
 
-def test_a_limit_without_a_depth_is_refused() -> None:
-	"""`limit` caps a recursion that `depth` bounds, so alone it caps nothing.
-
-	Tested on a struct that does NOT name itself, because a recursive one
-	without `depth` is refused for the recursion first -- which is the more
-	fundamental answer and the right order. The case this check is actually
-	about is a schema that reached for a safety cap on a type that has no
-	recursion to be unsafe about.
-	"""
-	with pytest.raises(SituError, match="without"):
+def test_a_limit_on_a_struct_that_does_not_recurse_is_refused() -> None:
+	"""`limit` caps how deep a recursion is followed, so on a type with no
+	recursion it caps nothing and reads as a defence it is not."""
+	with pytest.raises(SituError, match="does not contain itself"):
 		layout("struct s [limit = 4] { u8 a; }\n")
+
+
+def test_a_limit_alone_bounds_a_recursion_the_format_does_not() -> None:
+	"""0054 refused `[limit]` without `[depth]`, so a format that sets no
+	maximum -- FS2's sentinel-ended chain -- had to state a false one, and a
+	legal image one deeper was called malformed. A limit alone is this
+	build's cap and nothing else (26.1047)."""
+	layout(NODE.replace("[depth = 32]", "[limit = 8]"))
+	layout(MUTUAL.replace("struct expr [depth = 8]", "struct expr [limit = 8]")
+	             .format(item_attrs=" [limit = 8]"))
 
 
 def test_every_backend_generates_for_a_recursive_type() -> None:

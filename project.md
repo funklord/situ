@@ -274,12 +274,13 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   as unbounded, and a recursive arm has none for a different reason. The
   arm carries `opaque` now and the check asks it.
 
-  Still open, and openmlx4's finding rather than a design gap: a format
-  that ends its list with a sentinel and declares no maximum has a `limit`
-  and no `depth`, and `[limit]` alone is refused. That was definitional
-  until `depth` acquired a behavioural meaning; their `[depth = 64]` now
-  claims a 65-section FS2 image is malformed, which is false and blames the
-  image rather than the reader.
+  **A format with no maximum states `[limit]` alone** (26.1047, the
+  holder's word 2026-11-17, superseding 0054's refusal). openmlx4's FS2
+  ends its list on a sentinel and sets no section count, so its
+  `[depth = 64]` called a legal 65-section image malformed. With `[limit]`
+  alone, past the limit is DEPTH in every backend and never CONSTRAINT,
+  and a cycle states it on all of its structs or none. A `[limit]` on a
+  struct that does not recurse is still refused.
 
   **The chain itself builds and runs in all four backends since 26.1041**
   (2026-11-17). FS2's section list is a recursive member placed by `at`:
@@ -8897,6 +8898,10 @@ Moved to `doc/decision/26.1045-a-when-reads-where-its-struct-sits.md`.
 ### 26.1046 An at reads no sealed or coded interior
 
 Moved to `doc/decision/26.1046-an-at-reads-no-sealed-or-coded-interior.md`.
+
+### 26.1047 A format with no maximum states only the limit
+
+Moved to `doc/decision/26.1047-a-format-with-no-maximum-states-only-the-limit.md`.
 
 ### 26.929 The offset cache counts bits
 

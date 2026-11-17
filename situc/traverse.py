@@ -4096,13 +4096,40 @@ def declared_depth(schema: "ast.Schema", name: str) -> int:
 	smaller `[limit]` does not refuse a deep message, it makes the offending
 	bytes invisible. A *refusal* may use either, and `[limit]` is a refusal.
 	"""
+	stated = format_depth(schema, name)
+	if stated is not None:
+		return stated
+	# NO FORMAT BOUND, only this build's `[limit]` (26.1047): a format such
+	# as FS2's sentinel-ended chain sets no maximum, and a `[depth]` it had
+	# to invent called a legal image malformed. One past the limit is the
+	# depth a build must measure to see the limit crossed, and it puts every
+	# backend on the branch that refuses past `[limit]` as DEPTH -- never
+	# CONSTRAINT, since no nesting is malformed in such a format.
+	limit = _stated(schema, name, "limit")
+	return depth_limit(schema, name) if limit is None else limit + 1
+
+
+def _stated(schema: "ast.Schema", name: str, attribute: str) -> int | None:
 	for decl in schema.structs():
 		if decl.name != name:
 			continue
 		for attr in decl.attrs:
-			if attr.name == "depth" and isinstance(attr.value, ast.IntLiteral):
+			if attr.name == attribute and isinstance(attr.value, ast.IntLiteral):
 				return attr.value.value
-	return depth_limit(schema, name)
+	return None
+
+
+def format_allows(schema: "ast.Schema", name: str) -> str:
+	"""What the format says about how deep `name` nests, for a comment."""
+	stated = format_depth(schema, name)
+	return ("the format sets no bound" if stated is None
+	        else f"the format allows {stated} (`[depth]`)")
+
+
+def format_depth(schema: "ast.Schema", name: str) -> int | None:
+	"""The `[depth]` a struct states, or None where the format sets no bound
+	and only `[limit]` is given (26.1047)."""
+	return _stated(schema, name, "depth")
 
 
 def depth_limit(schema: "ast.Schema", name: str) -> int:

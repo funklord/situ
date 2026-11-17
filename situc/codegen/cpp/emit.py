@@ -85,6 +85,7 @@ from situc.traverse import (
 	decode_ratio,
 	decodes_here,
 	depth_limit,
+	format_allows,
 	dynamic_frame_owner,
 	element_bytes,
 	enforceable_max,
@@ -10568,8 +10569,8 @@ class Emitter:
 		if limit < declared:
 			return [
 				f"\t\t/* This build follows only {limit} (`[limit]`) where"
-				f" the format",
-				f"\t\t * allows {declared}. A refusal by the reader, not a"
+				f" {format_allows(self.schema, struct.name)}.",
+				"\t\t * A refusal by the reader, not a"
 				" verdict on",
 				"\t\t * the bytes -- and such a message is not also judged"
 				" against",

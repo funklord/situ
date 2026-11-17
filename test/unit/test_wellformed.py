@@ -3831,8 +3831,8 @@ def test_a_numeric_bound_is_refused_where_there_is_no_value(case: str) -> None:
 #: `[bit_order]` and `[encoding]` are in it because `Scope.narrow` reads
 #: them -- conditionally, so an artifact sweep reports them inert and
 #: `edges.situ` is what caught them (26.546).
-#: `limit` is paired with `depth` because a pre-existing rule requires
-#: it -- `[limit]` without `[depth]` is refused on its own terms.
+#: `limit` is paired with `depth` because this struct does not recurse, and
+#: a `[limit]` alone on such a struct is refused on its own terms (26.1047).
 STRUCT_KEEPS = ("depth = 4", "depth = 4, limit = 2", "endian = little",
                 "bit_order = lsb_first", "encoding = ascii",
                 "allow_straddle", "allow_host_dependent", "version = ver")
