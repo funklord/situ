@@ -129,8 +129,23 @@ GONE: dict[str, tuple[bytes, str, int]] = {
 	"apart":     ENDED["apart"],
 }
 
-SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED), (FORWARD, GONE)]
-SHAPE_IDS = ("located", "sentinel", "forward")
+#: A chain whose every link is the same length: no `data`, so the struct's
+#: frame is fixed and it has no extent function. C's located accessor asked
+#: for one and `situc build` crashed with a `ValueError`.
+FIXED = SENTINEL.replace("\tu8    data[head.size];\n", "")
+
+SAME: dict[str, tuple[bytes, str, int]] = {
+	"one":       (_sections((0, 0, END)), "ok", 0),
+	"three":     (_sections((0, 0, 16), (16, 0, 8), (8, 0, END)), "ok", 2),
+	"three_then_out": (_sections((0, 0, 16), (16, 0, 8), (8, 0, 200)),
+	                   "bounds", 2),
+	"loops_to_itself": (_sections((0, 0, 0)), "constraint", 10),
+	"nine":      ENDED["nine"],
+	"ten":       ENDED["ten"],
+}
+
+SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED), (FORWARD, GONE), (FIXED, SAME)]
+SHAPE_IDS = ("located", "sentinel", "forward", "fixed")
 
 
 def _build(tmp_path: Path, target: str, text: str = SCHEMA) -> Path:
@@ -166,6 +181,8 @@ def _c_bytes(data: bytes) -> str:
 def test_c(tmp_path: Path, text: str,
 		cases: dict[str, tuple[bytes, str, int]]) -> None:
 	out = _build(tmp_path, "c", text)
+	# A fixed struct's view takes no length: the struct says it.
+	length = "" if text is FIXED else "cases[i].n, "
 	rows = "\n".join(
 		f'\t{{ "{name}", (const uint8_t[]){_c_bytes(data)}, {len(data)}u }},'
 		for name, (data, _, _) in cases.items())
@@ -190,7 +207,7 @@ int main(void)
 
 		memcpy(buf, cases[i].data, cases[i].n);
 		situ_msg_init(&msg, buf, cases[i].n);
-		if (situ_chain_view(&msg, 0u, cases[i].n, &view) != SITU_OK) {{
+		if (situ_chain_view(&msg, 0u, {length}&view) != SITU_OK) {{
 			return 1;
 		}}
 		printf("%s %s %u\\n", cases[i].name, word(situ_chain_validate(view)),
@@ -298,10 +315,11 @@ def test_python(tmp_path: Path, text: str,
 	            out / "situ_runtime.py")
 	listed = ", ".join(f"({name!r}, {data!r})"
 	                   for name, (data, _, _) in cases.items())
+	length = "" if text is FIXED else ", len(data)"
 	(out / "main.py").write_text(f'''import situ_runtime as rt
 import chain
 for name, data in [{listed}]:
-	top = chain.chain.at(rt.Message(bytearray(data)), 0, len(data))
+	top = chain.chain.at(rt.Message(bytearray(data)), 0{length})
 	try:
 		top.validate()
 		word = "ok"
@@ -316,7 +334,7 @@ for name, data in [{listed}]:
 	                             cwd=out)) == _want(cases)
 
 
-@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD],
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD, FIXED],
                          ids=list(SHAPE_IDS))
 def test_python_type_checks(tmp_path: Path, text: str) -> None:
 	"""The probe's `try`/`else` is shaped for mypy: binding the element to
@@ -348,6 +366,9 @@ WALKED = {
 	             "ten": "cannot-say", "apart": "0"},
 	"forward": {"forward": "0", "backward": "2",
 	            "loops_to_itself": "cannot-say", "apart": "0"},
+	"fixed": {"one": "0", "three": "0", "three_then_out": "1",
+	          "loops_to_itself": "cannot-say", "nine": "cannot-say",
+	          "ten": "cannot-say"},
 }
 
 
@@ -376,7 +397,7 @@ def test_both_walkers(tmp_path: Path, text: str,
 
 
 @pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD],
-                         ids=list(SHAPE_IDS))
+                         ids=list(SHAPE_IDS[:3]))
 def test_the_dissector_steps_over_the_frame_alone(tmp_path: Path,
 		text: str) -> None:
 	"""The sixth reader. The next section is not this one's bytes, so the
@@ -404,7 +425,7 @@ def test_the_dissector_steps_over_the_frame_alone(tmp_path: Path,
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
 @pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD],
-                         ids=list(SHAPE_IDS))
+                         ids=list(SHAPE_IDS[:3]))
 def test_c_frames_a_section_by_its_own_bytes(tmp_path: Path,
 		text: str) -> None:
 	"""`required` asks for this section's bytes and no more: the next one

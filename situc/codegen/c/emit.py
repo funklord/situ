@@ -9213,7 +9213,13 @@ class Emitter:
 		# refuses it.
 		inner = self.resolved.structs.get(placement.type_name or "")
 		if inner is not None and not placement.is_fixed_size:
-			length = (None if not self._struct_extent(inner) else
+			# A struct whose every instance is the same length has no
+			# extent function to call -- a chain ending in a variant of
+			# zero-length arms is one -- so its length is that constant.
+			fixed  = (inner.layout.is_fixed_size
+			          and inner.layout.size_bits % BITS_PER_BYTE == 0)
+			length = (str(inner.layout.size_bits // BITS_PER_BYTE) if fixed
+			          else None if not self._struct_extent(inner) else
 			          f"at > msg->size ? UINT32_MAX : "
 			          f"{ident(self.prefix, inner.name, 'extent')}"
 			          "((situ_view_t){msg->base + at, msg->size - at,"
