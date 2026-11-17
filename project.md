@@ -8872,6 +8872,16 @@ generated checks build no baseline for a struct holding one. The next goal-gap
 item is recursion through `at` (openmlx4's FS2): a recursive located chain
 builds in no backend, as f715cd8c records.
 
+Asked by fuzznet (inbox, 2026-11-14), and not yet decided: a second resend
+schedule for once part of a reply is held. Measured there on a 960 KB fetch
+at 20 % loss: 600 ms x 3 took 24.5-31.5 s, 300 ms x 8 took 8.0-8.5 s, and
+300 ms x 8 only after some piece has arrived (600 ms x 3 before) took 8.5 s
+without resending whole replies on a slow link. Proposed spelling
+`resend_part_ms = 300, retries_part = 8` beside 26.1039's three, with the
+driver told by its reassembly whether part is held. fuzznet keeps its own
+schedule (node/asks.c) and waits on this before moving onto the driver.
+The spelling is the holder's, as 26.1039's was.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
