@@ -222,6 +222,12 @@ class Probe(Enum):
 	#: range in three backends and refused every message, uncaught, because
 	#: grepping for "covered" finds the write probe and stops (26.449).
 	COVERED_RANGE = "covered_range"
+	#: `name.sum <n>` or `name.sum refused` -- what the tag's own
+	#: `_compute` makes of the bytes it covers, where every backend has
+	#: one: a derived codec all three code generators write (26.1058).
+	#: The stored value says what the sender computed; this says whether
+	#: the four compute alike, which nothing asked before.
+	SUM = "sum"
 	#: `name ok=<0|1> len=<n> first=<byte|-1>` -- a byte run whose POSITION
 	#: comes from a field, so its bytes are at an offset in the MESSAGE
 	#: rather than in this frame.
@@ -322,6 +328,27 @@ class Ask:
 #: out of the generated C was unfalsifiable by any instrument in the
 #: tree (26.646).
 ASKS_STRUCT_RUN_COUNT = True
+
+
+#: The codecs whose sum every backend computes, set by `generate` for the
+#: schema at hand: a `derived` implementation whose kernel C, Rust and
+#: Python all write (26.1058). Empty elsewhere, so `asks` called on its own
+#: -- as the walker comparison does -- asks no sum.
+_COMPUTABLE: frozenset[str] = frozenset()
+
+
+def computable(schema: ast.Schema) -> frozenset[str]:
+	"""The codecs `_COMPUTABLE` holds for `schema` (26.1058)."""
+	from situc.codegen.c import derived as c_kernels
+	from situc.codegen.python import derived as py_kernels
+	from situc.codegen.rust import derived as rs_kernels
+	derived = {impl.codec for impl in schema.impls()
+	           if impl.kind is ast.ImplKind.DERIVED}
+	return frozenset(
+		decl.name for decl in schema.codecs()
+		if decl.name in derived and decl.kernel is not None
+		and all(kernels._for_kernel(decl, "situ") is not None
+		        for kernels in (c_kernels, rs_kernels, py_kernels)))
 
 
 def asks(struct: ResolvedStruct, structs: set[str],
@@ -632,6 +659,11 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# it while agreeing with the layout they were built from.
 			if covered_run(struct, placement) is not None:
 				found.append(Ask(Probe.COVERED_RANGE, local))
+				if placement.tag_codec in _COMPUTABLE \
+						and placement.tag_prefix is None \
+						and not placement.tag_before \
+						and not (placement.size_bits or 0) % 8:
+					found.append(Ask(Probe.SUM, local))
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:
@@ -1460,6 +1492,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
 	# an argument -- which all four backends can now be handed -- needs it
 	# back rather than needing it removed.
 
+	global _COMPUTABLE
+	_COMPUTABLE = computable(schema)
+	try:
+		return _render(schema, resolved, target, prefix)
+	finally:
+		_COMPUTABLE = frozenset()
+
+
+def _render(schema: ast.Schema, resolved: ResolvedSchema, target: str,
+		prefix: str) -> str:
 	if target == "c":
 		return _with_argument_tails(_c(resolved, prefix),
 		                            _c_argument_tails(schema, resolved, prefix),
@@ -1825,6 +1867,15 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        ' first=%d\\n",',
 		        "\t\t\t\t\theld == NULL ? 0 : 1, len,",
 		        "\t\t\t\t\tlen == 0u ? -1 : (int)held[0]);",
+		        "\t\t\t}"]
+	if ask.probe is Probe.SUM:
+		return ["\t\t\t{",
+		        "\t\t\t\tuint32_t sum = 0u;",
+		        f"\t\t\t\tif ({call.format('compute')}(view, &sum) == SITU_OK) {{",
+		        f'\t\t\t\t\tprintf("{ask.local}.sum %u\\n", (unsigned)sum);',
+		        "\t\t\t\t} else {",
+		        f'\t\t\t\t\tprintf("{ask.local}.sum refused\\n");',
+		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
 		# The refusal is part of the answer, not a reason to print
@@ -2338,6 +2389,16 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\tstatic_cast<std::uint32_t>(held.size()),",
 		        "\t\t\t\t\theld.empty() ? -1 : static_cast<int>(held[0]));",
 		        "\t\t\t}"]
+	if ask.probe is Probe.SUM:
+		return ["\t\t\t{",
+		        "\t\t\t\tstd::uint32_t sum = 0u;",
+		        f"\t\t\t\tif (view.{call}_compute(sum) == ::situ::rt::err::ok) {{",
+		        f'\t\t\t\t\tstd::printf("{ask.local}.sum %u\\n",'
+		        " static_cast<unsigned>(sum));",
+		        "\t\t\t\t} else {",
+		        f'\t\t\t\t\tstd::printf("{ask.local}.sum refused\\n");',
+		        "\t\t\t\t}",
+		        "\t\t\t}"]
 	if ask.probe is Probe.LOCATED_VALUE:
 		held = f"std::{'int' if ask.signed else 'uint'}{ask.bits}_t"
 		form = "%lld" if ask.signed else "%llu"
@@ -2766,6 +2827,11 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\t\tif held.is_empty() { -1i32 }"
 		        " else { held[0] as i32 });",
 		        "\t\t\t\t}"]
+	if ask.probe is Probe.SUM:
+		return [f"\t\t\t\tmatch view.{call}_compute() {{",
+		        f'\t\t\t\t\tOk(sum) => println!("{ask.local}.sum {{}}", sum),',
+		        f'\t\t\t\t\tErr(_) => println!("{ask.local}.sum refused"),',
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
 		return [f"\t\t\t\tmatch view.{call}_covered() {{",
 		        f'\t\t\t\t\tOk((at, len)) => println!("{ask.local}'
@@ -3095,6 +3161,11 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f'print("{ask.local} present=%d bytes=%d first=%d"',
 		        "\t% (0 if len(held) == 0 else 1, len(held),",
 		        "\t   -1 if len(held) == 0 else held[0]))"]
+	if ask.probe is Probe.SUM:
+		return ["try:",
+		        f'\tprint("{ask.local}.sum %d" % view.{call}_compute())',
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local}.sum refused")']
 	if ask.probe is Probe.COVERED_RANGE:
 		return ["try:",
 		        f"\tat, length = view.{call}_covered()",

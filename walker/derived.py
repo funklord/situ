@@ -32,6 +32,10 @@ This said the differential oracle compared them against C on every run.
 It does not and never did -- nothing outside the editor and that test
 calls this module. **A sentence asserting a check that does not exist is
 worse than no sentence, because it is the reason nobody writes one.**
+
+Since 26.1058 it is one: the listing prints `name.sum` from `compute`,
+and `test_walker` holds that line to C's `_compute`, and
+`test_a_walker_checks_a_checksum` to the C walker's own loop.
 """
 
 from __future__ import annotations

@@ -380,6 +380,46 @@ def _tags(image: Image, struct_index: int) -> list[int]:
 	        and _offset_computable(image, struct_index, index)]
 
 
+def _sum(image: Image, view: View, index: int, local: str) -> list[str]:
+	"""`name.sum <n>`: what the tag's codec makes of the bytes it covers,
+	from the image's kernel tables (26.1058) -- the differential's `SUM`.
+
+	`refused` where those bytes are not all there, which is what each
+	backend's `_compute` says; nothing at all where this walk cannot compute
+	the kernel, since a line it could not have written is not a
+	disagreement. The span and the tag's own hole are found as situ-edit
+	finds them (26.579)."""
+	from walker import derived
+
+	held = image.tags.get(index)
+	if held is None or held.first == NONE or held.last == NONE \
+			or not derived.computes(image, index):
+		return []
+	# Declined before the bytes are asked about: a sum that also runs over
+	# a pseudo-header cannot be computed from any message (14.2a), and the
+	# C walker says so first too.
+	if held.prefix:
+		return []
+	try:
+		first = offset_bits(view, held.first) // BITS_PER_BYTE
+		end   = (offset_bits(view, held.last) // BITS_PER_BYTE
+		         + size_bits(view, held.last) // BITS_PER_BYTE)
+		start = offset_bits(view, index) // BITS_PER_BYTE
+		wide  = size_bits(view, index) // BITS_PER_BYTE
+		if end < first or view.at + end > view.limit:
+			return [f"{local}.sum refused"]
+		hole = (None if start < first or start + wide > end
+		        else (start - first, wide))
+		value = derived.compute(
+			image, index, bytes(view.buffer[view.at + first:view.at + end]),
+			hole)
+	except Refused:
+		return [f"{local}.sum refused"]
+	except derived.Uncomputable:
+		return []
+	return [f"{local}.sum {value}"]
+
+
 def _while_runs(image: Image, struct_index: int) -> list[int]:
 	"""Runs that end after the element failing a predicate (8.6.6)."""
 	return [index for index in image.members(image.structs[struct_index])
@@ -2502,6 +2542,7 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			             f"first={span[0] if span else -1}")
 		except Refused:
 			lines.append(f"{local} present=0 bytes=0 first=-1")
+		lines.extend(_sum(image, view, index, local))
 
 	for index in _while_runs(image, struct_index):
 		local = _local(image, index)

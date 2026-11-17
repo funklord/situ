@@ -325,9 +325,29 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->delimiters       = image + offset;
 			out->delimiter_count  = items;
 			out->delimiter_stride = stride;
-		} else if (kind == TAG_STRINGS || kind == TAG_CODECS
-		           || kind == TAG_WHITESPACE || kind == TAG_TAGS
-		           || kind == TAG_KERNEL_TABLES) {
+		} else if (kind == TAG_TAGS) {
+			/* `(where, codec, first, last)`, and from the seventh word on
+			 * `fill`, `prefix` and the order; an older row has none. */
+			if (stride < 16u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->tags       = image + offset;
+			out->tag_count  = items;
+			out->tag_stride = stride;
+		} else if (kind == TAG_CODECS) {
+			/* A row too narrow for the kernel's eight words is a codec
+			 * with nothing to compute from, not a malformed image. */
+			out->codecs       = image + offset;
+			out->codec_count  = items;
+			out->codec_stride = stride;
+		} else if (kind == TAG_KERNEL_TABLES) {
+			if (stride < 1024u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->kernel_tables       = image + offset;
+			out->kernel_table_count  = items;
+			out->kernel_table_stride = stride;
+		} else if (kind == TAG_STRINGS || kind == TAG_WHITESPACE) {
 			/* Known, and not read by this walker: a member that needs one
 			 * of these is declined where it is reached, as it always was.
 			 * Not an unknown tag, so the rule below does not apply. */
@@ -8404,5 +8424,189 @@ situ_walk_err situ_walk_relate(const situ_walk_image *image, uint32_t which,
 			return SITU_WALK_OK;
 		}
 	}
+	return SITU_WALK_OK;
+}
+
+
+/* -- Checksums (26.1058) ---------------------------------------------------
+ *
+ * The loop is written here a second time, as `walker/derived.py` writes it,
+ * and the polynomial is not: the table and the four numbers are the
+ * packer's, derived once for all four backends. Three shapes --
+ *
+ *	reflected                crc = T[(crc ^ b) & 0xFF] ^ (crc >> 8)
+ *	left-aligned register    crc = T[crc ^ b]
+ *	otherwise                crc = T[((crc >> (w-8)) ^ b) & 0xFF] ^ (crc << 8)
+ */
+
+#define KERNEL_POLYNOMIAL      1u
+#define KERNEL_ONES_COMPLEMENT 2u
+#define KERNEL_BYTE_SUM        3u
+
+static uint64_t width_mask(uint32_t width)
+{
+	return width >= 64u ? ~(uint64_t)0 : (((uint64_t)1 << width) - 1u);
+}
+
+/* The covered byte at `i`, with the tag's own bytes read as `fill`. */
+static uint32_t covered_byte(const uint8_t *span, uint32_t i, int holed,
+                             uint32_t hole_at, uint32_t hole_len,
+                             uint32_t fill)
+{
+	if (holed && i >= hole_at && i - hole_at < hole_len) {
+		return fill & 0xFFu;
+	}
+	return span[i];
+}
+
+situ_walk_err situ_walk_sum(const situ_walk_image *image,
+                                const uint8_t *message, uint32_t len,
+                                uint32_t shape, uint32_t index,
+                                uint32_t *out)
+{
+	if (image == NULL || message == NULL || out == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+
+	const uint8_t *row = NULL;
+	for (uint32_t i = 0u; image->tags != NULL && i < image->tag_count; i++) {
+		const uint8_t *at = image->tags + i * image->tag_stride;
+		if (u32_at(at) == index) {
+			row = at;
+			break;
+		}
+	}
+	if (row == NULL) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	const uint32_t codec  = u32_at(row + 4);
+	const uint32_t first  = u32_at(row + 8);
+	const uint32_t last   = u32_at(row + 12);
+	const uint32_t fill   = image->tag_stride >= 28u ? u32_at(row + 16)
+	                                                 : SITU_WALK_NONE;
+	const uint32_t prefix = image->tag_stride >= 28u ? u32_at(row + 20) : 0u;
+
+	if (codec == SITU_WALK_NONE || first == SITU_WALK_NONE || last == SITU_WALK_NONE
+	                || image->codecs == NULL || image->codec_stride < 32u
+	                || codec >= image->codec_count) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	const uint8_t *kernel = image->codecs + codec * image->codec_stride;
+	const uint32_t family  = u32_at(kernel + 4);
+	const uint32_t width   = u32_at(kernel + 8);
+	const uint32_t start   = u32_at(kernel + 12);
+	const uint32_t xorout  = u32_at(kernel + 16);
+	const uint32_t table   = u32_at(kernel + 20);
+	const int32_t  shift   = (int32_t)u32_at(kernel + 24);
+	const int32_t  reflect = (int32_t)u32_at(kernel + 28);
+
+	if (family != KERNEL_POLYNOMIAL && family != KERNEL_ONES_COMPLEMENT
+	                && family != KERNEL_BYTE_SUM) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	if (width == 0u || width > 32u || prefix != 0u || shift < 0) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	/* Where the covered bytes are, from what the walk places. */
+	uint32_t from = 0u, end_at = 0u, end_bits = 0u, own = 0u, own_bits = 0u;
+	situ_walk_err err;
+	if ((err = situ_walk_offset_bits(image, message, len, shape, first, &from))
+	                != SITU_WALK_OK
+	                || (err = situ_walk_offset_bits(image, message, len, shape,
+	                                                last, &end_at))
+	                != SITU_WALK_OK
+	                || (err = situ_walk_size_bits(image, message, len, shape,
+	                                              last, &end_bits))
+	                != SITU_WALK_OK
+	                || (err = situ_walk_offset_bits(image, message, len, shape,
+	                                                index, &own))
+	                != SITU_WALK_OK
+	                || (err = situ_walk_size_bits(image, message, len, shape,
+	                                              index, &own_bits))
+	                != SITU_WALK_OK) {
+		return err;
+	}
+	const uint64_t lo   = from / 8u;
+	const uint64_t hi   = (uint64_t)(end_at / 8u) + end_bits / 8u;
+	const uint64_t mine = own / 8u;
+	const uint64_t wide = own_bits / 8u;
+	if (hi < lo || hi > len) {
+		return SITU_WALK_BOUNDS;
+	}
+	const uint32_t span = (uint32_t)(hi - lo);
+	const int      inside = mine >= lo && mine + wide <= hi;
+
+	/* A tag that covers its own bytes is summed with them read as its
+	 * `[self_as]`; one whose schema says nothing about them cannot be. */
+	if (inside && fill == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	const int      holed    = inside;
+	const uint32_t hole_at  = inside ? (uint32_t)(mine - lo) : 0u;
+	const uint32_t hole_len = inside ? (uint32_t)wide : 0u;
+	const uint8_t *bytes    = message + lo;
+	const uint64_t mask     = width_mask(width);
+
+	if (family == KERNEL_POLYNOMIAL) {
+		if (image->kernel_tables == NULL || table == SITU_WALK_NONE
+		                || table >= image->kernel_table_count) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		const uint8_t *words = image->kernel_tables
+		                       + table * image->kernel_table_stride;
+		const uint64_t reg = shift != 0 ? 0xFFu : mask;
+		uint64_t       crc = start;
+		for (uint32_t i = 0u; i < span; i++) {
+			const uint32_t b = covered_byte(bytes, i, holed, hole_at,
+			                                hole_len, fill);
+			if (reflect != 0) {
+				crc = (u32_at(words + 4u * ((crc ^ b) & 0xFFu))
+				       ^ (crc >> 8)) & reg;
+			} else if (shift != 0) {
+				crc = u32_at(words + 4u * ((crc ^ b) & 0xFFu));
+			} else if (width >= 8u) {
+				crc = (u32_at(words + 4u * (((crc >> (width - 8u)) ^ b)
+				                            & 0xFFu))
+				       ^ (crc << 8)) & reg;
+			} else {
+				return SITU_WALK_UNSUPPORTED;
+			}
+		}
+		const uint64_t held = shift != 0 ? crc >> (uint32_t)shift : crc;
+		*out = (uint32_t)((held ^ xorout) & mask);
+		return SITU_WALK_OK;
+	}
+
+	if (family == KERNEL_BYTE_SUM) {
+		uint64_t total = 0u;
+		for (uint32_t i = 0u; i < span; i++) {
+			total += covered_byte(bytes, i, holed, hole_at, hole_len, fill);
+		}
+		*out = (uint32_t)((reflect != 0 ? (uint64_t)0 - total : total)
+		                  & mask);
+		return SITU_WALK_OK;
+	}
+
+	/* RFC 1071: 16-bit words, an odd last byte the high half of one, the
+	 * end-around carry, then `xorout`; `reflect` is `zero_means_none`. */
+	if (width != 16u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	uint64_t total = 0u;
+	for (uint32_t i = 0u; i < span; i += 2u) {
+		const uint32_t high = covered_byte(bytes, i, holed, hole_at,
+		                                   hole_len, fill);
+		const uint32_t low  = i + 1u < span
+		                      ? covered_byte(bytes, i + 1u, holed, hole_at,
+		                                     hole_len, fill)
+		                      : 0u;
+		total += (uint64_t)(high << 8 | low);
+	}
+	while (total >> 16) {
+		total = (total & 0xFFFFu) + (total >> 16);
+	}
+	total = (total ^ xorout) & 0xFFFFu;
+	*out = (reflect != 0 && total == 0u) ? 0xFFFFu : (uint32_t)total;
 	return SITU_WALK_OK;
 }

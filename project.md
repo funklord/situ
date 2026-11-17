@@ -8945,6 +8945,10 @@ Moved to `doc/decision/26.1056-a-struct-may-name-a-value-its-fields-assemble.md`
 
 Moved to `doc/decision/26.1057-the-differential-asks-an-argued-struct-everything.md`.
 
+### 26.1058 Every reader computes a checksum, and a span refuses what does not fit
+
+Moved to `doc/decision/26.1058-every-reader-computes-a-checksum.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

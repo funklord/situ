@@ -231,6 +231,23 @@ typedef struct {
 	uint32_t       message_count;
 	uint32_t       message_stride;
 
+	/* What computes a checksum (26.1058): the tag rows -- which codec, the
+	 * first and last member it covers, what its own bytes read as and
+	 * whether a prefix the message does not hold is summed too -- the codec
+	 * rows that carry each kernel's numbers, and the 256-word tables. The
+	 * packer derives every polynomial once; this walker runs the loop and
+	 * never re-derives one. NULL where the image carries none, and a tag
+	 * without them is one this walker does not compute. */
+	const uint8_t *tags;
+	uint32_t       tag_count;
+	uint32_t       tag_stride;
+	const uint8_t *codecs;
+	uint32_t       codec_count;
+	uint32_t       codec_stride;
+	const uint8_t *kernel_tables;
+	uint32_t       kernel_table_count;
+	uint32_t       kernel_table_stride;
+
 	/* The arguments this walk was acquired with (decision 0050), in the
 	 * order the schema declares its `parameter` members. `arg_count` is
 	 * what says how many there are; NULL and zero both mean none, and a
@@ -592,6 +609,20 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
                                   const uint8_t *message, uint32_t len,
                                   uint32_t shape, uint32_t index,
                                   const uint8_t **out, uint32_t *count);
+
+/* What a checksum's codec makes of the bytes it covers (26.1058): from the
+ * first covered member to the end of the last, with the tag's own bytes read
+ * as the schema's `[self_as]` where it covers itself. `BOUNDS` where those
+ * bytes are not all in the message -- a declared length past its end is
+ * refused rather than summed over what is there, as each backend's `_covered`
+ * refuses it -- and `UNSUPPORTED` where the image names no kernel, or the sum
+ * also runs over a prefix the message does not hold (14.2a). Comparing the
+ * result with the stored value is the caller's: situ guards bytes, and a
+ * mismatch is an answer rather than an error. */
+situ_walk_err situ_walk_sum(const situ_walk_image *image,
+                                const uint8_t *message, uint32_t len,
+                                uint32_t shape, uint32_t index,
+                                uint32_t *out);
 
 /* An endian marker's verdict: whether its field, read big-endian, equals the
  * `little` sentinel the schema gave it -- 1 for little, 0 otherwise.

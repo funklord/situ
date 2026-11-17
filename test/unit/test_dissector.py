@@ -1165,6 +1165,15 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		# delimited members have none. `[escape]`, `[quoted]`, a second
 		# delimiter alternative and `before` were all ignored by the
 		# generated Lua, on schemas this differential runs over every time.
+		# A checksum's status row, where it says what the tag should be:
+		# the dissector's own sum of the covered bytes, held to the walker's
+		# `crc.sum` line, which is every backend's `_compute` (26.1058).
+		# `Good` says only that the sum equals the stored bytes, which the
+		# walker does not print as a number, so it is not compared.
+		if abbrev.endswith(".status") and value.startswith("Bad, should be 0x"):
+			member = abbrev[len(proto) + 1:-len(".status")]
+			values[f"{member}.sum"] = int(value.rsplit("0x", 1)[1], 16)
+			continue
 		if kind in ("bytes", "string"):
 			if declined is not None and abbrev in declined:
 				continue	# "the rest of the frame is shown raw"
@@ -1255,6 +1264,8 @@ def _walked(image: Image, proto: str,
 		if parts[0] in NOT_A_MEMBER:
 			continue
 		total += 1
+		if len(parts) == 2 and parts[1] == "refused":
+			continue	# `crc.sum refused`: the dissector gives no verdict
 		if len(parts) == 2 and "=" not in parts[1]:
 			values[parts[0]] = int(parts[1])
 			continue

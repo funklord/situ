@@ -1152,6 +1152,7 @@ class Emitter:
 				f"(situ_view_t view, uint32_t *offset, uint32_t *len"
 				f"{self._covered_tail(struct, placement)})",
 				"{",
+				*self._covered_fits(struct, placement),
 				f"\tuint32_t start = {first};",
 				f"\tuint32_t end   = {last};",
 				"",
@@ -14862,6 +14863,31 @@ class Emitter:
 			for held in self._arguments(struct)
 			if re.search(rf"\b{self._argument_name(held)}\b", text))
 
+	def _covered_fits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What `_covered` asks before it answers: that every length a
+		covered member declares fits the frame (26.1058).
+
+		The accessors clamp a declared length to the frame, so a span read
+		off them alone ended where the FRAME ends -- and a sum over it was
+		a checksum of bytes the sender never covered, answered as though it
+		were the message's. `validate` calls such a message malformed with
+		these same checks; the span refuses it for the same reason.
+		"""
+		from situc.traverse import covered_members
+		lines: list[str] = []
+		for member in covered_members(struct, placement):
+			# A length the message DECLARES, which is what the accessors
+			# clamp. Not every member `_fits_check` asks about: it also
+			# wants each scalar at a computed offset inside the frame, and
+			# a `[since]` member absent at this version would then refuse
+			# a span that does not include it.
+			if member.since or (member.size_expr is None
+			                    and member.sized_by is None):
+				continue
+			lines.extend(self._fits_check(struct, member))
+		return lines
+
 	def _covered_tail(self, struct: ResolvedStruct,
 			placement: Placement) -> str:
 		"""The argument tail the covered-span accessor carries.
@@ -14878,7 +14904,8 @@ class Emitter:
 		spans = self._covered_spans(struct, placement)
 		if spans is None:
 			return ""
-		return self._argument_tail_in(struct, *(str(one) for one in spans))
+		return self._argument_tail_in(struct, *(str(one) for one in spans),
+		                  *self._covered_fits(struct, placement))
 
 	def _covered_args(self, struct: ResolvedStruct,
 			placement: Placement) -> str:
@@ -14886,7 +14913,8 @@ class Emitter:
 		spans = self._covered_spans(struct, placement)
 		if spans is None:
 			return ""
-		return self._argument_args_in(struct, *(str(one) for one in spans))
+		return self._argument_args_in(struct, *(str(one) for one in spans),
+		                  *self._covered_fits(struct, placement))
 
 	def _member_reads_arguments(self, struct: ResolvedStruct,
 			placement: Placement) -> bool:

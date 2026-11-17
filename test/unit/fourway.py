@@ -21,6 +21,7 @@ from pathlib import Path
 from every_schema import ROOT
 from situc.cli import analyse
 from situc.codegen import differ
+from situc.codegen.c.derived import generate as generate_derived_c
 from situc.codegen.c import generate as generate_c
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.python import generate as generate_py
@@ -291,12 +292,17 @@ def build(tmp_path: Path, schema: Path) -> dict[str, list[str]]:
 	built = generate_c(parsed, resolved, "unit")
 	for name, text in built.files().items():
 		(tmp_path / name).write_text(text, encoding="ascii")
+	# The derived codecs a checksum names, which C leaves to `gen-derived`
+	# and the linker; the drivers call `_compute` now (26.1058).
+	(tmp_path / "unit_derived.c").write_text(
+		generate_derived_c(parsed, "unit"), encoding="ascii")
 	(tmp_path / "c_driver.c").write_text(
 		differ.generate(parsed, resolved, "c"), encoding="ascii")
 	compiled = subprocess.run(
 		[HOST_CC or "cc", "-std=c11", "-O1", f"-I{RUNTIME / 'c'}",
 		 f"-I{tmp_path}", str(tmp_path / "c_driver.c"),
-		 str(tmp_path / "unit.c"), str(RUNTIME / "c" / "situ.c"),
+		 str(tmp_path / "unit.c"), str(tmp_path / "unit_derived.c"),
+		 str(RUNTIME / "c" / "situ.c"),
 		 "-o", str(tmp_path / "c_probe")],
 		capture_output=True, text=True)
 	if compiled.returncode != 0:
@@ -308,10 +314,20 @@ def build(tmp_path: Path, schema: Path) -> dict[str, list[str]]:
 		generate_cpp(parsed, resolved, "unit").header, encoding="ascii")
 	(tmp_path / "cpp_driver.cpp").write_text(
 		differ.generate(parsed, resolved, "cpp"), encoding="ascii")
+	# C++ declares the derived codecs with C linkage and calls C's: the
+	# same file, compiled as C against the C header beside it.
+	derived_obj = subprocess.run(
+		[HOST_CC or "cc", "-std=c11", "-O1", f"-I{RUNTIME / 'c'}",
+		 f"-I{tmp_path}", "-c", str(tmp_path / "unit_derived.c"),
+		 "-o", str(tmp_path / "unit_derived.o")],
+		capture_output=True, text=True)
+	if derived_obj.returncode != 0:
+		raise BuildFailed("cpp", derived_obj.stderr)
 	compiled = subprocess.run(
 		[HOST_CXX or "g++", "-std=c++17", "-O1", f"-I{RUNTIME / 'c'}",
 		 f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
 		 str(tmp_path / "cpp_driver.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 str(tmp_path / "unit_derived.o"),
 		 "-o", str(tmp_path / "cpp_probe")],
 		capture_output=True, text=True)
 	if compiled.returncode != 0:

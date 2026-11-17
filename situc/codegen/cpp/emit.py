@@ -4984,6 +4984,31 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _covered_fits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What `_covered` asks before it answers: that every length a
+		covered member declares fits the frame (26.1058).
+
+		The accessors clamp a declared length to the frame, so a span read
+		off them alone ended where the FRAME ends -- and a sum over it was
+		a checksum of bytes the sender never covered, answered as though it
+		were the message's. `validate` calls such a message malformed with
+		these same checks; the span refuses it for the same reason.
+		"""
+		from situc.traverse import covered_members
+		lines: list[str] = []
+		for member in covered_members(struct, placement):
+			# A length the message DECLARES, which is what the accessors
+			# clamp. Not every member `_fits_check` asks about: it also
+			# wants each scalar at a computed offset inside the frame, and
+			# a `[since]` member absent at this version would then refuse
+			# a span that does not include it.
+			if member.since or (member.size_expr is None
+			                    and member.sized_by is None):
+				continue
+			lines.extend(self._fits_check(struct, member))
+		return lines
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -9630,6 +9655,7 @@ class Emitter:
 				"std::uint32_t &offset,",
 				"\t\t\tstd::uint32_t &len) const noexcept",
 				"\t{",
+				*self._covered_fits(struct, placement),
 				f"\t\tconst std::uint32_t start ="
 				f" {self._region_start(struct, first)};",
 				f"\t\tconst std::uint32_t end   ="
