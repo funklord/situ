@@ -476,6 +476,19 @@ def _interior_permuted(context: Context) -> bool:
 	        and codec.seekable is ast.Seekable.PERMUTED)
 
 
+def _interior_blockwise(context: Context) -> bool:
+	"""Positions move, but only inside their own block (26.1065).
+
+	Read as nothing until then, so a field inside a `blockwise(16)` region
+	mapped exactly as one under CTR -- a contiguous span to hand out --
+	while its bytes sat scattered across the block."""
+	codec = context.codec
+	return (_inside_codec(context)
+	        and codec is not None
+	        and codec.expansion is ast.Expansion.PRESERVING
+	        and codec.seekable is ast.Seekable.BLOCKWISE)
+
+
 def _interior_whole_region(context: Context) -> bool:
 	"""Length-preserving but not seekable: offsets survive, mutation does not."""
 	codec = context.codec
@@ -1350,6 +1363,20 @@ TABLE: tuple[Row, ...] = (
 			            "prefetch does not",
 		),
 		applies = _interior_permuted,
+	),
+	Row(
+		rule = Rule(
+			name      = "codec-blockwise",
+			construct = "a codec whose output positions move within a block",
+			effects   = (Effect(Axis.ADDRESS, Value("Unstable"),
+			                    "each byte stays inside its own block but not "
+			                    "at its own offset, so no contiguous span can "
+			                    "be handed out"),),
+			remedy    = "a reader that holds one block at a time reads the "
+			            "region in order, which a `permuted` codec does not "
+			            "allow",
+		),
+		applies = _interior_blockwise,
 	),
 	Row(
 		rule = Rule(

@@ -1545,6 +1545,10 @@ class CodecDecl(Decl):
 	expansion_add: int		= 0
 	ratio: tuple[int, int] | None	= None
 	seekable: Seekable		= Seekable.NONE
+	#: `blockwise(N)`'s N, in bytes: every position stays inside its own
+	#: N-byte block (26.1065). None for the other three, and for
+	#: `blockwise(any)`, which promises the locality without its extent.
+	seekable_size: int | None	= None
 	granularity: Granularity	= Granularity.STREAM
 	granularity_size: int | None	= None
 	systematic: bool		= False

@@ -40,7 +40,7 @@ codec crc8_smbus derived expansion=+1 seekable=linear granularity=block systemat
 codec framed unbound expansion=ratio_exact(2,1)+8 seekable=permuted granularity=block deterministic
 codec hamming_7_4 derived expansion=ratio_exact(7,4) seekable=linear granularity=bit(4) systematic invertible deterministic
 codec hdlc_bit_stuffing derived expansion=ratio_bounded(6,5) seekable=none granularity=bit(1) invertible deterministic
-codec interleave_16 derived length_preserving seekable=permuted granularity=byte invertible deterministic
+codec interleave_16 derived length_preserving seekable=blockwise(16) granularity=byte invertible deterministic
 codec internet_checksum derived expansion=+2 seekable=linear granularity=block systematic deterministic
 codec json_string derived expansion=ratio_bounded(6,1) seekable=none granularity=stream invertible deterministic
 codec manchester_802_3 derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic

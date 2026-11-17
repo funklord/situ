@@ -246,7 +246,7 @@ def _codec_lines(decl: ast.CodecDecl) -> list[str]:
 	if decl.seekable is ast.Seekable.NONE:
 		lines.append("\tnot seekable;")
 	else:
-		lines.append(f"\tseekable = {decl.seekable.value};")
+		lines.append(f"\tseekable = {codec_seekable(decl)};")
 
 	for flag in ("systematic", "authenticated", "invertible", "deterministic",
 	             "error_propagating"):
@@ -298,6 +298,13 @@ def codec_expansion(decl: ast.CodecDecl) -> str:
 	         if decl.expansion_add else "")
 	return (f"expansion = {decl.expansion.value}"
 	        f"({decl.ratio[0]}, {decl.ratio[1]}){added}")
+
+
+def codec_seekable(decl: ast.CodecDecl) -> str:
+	"""`blockwise(16)`, or the bare form, as `codec_granularity` below."""
+	if decl.seekable_size is None:
+		return decl.seekable.value
+	return f"{decl.seekable.value}({decl.seekable_size})"
 
 
 def codec_granularity(decl: ast.CodecDecl) -> str:

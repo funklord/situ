@@ -556,6 +556,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"codec-whole-region-rewrite",
 		"codec-block-granularity",
 		"codec-permuted",
+		"codec-blockwise",
 		# Phase 8. Exercised in test_crypto.py, which keeps the cryptographic
 		# model's rows beside the requirements and diagnostics that read them.
 		"codec-not-deterministic",
@@ -886,6 +887,19 @@ def test_a_permuted_codec_hands_out_no_span() -> None:
 	assert axis_of(body, "S.b.x", Axis.ADDRESS) == Value("Unstable")
 	# Random access survives the permutation; only contiguity does not.
 	assert axis_of(body, "S.b.x", Axis.ACCESS) == Value("Random")
+
+
+def test_a_blockwise_codec_hands_out_no_span() -> None:
+	"""`blockwise(16)` mapped as CTR until 26.1065: nothing read it, so a
+	field whose bytes sit scattered across its block was a span to hand
+	out. Random access survives, as under `permuted`; mutation is the
+	granularity's to say."""
+	body = coded("length_preserving; seekable = blockwise(16); "
+	             "granularity = byte; invertible;")
+	assert axis_of(body, "S.b.x", Axis.ADDRESS) == Value("Unstable")
+	assert "codec-blockwise" in rules_for(body, "S.b.x", Axis.ADDRESS)
+	assert axis_of(body, "S.b.x", Axis.ACCESS) == Value("Random")
+	assert axis_of(body, "S.b.x", Axis.MUTATE) != Value("RewriteRequired")
 
 
 def test_a_non_invertible_codec_makes_the_region_read_only() -> None:

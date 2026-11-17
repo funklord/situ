@@ -2435,6 +2435,7 @@ output can be read against this table directly.
 | `codec-whole-region-rewrite` | a length-preserving codec that is not seekable | `mutate := RewriteRequired` |
 | `codec-block-granularity` | a length-preserving codec with block granularity | `mutate := InPlaceSlack` |
 | `codec-permuted` | a codec whose output positions are a permutation | `address := Unstable` |
+| `codec-blockwise` | a codec whose output positions move within a block | `address := Unstable` |
 | `codec-not-deterministic` | a codec that is not `deterministic` | `canonical := NonCanonical` |
 
 **Cryptography (14)**
@@ -3028,7 +3029,7 @@ design.
 | **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, base16/32/64 (not NRZI, 8b10b, Gray or BCD -- see 26.140) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout, and `augmented` where `init` enters as Mellanox's does (26.890) | CRC (all variants), Reed-Solomon. BCH takes the same route and none is written | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
-| **linear block** | parity-check matrix over GF(2): a named code, or one `parity` row per check bit | Hamming(7,4) by name; any `(n,k)` from its matrix, bounded to a codeword that fits the byte the generated pair takes and to rows that locate a single error. Not LDPC, for the reason below the table | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form, which rows given outright are by construction; `seekable = blockwise(n)` |
+| **linear block** | parity-check matrix over GF(2): a named code, or one `parity` row per check bit | Hamming(7,4) by name; any `(n,k)` from its matrix, bounded to a codeword that fits the byte the generated pair takes and to rows that locate a single error. Not LDPC, for the reason below the table | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form, which rows given outright are by construction; `seekable = linear` over whole codewords (this cell said `blockwise(n)`, which the kernel never derived and 26.1065 defines for a length-preserving map only) |
 | **shift register** | taps, feedback source, initial state, and whether the feedback is complemented | additive and multiplicative scramblers, NRZI in both conventions. **Not convolutional codes, and not Miller** -- see below the table, which is a sharper refusal than the other rows' | `length_preserving`, always; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output. `complement_feedback` moves none of them |
 | **permutation** | index mapping, closed form or table | block interleavers. A bare `span` derives the properties and generates nothing, which is what a convolutional interleaver would get: a bank of delay lines is not an index map within a block | `length_preserving`; `seekable = permuted`; `deterministic` |
 | **stuffing** | trigger predicate plus insertion rule | HDLC bit stuffing, COBS, SLIP, byte stuffing | `expansion = ratio_bounded`; `not seekable`; interior addressing lost |
@@ -8964,6 +8965,10 @@ Moved to `doc/decision/26.1063-a-fixed-struct-fills-its-frame.md`.
 ### 26.1064 A driver tracks an exchange by its id alone
 
 Moved to `doc/decision/26.1064-a-driver-tracks-an-exchange-by-id-alone.md`.
+
+### 26.1065 `seekable = blockwise(N)` is a permutation that stays in its block
+
+Moved to `doc/decision/26.1065-blockwise-is-a-local-permutation.md`.
 
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 

@@ -235,7 +235,7 @@ def _codec_suite(codec: ast.CodecDecl,
 	claimed: list[str] = []
 
 	for builder in (_length_test, _deterministic_test, _invertible_test,
-	                _seekable_test, _permuted_test,
+	                _seekable_test, _permuted_test, _blockwise_test,
 	                _systematic_test, _granularity_test, _hostile_test,
 	                _authenticated_note, _error_propagating_note):
 		body, name = builder(codec, encode, decode)
@@ -647,6 +647,81 @@ def _permuted_test(codec: ast.CodecDecl, encode: str,
 
 	name = f"test_{codec.name}_seekable_permuted"
 	return (_permuted_body(name, encode, codec.granularity_size, ""), name)
+
+
+def _blockwise_test(codec: ast.CodecDecl, encode: str,
+		decode: str) -> tuple[list[str], str | None]:
+	"""`seekable = blockwise(N)`: a change stays inside its own block.
+
+	The claim is about where an input byte can REACH, not about values: a
+	block cipher in a blockwise mode transforms every byte, so the
+	value-tracking bijection `_permuted_body` asserts is not this. What
+	holds for any blockwise codec is that changing input byte i changes
+	output bytes only inside i's block -- and that is what lets a write
+	re-transform the blocks it touches instead of the region (26.1065).
+
+	Four blocks, and the two bytes changed sit on block edges: the first
+	block's last, whose change a CBC-like codec carries forward into the
+	second block, and the last block's first, whose change a codec reading
+	ahead carries back into the third. A byte inside a block catches
+	neither, which the first version of this test changed and passed a
+	leaking codec with.
+	"""
+	del decode
+	if codec.seekable is not ast.Seekable.BLOCKWISE:
+		return ([], None)
+	if codec.seekable_size is None \
+			or codec.expansion is not ast.Expansion.PRESERVING:
+		return ([
+			f"/* `{codec.name}` declares `seekable = blockwise` and"
+			+ (" no block size" if codec.seekable_size is None
+			   else " changes the length"),
+			" * so which block a byte belongs to on the way out is not",
+			" * stated. Declare `blockwise(n)` on a length-preserving codec",
+			" * and this is generated. */",
+		], None)
+
+	block = codec.seekable_size
+	total = block * 4
+	name  = f"test_{codec.name}_seekable_blockwise"
+	return ([
+		f"/* Declared: `seekable = blockwise({block})`. A byte changed in the",
+		" * input may change the output only inside its own block. */",
+		f"static void {name}(void **state)",
+		"{",
+		f"\tuint8_t input[{total}u];",
+		"\tuint8_t base[SITU_CODEC_MAX_OUTPUT];",
+		"\tuint8_t moved[SITU_CODEC_MAX_OUTPUT];",
+		"\tuint32_t base_len  = 0;",
+		"\tuint32_t moved_len = 0;",
+		f"\tconst uint32_t changed[2] = {{ {block - 1}u, {total - block}u }};",
+		"\tuint32_t c;",
+		"\tuint32_t i;",
+		"",
+		"\t(void)state;",
+		"\tsitu_codec_fill(input, sizeof(input), 45u);",
+		f"\tsitu_check_eq({encode}(input, sizeof(input), base,",
+		"\t\tsizeof(base), &base_len), SITU_OK);",
+		f"\tsitu_check_eq(base_len, {total}u);",
+		"",
+		"\tfor (c = 0; c < 2u; c++) {",
+		f"\t\tconst uint32_t first = changed[c] - changed[c] % {block}u;",
+		"",
+		"\t\tinput[changed[c]] ^= 0x5Au;",
+		f"\t\tsitu_check_eq({encode}(input, sizeof(input), moved,",
+		"\t\t\tsizeof(moved), &moved_len), SITU_OK);",
+		"\t\tinput[changed[c]] ^= 0x5Au;",
+		"\t\tsitu_check_eq(moved_len, base_len);",
+		"",
+		"\t\tfor (i = 0; i < base_len; i++) {",
+		f"\t\t\tif (i >= first && i < first + {block}u) {{",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		"\t\t\tsitu_check_eq(moved[i], base[i]);",
+		"\t\t}",
+		"\t}",
+		"}",
+	], name)
 
 
 def _systematic_test(codec: ast.CodecDecl, encode: str,
@@ -1186,7 +1261,12 @@ def _derived_permuted(codec: ast.CodecDecl, encode: str, unit: str,
 	never be emitted -- a gate over an empty population, which is the
 	failure this suite exists to avoid rather than one to add.
 	"""
-	if codec.seekable is not ast.Seekable.PERMUTED or step <= 1:
+	# A block interleaver is derived `blockwise(rows * columns)` since
+	# 26.1065, which is the bijection this asserts, made local -- so it is
+	# asked of both, or the one kernel the test was written for would have
+	# left it on the day it gained the stronger claim.
+	if codec.seekable not in (ast.Seekable.PERMUTED, ast.Seekable.BLOCKWISE) \
+			or step <= 1:
 		return None
 
 	name = f"test_{codec.name}_derived_permuted"

@@ -529,26 +529,53 @@ def test_a_pipeline_takes_the_weakest_seekability() -> None:
 	assert codecs(PIPELINE)["framed"].seekable is ast.Seekable.PERMUTED
 
 
-def test_a_blockwise_stage_is_refused_rather_than_crashing() -> None:
-	"""`_weakest_seekable` ranked three of `Seekable`'s four members.
-
-	It is used as a TOTAL function, so composing a `blockwise` stage
-	reached `order.index` and raised `ValueError: tuple.index(x): x not in
-	tuple` -- an uncaught Python traceback out of `situc map`, with no span
-	and no diagnostic (26.492). `_coarsest_granularity` next door lists all
-	five of its own members.
-
-	Refused rather than ranked: where `blockwise` sits between `permuted`
-	and `none` is a question about what the value means, and nothing in the
-	compiler reads it yet. Ranking it here would settle that silently, in
-	the one place nobody would look.
-	"""
-	rendered = refusal("codec inter { seekable = blockwise; invertible; }\n"
+def test_a_blockwise_stage_ranks_between_linear_and_permuted() -> None:
+	"""26.492 found this ranking crashing on `blockwise`, 26.494 refused it
+	rather than decide what the value meant, and 26.1065 decided: a
+	bijection keeping every position inside its own block, so a local
+	`permuted`. With a linear stage it stays `blockwise`."""
+	both = codecs("codec inter { seekable = blockwise; invertible; }\n"
 		"codec plain { seekable = linear; invertible; }\n"
-		"codec both = inter |> plain;\n")
+		"codec both = inter |> plain;\n")["both"]
 
-	assert "`seekable = blockwise` has no place in the ordering" in rendered
-	assert "not settled" in rendered, "the diagnostic has to say why"
+	assert both.seekable is ast.Seekable.BLOCKWISE
+	assert both.seekable_size is None, "`blockwise(any)` names no block"
+
+
+def test_two_blockwise_stages_compose_over_the_common_multiple() -> None:
+	"""A block of 12 is a union of 4-blocks and of 6-blocks, so a byte
+	that stays in its 4-block and then its 6-block stays in its 12-block."""
+	both = codecs("codec four { seekable = blockwise(4); invertible; }\n"
+		"codec six { seekable = blockwise(6); invertible; }\n"
+		"codec both = four |> six;\n")["both"]
+
+	assert (both.seekable, both.seekable_size) \
+		== (ast.Seekable.BLOCKWISE, 12)
+
+
+def test_blockwise_meets_permuted_or_a_length_change_as_permuted() -> None:
+	"""Across a stage that changes the length a block in no longer lines up
+	with a block out, so the claim left is `permuted`'s."""
+	assert codecs("codec four { seekable = blockwise(4); invertible; }\n"
+		"codec mix { seekable = permuted; invertible; }\n"
+		"codec both = four |> mix;\n")["both"].seekable \
+		is ast.Seekable.PERMUTED
+	grown = codecs("codec four { seekable = blockwise(4); invertible; }\n"
+		"codec tail { expansion = +4; seekable = linear; invertible; }\n"
+		"codec both = four |> tail;\n")["both"]
+	assert (grown.seekable, grown.seekable_size) \
+		== (ast.Seekable.PERMUTED, None)
+
+
+def test_a_block_interleaver_is_blockwise_over_its_block() -> None:
+	"""Rows by columns permutes each block of `rows * columns` on its own,
+	and was derived as merely `permuted`; a bare `span` stays that."""
+	found = codecs("codec grid { kernel = permutation(rows = 4, columns = 4); }\n"
+		"codec some { kernel = permutation(span = 16); }\n")
+
+	assert (found["grid"].seekable, found["grid"].seekable_size) \
+		== (ast.Seekable.BLOCKWISE, 16)
+	assert found["some"].seekable is ast.Seekable.PERMUTED
 
 
 def test_a_rankable_stage_still_composes() -> None:
@@ -561,16 +588,12 @@ def test_a_rankable_stage_still_composes() -> None:
 	assert composed["both"].seekable is ast.Seekable.PERMUTED
 
 
-def test_a_standalone_blockwise_codec_is_untouched() -> None:
-	"""The crash is composition's, so the refusal is scoped to a pipeline.
-
-	A codec declaring `seekable = blockwise` on its own is accepted today
-	and stays accepted: widening the refusal to the VALUE would decide the
-	same open question from the other side, and would refuse schemas that
-	compile now.
-	"""
-	assert codecs("codec inter { seekable = blockwise; invertible; }\n"
-		)["inter"].seekable is ast.Seekable.BLOCKWISE
+def test_a_standalone_blockwise_codec_keeps_its_block() -> None:
+	"""The N of `blockwise(N)` was parsed and dropped until 26.1065."""
+	inter = codecs("codec inter { seekable = blockwise(16); invertible; }\n"
+		)["inter"]
+	assert (inter.seekable, inter.seekable_size) \
+		== (ast.Seekable.BLOCKWISE, 16)
 
 
 def test_a_pipeline_is_systematic_only_if_every_stage_is() -> None:

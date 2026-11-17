@@ -44,6 +44,7 @@ class _CodecProperties:
 	expansion_add: int		= 0	# BITS, per 0046
 	ratio: tuple[int, int] | None	= None
 	seekable: ast.Seekable		= ast.Seekable.NONE
+	seekable_size: int | None	= None
 	granularity: ast.Granularity	= ast.Granularity.STREAM
 	granularity_size: int | None	= None
 	systematic: bool		= False
@@ -74,6 +75,7 @@ class _CodecProperties:
 			expansion_add     = self.expansion_add,
 			ratio             = self.ratio,
 			seekable          = self.seekable,
+			seekable_size     = self.seekable_size,
 			granularity       = self.granularity,
 			granularity_size  = self.granularity_size,
 			systematic        = self.systematic,
@@ -1274,7 +1276,8 @@ class Parser:
 				properties.seekable = ast.Seekable.NONE
 			elif self.accept_symbol("=") is not None:
 				properties.seekable = self._named(
-					ast.Seekable, "seekability", properties, size=False)
+					ast.Seekable, "seekability", properties,
+					size="seekable_size")
 			else:
 				# Bare `seekable;` is the linear case, as in example 5.3.
 				properties.seekable = ast.Seekable.LINEAR
@@ -1282,7 +1285,8 @@ class Parser:
 			self.expect_symbol("=", "after `granularity`")
 			properties.written.add("granularity")
 			properties.granularity = self._named(
-				ast.Granularity, "granularity", properties, size=True)
+				ast.Granularity, "granularity", properties,
+				size="granularity_size")
 		elif token.text == "kernel":
 			self.expect_symbol("=", "after `kernel`")
 			properties.kernel = self.parse_kernel()
@@ -1402,8 +1406,12 @@ class Parser:
 		)
 
 	def _named(self, enum: type[EnumT], described: str,
-			properties: _CodecProperties, size: bool) -> EnumT:
-		"""A property value that may carry a size: `block(16)`, `symbol(5)`."""
+			properties: _CodecProperties, size: str) -> EnumT:
+		"""A property value that may carry a size: `block(16)`, `symbol(5)`,
+		`blockwise(16)`, kept in the property `size` names.
+
+		`blockwise`'s was parsed and dropped until 26.1065, so a schema could
+		say how far a position moves and nothing could read it."""
 		token = self.expect_ident(f"a {described}")
 
 		for candidate in enum:
@@ -1417,9 +1425,8 @@ class Parser:
 				if value is None and not inner.is_ident("any"):
 					raise error(f"`{token.text}` needs a literal size or `any`",
 					            inner.span)
-				if size:
-					properties.granularity_size = value
-					properties.written.add("granularity_size")
+				setattr(properties, size, value)
+				properties.written.add(size)
 			return candidate
 
 		options = ", ".join(f"`{item.value}`" for item in enum)

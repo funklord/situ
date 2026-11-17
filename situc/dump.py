@@ -127,7 +127,8 @@ def _codec(decl: ast.CodecDecl, depth: int) -> list[str]:
 	(section 13.1), so the dump shows all of it: a property that is absent
 	because it defaulted is exactly as load-bearing as one that was written.
 	"""
-	from situc.unparse import codec_expansion, codec_granularity
+	from situc.unparse import (codec_expansion, codec_granularity,
+	                           codec_seekable)
 
 	flags = [flag for flag in ("systematic", "authenticated", "invertible",
 	                           "deterministic", "error_propagating")
@@ -137,7 +138,7 @@ def _codec(decl: ast.CodecDecl, depth: int) -> list[str]:
 		_indent(depth, f"codec {decl.name}"),
 		_indent(depth + 1, f"expansion = {codec_expansion(decl)}"),
 		_indent(depth + 1, f"granularity = {codec_granularity(decl)}"),
-		_indent(depth + 1, f"seekable = {decl.seekable.value}"),
+		_indent(depth + 1, f"seekable = {codec_seekable(decl)}"),
 		_indent(depth + 1, f"flags = {', '.join(flags) or 'none'}"),
 	]
 

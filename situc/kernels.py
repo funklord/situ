@@ -36,8 +36,8 @@ from situc.diagnostics import error
 # Properties a derived signature sets. Anything absent from a family's result
 # keeps the conservative default a declaration would have had.
 DERIVED_PROPERTIES = (
-	"expansion", "expansion_add", "ratio", "seekable", "granularity",
-	"granularity_size", "systematic", "invertible", "deterministic",
+	"expansion", "expansion_add", "ratio", "seekable", "seekable_size",
+	"granularity", "granularity_size", "systematic", "invertible", "deterministic",
 	"error_propagating", "authenticated",
 )
 
@@ -50,6 +50,7 @@ class Derived:
 	expansion_add: int              = 0	# BITS, per 0046
 	ratio: tuple[int, int] | None   = None
 	seekable: ast.Seekable          = ast.Seekable.NONE
+	seekable_size: int | None       = None	# `blockwise(N)`'s N
 	granularity: ast.Granularity    = ast.Granularity.STREAM
 	granularity_size: int | None    = None
 	systematic: bool                = False
@@ -741,9 +742,10 @@ def _permutation(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	# implementation can be generated from; a bare `span` describes the extent
 	# of some permutation without saying which, which is enough for the
 	# properties and not enough for the code.
+	block: int | None = None
 	if kernel.argument("rows") is not None:
 		rows = _positive(kernel, "rows", decl)
-		_positive(kernel, "columns", decl)
+		block = rows * _positive(kernel, "columns", decl)
 		if rows < 2:
 			raise error(
 				f"`{decl.name}` interleaves over one row",
@@ -755,9 +757,16 @@ def _permutation(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	else:
 		_positive(kernel, "span", decl)
 
+	# Rows by columns permutes each block of `rows * columns` bytes on its
+	# own, so every position stays inside its block: `blockwise`, which
+	# says how far a byte moves, and not merely `permuted` (26.1065). A
+	# bare `span` names the extent of some permutation without saying it
+	# repeats, so it stays `permuted`.
 	return Derived(
 		expansion     = ast.Expansion.PRESERVING,
-		seekable      = ast.Seekable.PERMUTED,
+		seekable      = (ast.Seekable.BLOCKWISE if block is not None
+		                 else ast.Seekable.PERMUTED),
+		seekable_size = block,
 		granularity   = ast.Granularity.BYTE,
 		systematic    = False,
 		invertible    = True,
@@ -947,46 +956,16 @@ def compose(decl: ast.CodecDecl, stages: list[ast.CodecDecl]) -> ast.CodecDecl:
 		raise error(f"`{decl.name}` is an empty pipeline", decl.span,
 		            label="no stages")
 
-	# `_weakest_seekable` ranks three of `Seekable`'s four members and is
-	# used as a TOTAL function, so a `blockwise` stage reached
-	# `order.index` and raised `ValueError: tuple.index(x): x not in tuple`
-	# -- an uncaught Python traceback out of `situc map`, with no span and
-	# no diagnostic (26.492). `_coarsest_granularity` next door lists all
-	# five of its own members and is total.
-	#
-	# **Refused rather than ranked.** Where `blockwise` sits between
-	# `permuted` and `none` is a question about what the value MEANS, and
-	# nothing in the compiler reads it yet -- `Seekable.BLOCKWISE` has no
-	# reference outside its own definition in `ast.py`. Ranking it here
-	# would take that decision silently, in the one place nobody would
-	# look for it; a refusal naming the stage stops the crash and leaves
-	# the decision where it belongs.
-	#
-	# Scoped to a pipeline deliberately: a standalone `seekable = blockwise`
-	# is accepted today and this does not change that, because the crash is
-	# composition's and so is the ordering question.
-	unranked = next((stage for stage in stages
-	                 if stage.seekable is ast.Seekable.BLOCKWISE), None)
-	if unranked is not None:
-		raise error(
-			f"`{decl.name}` composes `{unranked.name}`, whose"
-			" `seekable = blockwise` has no place in the ordering",
-			decl.span,
-			label="this pipeline cannot rank it",
-			notes=["`seekable` composes to the weakest stage, and where "
-			       "`blockwise` sits between `permuted` and `none` is not "
-			       "settled",
-			       "every other property of the stage composes normally -- "
-			       "only this one has no ordering"])
-
 	expansion, ratio, add = _compose_expansion(decl, stages)
+	seekable, seekable_size = _weakest_seekable(stages)
 
 	return replace(
 		decl,
 		expansion         = expansion,
 		expansion_add     = add,
 		ratio             = ratio,
-		seekable          = _weakest_seekable(stages),
+		seekable          = seekable,
+		seekable_size     = seekable_size,
 		granularity       = _coarsest_granularity(stages),
 		granularity_size  = None,
 		systematic        = all(stage.systematic for stage in stages),
@@ -1054,9 +1033,38 @@ def _reduce(numerator: int, denominator: int) -> tuple[int, int]:
 	return (numerator // divisor, denominator // divisor)
 
 
-def _weakest_seekable(stages: list[ast.CodecDecl]) -> ast.Seekable:
-	order = (ast.Seekable.LINEAR, ast.Seekable.PERMUTED, ast.Seekable.NONE)
-	return max((stage.seekable for stage in stages), key=order.index)
+def _weakest_seekable(stages: list[ast.CodecDecl]
+		) -> tuple[ast.Seekable, int | None]:
+	"""The pipeline's position map, and `blockwise`'s block (26.1065).
+
+	`blockwise(N)` is a bijection that keeps every position inside its own
+	N-byte block: a `permuted` map that is local. So it ranks between
+	`linear` and `permuted`, and two of them compose to `blockwise` over the
+	least common multiple, whose blocks are unions of both stages' blocks.
+
+	Only while every stage keeps its length. Across a stage that changes
+	it, a block in no longer lines up with a block out, and the honest
+	claim left is `permuted`'s -- what the pipeline `rs |> interleave`
+	already composes to. 26.492 found this ranking crashing on `blockwise`
+	and 26.494 refused it rather than decide what it meant; this is the
+	decision.
+	"""
+	kinds = {stage.seekable for stage in stages}
+	if ast.Seekable.NONE in kinds:
+		return ast.Seekable.NONE, None
+	if ast.Seekable.PERMUTED in kinds:
+		return ast.Seekable.PERMUTED, None
+	blocks = [stage for stage in stages
+	          if stage.seekable is ast.Seekable.BLOCKWISE]
+	if not blocks:
+		return ast.Seekable.LINEAR, None
+	if any(stage.expansion is not ast.Expansion.PRESERVING
+	       for stage in stages):
+		return ast.Seekable.PERMUTED, None
+	if any(stage.seekable_size is None for stage in blocks):
+		return ast.Seekable.BLOCKWISE, None
+	return (ast.Seekable.BLOCKWISE,
+	        lcm(*(stage.seekable_size or 1 for stage in blocks)))
 
 
 def _coarsest_granularity(stages: list[ast.CodecDecl]) -> ast.Granularity:

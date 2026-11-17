@@ -119,7 +119,8 @@ def _codec_properties(codec: ast.CodecDecl) -> list[str]:
 		shown.append(f"expansion={codec.expansion.value}"
 		             f"({codec.ratio[0]},{codec.ratio[1]}){added}")
 
-	shown.append(f"seekable={codec.seekable.value}")
+	from situc.unparse import codec_seekable
+	shown.append(f"seekable={codec_seekable(codec)}")
 	granularity = codec.granularity.value
 	if codec.granularity_size is not None:
 		granularity += f"({codec.granularity_size})"
