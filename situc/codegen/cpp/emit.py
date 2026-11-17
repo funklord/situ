@@ -4394,6 +4394,13 @@ class Emitter:
 				source, lambda run: self._sum_run(struct, run),
 				lambda path: self._size_term(struct, path))
 			extra = {**(extra or {}), **sums}
+		# `offset(s)` in a `when`: this view's distance from its message's
+		# start, through the owner (26.1045). See the C backend.
+		source, here = traverse.with_offset_self(source, struct.name)
+		if here:
+			extra = {**(extra or {}), traverse.HERE:
+			         "(raw_.owner != nullptr ? static_cast<std::int64_t>"
+			         "(situ_base(raw_) - raw_.owner->base) : 0)"}
 
 		def leaf(text: str, signed: bool = False) -> str:
 			if not bounded:

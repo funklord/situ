@@ -2579,6 +2579,25 @@ def measured_extent(structs: dict[str, ResolvedStruct],
 	return extent_parts(structs, struct)
 
 
+#: What `offset(s)` of a `when`'s own struct becomes before a backend renders
+#: the rest, which it then binds like `remaining`: a name no schema can
+#: spell, since every one starts `situ_` here only.
+HERE = "situ_here_"
+
+
+def with_offset_self(source: str, struct_name: str) -> tuple[str, bool]:
+	"""`offset(s)` replaced by `HERE` in a `when` on `s` (26.1045).
+
+	Where this struct sits in the message: zero for the one a reader was
+	handed, and the link's own address down a chain, which is what FS2's
+	"the list must go forward" compares `next` against. The second element
+	says whether there was one, so a backend binds `HERE` only where read.
+	"""
+	pattern = rf"\boffset\(\s*{re.escape(struct_name)}\s*\)"
+	replaced, count = re.subn(pattern, HERE, source)
+	return replaced, count > 0
+
+
 def size_term(resolved: ResolvedSchema, struct: ResolvedStruct, path: str,
 		size: Callable[[ResolvedStruct, Placement], str | None]
 		) -> str | None:

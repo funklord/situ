@@ -7569,6 +7569,14 @@ class Emitter:
 				source, lambda run: self._sum_run(struct, run, held),
 				lambda path: self._size_term(struct, path))
 			extra = {**(extra or {}), **sums}
+		# `offset(s)` in a `when`: this view's distance from its message's
+		# start, through the owner `check` already reads located members
+		# through. A view with no message is at zero, as it is the root.
+		source, here = traverse.with_offset_self(source, struct.name)
+		if here:
+			extra = {**(extra or {}), traverse.HERE:
+			         f"((int64_t)(({held}).owner != NULL ? (uint32_t)"
+			         f"(situ_base({held}) - ({held}).owner->base) : 0u))"}
 
 		def leaf(text: str, signed: bool) -> str:
 			if not bounded:

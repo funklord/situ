@@ -1894,6 +1894,14 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 {
 	walk_ctx *ctx = (walk_ctx *)raw;
 
+	/* `offset(s)`: this frame's distance from the root a validation began
+	 * over, which every nested walk is handed as `message` (26.1045). */
+	if (what == SITU_WALK_ASK_HERE) {
+		*out = ctx->image->root != NULL
+		       ? (int64_t)(ctx->message - ctx->image->root) : 0;
+		return SITU_WALK_OK;
+	}
+
 	/* A relation's `arg_field` names a message this callback does not
 	 * hold one of two of; answering from the one it does would answer a
 	 * question about another pair (26.755). */
@@ -7970,6 +7978,7 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_FIELD_IN 0x08u
 #define OP_TAG 0x09u
 #define OP_SUM 0x0Au
+#define OP_HERE 0x0Bu
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -8120,6 +8129,24 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_UNSUPPORTED;
 			}
 			stack[depth++] = (int64_t)tag;
+			continue;
+		}
+
+		/* `offset(s)`: where this frame starts in the message (26.1045),
+		 * asked of the caller, who alone knows the root. A caller that
+		 * cannot answer refuses, as for a tag, rather than say zero. */
+		if (op == OP_HERE) {
+			int64_t word = 0;
+
+			if (load == NULL || depth >= STACK_DEPTH) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			const situ_walk_err asked = load(ctx, SITU_WALK_ASK_HERE, 0u, 0,
+			                                 &word);
+			if (asked != SITU_WALK_OK) {
+				return asked;
+			}
+			stack[depth++] = word;
 			continue;
 		}
 

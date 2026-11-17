@@ -722,7 +722,10 @@ typedef enum {
 	SITU_WALK_ASK_ARG_REQUEST  = 4,
 	SITU_WALK_ASK_ARG_RESPONSE = 5,
 	/* `sum(lens)`: a run's elements added (26.896). */
-	SITU_WALK_ASK_SUM = 6
+	SITU_WALK_ASK_SUM = 6,
+	/* `offset(s)` of a `when`'s own struct: where the frame being walked
+	 * starts in the message (26.1045). The index is unused. */
+	SITU_WALK_ASK_HERE = 7
 } situ_walk_ask;
 
 typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,

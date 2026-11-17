@@ -114,8 +114,23 @@ ENDED: dict[str, tuple[bytes, str, int]] = {
 	              "ok", 1),
 }
 
-SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED)]
-SHAPE_IDS = ("located", "sentinel")
+#: And FS2's other rule, "the list must go forward" (fs2.c refuses
+#: `next <= at`): `offset(chain)` in a `when` is where this link sits in the
+#: message (26.1045), so a link pointing at or before itself is refused.
+FORWARD = SENTINEL + (
+	"when chain.head.next != 0xFF000000 && chain.head.next <= offset(chain)\n"
+	"\trefuse backwards \"a section points at or before itself\";\n")
+
+GONE: dict[str, tuple[bytes, str, int]] = {
+	"forward":   (_sections((0, 0, 10), (10, 0, 20), (20, 0, END)), "ok", 2),
+	"backward":  (_sections((0, 0, 20), (20, 0, 10), (10, 0, END)),
+	              "constraint", 2),
+	"loops_to_itself": (_sections((0, 2, 0)), "constraint", 10),
+	"apart":     ENDED["apart"],
+}
+
+SHAPES = [(SCHEMA, CASES), (SENTINEL, ENDED), (FORWARD, GONE)]
+SHAPE_IDS = ("located", "sentinel", "forward")
 
 
 def _build(tmp_path: Path, target: str, text: str = SCHEMA) -> Path:
@@ -301,7 +316,8 @@ for name, data in [{listed}]:
 	                             cwd=out)) == _want(cases)
 
 
-@pytest.mark.parametrize("text", [SCHEMA, SENTINEL], ids=list(SHAPE_IDS))
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD],
+                         ids=list(SHAPE_IDS))
 def test_python_type_checks(tmp_path: Path, text: str) -> None:
 	"""The probe's `try`/`else` is shaped for mypy: binding the element to
 	`None` on a miss would retype a variable `mypy` reads as the struct."""
@@ -330,6 +346,8 @@ WALKED = {
 	"sentinel": {"one": "0", "three": "0", "three_then_out": "1",
 	             "loops_to_itself": "cannot-say", "nine": "cannot-say",
 	             "ten": "cannot-say", "apart": "0"},
+	"forward": {"forward": "0", "backward": "2",
+	            "loops_to_itself": "cannot-say", "apart": "0"},
 }
 
 
@@ -357,7 +375,8 @@ def test_both_walkers(tmp_path: Path, text: str,
 	assert said == {name: (word, word) for name, word in want.items()}
 
 
-@pytest.mark.parametrize("text", [SCHEMA, SENTINEL], ids=list(SHAPE_IDS))
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD],
+                         ids=list(SHAPE_IDS))
 def test_the_dissector_steps_over_the_frame_alone(tmp_path: Path,
 		text: str) -> None:
 	"""The sixth reader. The next section is not this one's bytes, so the
@@ -384,7 +403,8 @@ def test_the_dissector_steps_over_the_frame_alone(tmp_path: Path,
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="no C compiler")
-@pytest.mark.parametrize("text", [SCHEMA, SENTINEL], ids=list(SHAPE_IDS))
+@pytest.mark.parametrize("text", [SCHEMA, SENTINEL, FORWARD],
+                         ids=list(SHAPE_IDS))
 def test_c_frames_a_section_by_its_own_bytes(tmp_path: Path,
 		text: str) -> None:
 	"""`required` asks for this section's bytes and no more: the next one

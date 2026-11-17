@@ -868,6 +868,9 @@ def _evaluate(view: View, code_at: int,
 		remaining  = lambda: max(			# noqa: E731
 			0, view.limit - view.at
 			- (from_byte() if callable(from_byte) else from_byte)),
+		# `offset(s)`: the view's start is its offset in the message, every
+		# nested view being made over the one buffer (26.1045).
+		here       = view.at,
 	)
 
 

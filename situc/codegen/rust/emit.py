@@ -5386,6 +5386,13 @@ class Emitter:
 				lambda run: f"({self._sum_run(struct, run)} as {cast})",
 				lambda path: self._cast_size(struct, path, cast))
 			extra = {**(extra or {}), **sums}
+		# `offset(s)` in a `when`: where these bytes start in the message
+		# `check_which_in` is handed (26.1045). See the C backend.
+		source, here = traverse.with_offset_self(source, struct.name)
+		if here:
+			extra = {**(extra or {}), traverse.HERE:
+			         f"(({held}.bytes.as_ptr() as usize)"
+			         f".wrapping_sub(msg.as_ptr() as usize) as {cast})"}
 
 		def leaf(text: str, signed: bool = False) -> str:
 			"""One read, cast and bounded together.
@@ -10910,6 +10917,12 @@ class Emitter:
 			"\t}",
 		]
 
+	def _reads_its_offset(self, struct: ResolvedStruct) -> bool:
+		"""Whether a `when` on `struct` asks where it sits (26.1045)."""
+		return any(traverse.with_offset_self(
+		               unparse_expr(when.expr, explicit=True), struct.name)[1]
+		           for when in traverse.messages(self.schema, struct.name))
+
 	def _reaches_located(self, struct: ResolvedStruct,
 			seen: frozenset[str] = frozenset()) -> bool:
 		"""Whether `validate` reads a member `at` places, here or below.
@@ -10921,6 +10934,9 @@ class Emitter:
 		"""
 		if struct.name in seen:
 			return False
+		# `offset(s)` in its own `when` is a read of the message too.
+		if self._reads_its_offset(struct):
+			return True
 		# A STRUCT ARM placed by `at` is reached from the message too, and its
 		# check passes the message on (26.1044).
 		for variant in own_members(struct):
@@ -11001,8 +11017,19 @@ class Emitter:
 		lines.extend(
 			f"\tpub const MSG_{_ident(when.name).upper()}: u32 = {at};"
 			for at, when in enumerate(held))
+		# `offset(s)` is where these bytes start in a message, so a struct
+		# whose `when` asks it takes the message, as `validate_in` does, and
+		# `messages` hands it its own bytes (26.1045).
+		placed = self._reads_its_offset(struct)
 		lines.extend([
-			"\tpub fn messages(&self, ids: &mut [u32]) -> usize {",
+			*(["\tpub fn messages(&self, ids: &mut [u32]) -> usize {",
+			   "\t\tself.messages_in(self.bytes, ids)",
+			   "\t}",
+			   "",
+			   "\t/// `messages`, where this frame sits in `msg`.",
+			   "\tpub fn messages_in(&self, msg: &[u8], ids: &mut [u32])"
+			   " -> usize {"] if placed else
+			  ["\tpub fn messages(&self, ids: &mut [u32]) -> usize {"]),
 			"\t\tlet mut found = 0usize;",
 		])
 		for when in held:

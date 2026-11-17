@@ -6043,6 +6043,11 @@ class Emitter:
 				source, lambda run: self._sum_run(struct, run),
 				lambda path: self._size_term(struct, path))
 			extra = {**(extra or {}), **sums}
+		# `offset(s)` in a `when`: where this view starts in its message
+		# (26.1045). See the C backend.
+		source, here = traverse.with_offset_self(source, struct.name)
+		if here:
+			extra = {**(extra or {}), traverse.HERE: f"{held}._at"}
 
 		# Its own scalars and its nested structs': `at file.pixel_offset`
 		# names a field of a header nested in this struct, and the dotted

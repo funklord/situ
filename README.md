@@ -893,6 +893,16 @@ which does not stop at the first -- `validate` short-circuits because for a
 verdict the first failure is the answer, and a caller asking what a message
 *says* wants all of it.
 
+A predicate reads the message's fields, `size(m)` of a member or `size(s)`
+of the struct itself, and `offset(s)`: where the struct sits in the message,
+which is zero for the one a reader was handed and a link's own address down
+a chain -- so a list that must go forward says so:
+
+```situ
+when chain.head.next != 0xFF000000 && chain.head.next <= offset(chain)
+	refuse backwards "a section points at or before itself";
+```
+
 **The identity is the contract and the text is a default.** The id is always
 emitted and costs a small integer; the sentence arrives only under
 `--messages`, because text needs a locale, a log format and a flash budget

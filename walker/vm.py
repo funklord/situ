@@ -25,6 +25,9 @@ from collections.abc import Callable
 END, PUSH, FIELD, REMAINING, SIZE, OFFSET, COUNT = range(7)
 #: `sum(lens)`: a run's elements added (26.896).
 SUM = 10
+#: `offset(s)` of a `when`'s own struct: where the frame being walked starts
+#: in the message (26.1045). Ambient, like `REMAINING`.
+HERE = 11
 #: Only relation programs carry this (26.95). A relation's two
 #: parameters are usually the same struct, so a placement index alone
 #: does not say which message to read it out of; the operand is a
@@ -109,7 +112,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
         load_arg: Callable[[int, int], int] | None = None,
         load_field_in: Callable[[int, int], int] | None = None,
         tag: int | None = None,
-        sum_of: Callable[[int], int] | None = None) -> int:
+        sum_of: Callable[[int], int] | None = None,
+        here: int | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -172,6 +176,15 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 		if op == REMAINING:
 			stack.append(remaining() if callable(remaining)
 			             else remaining)
+			continue
+		if op == HERE:
+			# Where the frame being walked starts in the message (26.1045):
+			# refused where the caller did not say, as a tag is, rather
+			# than read as zero for a struct that is not the root.
+			if here is None:
+				raise VmError("this program reads where its struct sits "
+				              "and no position was supplied")
+			stack.append(here)
 			continue
 		if op == TAG:
 			if tag is None:

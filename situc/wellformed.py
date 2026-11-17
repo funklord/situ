@@ -1533,7 +1533,8 @@ def check_whens(schema: ast.Schema) -> None:
 		# Counted rather than collected: `paths_in` folds a call's argument
 		# into the list, and only that many bare names are measures.
 		measures = sum(1 for call in _calls_in(held.expr)
-		               if call.name == "size" and len(call.args) == 1
+		               if call.name in ("size", "offset")
+		               and len(call.args) == 1
 		               and isinstance(call.args[0], ast.NameRef)
 		               and call.args[0].name in structs)
 		for path in paths_in(held.expr):
@@ -1614,8 +1615,8 @@ def check_whens(schema: ast.Schema) -> None:
 				# member named `s` and the struct would be one name there.
 				if _find_member(struct, struct_name) is not None:
 					raise error(
-						f"`size({struct_name})` could be the struct or its "
-						f"member `{struct_name}`",
+						f"`size({struct_name})` or `offset({struct_name})` "
+						f"could be the struct or its member `{struct_name}`",
 						held.span,
 						label = "two things of one name",
 						notes = ["rename the member to measure the struct"],
@@ -3958,15 +3959,28 @@ def check_when_calls(schema: ast.Schema) -> None:
 	`offset` and `count` reached the renderer as names nothing defines, and a
 	traceback was what the author got, from `build` and not from `map`.
 	"""
+	structs = {decl.name for decl in schema.structs()}
 	for when in schema.whens():
+		roots = {path.partition(".")[0] for path in paths_in(when.expr)}
 		for call in _calls_in(when.expr):
 			if call.name not in ("offset", "count"):
+				continue
+			# `offset(s)` of the struct the `when` is on: where this one
+			# sits in the message, which every reader holds (26.1045). A
+			# chain's link is refused for pointing at or before itself by
+			# it, which is FS2's "the list must go forward".
+			if call.name == "offset" and len(call.args) == 1 \
+					and isinstance(call.args[0], ast.NameRef) \
+					and call.args[0].name in structs \
+					and roots == {call.args[0].name}:
 				continue
 			raise error(
 				f"`{call.name}` cannot be read in a `when`",
 				call.span,
 				label = "no reader evaluates this at run time",
 				notes = ["`size(member)` can be, and a field's own value",
+				         "and `offset(s)` of the struct the `when` is on, "
+				         "which is where that struct sits in the message",
 				         "section 16.1 has what `offset` and `count` are for"],
 			)
 

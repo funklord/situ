@@ -277,6 +277,10 @@ class Op:
 	COUNT		= 0x06		# + u32 placement index
 	# `sum(lens)`: a run's elements added (26.896).
 	SUM		= 0x0A		# + u32 placement index
+	# `offset(s)` of a `when`'s own struct: where the frame being walked
+	# starts in the message (26.1045). Ambient like `REMAINING`, and for
+	# the same reason: it is a fact about this walk, not about a placement.
+	HERE		= 0x0B
 	# A relation's two parameters are usually the same struct, so a
 	# placement index alone does not say which message to read it out
 	# of. Only relation programs emit this (26.95).
@@ -470,6 +474,9 @@ class Program:
 			self.compile(expr.left, resolve_path, known, folded)
 			self.compile(expr.right, resolve_path, known, folded)
 			self.emit(op)
+			return
+		if isinstance(expr, ast.Call) and expr.name == traverse.HERE:
+			self.emit(Op.HERE)
 			return
 		if isinstance(expr, ast.Call):
 			self._call(expr, resolve_path, known, folded)
@@ -1144,6 +1151,12 @@ def _measured(expr: ast.Expr, struct: ResolvedStruct,
 	so the image needs no opcode for it.
 	"""
 	if isinstance(expr, ast.Call):
+		# `offset(s)`: where this frame starts, which the walker holds as it
+		# holds `remaining` (26.1045).
+		if expr.name == "offset" and len(expr.args) == 1 \
+				and isinstance(expr.args[0], ast.NameRef) \
+				and expr.args[0].name == struct.name:
+			return ast.Call(expr.span, traverse.HERE, ())
 		if expr.name == "size" and len(expr.args) == 1 \
 				and isinstance(expr.args[0], ast.NameRef) \
 				and expr.args[0].name == struct.name:
