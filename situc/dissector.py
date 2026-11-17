@@ -138,6 +138,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		if held:
 			_CHECKED[struct.name] = held
 	lines.extend(_check_helpers())
+	# A checksum over the message ahead of it sums from the MESSAGE's first
+	# byte, and a nested dissector sees a sub-tvb (26.1050).
+	global _ROOTED
+	_ROOTED = any(one.tag.tag_before for held in _CHECKED.values()
+	              for one in held)
+	if _ROOTED:
+		lines.extend(ROOT_HELPER)
 
 	# Only where something scans. A helper nobody calls is dead Lua in a file
 	# a user is expected to read before trusting it.
@@ -235,10 +242,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines.extend(_registration(resolved, roots))
 	text = "\n".join(lines).rstrip() + "\n"
-	return _within_lua_locals(re.sub(
+	text = re.sub(
 		r'Dissector\.get\("([^"]+)"\)',
 		lambda found: f'Dissector.get("{_proto_name(basename, found[1])}")',
-		text))
+		text)
+	# Every nested call says it is nested, so the outermost entry alone
+	# records the message (26.1050). Only where something sums it.
+	if _ROOTED:
+		text = re.sub(r'Dissector\.get\(("[^"]+")\):call\(',
+		              r'situ_root.call(\1, ', text)
+	return _within_lua_locals(text)
 
 
 READ_HELPER = [
@@ -1748,7 +1761,7 @@ def _checkable(struct: ResolvedStruct) -> list[Checked]:
 	kernel other than a CRC of at most 32 bits -- what Lua 5.2's `bit32`
 	holds -- or RFC 1071's sum.
 	"""
-	from situc.codegen.kernel_math import crc_width
+	from situc.codegen.kernel_math import crc_width, number
 
 	members = [held for held in own_members(struct) if not held.parameter]
 	paths   = [held.path for held in members]
@@ -1758,12 +1771,15 @@ def _checkable(struct: ResolvedStruct) -> list[Checked]:
 			continue
 		codec = _CODECS.get(tag.tag_codec or "")
 		if codec is None or codec.kernel is None or tag.tag_prefix \
-				or len(tag.tag_covers) != 1 \
+				or (len(tag.tag_covers) != 1 and not tag.tag_before) \
 				or (tag.size_bits or 0) % BITS_PER_BYTE \
 				or (tag.offset_bits or 0) % BITS_PER_BYTE:
 			continue
 		family = codec.kernel.family
-		if family is ast.KernelFamily.POLYNOMIAL:
+		if family is ast.KernelFamily.BYTE_SUM:
+			if number(codec, "width") != tag.size_bits:
+				continue
+		elif family is ast.KernelFamily.POLYNOMIAL:
 			width = crc_width(codec)
 			if codec.kernel.argument("field") is not None or width is None \
 					or width > 32 or width != tag.size_bits:
@@ -1772,6 +1788,12 @@ def _checkable(struct: ResolvedStruct) -> list[Checked]:
 			if tag.size_bits != 16:
 				continue
 		else:
+			continue
+		# `covers(before)`: the packet from its first byte up to the tag
+		# (26.1050), so there is no first or last member to mark.
+		if tag.tag_before:
+			found.append(Checked(tag, codec, "", "",
+			                     traverse.self_as(tag.attrs)))
 			continue
 		# A variant of THIS struct; one inside a nested member is measured
 		# with that member, as FLAC's frame fields are.
@@ -1809,17 +1831,26 @@ def _check_marks(struct: ResolvedStruct, checked: list[Checked],
 	proto = _lua(struct.name)
 	for one in checked:
 		tag = _lua(_local(struct, one.tag))
+		before = one.tag.tag_before
 		if when == "before":
 			if placement.path == one.first:
 				lines.append(f"\tlocal situ_{tag}_from = at")
 			if placement.path == one.tag.path:
 				lines.append(f"\tlocal situ_{tag}_at = at")
+				# The MESSAGE ahead of the tag (26.1050): from its first
+				# byte to where this tag sits in it.
+				if before:
+					lines += [f"\tlocal situ_{tag}_tvb = situ_root.message",
+					          f"\tlocal situ_{tag}_from = 0",
+					          f"\tlocal situ_{tag}_to = tvb:offset()"
+					          " - situ_root.base + at"]
 			continue
 		if placement.path == one.last:
 			lines.append(f"\tlocal situ_{tag}_to = at")
 		# After whichever of the two comes later.
-		later = one.last if _after(struct, one.last, one.tag.path) \
-			else one.tag.path
+		later = (one.tag.path if before
+		         else one.last if _after(struct, one.last, one.tag.path)
+		         else one.tag.path)
 		if placement.path != later:
 			continue
 		n      = (one.tag.size_bits or 0) // BITS_PER_BYTE
@@ -1827,13 +1858,15 @@ def _check_marks(struct: ResolvedStruct, checked: list[Checked],
 			else "false"
 		hole   = (f"situ_{tag}_at, {n}, {one.filler}"
 		          if one.filler is not None else "0, 0, 0")
+		# The span's tvb: the message's for `covers(before)` (26.1050).
+		source = f"situ_{tag}_tvb" if before else "tvb"
 		lines += [
 			f"\t-- {one.tag.path}: {one.codec.name} over what it covers,"
 			" as the readers",
 			"\t-- compute it, and Wireshark's verdict beside it (26.1031).",
-			f"\tif situ_{tag}_to <= tvb:len() and situ_{tag}_at + {n}"
+			f"\tif situ_{tag}_to <= {source}:len() and situ_{tag}_at + {n}"
 			" <= tvb:len() then",
-			f"\t\tlocal want = situ_check.{_lua(one.codec.name)}(tvb, "
+			f"\t\tlocal want = situ_check.{_lua(one.codec.name)}({source}, "
 			f"situ_{tag}_from, situ_{tag}_to, {hole})",
 			f"\t\tlocal got = situ_uint(tvb, situ_{tag}_at, {n}, {little})",
 			"\t\tif got == want then",
@@ -1898,6 +1931,24 @@ def _check_helpers() -> list[str]:
 		kernel = codec.kernel
 		assert kernel is not None
 		fn = f"situ_check.{_lua(name)}"
+		if kernel.family is ast.KernelFamily.BYTE_SUM:
+			modulus = 1 << number(codec, "width")
+			negate  = kernel.flag("negate")
+			lines += [
+				f"-- {name}: the bytes added, modulo {modulus}"
+				+ (", negated." if negate else "."),
+				f"{fn} = function(tvb, from, to, hole_at, hole_n, fill)",
+				"\tlocal total = 0",
+				"\tfor i = from, to - 1 do",
+				"\t\ttotal = (total + situ_check_byte(tvb, i, hole_at,"
+				f" hole_n, fill)) % {modulus}",
+				"\tend",
+				*([f"\ttotal = ({modulus} - total) % {modulus}"]
+				  if negate else []),
+				"\treturn total",
+				"end",
+			]
+			continue
 		if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 			complement = kernel.flag("complement")
 			lines += [
@@ -1972,6 +2023,9 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	lines = [
 		f"function {proto}.dissector(tvb, pinfo, tree)",
+		*(["\tif not situ_root.nested then",
+		   "\t\tsitu_root.message, situ_root.base = tvb, tvb:offset()",
+		   "\tend"] if _ROOTED else []),
 		f"\tif tvb:len() < {layout.size_bytes} then",
 		"\t\treturn 0",
 		"\tend",
@@ -3099,6 +3153,31 @@ _CODECS: dict[str, ast.CodecDecl] = {}
 
 #: The tags each struct's dissector checks, by struct name (26.1031).
 _CHECKED: dict[str, list["Checked"]] = {}
+
+#: Whether some checked tag covers the message before it (26.1050), which
+#: is what the root helper and the entry bookkeeping are emitted for.
+_ROOTED = False
+
+#: The message a `covers(before)` checksum sums from its first byte. A nested
+#: dissector is handed a sub-tvb whose offset 0 is its own struct's, and
+#: Wireshark's Lua gives no way from one back to the message's -- which is
+#: itself usually a lower layer's sub-tvb. So the outermost call records the
+#: message's tvb and its offset, and every nested call goes through
+#: `situ_root.call`, which says it is nested. One local, since `edges`
+#: has met the main chunk's two hundred before (26.518).
+ROOT_HELPER = [
+	"",
+	"-- The message a checksum over everything before it sums from its",
+	"-- first byte, recorded where the outermost dissector is entered.",
+	"local situ_root = { nested = false, message = nil, base = 0 }",
+	"situ_root.call = function (name, tvb, pinfo, tree)",
+	"\tlocal was = situ_root.nested",
+	"\tsitu_root.nested = true",
+	"\tlocal got = Dissector.get(name):call(tvb, pinfo, tree)",
+	"\tsitu_root.nested = was",
+	"\treturn got",
+	"end",
+]
 
 
 #: Every `endian_marker`, for the literal a governed member is compared against.

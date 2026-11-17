@@ -372,3 +372,27 @@ for data in ({_vpd_image()!r}, {_vpd_image(False)!r}):
 	assert ran.stdout.splitlines() == ["3 2 19 ok", "3 2 19 checksum"], \
 		ran.stdout + ran.stderr
 	assert sum(_vpd_image()[:20]) % 256 == 0
+
+
+def test_the_dissector_checks_the_message_ahead_of_the_tag(tmp_path: Path) -> None:
+	"""Wireshark holds the whole packet, so it can sum it: `Good`, or what
+	RV should be. The RV struct is dissected over a sub-tvb, so the sum is
+	taken over the message the outermost dissector recorded, up to the
+	tag's place in it."""
+	from situc.cli import analyse
+	from situc.dissector import generate
+	from situc.parser import parse
+	from test_dissector import LUA, read_back
+	if LUA is None:
+		pytest.skip("no Lua interpreter")
+	path = tmp_path / "rv.situ"
+	path.write_text(SCHEMA, encoding="ascii")
+	source, resolved, _ = analyse(path)
+	lua = tmp_path / "rv.lua"
+	lua.write_text(generate(parse(source), resolved, "rv"), encoding="ascii")
+	said = []
+	for data in (GOOD, BAD):
+		_, rows = read_back(lua, "image", data)
+		said.append([text for field, _, _, text in rows
+		             if field.endswith(".status")])
+	assert said == [["Good"], [f"Bad, should be 0x{GOOD[-1]:02x}"]], said

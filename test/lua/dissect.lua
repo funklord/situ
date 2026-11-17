@@ -112,7 +112,11 @@ local function Tvb(buffer, base)
 
 	return setmetatable(self, {
 		__call  = function(_, offset, length) return slice(offset, length) end,
-		__index = { len = function() return #buffer end },
+		-- `offset` is where this tvb starts in the one it was cut from,
+		-- as Wireshark's `Tvb:offset()` answers: what a checksum over the
+		-- whole message reaches it by (26.1050).
+		__index = { len = function() return #buffer end,
+		            offset = function() return base end },
 		Tvb     = Tvb,
 	})
 end
