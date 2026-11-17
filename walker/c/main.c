@@ -206,6 +206,39 @@ int main(int argc, char **argv)
 		} else {
 			printf("  [%u] @%u -- %s\n", i, offset / 8u, why(err));
 		}
+
+		/* What a checksum's codec makes of the bytes it covers (26.1058),
+		 * beside the stored value above: equal is a tag that verifies.
+		 * Nothing where the image names no codec this walker computes. */
+		uint32_t sum = 0u;
+		const situ_walk_err summed = situ_walk_sum(&image, message_bytes,
+		                                           len, shape, first + i,
+		                                           &sum);
+		if (summed == SITU_WALK_OK) {
+			printf("  [%u] sum = %u\n", i, sum);
+		} else if (summed != SITU_WALK_UNSUPPORTED) {
+			printf("  [%u] sum -- %s\n", i, why(summed));
+		}
+	}
+
+	/* The values the struct's fields assemble (26.1059), in declaration
+	 * order. */
+	uint32_t lets = 0u;
+	if (situ_walk_let_count(&image, shape, &lets) == SITU_WALK_OK) {
+		for (uint32_t k = 0u; k < lets; k++) {
+			int64_t held = 0;
+			int     sign = 0;
+			err = situ_walk_let(&image, message_bytes, len, shape, k, &held,
+			                    &sign);
+			if (err != SITU_WALK_OK) {
+				printf("  let %u -- %s\n", k, why(err));
+			} else if (sign) {
+				printf("  let %u = %lld\n", k, (long long)held);
+			} else {
+				printf("  let %u = %llu\n", k,
+				       (unsigned long long)(uint64_t)held);
+			}
+		}
 	}
 
 	return 0;

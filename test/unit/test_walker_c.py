@@ -4093,3 +4093,29 @@ def test_the_program_reads_what_the_python_walker_reads(
 		assert said == python_answers(blob, message), (
 			f"on {message.hex()!r} the program says {said} and the python "
 			f"walker says {python_answers(blob, message)}")
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_program_prints_a_sum_and_a_named_value(
+		program: Path, tmp_path: Path) -> None:
+	"""What the library computes reaches the command line (26.1058,
+	26.1059): PNG's IEND CRC as published, and `edges`' `assembled` worked
+	by hand -- the 48-bit offset, `-3 - 200` read signed, a zero divisor."""
+	png = ROOT / "example" / "png" / "png.situ"
+	(tmp_path / "png.img").write_bytes(image_for(png))
+	ran = _program_answers(program, tmp_path / "png.img",
+	                       bytes.fromhex("0000000049454E44AE426082"),
+	                       shape_named(png, "chunk"))
+	assert ran.returncode == 0, ran.stderr
+	assert f"sum = {0xAE426082}" in ran.stdout, ran.stdout
+
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	(tmp_path / "edges.img").write_bytes(image_for(edges))
+	ran = _program_answers(program, tmp_path / "edges.img",
+	                       bytes.fromhex("123489ABCDEFFDC800460102"),
+	                       shape_named(edges, "assembled"))
+	assert ran.returncode == 0, ran.stderr
+	said = [line.strip() for line in ran.stdout.splitlines()
+	        if line.strip().startswith("let ")]
+	assert said[:3] == [f"let 0 = {0x123489ABCDEF}", "let 1 = -203",
+	                    "let 2 = 0"], ran.stdout
