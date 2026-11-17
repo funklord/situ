@@ -228,6 +228,9 @@ ATTRIBUTE_NAMES = frozenset({
 	# 26.1039: a resend interval beside them, which makes `timeout_ms` the
 	# exchange's total wait rather than each attempt's.
 	"resend_ms",
+	# and a second schedule for once part of the reply is held (fuzznet's
+	# sec 1168).
+	"resend_part_ms", "retries_part",
 	# section 14: cryptographic model
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
 	# section 14.2: a checksum that covers its own bytes, taken as this
@@ -256,7 +259,7 @@ ATTRIBUTE_NAMES = frozenset({
 #: lone `[escape]` means something, and so does a lone `[secret]`.
 VALUE_ATTRIBUTES = frozenset({
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
-	"retries", "timeout_ms", "resend_ms", "must_eq", "encoding", "endian", "bit_order",
+	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds",
 })
 

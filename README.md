@@ -852,6 +852,7 @@ The ones whose placement rule is the interesting part:
 | `[rsvd]` | on a register field: SystemRDL's reserved, which is not `reserved u2 [preserve]` |
 | `[timeout_ms = N]` / `[retries = N]` | on a `relation`: the retransmission and timing contract of an exchange, which both endpoints must agree on |
 | `[resend_ms = N]` | on a `relation` with `retries`: resend every N milliseconds within the total `timeout_ms`, rather than spending the whole wait on one attempt |
+| `[resend_part_ms = N]` / `[retries_part = N]` | on a `relation` with `resend_ms`: once the consumer says part of the reply is held, resend N milliseconds after the last send, at most `retries_part` times in all -- the path works, so what is missing was lost rather than slow |
 
 A member may carry an access mode too -- `[rw]`, `[ro]`, `[wo]`, `[w1c]`,
 `[w0c]`, `[w1s]`, `[w0s]`, `[rc]`, `[rs]`, `[wo_once]` -- which is the

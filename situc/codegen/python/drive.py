@@ -97,7 +97,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	from situc.codegen.c.drive import resend_of
+	from situc.codegen.c.drive import part_of, resend_of
 
 	if any(resend_of(relation) for relation, _, _ in ready):
 		lines += [
@@ -112,6 +112,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	for relation, (timeout, retries), layout in ready:
 		request, response = layout.request, layout.response
 		resend = resend_of(relation)
+		part   = part_of(relation) if resend else None
 		name = py_name(relation.name)
 		first, second = relation.params
 		lines += [
@@ -121,6 +122,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*([f"{name.upper()}_RESEND_MS = {resend}",
 			   "# TIMEOUT_MS is the whole exchange's wait with a resend",
 			   "# interval: C's (26.1039)."] if resend else []),
+			*([f"{name.upper()}_RESEND_PART_MS = {part[0]}",
+			   f"{name.upper()}_RETRIES_PART = {part[1]}",
+			   "# Once `part_held` says part of the reply is in: C's."]
+			  if part else []),
 			"",
 			"",
 			f"class {name}_driver:",
@@ -131,7 +136,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			'\t"""',
 			"",
 			"\t__slots__ = (\"_cap\", \"_live\", \"_submit\", \"_timeout\", \"_retries\",",
-			("\t             \"_resend\", \"_interval\")" if resend else
+			("\t             \"_resend\", \"_interval\", \"_part_interval\","
+			 " \"_part_retries\")" if part else
+			 "\t             \"_resend\", \"_interval\")" if resend else
 			 "\t             \"_resend\")"),
 			"",
 			"\tdef __init__(self, submit: Callable[[bytes], None], cap: int,",
@@ -139,7 +146,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t             retries: int = {retries}, *,"
 			if not resend else
 			f"\t             retries: int = {retries},"
-			f"\n\t             resend_ms: int = {resend}, *,",
+			f"\n\t             resend_ms: int = {resend}, *,"
+			if not part else
+			f"\t             retries: int = {retries},"
+			f"\n\t             resend_ms: int = {resend},"
+			f"\n\t             resend_part_ms: int = {part[0]},"
+			f"\n\t             retries_part: int = {part[1]}, *,",
 			"\t             resend: Callable[[int, bytes], None] | None = None"
 			") -> None:",
 			"\t\t# `resend` is told which exchange a retransmission is, so a",
@@ -151,6 +163,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tself._timeout = timeout_ms",
 			"\t\tself._retries = retries",
 			*(["\t\tself._interval = resend_ms"] if resend else []),
+			*(["\t\tself._part_interval = resend_part_ms",
+			   "\t\tself._part_retries  = retries_part"] if part else []),
 			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
 			 "list[object]] = {}"),
 			"",
@@ -166,7 +180,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(["\t\tend = (now_ms + self._timeout) & 0xFFFFFFFF",
 			   "\t\tfirst = end if self._retries == 0 else _sooner(",
 			   "\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, end, now_ms)",
-			   "\t\tself._live[key] = [data, id, first, self._retries, end]"]
+			   (f"\t\tself._live[key] = [data, id, first, self._retries, end,"
+			    " now_ms, False]" if part else
+			    "\t\tself._live[key] = [data, id, first, self._retries, end]")]
 			  if resend else
 			  ["\t\tself._live[key] = [data, id,",
 			   "\t\t                   (now_ms + self._timeout) & 0xFFFFFFFF,",
@@ -196,6 +212,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
 			"\t\treturn int(self._live[key][1])  # type: ignore[arg-type]",
 			"",
+			*_part_held(part),
 			"\tdef step(self, now_ms: int) -> tuple[int | None, int]:",
 			'\t\t"""Retransmit what is due; return (next deadline, given up).',
 			"",
@@ -209,7 +226,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tdue: list[tuple[int, bytes]] = []",
 			"",
 			"\t\tfor key in list(self._live):",
-			("\t\t\tdata, _id, deadline, left, end = self._live[key]" if resend
+			("\t\t\tdata, _id, deadline, left, end, _sent, held = self._live[key]"
+			 if part else
+			 "\t\t\tdata, _id, deadline, left, end = self._live[key]" if resend
 			 else "\t\t\tdata, _id, deadline, left = self._live[key]"),
 			# Serially, modulo 2^32, as the other three: a 32-bit clock
 			# wraps, and the four agree about when it does (26.1008).
@@ -222,6 +241,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\t\t\texpired += 1",
 			"\t\t\t\t\tcontinue",
 			*(["\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
+			   "\t\t\t\tdeadline = int(end) if left == 0 else _sooner("
+			   "  # type: ignore[call-overload]",
+			   "\t\t\t\t\t(now_ms + (self._part_interval if held"
+			   " else self._interval)) & 0xFFFFFFFF, int(end),"
+			   "  # type: ignore[call-overload]",
+			   "\t\t\t\t\tnow_ms)",
+			   "\t\t\t\tself._live[key] = [data, _id, deadline, left, end,"
+			   " now_ms, held]"]
+			  if part else
+			  ["\t\t\t\tleft = int(left) - 1  # type: ignore[call-overload]",
 			   "\t\t\t\tdeadline = int(end) if left == 0 else _sooner("
 			   "  # type: ignore[call-overload]",
 			   "\t\t\t\t\t(now_ms + self._interval) & 0xFFFFFFFF, int(end),"
@@ -249,3 +278,38 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		]
 
 	return {f"{basename}_drive.py": "\n".join(lines).rstrip("\n") + "\n"}
+
+
+def _part_held(part: tuple[int, int] | None) -> list[str]:
+	"""`part_held`: see the C driver's `_part_held`."""
+	if part is None:
+		return []
+	return [
+		"\tdef part_held(self, id: int, now_ms: int) -> None:",
+		'\t\t"""Part of exchange `id`\'s reply is held: from here its next',
+		"",
+		"\t\tretransmission is due `resend_part_ms` after the last send, and",
+		"\t\t`retries_part` bounds them all. ConstraintError where no such",
+		'\t\texchange is outstanding."""',
+		"\t\tfor entry in self._live.values():",
+		"\t\t\tif int(entry[1]) != id:  # type: ignore[call-overload]",
+		"\t\t\t\tcontinue",
+		"\t\t\tif not entry[6]:",
+		"\t\t\t\tdone = self._retries - int(entry[3])"
+		"  # type: ignore[call-overload]",
+		"\t\t\t\tdue = (int(entry[5]) + self._part_interval) & 0xFFFFFFFF"
+		"  # type: ignore[call-overload]",
+		"\t\t\t\tif (now_ms - due) & 0xFFFFFFFF < 0x80000000:",
+		"\t\t\t\t\tdue = now_ms",
+		"\t\t\t\tleft = max(self._part_retries - done, 0)",
+		"\t\t\t\tentry[3] = left",
+		"\t\t\t\tentry[6] = True",
+		"\t\t\t\tentry[2] = int(entry[4]) if left == 0 else _sooner("
+		"  # type: ignore[call-overload]",
+		"\t\t\t\t\tdue, int(entry[4]), now_ms)"
+		"  # type: ignore[call-overload]",
+		"\t\t\treturn",
+		"\t\traise ConstraintError(\"no exchange {} is outstanding\""
+		".format(id))",
+		"",
+	]

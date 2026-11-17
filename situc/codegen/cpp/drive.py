@@ -155,11 +155,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	from situc.codegen.c.drive import resend_of
+	from situc.codegen.c.drive import part_of, resend_of
 
 	for relation, (timeout, retries), layout in ready:
 		request, response = layout.request, layout.response
 		resend = resend_of(relation)
+		part   = part_of(relation) if resend else None
 		name = f"{c_name(relation.name)}_driver"
 		first, second = relation.params
 		req  = class_name(resolved.structs[first.type_name])
@@ -170,6 +171,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*([f"#define SITU_{c_name(relation.name).upper()}_RESEND_MS {resend}u",
 			   "/* TIMEOUT_MS is the whole exchange's wait with a resend",
 			   " * interval: C's (26.1039). */"] if resend else []),
+			*([f"#define SITU_{c_name(relation.name).upper()}_RESEND_PART_MS"
+			   f" {part[0]}u",
+			   f"#define SITU_{c_name(relation.name).upper()}_RETRIES_PART"
+			   f" {part[1]}u",
+			   "/* Once `part_held` says part of the reply is in: C's. */"]
+			  if part else []),
 			"",
 			f"/** Retransmission for `{relation.name}`. */",
 			f"class {name} {{",
@@ -185,6 +192,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tbool          live;",
 			*(["\t\tstd::uint32_t end_ms;\t/* the whole exchange's end */"]
 			  if resend else []),
+			*(["\t\tstd::uint32_t sent_ms;\t/* the last send */",
+			   "\t\tbool          part;\t/* part of the reply is held */"]
+			  if part else []),
 			"\t};",
 			"",
 			# `store`, not `slots`: Qt defines `slots` as an empty macro, so a
@@ -195,11 +205,18 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			# member keeps its trailing underscore and is unaffected.
 			f"\t{name}(slot *store, std::uint32_t cap, ::situ::io &sink,",
 			("\t       std::uint32_t timeout_ms, std::uint32_t retries,"
+			 "\n\t       std::uint32_t resend_ms, std::uint32_t resend_part_ms,"
+			 "\n\t       std::uint32_t retries_part) noexcept"
+			 if part else
+			 "\t       std::uint32_t timeout_ms, std::uint32_t retries,"
 			 "\n\t       std::uint32_t resend_ms) noexcept"
 			 if resend else
 			 "\t       std::uint32_t timeout_ms, std::uint32_t retries) noexcept"),
 			"\t\t: slots_(store), cap_(cap), io_(sink),",
 			("\t\t  timeout_ms_(timeout_ms), retries_(retries),"
+			 " resend_ms_(resend_ms),\n\t\t  resend_part_ms_(resend_part_ms),"
+			 " retries_part_(retries_part)" if part else
+			 "\t\t  timeout_ms_(timeout_ms), retries_(retries),"
 			 " resend_ms_(resend_ms)" if resend else
 			 "\t\t  timeout_ms_(timeout_ms), retries_(retries)"),
 			"\t{",
@@ -222,7 +239,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\tif (!slots_[i].live) {",
 			*(["\t\t\t\tslots_[i] = slot{bytes, len, key, id,",
 			   "\t\t\t\t                 now_ms + timeout_ms_, retries_, true"
-			   + (", 0u};" if resend else "};")]
+			   + (", 0u, now_ms, false};" if part else
+			      ", 0u};" if resend else "};")]
 			  if layout.packed else [
 			  "\t\t\t\tslots_[i].bytes = bytes;",
 			  "\t\t\t\tslots_[i].len   = len;",
@@ -232,7 +250,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			  "\t\t\t\tslots_[i].id          = id;",
 			  "\t\t\t\tslots_[i].deadline_ms = now_ms + timeout_ms_;",
 			  "\t\t\t\tslots_[i].left        = retries_;",
-			  "\t\t\t\tslots_[i].live        = true;"]),
+			  "\t\t\t\tslots_[i].live        = true;",
+			  *(["\t\t\t\tslots_[i].sent_ms     = now_ms;",
+			     "\t\t\t\tslots_[i].part        = false;"] if part else [])]),
 			*(["\t\t\t\tslots_[i].end_ms      = now_ms + timeout_ms_;",
 			   "\t\t\t\tslots_[i].deadline_ms = retries_ == 0u ? slots_[i].end_ms",
 			   "\t\t\t\t\t: sooner(now_ms + resend_ms_, slots_[i].end_ms, now_ms);"]
@@ -282,6 +302,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\treturn ::situ::rt::err::constraint;",
 			"\t}",
 			"",
+			*_part_held(part),
 			"\t/** Retransmit what is due; `next_ms` is when to come back.",
 			"\t * `err::truncated` where nothing is outstanding. */",
 			"\t[[nodiscard]] ::situ::rt::err step(std::uint32_t now_ms,",
@@ -307,7 +328,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\t\t\tcontinue;",
 			"\t\t\t\t}",
 			"\t\t\t\tslots_[i].left -= 1u;",
-			*(["\t\t\t\tslots_[i].deadline_ms = slots_[i].left == 0u"
+			*(["\t\t\t\tslots_[i].sent_ms = now_ms;",
+			   "\t\t\t\tslots_[i].deadline_ms = slots_[i].left == 0u"
+			   " ? slots_[i].end_ms",
+			   "\t\t\t\t\t: sooner(now_ms + (slots_[i].part ? resend_part_ms_"
+			   " : resend_ms_),",
+			   "\t\t\t\t\t         slots_[i].end_ms, now_ms);"]
+			  if part else
+			  ["\t\t\t\tslots_[i].deadline_ms = slots_[i].left == 0u"
 			   " ? slots_[i].end_ms",
 			   "\t\t\t\t\t: sooner(now_ms + resend_ms_, slots_[i].end_ms, now_ms);"]
 			  if resend else
@@ -336,6 +364,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tstd::uint32_t  timeout_ms_;",
 			"\tstd::uint32_t  retries_;",
 			*(["\tstd::uint32_t  resend_ms_;",
+			   *(["\tstd::uint32_t  resend_part_ms_;",
+			      "\tstd::uint32_t  retries_part_;"] if part else []),
 			   "",
 			   "\t/* The sooner of two deadlines, serially from `now_ms`. */",
 			   "\tstatic std::uint32_t sooner(std::uint32_t a, std::uint32_t b,",
@@ -350,3 +380,39 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines += ["}  /* namespace situ */", "", f"#endif /* {guard} */"]
 	return {f"{basename}_drive.hpp": "\n".join(lines) + "\n"}
+
+
+def _part_held(part: tuple[int, int] | None) -> list[str]:
+	"""`part_held`: see the C driver's `_part_held`."""
+	if part is None:
+		return []
+	return [
+		"\t/** Part of exchange `id`'s reply is held: from here its next",
+		"\t *  retransmission is due `resend_part_ms` after the last send, and",
+		"\t *  `retries_part` bounds them all. `err::constraint` where no such",
+		"\t *  exchange is outstanding. */",
+		"\t[[nodiscard]] ::situ::rt::err part_held(std::uint32_t id,",
+		"\t                                        std::uint32_t now_ms) noexcept",
+		"\t{",
+		"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
+		"\t\t\tif (!slots_[i].live || slots_[i].id != id) {",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		"\t\t\tif (!slots_[i].part) {",
+		"\t\t\t\tconst std::uint32_t done = retries_ - slots_[i].left;",
+		"\t\t\t\tstd::uint32_t due = slots_[i].sent_ms + resend_part_ms_;",
+		"",
+		"\t\t\t\tif (static_cast<std::uint32_t>(now_ms - due) < 0x80000000u) {",
+		"\t\t\t\t\tdue = now_ms;",
+		"\t\t\t\t}",
+		"\t\t\t\tslots_[i].part = true;",
+		"\t\t\t\tslots_[i].left = retries_part_ > done ? retries_part_ - done : 0u;",
+		"\t\t\t\tslots_[i].deadline_ms = slots_[i].left == 0u ? slots_[i].end_ms",
+		"\t\t\t\t\t: sooner(due, slots_[i].end_ms, now_ms);",
+		"\t\t\t}",
+		"\t\t\treturn ::situ::rt::err::ok;",
+		"\t\t}",
+		"\t\treturn ::situ::rt::err::constraint;",
+		"\t}",
+		"",
+	]

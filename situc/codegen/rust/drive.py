@@ -132,10 +132,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
-	from situc.codegen.c.drive import resend_of
+	from situc.codegen.c.drive import part_of, resend_of
 
 	for relation, (timeout, retries), layout in ready:
 		resend = resend_of(relation)
+		part   = part_of(relation) if resend else None
 		request, response = layout.request, layout.response
 		held = _pascal(relation.name)
 		first, second = relation.params
@@ -147,6 +148,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*([f"pub const {held.upper()}_RESEND_MS: u32 = {resend};",
 			   "/// `TIMEOUT_MS` is the whole exchange's wait with a resend",
 			   "/// interval: C's (26.1039)."] if resend else []),
+			*([f"pub const {held.upper()}_RESEND_PART_MS: u32 = {part[0]};",
+			   f"pub const {held.upper()}_RETRIES_PART: u32 = {part[1]};",
+			   "/// Once `part_held` says part of the reply is in: C's."]
+			  if part else []),
 			"",
 			f"/// One outstanding `{relation.name}`.",
 			"///",
@@ -163,6 +168,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tleft: u32,",
 			"\tlive: bool,",
 			*(["\tend_ms: u32,"] if resend else []),
+			*(["\tsent_ms: u32,", "\tpart: bool,"] if part else []),
 			"}",
 			"",
 			f"impl Default for {held}Slot<'_> {{",
@@ -171,7 +177,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			 if layout.packed else
 			 f"\t\tSelf {{ bytes: &[], key: [0u8; {layout.total_bytes}], "
 			 "id: 0, deadline_ms: 0,"),
-			("\t\t       left: 0, live: false, end_ms: 0 }" if resend else
+			("\t\t       left: 0, live: false, end_ms: 0, sent_ms: 0,"
+			 " part: false }" if part else
+			 "\t\t       left: 0, live: false, end_ms: 0 }" if resend else
 			 "\t\t       left: 0, live: false }"),
 			"\t}",
 			"}",
@@ -186,17 +194,23 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\ttimeout_ms: u32,",
 			"\tretries: u32,",
 			*(["\tresend_ms: u32,"] if resend else []),
+			*(["\tresend_part_ms: u32,", "\tretries_part: u32,"] if part else []),
 			"}",
 			"",
 			f"impl<'s, 'a, I: Io> {held}Driver<'s, 'a, I> {{",
 			f"\tpub fn new(slots: &'s mut [{held}Slot<'a>], io: I,",
-			("\t           timeout_ms: u32, retries: u32, resend_ms: u32)"
+			("\t           timeout_ms: u32, retries: u32, resend_ms: u32,"
+			 "\n\t           resend_part_ms: u32, retries_part: u32) -> Self {"
+			 if part else
+			 "\t           timeout_ms: u32, retries: u32, resend_ms: u32)"
 			 " -> Self {" if resend else
 			 "\t           timeout_ms: u32, retries: u32) -> Self {"),
 			"\t\tfor slot in slots.iter_mut() {",
 			"\t\t\tslot.live = false;",
 			"\t\t}",
-			("\t\tSelf { slots, io, timeout_ms, retries, resend_ms }"
+			("\t\tSelf { slots, io, timeout_ms, retries, resend_ms,"
+			 " resend_part_ms, retries_part }" if part else
+			 "\t\tSelf { slots, io, timeout_ms, retries, resend_ms }"
 			 if resend else
 			 "\t\tSelf { slots, io, timeout_ms, retries }"),
 			"\t}",
@@ -225,7 +239,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			   "\t\t\t\t\t\t       now_ms.wrapping_add(self.timeout_ms), now_ms)",
 			   "\t\t\t\t\t},",
 			   "\t\t\t\t\tleft: self.retries, live: true,",
-			   "\t\t\t\t\tend_ms: now_ms.wrapping_add(self.timeout_ms),"]
+			   "\t\t\t\t\tend_ms: now_ms.wrapping_add(self.timeout_ms),",
+			   *(["\t\t\t\t\tsent_ms: now_ms, part: false,"] if part else [])]
 			  if resend else
 			  ["\t\t\t\t\tdeadline_ms: now_ms.wrapping_add(self.timeout_ms),",
 			   "\t\t\t\t\tleft: self.retries, live: true,"]),
@@ -269,6 +284,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tErr(Error::Constraint)",
 			"\t}",
 			"",
+			*_part_held(part),
 			"\t/// Retransmit whatever is due; answer the next deadline and",
 			"\t/// how many exchanges gave up. `None` is an empty in-flight",
 			"\t/// set -- no deadline to wait on, which is completion rather",
@@ -300,7 +316,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\t\t\tcontinue;",
 			"\t\t\t\t}",
 			"\t\t\t\tslot.left -= 1;",
-			*(["\t\t\t\tslot.deadline_ms = if slot.left == 0 {",
+			*(["\t\t\t\tslot.sent_ms = now_ms;",
+			   "\t\t\t\tlet every = if slot.part { self.resend_part_ms }"
+			   " else { self.resend_ms };",
+			   "\t\t\t\tslot.deadline_ms = if slot.left == 0 {",
+			   "\t\t\t\t\tslot.end_ms",
+			   "\t\t\t\t} else {",
+			   "\t\t\t\t\tSelf::sooner(now_ms.wrapping_add(every),"
+			   " slot.end_ms, now_ms)",
+			   "\t\t\t\t};"]
+			  if part else
+			  ["\t\t\t\tslot.deadline_ms = if slot.left == 0 {",
 			   "\t\t\t\t\tslot.end_ms",
 			   "\t\t\t\t} else {",
 			   "\t\t\t\t\tSelf::sooner(now_ms.wrapping_add(self.resend_ms),"
@@ -336,3 +362,41 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		]
 
 	return {f"{basename}_drive.rs": "\n".join(lines).rstrip("\n") + "\n"}
+
+
+def _part_held(part: tuple[int, int] | None) -> list[str]:
+	"""`part_held`: see the C driver's `_part_held`."""
+	if part is None:
+		return []
+	return [
+		"\t/// Part of exchange `id`'s reply is held: from here its next",
+		"\t/// retransmission is due `resend_part_ms` after the last send, and",
+		"\t/// `retries_part` bounds them all. `Constraint` where no such",
+		"\t/// exchange is outstanding.",
+		"\tpub fn part_held(&mut self, id: u32, now_ms: u32) -> Result<()> {",
+		"\t\tlet (retries, every, most) = (self.retries, self.resend_part_ms,"
+		" self.retries_part);",
+		"\t\tfor slot in self.slots.iter_mut() {",
+		"\t\t\tif !slot.live || slot.id != id {",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		"\t\t\tif !slot.part {",
+		"\t\t\t\tlet done = retries.saturating_sub(slot.left);",
+		"\t\t\t\tlet mut due = slot.sent_ms.wrapping_add(every);",
+		"\t\t\t\tif now_ms.wrapping_sub(due) < 0x8000_0000 {",
+		"\t\t\t\t\tdue = now_ms;",
+		"\t\t\t\t}",
+		"\t\t\t\tslot.part = true;",
+		"\t\t\t\tslot.left = most.saturating_sub(done);",
+		"\t\t\t\tslot.deadline_ms = if slot.left == 0 {",
+		"\t\t\t\t\tslot.end_ms",
+		"\t\t\t\t} else {",
+		"\t\t\t\t\tSelf::sooner(due, slot.end_ms, now_ms)",
+		"\t\t\t\t};",
+		"\t\t\t}",
+		"\t\t\treturn Ok(());",
+		"\t\t}",
+		"\t\tErr(Error::Constraint)",
+		"\t}",
+		"",
+	]

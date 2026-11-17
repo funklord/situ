@@ -1821,9 +1821,11 @@ def _check_exchange_policy(relation: ast.Relation) -> None:
 	stated = {attr.name: attr for attr in relation.attrs
 	          if attr.name in POLICY_ATTRS}
 	if not stated:
-		if any(attr.name == "resend_ms" for attr in relation.attrs):
+		named = next((attr.name for attr in relation.attrs
+		              if attr.name in ("resend_ms", *PART_ATTRS)), None)
+		if named is not None:
 			raise error(
-				"`resend_ms` with no retransmission policy",
+				f"`{named}` with no retransmission policy",
 				relation.span,
 				label = "`timeout_ms` and `retries` are missing",
 				notes = ["a resend interval divides a policy's total wait, "
@@ -1874,6 +1876,7 @@ def _check_exchange_policy(relation: ast.Relation) -> None:
 	resend = next((attr for attr in relation.attrs
 	               if attr.name == "resend_ms"), None)
 	if resend is None:
+		_check_part_schedule(relation, None, 0)
 		return
 	interval = getattr(resend.value, "value", None)
 	total    = getattr(stated["timeout_ms"].value, "value", 0)
@@ -1893,6 +1896,59 @@ def _check_exchange_policy(relation: ast.Relation) -> None:
 			notes = ["with `resend_ms`, `timeout_ms` is the total wait, so "
 			         "an interval at least that long never resends",
 			         "without it, `timeout_ms` is each attempt's wait"],
+		)
+	_check_part_schedule(relation, resend, total)
+
+
+#: A second schedule, for once part of the reply is held (fuzznet's sec
+#: 1168): stated together, and only beside `resend_ms`, whose total wait
+#: still ends the exchange.
+PART_ATTRS = ("resend_part_ms", "retries_part")
+
+
+def _check_part_schedule(relation: ast.Relation, resend: ast.Attr | None,
+		total: int) -> None:
+	"""`resend_part_ms` and `retries_part`, whole and beside `resend_ms`."""
+	stated = {attr.name: attr for attr in relation.attrs
+	          if attr.name in PART_ATTRS}
+	if not stated:
+		return
+	if resend is None:
+		raise error(
+			"a part schedule with no `resend_ms`",
+			next(iter(stated.values())).span,
+			label = "`resend_ms` is missing",
+			notes = ["the part schedule replaces `resend_ms` once part of the "
+			         "reply is held, so it needs the one it replaces -- and "
+			         "the total wait `resend_ms` makes of `timeout_ms`"],
+		)
+	missing = [name for name in PART_ATTRS if name not in stated]
+	if missing:
+		raise error(
+			f"`{relation.name}` states half a part schedule",
+			relation.span,
+			label = f"`{missing[0]}` is missing",
+			notes = ["how soon and how often are one schedule: either alone "
+			         "leaves the other for the generator to invent"],
+		)
+	for name, attr in stated.items():
+		value = getattr(attr.value, "value", None)
+		if not isinstance(value, int) or value <= 0:
+			raise error(
+				f"`{name}` needs a positive number",
+				attr.span,
+				label = "expected a positive integer",
+				notes = ["`retries_part` bounds every resend once part is "
+				         "held, the ones already sent included"],
+			)
+	interval = stated["resend_part_ms"].value.value  # type: ignore[union-attr]
+	if interval >= total:
+		raise error(
+			f"`resend_part_ms` is {interval} and the whole exchange waits "
+			f"{total}",
+			stated["resend_part_ms"].span,
+			label = "no shorter than `timeout_ms`",
+			notes = ["an interval at least the total wait never resends"],
 		)
 
 
@@ -2566,6 +2622,10 @@ RELATION_ONLY_ATTRS = {
 	"timeout_ms": "a `relation`, which is where an exchange states its timing",
 	"retries":    "a `relation`, which is where an exchange states its timing",
 	"resend_ms":  "a `relation`, which is where an exchange states its timing",
+	"resend_part_ms": "a `relation`, which is where an exchange states its"
+	                  " timing",
+	"retries_part": "a `relation`, which is where an exchange states its"
+	                " timing",
 }
 
 #: Attributes whose own check runs only on the member kind that READS them,
@@ -2996,8 +3056,9 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 #: control being the half that matters, since a table that refuses a valid
 #: schema is worse than the silence it replaces.
 #:
-#: `quoted`, `escape`, `timeout_ms`, `retries` and `resend_ms` are absent
-#: because `check_delimiters` and `_check_exchange_policy` already place them.
+#: `quoted`, `escape`, `timeout_ms`, `retries`, `resend_ms`, `resend_part_ms`
+#: and `retries_part` are absent because `check_delimiters` and
+#: `_check_exchange_policy` already place them.
 #: Read in any position, so there is no wrong place to refuse: `secret`
 #: suppresses accessors and zeroizes wherever it stands, and `non_canonical`
 #: sets the canonical axis on anything. The table closed at these two (0041).

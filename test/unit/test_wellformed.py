@@ -976,7 +976,7 @@ def test_every_attribute_is_accounted_for() -> None:
 	# walk is what surfaced it, by refusing the construct seven tests
 	# exercise (26.544).
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries", "resend_ms",
-	             "align",
+	             "resend_part_ms", "retries_part", "align",
 	             "bits", "since", "require_aligned", "stream", "tag_order"}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
