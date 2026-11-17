@@ -1646,6 +1646,60 @@ def test_a_relation_reads_no_located_member(read: str) -> None:
 	assert "is placed by `at`" in text, text
 
 
+AUTHENTICATED_HEADER = (
+	"codec c8 {\n\tkernel = polynomial(width = 8, poly = 0x07);\n}\n"
+	"impl c8 derived;\n"
+	"struct hdr { u8 next; u8 len; }\n"
+	"struct section {\n\tauthenticated body { hdr h; }\n"
+	"\tchecksum u8 crc[1] covers(body) is c8;\n\tu8 open;\n}\n")
+
+#: The same section with its header sealed: the message holds ciphertext
+#: where `next` would be.
+SEALED_HEADER = (
+	"codec ae {\n\tauthenticated;\n\tlength_preserving;\n"
+	"\tinvertible;\n}\n" 'impl ae extern "x";\n'
+	"struct section {\n\tu8 n[12];\n"
+	"\tsealed body(ae, nonce = n) { u8 next; u8 len; }\n"
+	"\ttag u8[16];\n\tu8 open;\n}\n"
+	"struct hdr { u8 a; }\n")
+
+
+def test_an_offset_reads_nothing_sealed() -> None:
+	"""A sealed interior is the codec's output, so an offset read there is
+	ciphertext; `situc build` crashed on `UnknownName` (26.1046)."""
+	text = rendered(BUFFER + SEALED_HEADER
+	                + "struct s { section one; hdr there at one.next; }\n")
+	assert "reads into `section`'s sealed region `body`" in text, text
+
+
+def test_a_located_arm_reads_nothing_sealed() -> None:
+	"""The located arm (26.1044) reaches the same check: a variant's arms
+	are not the struct's members."""
+	text = rendered(BUFFER + SEALED_HEADER + "struct nothing { }\n"
+	                "struct s [depth = 8] {\n\tsection one;\n"
+	                "\tvariant rest switch (one.open) {\n"
+	                "\t\tcase 0xFF: nothing none;\n"
+	                "\t\tdefault: hdr following at one.next;\n\t}\n}\n")
+	assert "reads into `section`'s sealed region `body`" in text, text
+
+
+def test_an_offset_may_read_an_authenticated_region() -> None:
+	"""openmlx4's FS2 shape: `next` inside the section's `authenticated
+	body`. Plaintext, readable as a discriminant or a length reads it, and
+	checking the CRC is the caller's (0051); 26.1046 first refused it on a
+	premise that did not hold."""
+	parse_text(BUFFER + AUTHENTICATED_HEADER
+	           + "struct s { section one; hdr there at one.h.next; }\n",
+	           path="s.situ")
+
+
+def test_an_offset_beside_a_region_is_untouched() -> None:
+	"""The control: a field of the same nested struct outside its region."""
+	parse_text(BUFFER + SEALED_HEADER
+	           + "struct s { section one; hdr there at one.open; }\n",
+	           path="s.situ")
+
+
 def test_a_length_beside_a_located_member_is_untouched() -> None:
 	"""The control: the field the offset is computed from is in the frame,
 	and so is anything else a length names."""

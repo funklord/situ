@@ -3488,6 +3488,7 @@ def check_located_names(schema: ast.Schema) -> None:
 	enums |= {decl.name for decl in schema.enums()}
 
 	structs = {decl.name for decl in schema.structs()}
+	decls   = {decl.name: decl for decl in schema.structs()}
 
 	for struct in schema.structs():
 		seen: set[str] = set()
@@ -3498,6 +3499,7 @@ def check_located_names(schema: ast.Schema) -> None:
 			if located is not None:
 				_check_located(member, located, seen | consts | enums)
 				_check_located_run(member, structs)
+				_check_located_unsealed(member, located, struct, decls)
 				named = getattr(member, "name", None)
 				if named is not None:
 					placed.add(named)
@@ -3543,6 +3545,63 @@ def _check_reads_no_located(member: ast.Member, placed: set[str]) -> None:
 					         "read the field the offset is computed from, or "
 					         "a member of the frame"],
 				)
+
+
+def _opaque_region_holding(decl: ast.StructDecl, name: str) -> ast.Member | None:
+	"""The `sealed` or `coded` region of `decl` whose interior holds `name`."""
+	for member in _walk_members(decl.members):
+		if isinstance(member, (ast.Sealed, ast.Coded)):
+			if any(getattr(inner, "name", None) == name
+			       for inner in _walk_members(member.members)):
+				return member
+	return None
+
+
+def _check_located_unsealed(member: ast.Member, located: ast.Expr,
+		struct: ast.StructDecl, decls: dict[str, ast.StructDecl]) -> None:
+	"""An `at` may not read inside a nested struct's `sealed` or `coded`
+	region (26.1046).
+
+	Those bytes are the codec's output, not the message's: what the
+	message holds there is ciphertext or a transform of it, and a
+	discriminant may not read it either -- it is out of scope. An `at`
+	reaching one crashed `situc build` with `UnknownName`.
+
+	An `authenticated` region is plaintext and is not refused: a
+	discriminant or a length one level down reads it today, and a format
+	has to read such bytes to find its tag at all. openmlx4's FS2 places
+	each section by `section.hdr.next`, inside `authenticated body`, as
+	fs2.c does; verifying the CRC is the caller's `crc_check`, as for every
+	checksum, since `validate` computes none (0051).
+	"""
+	for path in paths_in(located):
+		steps = path.split(".")
+		here  = struct
+		for at, step in enumerate(steps[:-1]):
+			held = _find_member(here, step)
+			named = getattr(getattr(held, "type_ref", None), "name", None)
+			inner = decls.get(named or "")
+			if inner is None:
+				break
+			region = _opaque_region_holding(inner, steps[at + 1])
+			if region is not None:
+				kind = "sealed" if isinstance(region, ast.Sealed) else "coded"
+				# An unnamed region is called by its kind, so naming it
+				# would say "sealed region `sealed`".
+				named = getattr(region, "name", kind)
+				shown = "" if named == kind else f" `{named}`"
+				raise error(
+					f"`{path}` reads into `{inner.name}`'s {kind} region"
+					f"{shown}",
+					located.span,
+					label = "these bytes are the codec's output",
+					notes = ["what the message holds there is the transform "
+					         "of these fields, not the fields, so `at` would "
+					         f"place `{getattr(member, 'name', '?')}` by bytes "
+					         "nobody wrote as an offset (26.1046)",
+					         "a variant may not switch on such a field either"],
+				)
+			here = inner
 
 
 def _check_located(member: ast.Member, located: ast.Expr,

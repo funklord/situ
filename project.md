@@ -296,7 +296,10 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   cannot say (26.1043). A located run of structs, the other spelling
   that looked possible, compiled in no backend and is refused by name.
   FS2's rule that the list goes forward is a `when` reading
-  `offset(chain)`, where the link sits (26.1045).
+  `offset(chain)`, where the link sits (26.1045). The link sits inside
+  the section's `authenticated body`, which an `at` may read as a
+  discriminant may; checking the CRC first is the caller's, as fs2.c
+  does. Only a `sealed` or `coded` interior is refused (26.1046).
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -8890,6 +8893,10 @@ Moved to `doc/decision/26.1044-a-chain-ends-on-a-sentinel.md`.
 ### 26.1045 A when reads where its struct sits
 
 Moved to `doc/decision/26.1045-a-when-reads-where-its-struct-sits.md`.
+
+### 26.1046 An at reads no sealed or coded interior
+
+Moved to `doc/decision/26.1046-an-at-reads-no-sealed-or-coded-interior.md`.
 
 ### 26.929 The offset cache counts bits
 
