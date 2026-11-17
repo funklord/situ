@@ -172,6 +172,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tdeadline_ms: u32,",
 			"\tleft: u32,",
 			"\tlive: bool,",
+			"\tkeyed: bool,\t// false for `track_by_id`",
 			*(["\tend_ms: u32,"] if resend else []),
 			*(["\tsent_ms: u32,", "\tpart: bool,"] if part else []),
 			# This exchange's own retry count is read only by `part_held`,
@@ -194,10 +195,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"impl Default for {held}Slot<'_> {{",
 			"\tfn default() -> Self {",
-			("\t\tSelf { bytes: &[], key: 0, id: 0, deadline_ms: 0,"
+			("\t\tSelf { bytes: &[], key: 0, keyed: false, id: 0, deadline_ms: 0,"
 			 if layout.packed else
 			 f"\t\tSelf {{ bytes: &[], key: [0u8; {layout.total_bytes}], "
-			 "id: 0, deadline_ms: 0,"),
+			 "keyed: false, id: 0, deadline_ms: 0,"),
 			("\t\t       left: 0, live: false, end_ms: 0, sent_ms: 0,"
 			 " part: false, retries: 0, resend_ms: 0, resend_part_ms: 0,"
 			 " retries_part: 0 }" if part else
@@ -254,6 +255,34 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(_key(request, first.name, "\t\t", resolved) if layout.packed
 			  else _key_bytes(request, first.name, "\t\t",
 			                  layout.total_bytes, resolved)),
+			"\t\tself.hold(key, true, bytes, id, now_ms, own)",
+			"\t}",
+			"",
+			"\t/// `track` for a caller that matches replies itself -- after",
+			"\t/// opening them, where the key is inside sealed bytes -- so no",
+			"\t/// request is read and no key is held: the exchange is its id",
+			"\t/// alone, ended by `end` or by expiring (26.1064).",
+			"\tpub fn track_by_id_with(&mut self, bytes: &'a [u8], id: u32,",
+			f"\t                        now_ms: u32, own: Option<&{held}Policy>)"
+			" -> Result<()> {",
+			("\t\tself.hold(0, false, bytes, id, now_ms, own)" if layout.packed
+			 else f"\t\tself.hold([0u8; {layout.total_bytes}], false, bytes, id,"
+			 " now_ms, own)"),
+			"\t}",
+			"",
+			"\tpub fn track_by_id(&mut self, bytes: &'a [u8], id: u32,"
+			" now_ms: u32) -> Result<()> {",
+			"\t\tself.track_by_id_with(bytes, id, now_ms, None)",
+			"\t}",
+			"",
+			"\t/// The slot an exchange takes; `keyed` false where no reply",
+			"\t/// is matched to it.",
+			("\tfn hold(&mut self, key: u64, keyed: bool, bytes: &'a [u8],"
+			 if layout.packed else
+			 f"\tfn hold(&mut self, key: [u8; {layout.total_bytes}], keyed: bool,"
+			 " bytes: &'a [u8],"),
+			"\t        id: u32, now_ms: u32,",
+			f"\t        own: Option<&{held}Policy>) -> Result<()> {{",
 			"\t\tlet timeout_ms = own.map_or(self.timeout_ms, |p| p.timeout_ms);",
 			"\t\tlet retries    = own.map_or(self.retries, |p| p.retries);",
 			*(["\t\tlet resend_ms  = own.map_or(self.resend_ms, |p| p.resend_ms);"]
@@ -266,7 +295,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
 			f"\t\t\t\t*slot = {held}Slot {{",
-			"\t\t\t\t\tbytes, key, id,",
+			"\t\t\t\t\tbytes, key, keyed, id,",
 			*(["\t\t\t\t\tretries,"] if part else []),
 			*(["\t\t\t\t\tdeadline_ms: if retries == 0 {",
 			   "\t\t\t\t\t\tnow_ms.wrapping_add(timeout_ms)",
@@ -331,7 +360,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			                  layout.total_bytes, resolved)),
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
-			"\t\t\tif slot.live && slot.key == key {",
+			"\t\t\tif slot.live && slot.keyed && slot.key == key {",
 			"\t\t\t\tslot.live = false;",
 			"\t\t\t\treturn Ok(slot.id);",
 			"\t\t\t}",
@@ -348,7 +377,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			                  layout.total_bytes, resolved)),
 			"",
 			"\t\tfor slot in self.slots.iter() {",
-			"\t\t\tif slot.live && slot.key == key {",
+			"\t\t\tif slot.live && slot.keyed && slot.key == key {",
 			"\t\t\t\treturn Ok(slot.id);",
 			"\t\t\t}",
 			"\t\t}",

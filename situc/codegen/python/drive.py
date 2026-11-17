@@ -106,6 +106,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	lines += [
 		"",
 		"",
+		"#: A pending exchange's key: what a reply's relation fields come to,",
+		"#: or `(\"id\", id)` for one tracked by id alone, which no reply's",
+		"#: int or bytes can equal (26.1064).",
+		"_key = int | bytes | tuple[str, int]",
+		"",
+		"",
 		"class _exchange:",
 		'\t"""One outstanding exchange: its bytes, id and schedule."""',
 		"",
@@ -203,8 +209,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(["\t\tself._interval = resend_ms"] if resend else []),
 			*(["\t\tself._part_interval = resend_part_ms",
 			   "\t\tself._part_retries  = retries_part"] if part else []),
-			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
-			 "_exchange] = {}"),
+			"\t\tself._live: dict[_key, _exchange] = {}",
 			"",
 			f"\tdef track(self, {first.name}: {py_name(first.type_name)},",
 			"\t          data: bytes, id: int, now_ms: int, *,",
@@ -225,6 +230,49 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(_key(request, first.name) if layout.packed
 			  else _key_bytes(request, first.name)),
 			"",
+			"\t\tself._hold(key, data, id, now_ms, timeout_ms=timeout_ms,",
+			("\t\t           retries=retries, resend_ms=resend_ms,"
+			 "\n\t\t           resend_part_ms=resend_part_ms,"
+			 " retries_part=retries_part)" if part else
+			 "\t\t           retries=retries, resend_ms=resend_ms)"
+			 if resend else
+			 "\t\t           retries=retries)"),
+			"",
+			"\tdef track_by_id(self, data: bytes, id: int, now_ms: int, *,",
+			"\t                timeout_ms: int | None = None,",
+			("\t                retries: int | None = None,"
+			 "\n\t                resend_ms: int | None = None,"
+			 "\n\t                resend_part_ms: int | None = None,"
+			 "\n\t                retries_part: int | None = None) -> None:"
+			 if part else
+			 "\t                retries: int | None = None,"
+			 "\n\t                resend_ms: int | None = None) -> None:"
+			 if resend else
+			 "\t                retries: int | None = None) -> None:"),
+			'\t\t"""`track` for a caller that matches replies itself',
+			"",
+			"\t\tAfter opening them, where the key is inside sealed bytes: no",
+			"\t\trequest is read and no key held, so the exchange is its id",
+			'\t\talone, ended by `end` or by expiring (26.1064)."""',
+			"\t\tself._hold((\"id\", id), data, id, now_ms, timeout_ms=timeout_ms,",
+			("\t\t           retries=retries, resend_ms=resend_ms,"
+			 "\n\t\t           resend_part_ms=resend_part_ms,"
+			 " retries_part=retries_part)" if part else
+			 "\t\t           retries=retries, resend_ms=resend_ms)"
+			 if resend else
+			 "\t\t           retries=retries)"),
+			"",
+			"\tdef _hold(self, key: _key, data: bytes, id: int, now_ms: int, *,",
+			"\t          timeout_ms: int | None = None,",
+			("\t          retries: int | None = None,"
+			 "\n\t          resend_ms: int | None = None,"
+			 "\n\t          resend_part_ms: int | None = None,"
+			 "\n\t          retries_part: int | None = None) -> None:"
+			 if part else
+			 "\t          retries: int | None = None,"
+			 "\n\t          resend_ms: int | None = None) -> None:"
+			 if resend else
+			 "\t          retries: int | None = None) -> None:"),
 			"\t\tif key not in self._live and len(self._live) >= self._cap:",
 			"\t\t\traise BoundsError(",
 			f"\t\t\t\t\"{relation.name}: {{}} exchanges already pending\""

@@ -8961,6 +8961,10 @@ Moved to `doc/decision/26.1060-the-map-and-the-dissector-show-a-named-value.md`.
 
 Moved to `doc/decision/26.1063-a-fixed-struct-fills-its-frame.md`.
 
+### 26.1064 A driver tracks an exchange by its id alone
+
+Moved to `doc/decision/26.1064-a-driver-tracks-an-exchange-by-id-alone.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.
