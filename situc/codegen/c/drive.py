@@ -289,6 +289,8 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		"\t\t\treturn drive->io.submit(drive->io.ctx, bytes, len);",
 		"\t\t}",
 		"\t}",
+		"\t/* Refused, so not pending either (26.1054). */",
+		f"\t{table}_forget(&drive->pending, id);",
 		"\treturn SITU_ERR_BOUNDS;",
 		"}",
 		"",
@@ -359,6 +361,11 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		 if resend else
 		 "\t\t\tif (drive->slots[i].left == 0u) {"),
 		"\t\t\t\tdrive->slots[i].live = 0u;",
+		# The key too: the table is the conversation's, and a slot the
+		# driver dropped while the table held its key leaked one entry
+		# per expiry until `send` refused everything (26.1054).
+		f"\t\t\t\t{table}_forget(&drive->pending,"
+		" drive->slots[i].id);",
 		"\t\t\t\t*expired += 1u;",
 		"\t\t\t\tcontinue;",
 		"\t\t\t}",

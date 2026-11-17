@@ -8927,6 +8927,10 @@ Moved to `doc/decision/26.1052-a-sized-arm-beside-a-framed-one.md`.
 
 Moved to `doc/decision/26.1053-the-differential-asks-an-argued-struct-to-validate.md`.
 
+### 26.1054 An expired exchange is forgotten
+
+Moved to `doc/decision/26.1054-an-expired-exchange-is-forgotten.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.
