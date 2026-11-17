@@ -1175,7 +1175,10 @@ right. `require in_place_dirty(...)` is how a schema asserts it noticed. A
 checksum inside its own coverage says what its bytes read as while the
 algorithm runs (`[self_as = 0]`, which is RFC 1071's rule), and one that
 covers bytes the message does not contain names them (`prefix(...)`, which is
-UDP's and TCP's pseudo-header).
+UDP's and TCP's pseudo-header). One that covers every byte of the message ahead
+of it, wherever it falls, says `covers(before)` -- PCI VPD's RV byte, which
+makes the image sum to zero through itself -- and a write anywhere ahead of
+it marks it stale.
 
 **The interior of a sealed region does not exist until the tag verifies.**
 That is the doom principle as a typestate: parsing attacker-controlled

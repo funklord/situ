@@ -5201,7 +5201,11 @@ def tag_fields(members: tuple[ast.Member, ...]) -> list[ast.TagField]:
 
 def coverage_of(tag: ast.TagField, regions: list[ast.Authenticated | ast.Sealed]
 		) -> tuple[str, ...]:
-	"""Which regions a tag covers, with inference applied (section 14.1)."""
+	"""Which regions a tag covers, with inference applied (section 14.1).
+
+	None for `covers(before)`, whose bytes are the message's (26.1050)."""
+	if tag.before:
+		return ()
 	if tag.covers:
 		return tag.covers
 	return tuple(region.name for region in regions)

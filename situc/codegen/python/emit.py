@@ -2554,6 +2554,22 @@ class Emitter:
 		belong to the TAG rather than to its shape (26.371).
 		"""
 		lines: list[str] = []
+		# `covers(before)`: every byte of the message ahead of the tag, in
+		# the struct that declares it (26.1050). The range is the MESSAGE's,
+		# from 0, where every other `_covered` answers from the view.
+		before = placement.tag_before and len(placement.path.split(".")) == 2
+		if before:
+			start = self._offset_expression(struct, placement) or "0"
+			lines.extend([
+				"",
+				f"\tdef {name}_covered(self) -> tuple[int, int]:",
+				f'\t\t"""The bytes {placement.name} covers: every byte of the',
+				"",
+				"\t\tMESSAGE ahead of it, so the range starts at 0 of the",
+				'\t\tmessage rather than of this view (26.1050)."""',
+				"\t\tself._check()",
+				f"\t\treturn 0, self._at + ({start})",
+			])
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run
@@ -2648,7 +2664,8 @@ class Emitter:
 			# is not emitted where the coverage has no single range. Python
 			# is the quietest of the four about it: the call type-checks and
 			# raises `AttributeError` the first time somebody asks (26.367).
-			if covered_run(struct, placement) is None and bitspan is None:
+			if covered_run(struct, placement) is None and bitspan is None \
+					and not before:
 				if placement.tag_codec is not None:
 					lines.extend([
 						"",
@@ -2865,6 +2882,9 @@ class Emitter:
 		codec  = py_name(placement.tag_codec)
 		span   = ("bytes(self._msg.buffer"
 		          "[self._at + at:self._at + at + n])")
+		# `covers(before)` answers from the message's start (26.1050).
+		if placement.tag_before:
+			span = "bytes(self._msg.buffer[at:at + n])"
 		filler = _self_as(placement.attrs)
 		before = placement.tag_prefix
 		# The prefix is a parameter rather than a member: a bytes object

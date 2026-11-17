@@ -9585,6 +9585,31 @@ class Emitter:
 				"\t}",
 			])
 
+		# `covers(before)`: the message ahead of the tag, reached through the
+		# view's owner, in the struct that declares it (26.1050); see C.
+		before = placement.tag_before and len(placement.path.split(".")) == 2
+		if before:
+			lines.extend([
+				"",
+				f"\t/* {placement.name} covers every byte of the MESSAGE ahead"
+				" of it, so",
+				"\t * `offset` is 0 and `len` is where it sits in the message"
+				" (26.1050). */",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_covered("
+				"std::uint32_t &offset,",
+				"\t\t\tstd::uint32_t &len) const noexcept",
+				"\t{",
+				"\t\tif (raw().owner == nullptr) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"\t\toffset = 0;",
+				"\t\tlen    = static_cast<std::uint32_t>(raw().base -"
+				" raw().owner->base)",
+				f"\t\t       + ({self._offset_expression(struct, placement) or '0'});",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			])
+
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run
@@ -9678,7 +9703,8 @@ class Emitter:
 		# `compute` and `check` read the span through `_covered`, which is
 		# not emitted where the coverage has no single range -- so the call
 		# was to a member nothing declares (26.367).
-		if covered_run(struct, placement) is None and bitspan is None:
+		if covered_run(struct, placement) is None and bitspan is None \
+				and not before:
 			if placement.tag_codec is not None:
 				lines.extend([
 					f"\t/* No {placement.tag_codec} helpers for"
@@ -9827,6 +9853,9 @@ class Emitter:
 		if covered_bit_span(struct, placement) is not None:
 			return [f"\t\tout = {codec}_bits(raw().base, at, n);"]
 
+		# `covers(before)`: from the message's start (26.1050).
+		if placement.tag_before:
+			return [f"\t\tout = {codec}(raw().owner->base + at, n);"]
 		if filler is None and before is None:
 			return [f"\t\tout = {codec}(raw().base + at, n);"]
 

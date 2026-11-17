@@ -1005,10 +1005,16 @@ class TagField(Member):
 	#: 14.1 was not written about -- no key, no secret-dependent branch, and
 	#: situ already generates the algorithm from a kernel description.
 	codec: str | None		= None
+	#: `checksum u8 rv covers(before) is vpd_sum;` -- every byte of the
+	#: MESSAGE ahead of this tag, wherever in it the tag sits (26.1050).
+	#: PCI VPD's RV is the case: the byte that makes the image, from its
+	#: first byte through itself, sum to zero. `covers` is empty beside it,
+	#: since the bytes are the message's and no region of this struct's.
+	before: bool			= False
 
 	@property
 	def infers_coverage(self) -> bool:
-		return not self.covers
+		return not self.covers and not self.before
 
 
 @dataclass(frozen=True)

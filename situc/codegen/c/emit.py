@@ -821,6 +821,61 @@ class Emitter:
 		lines.append("")
 		return lines
 
+	def _before_tag_support(self, struct: ResolvedStruct,
+			placement: Placement, local: str) -> list[str]:
+		"""`covers(before)`: every byte of the message ahead of the tag
+		(26.1050), PCI VPD's RV being the case.
+
+		The span is the MESSAGE's, so `covered` answers from its start and
+		reaches it through the view's owner, as a located member does; a
+		view acquired without a message has none to sum, and is BOUNDS.
+		Where the tag is a nested struct's and no plain view reaches that
+		struct, only the holder's dirty bit is here -- the helpers are the
+		declaring struct's."""
+		bit = self._tag_bit(struct, self._local(struct, placement))
+		dirty = [
+			f"static inline int "
+			f"{ident(self.prefix, struct.name, local, 'is_dirty')}"
+			"(const situ_msg_t *msg)",
+			"{",
+			f"\treturn (msg->dirty & {bit}) != 0u;",
+			"}",
+			f"static inline void "
+			f"{ident(self.prefix, struct.name, local, 'finalize')}(situ_msg_t *msg)",
+			"{",
+			f"\tsitu_msg_clear_dirty(msg, {bit});",
+			"}",
+		]
+		if len(placement.path.split(".")) > 2:
+			return [f"/* `{placement.name}` covers the message ahead of it;"
+			        " its span and sum are",
+			        " * asked of the struct that declares it. */", *dirty]
+		where = self._base_expression(struct, placement)
+		lines = [
+			f"/* `{placement.name}` covers every byte of the MESSAGE ahead of"
+			" it, so",
+			" * `offset` is 0 and `len` is where the tag sits in the message"
+			" (26.1050). */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'covered')}"
+			"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+			"{",
+			"\tif (view.owner == NULL) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"\t*offset = 0u;",
+			f"\t*len    = (uint32_t)(situ_base(view) - view.owner->base)"
+			f" + {where};",
+			"\treturn SITU_OK;",
+			"}",
+			*dirty,
+		]
+		if placement.tag_codec is not None \
+				and placement.tag_codec not in self._underivable_codecs() \
+				and not (placement.size_bits or 0) % BITS_PER_BYTE:
+			lines += self._checksum_codec(struct, placement, local)
+		return lines
+
 	def _nested_tag(self, struct: ResolvedStruct, placement: Placement
 			) -> tuple[list[tuple[str, str]], ResolvedStruct, Placement] | None:
 		"""The plain nested members leading to the struct that owns this tag,
@@ -885,7 +940,9 @@ class Emitter:
 				"\tif (e != SITU_OK) {",
 				"\t\treturn e;",
 				"\t}",
-				f"\t*offset += (uint32_t)(situ_base({held}) - situ_base(view));",
+				# A `covers(before)` span is the message's already (26.1050).
+				*([] if tag.tag_before else
+				  [f"\t*offset += (uint32_t)(situ_base({held}) - situ_base(view));"]),
 				"\treturn SITU_OK;",
 				"}",
 			]
@@ -972,6 +1029,8 @@ class Emitter:
 		if nested is not None:
 			return [*lines, *self._nested_tag_support(struct, placement,
 			                                          local, *nested)]
+		if placement.tag_before:
+			return [*lines, *self._before_tag_support(struct, placement, local)]
 
 		# A prefix the message does not contain (14.2a). Situ knows its layout
 		# and its size and cannot know its contents, so it says both and stops
@@ -15051,6 +15110,10 @@ class Emitter:
 		if covered_bit_span(struct, placement) is not None:
 			return [f"\t*out = {codec}_bits(situ_base(view), at, n);"]
 
+		# `covers(before)`: the span is the message's, from its start
+		# (26.1050); `covered` refused a view with no owner.
+		if placement.tag_before:
+			return [f"\t*out = {codec}(view.owner->base + at, n);"]
 		if filler is None and before is None:
 			return [f"\t*out = {codec}(situ_base(view) + at, n);"]
 

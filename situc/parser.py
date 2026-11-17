@@ -2018,6 +2018,21 @@ class Parser:
 			)
 
 		covers = self.parse_covers()
+		# `covers(before)`: every byte of the message ahead of the tag
+		# (26.1050). Alone, since what it covers is the message's and not a
+		# region of this struct's, so it cannot share a list with regions.
+		before = "before" in covers
+		if before and len(covers) > 1:
+			raise error(
+				"`before` covers the message ahead of this tag, and cannot be "
+				"listed with regions",
+				self.span_from(start),
+				label = "here",
+				notes = ["every byte before the tag already includes any "
+				         "region ahead of it; write `covers(before)` alone"],
+			)
+		if before:
+			covers = ()
 		# After `covers`, because it names bytes the algorithm reaches before
 		# this message's and reads as the same question continued (14.2a).
 		prefix = self.parse_prefix()
@@ -2027,8 +2042,17 @@ class Parser:
 		attrs  = self.parse_attrs()
 		self.expect_symbol(";", f"after the {start.text} declaration")
 
+		if before and prefix is not None:
+			raise error(
+				"`covers(before)` with a `prefix`",
+				self.span_from(start),
+				label = "here",
+				notes = ["a prefix is bytes ahead of the message, and `before` "
+				         "is the message ahead of the tag; no format sums "
+				         "both, so neither is guessed at"],
+			)
 		return ast.TagField(self.span_from(start), name, type_ref, array,
-		                    covers, kind, attrs, prefix, codec)
+		                    covers, kind, attrs, prefix, codec, before)
 
 	def parse_checksum_codec(self, keyword: str) -> str | None:
 		"""`is crc32`, naming the codec that computes this checksum (0053).

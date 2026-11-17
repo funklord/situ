@@ -389,6 +389,9 @@ class Placement:
 	unverified_ok: bool		= False
 	# For a tag or checksum placement: the regions it covers, after inference.
 	tag_covers: tuple[str, ...]	= ()
+	#: `covers(before)`: every byte of the message ahead of this tag, with
+	#: `tag_covers` empty (26.1050).
+	tag_before: bool		= False
 	# For a tag or checksum: a struct whose bytes the algorithm runs over
 	# before this message's, and which this message does not contain
 	# (section 14.2a). TCP's and UDP's pseudo-header.
@@ -1801,8 +1804,10 @@ class Solver:
 		# Before this the second loop below asked `next()` for such a tag with
 		# no default and got `StopIteration` -- a traceback rather than a
 		# diagnostic, for a shape the language allows (26.437).
-		own = ({tag.name: tag for tag in tag_fields(decl.members)}
-		       if regions else {})
+		# `covers(before)` names no region, so a struct holding one may hold
+		# none and still has its tag resolved (26.1050).
+		own = {tag.name: tag for tag in tag_fields(decl.members)
+		       if regions or tag.before}
 
 		for index, held in enumerate(layout.placements):
 			if held.kind not in ("tag", "checksum"):
@@ -1816,7 +1821,7 @@ class Solver:
 				continue
 			layout.placements[index] = replace(
 				held, tag_covers=coverage_of(tag, regions),
-				tag_prefix=tag.prefix)
+				tag_prefix=tag.prefix, tag_before=tag.before)
 
 		# (owning struct's path, region name) -> the tags covering it. A
 		# region may appear under more than one tag when coverage nests
@@ -1956,6 +1961,61 @@ class Solver:
 
 			layout.placements[index] = replace(
 				held, covered_by=tuple(sorted(tags, key=lambda name: order[name])))
+
+		self._cover_ahead(layout, local, order)
+
+	def _cover_ahead(self, layout: StructLayout, local: dict[int, str],
+			order: dict[str, tuple[int, int]]) -> None:
+		"""`covers(before)`: a write to any byte ahead of the tag stales it
+		(26.1050).
+
+		Ahead is placement order, which is message order within one
+		instance of this struct. Inside a run that order wraps: a member of
+		an earlier element precedes a later element's tag whatever their
+		positions in the flattened list, so a tag under a run is staled by
+		every member. Ordered last among the tags, since it covers the
+		most and every other tag's bytes are among them.
+		"""
+		ahead = [(position, local[id(held)], held)
+		         for position, held in enumerate(layout.placements)
+		         if held.kind in ("tag", "checksum") and held.tag_before]
+		if not ahead:
+			return
+		by_path = {held.path: held for held in layout.placements}
+
+		def repeated(path: str) -> bool:
+			parts = path.split(".")
+			for depth in range(2, len(parts)):
+				step = by_path.get(".".join(parts[:depth]))
+				if step is not None and (step.array_count is not None
+				                         or step.size_expr is not None
+				                         or step.sized_by is not None
+				                         or step.repeat_while is not None):
+					return True
+			return False
+
+		for position, name, held in ahead:
+			order[name] = (1 << 30, position)
+		for index, member in enumerate(layout.placements):
+			names = {name for position, name, held in ahead
+			         if member is not held
+			         and (index < position or repeated(held.path))}
+			if not names:
+				continue
+			# A nested member arrives carrying its own struct's label for
+			# the tag -- `body.rv.sum` inside `field` -- which names nothing
+			# here, where the same tag is `second.body.rv.sum`. Dropped, so
+			# a setter cannot mark a bit by a name this struct does not have
+			# (the shape 26.467 met for region tags).
+			inner = {label for label in member.covered_by
+			         if label not in order
+			         and any(("." + label) in ("." + name)
+			                 and ("." + name).endswith("." + label)
+			                 for _, name, _ in ahead)}
+			merged = (set(member.covered_by) - inner) | names
+			layout.placements[index] = replace(
+				member, covered_by=tuple(sorted(
+					merged, key=lambda name: order.get(name, (0, 0)))))
 
 
 	def _codec_counts_bits(self, codec: str | None) -> bool:

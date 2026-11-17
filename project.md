@@ -8911,6 +8911,10 @@ Moved to `doc/decision/26.1048-a-nested-checksum-is-its-structs.md`.
 
 Moved to `doc/decision/26.1049-an-opaque-region-has-its-size.md`.
 
+### 26.1050 A checksum may cover the message before it
+
+Moved to `doc/decision/26.1050-a-checksum-may-cover-the-message-before-it.md`.
+
 ### 26.929 The offset cache counts bits
 
 Moved to `doc/decision/26.929-the-offset-cache-counts-bits.md`.

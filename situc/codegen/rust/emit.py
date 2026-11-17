@@ -1908,7 +1908,10 @@ class Emitter:
 			# `compute` and `check` read the span through `_covered`,
 			# which is not emitted where the coverage has no single range
 			# -- so the call was to a method nothing defines (26.367).
-			if covered_run(struct, placement) is None and bitspan is None:
+			if placement.tag_before \
+					and len(placement.path.split(".")) == 2:
+				lines.extend(self._before_tag(struct, placement, name))
+			elif covered_run(struct, placement) is None and bitspan is None:
 				if placement.tag_codec is not None:
 					lines.extend([
 						f"\t/// No {placement.tag_codec} helpers for"
@@ -1936,6 +1939,60 @@ class Emitter:
 				lines.extend(self._checksum_codec(struct, placement, name))
 
 		return lines
+
+	def _before_tag(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""`covers(before)`: every byte of the message ahead of the tag
+		(26.1050). A view here holds no message, so each helper takes the
+		one this view was cut from, as `nesting_in` does; a slice that is
+		not inside it is BOUNDS."""
+		start = self._offset_expression(struct, placement) or "0"
+		lines = [
+			"",
+			f"\t/// The bytes `{placement.name}` covers: every byte of the",
+			"\t/// MESSAGE ahead of it, so the range starts at 0 and ends where",
+			"\t/// the tag sits in `msg`, the message this view was cut from.",
+			f"\tpub fn {name}_covered_in(&self, msg: &[u8])"
+			" -> Result<(usize, usize)> {",
+			"\t\tlet here = (self.bytes.as_ptr() as usize)"
+			".wrapping_sub(msg.as_ptr() as usize);",
+			"\t\tif here > msg.len() || msg.len() - here < self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tOk((0, here + ({start}) as usize))",
+			"\t}",
+		]
+		codec = (placement.tag_codec or "").lower()
+		if placement.tag_codec is None \
+				or placement.tag_codec in self._unimplemented_codecs() \
+				or (placement.size_bits or 0) % BITS_PER_BYTE:
+			return lines
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		read  = ("from_le_bytes" if placement.tag_codec_endian
+		         is ast.Endian.LITTLE else "from_be_bytes")
+		return lines + [
+			"",
+			f"\t/// {placement.tag_codec} over the bytes {name}_covered_in()"
+			" names.",
+			f"\tpub fn {name}_compute_in(&self, msg: &[u8]) -> Result<u32> {{",
+			f"\t\tlet (at, n) = self.{name}_covered_in(msg)?;",
+			f"\t\tOk(u32::from({codec}(&msg[at..at + n])))",
+			"\t}",
+			"",
+			f"\t/// Whether the stored {placement.tag_codec} matches the"
+			" message ahead of it.",
+			f"\tpub fn {name}_check_in(&self, msg: &[u8]) -> Result<()> {{",
+			f"\t\tlet want = self.{name}_compute_in(msg)?;",
+			f"\t\tlet at = ({start}) as usize;",
+			f"\t\tif at + {width} > self.bytes.len() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tlet held = u{width * 8}::{read}("
+			f"self.bytes[at..at + {width}].try_into().unwrap());",
+			"\t\tif u32::from(held) == want { Ok(()) } else"
+			" { Err(Error::Checksum) }",
+			"\t}",
+		]
 
 	def _unimplemented_codecs(self) -> frozenset[str]:
 		"""Codecs named by a checksum that this backend cannot write a body
