@@ -9130,6 +9130,10 @@ Moved to `doc/decision/26.1099-a-run-may-name-its-bytes.md`.
 
 Moved to `doc/decision/26.1100-an-opaque-default-takes-any-value.md`.
 
+### 26.1101 The dissector counts a text number in digits
+
+Moved to `doc/decision/26.1101-the-dissector-counts-a-text-number-in-digits.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

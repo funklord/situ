@@ -4580,7 +4580,12 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			"\tat = tvb:len()",
 		]
 
-	each = 1 if placement.kind == "opaque" else _element_bytes(resolved, placement)
+	# A text number's count is its DIGITS, a byte each, however wide the
+	# scalar giving its domain is: `decimal u32 count[n]` is one number in n
+	# bytes, and this showed n * 4, so every member after it sat past where
+	# six other readers put it (26.1101).
+	each = 1 if placement.kind == "opaque" or placement.radix is not None \
+		else _element_bytes(resolved, placement)
 	stride = None if element is None else _element_stride(resolved, element)
 	if each is None and stride is not None and element is not None \
 			and not _host_order_inside(element):
