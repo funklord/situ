@@ -3343,6 +3343,9 @@ class Emitter:
 			# is owed already: it needs no reading (26.946). `at` holds it
 			# from the start, and gives it back here (26.952).
 			floor = floors[index]
+			# The opening total less this member's floor, where it is still
+			# that: zero makes `need < at` a question with one answer (26.1092).
+			at_is_zero = index == 0 and constant + sum(floors) - floor == 0
 			steps.extend([
 				"",
 				f"\t\t/* {placement.path}: reading its length means reading",
@@ -3388,6 +3391,7 @@ class Emitter:
 					*(["\t\t\tneed = situ_need_u32(have, 1u);"] if cursor is None else [
 						f"\t\t\tneed = situ_need_u32(at, (have > {cursor} ?"
 						f" have - {cursor} : 0u) + 1u);"]),
+					*([] if at_is_zero else [
 					"\t\t\t/* ... and never below the total the walk has",
 					"\t\t\t * already accounted. The two are different",
 					"\t\t\t * quantities and neither bounds the other, so",
@@ -3395,7 +3399,7 @@ class Emitter:
 					"\t\t\t * fourth byte arrived (26.726). */",
 					"\t\t\tif (need < at) {",
 					"\t\t\t\tneed = at;",
-					"\t\t\t}",
+					"\t\t\t}"]),
 					"\t\t\treturn ::situ::rt::err::truncated;",
 					"\t\t}",
 				])
@@ -3422,6 +3426,7 @@ class Emitter:
 					*(["\t\t\tneed = have + 1u;"] if cursor is None else [
 						f"\t\t\tneed = situ_need_u32(at, (have > {cursor} ?"
 						f" have - {cursor} : 0u) + 1u);"]),
+					*([] if at_is_zero else [
 					"\t\t\t/* ... and never below the total the walk has",
 					"\t\t\t * already accounted. The two are different",
 					"\t\t\t * quantities and neither bounds the other, so",
@@ -3429,7 +3434,7 @@ class Emitter:
 					"\t\t\t * fourth byte arrived (26.726). */",
 					"\t\t\tif (need < at) {",
 					"\t\t\t\tneed = at;",
-					"\t\t\t}",
+					"\t\t\t}"]),
 					"\t\t\treturn ::situ::rt::err::truncated;",
 					"\t\t}",
 				])
@@ -8713,7 +8718,10 @@ class Emitter:
 			"\t\tstd::uint64_t raw = 0;",
 			*(["\t\tstd::uint32_t used = 0;"] if declared.minimal else []),
 			"",
-			"\t\tif (at >= raw_.limit) {",
+			# At a base of zero, whether the frame holds a byte: C's says
+			# why the other spelling reads as unsigned-below-zero (26.1092).
+			("\t\tif (raw_.limit == 0u) {" if start == "0u"
+			 else "\t\tif (at >= raw_.limit) {"),
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
@@ -8737,7 +8745,8 @@ class Emitter:
 			f"\t\tconst std::uint32_t at = {start};",
 			"\t\tstd::uint64_t raw = 0;",
 			"",
-			"\t\tif (at >= raw_.limit) {",
+			("\t\tif (raw_.limit == 0u) {" if start == "0u"
+			 else "\t\tif (at >= raw_.limit) {"),
 			"\t\t\treturn 0u;",
 			"\t\t}",
 			f"\t\treturn {read};",

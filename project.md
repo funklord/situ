@@ -9074,6 +9074,10 @@ Moved to `doc/decision/26.1090-a-registry-default-is-a-cell-of-its-type.md`.
 
 Moved to `doc/decision/26.1091-an-arm-that-repeats-the-chain-is-not-a-branch.md`.
 
+### 26.1092 A bound at a zero base is asked as what it is
+
+Moved to `doc/decision/26.1092-a-bound-at-a-zero-base-is-asked-as-what-it-is.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

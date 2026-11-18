@@ -4625,7 +4625,11 @@ class Emitter:
 			"	uint64_t raw = 0;",
 			"	uint32_t used;",
 			"",
-			f"	if (at >= {held}.limit) {{",
+			# At a base of zero the question is whether the frame holds a
+			# byte at all, and `0u >= limit` asked it in the form an
+			# analyser reads as an unsigned compared with zero (26.1092).
+			(f"	if ({held}.limit == 0u) {{" if base == "0u"
+			 else f"	if (at >= {held}.limit) {{"),
 			"		return SITU_ERR_BOUNDS;",
 			"	}",
 			"",
@@ -4669,7 +4673,8 @@ class Emitter:
 			f"	uint32_t at = {base};",
 			"	uint64_t raw = 0;",
 			"",
-			f"	if (at >= {held}.limit) {{",
+			(f"	if ({held}.limit == 0u) {{" if base == "0u"
+			 else f"	if (at >= {held}.limit) {{"),
 			"		return 0u;",
 			"	}",
 			f"	return {read};",
@@ -6491,6 +6496,10 @@ class Emitter:
 			# is owed already: it needs no reading (26.946). `at` holds it
 			# from the start, and gives it back here (26.952).
 			floor = floors[index]
+			# `at` is still its opening total less this member's floor
+			# here, and where that is zero, `*need < at` cannot be true --
+			# the clamp below asks nothing (26.1092).
+			at_is_zero = index == 0 and int(at.rstrip("u")) - floor == 0
 			steps.extend([
 				"",
 				f"\t/* {placement.path}: reading its length means reading bytes"
@@ -6546,6 +6555,7 @@ class Emitter:
 					f"\t\t/* {placement.path}: mid-varint, so one more byte"
 					" and ask again. */",
 					*self._partial_need(cursor),
+					*([] if at_is_zero else [
 					"\t\t/* ... and never below the total the walk has",
 					"\t\t * already accounted. The two are different",
 					"\t\t * quantities and neither bounds the other, so",
@@ -6553,7 +6563,7 @@ class Emitter:
 					"\t\t * fourth byte arrived (26.726). */",
 					"\t\tif (*need < at) {",
 					"\t\t\t*need = at;",
-					"\t\t}",
+					"\t\t}"]),
 					"\t\treturn SITU_ERR_TRUNCATED;",
 					"\t}",
 				])
@@ -6580,6 +6590,7 @@ class Emitter:
 					" lower",
 					"\t\t * bound is one byte: read again and ask again. */",
 					*self._partial_need(cursor),
+					*([] if at_is_zero else [
 					"\t\t/* ... and never below the total the walk has",
 					"\t\t * already accounted. The two are different",
 					"\t\t * quantities and neither bounds the other, so",
@@ -6587,7 +6598,7 @@ class Emitter:
 					"\t\t * fourth byte arrived (26.726). */",
 					"\t\tif (*need < at) {",
 					"\t\t\t*need = at;",
-					"\t\t}",
+					"\t\t}"]),
 					"\t\treturn SITU_ERR_TRUNCATED;",
 					"\t}",
 				])
