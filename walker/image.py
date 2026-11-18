@@ -30,6 +30,9 @@ STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 TAGS, KERNEL_TABLES                = 26, 27
 LETS                              = 31
+#: A registry's cells and the policy words they name (0070).
+REGISTRY                          = 32
+REGISTRY_WORDS                    = 33
 SKIPS                             = 22
 WHITESPACE                        = 23
 TLV_RULES                         = 24
@@ -55,7 +58,7 @@ KNOWN_SECTIONS = frozenset({
 	VARINTS, TLVS, INDEXES, NAMES, VECTORS, MARKERS, CONSTRAINTS,
 	ENUM_VALUES, VERSIONS, RELATIONS, RELATION_MUSTS, PINNED_RUNS, DEPTHS,
 	SKIPS, WHITESPACE, TLV_RULES, MESSAGES, TAGS, KERNEL_TABLES, ARGUMENTS,
-	HOLDS, ORDERINGS, LETS,
+	HOLDS, ORDERINGS, LETS, REGISTRY, REGISTRY_WORDS,
 })
 SECTION_ANCILLARY = 1
 
@@ -358,6 +361,35 @@ class Message:
 
 
 @dataclass(frozen=True)
+class RegistryEntry:
+	"""One cell of a registry (0070), as `image_registry_entry` holds it.
+
+	`registry`, `key`, `default`, `unit` and `summary` are string ids, the
+	last three `NONE` where unstated; `cell` is the struct its bytes are a
+	message of; `value_kind` is 0 (worth its bytes), 1 (a `let`, row
+	`value`) or 2 (a member, placement `value`). `words` is filled from the
+	`registry_words` section: (policy, word) string ids."""
+
+	registry: int
+	key: int
+	cell: int
+	family: bool
+	safe: int
+	value_kind: int
+	bounded: int
+	value: int
+	min: int
+	max: int
+	min_size: int
+	max_size: int
+	default: int
+	unit: int
+	summary: int
+	window_ms: int
+	words: list[tuple[int, int]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Let:
 	"""A value a struct's fields assemble (26.1056, 26.1059).
 
@@ -389,6 +421,7 @@ class Image:
 	#: existed, which a walker skips rather than failing to load.
 	messages: list[Message]			= field(default_factory=list)
 	lets: list[Let]				= field(default_factory=list)
+	registry: list[RegistryEntry]		= field(default_factory=list)
 	strings: bytes				= b""
 	#: placement index -> the byte runs it may hold (0052). One for a
 	#: `[must_eq]` or a `preamble`, one per arm for a byte-run enum. Keyed
@@ -684,6 +717,25 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			name, owner, code, bits, signed = _struct.unpack_from(
 				"<IIIBB", blob, at + i * stride)
 			image.lets.append(Let(name, owner, code, bits, bool(signed)))
+
+	if REGISTRY in found:
+		at, records, stride = found[REGISTRY]
+		for i in range(records):
+			(registry, key, cell, family, safe, kind, bounded, value, low, high,
+			 smallest, largest, default, unit, summary,
+			 window) = _struct.unpack_from("<IIIBBBBIqqIIIIII", blob,
+			                               at + i * stride)
+			image.registry.append(RegistryEntry(
+				registry, key, cell, bool(family), safe, kind, bounded,
+				value, low, high, smallest, largest, default, unit, summary,
+				window))
+	if REGISTRY_WORDS in found:
+		at, records, stride = found[REGISTRY_WORDS]
+		for i in range(records):
+			row, policy, word = _struct.unpack_from("<III", blob,
+			                                        at + i * stride)
+			if row < len(image.registry):
+				image.registry[row].words.append((policy, word))
 
 	if PINNED_RUNS in found:
 		at, records, stride = found[PINNED_RUNS]

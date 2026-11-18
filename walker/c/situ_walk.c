@@ -31,6 +31,8 @@
 #define TAG_TAGS          26u
 #define TAG_KERNEL_TABLES 27u
 #define TAG_LETS          31u
+#define TAG_REGISTRY       32u
+#define TAG_REGISTRY_WORDS 33u
 /* Bit 0 of a directory entry's flags: a tag a walker may skip (26.991). */
 #define SECTION_ANCILLARY  1u
 #define TAG_RELATIONS  18u
@@ -356,7 +358,27 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->lets       = image + offset;
 			out->let_count  = items;
 			out->let_stride = stride;
-		} else if (kind == TAG_STRINGS || kind == TAG_WHITESPACE) {
+		} else if (kind == TAG_REGISTRY) {
+			/* `image_registry_entry`, sixty bytes (0070). */
+			if (stride < 60u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->registry        = image + offset;
+			out->registry_count  = items;
+			out->registry_stride = stride;
+		} else if (kind == TAG_REGISTRY_WORDS) {
+			if (stride < 12u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->registry_words       = image + offset;
+			out->registry_word_count  = items;
+			out->registry_word_stride = stride;
+		} else if (kind == TAG_STRINGS) {
+			/* Read for a registry's keys alone (0070); a member that needs
+			 * a string is still declined where it is reached. */
+			out->strings     = image + offset;
+			out->strings_len = items * stride;
+		} else if (kind == TAG_WHITESPACE) {
 			/* Known, and not read by this walker: a member that needs one
 			 * of these is declined where it is reached, as it always was.
 			 * Not an unknown tag, so the rule below does not apply. */
@@ -8939,3 +8961,237 @@ situ_walk_err situ_walk_let(const situ_walk_image *image,
 	}
 	return SITU_WALK_OK;
 }
+
+
+/* -- a registry (0070) ----------------------------------------------------- */
+
+/* The string at `id`, NUL-ended inside the pool, or NULL. */
+static const char *pooled(const situ_walk_image *image, uint32_t id)
+{
+	if (image->strings == NULL || id >= image->strings_len) {
+		return NULL;
+	}
+	for (uint32_t i = id; i < image->strings_len; i++) {
+		if (image->strings[i] == 0u) {
+			return (const char *)image->strings + id;
+		}
+	}
+	return NULL;
+}
+
+/* The walker reaches for no libc, so the three comparisons a key needs are
+ * written out: a string's length, two strings equal, and a prefix. */
+static uint32_t pooled_len(const char *text)
+{
+	uint32_t n = 0u;
+	while (text[n] != '\0') {
+		n++;
+	}
+	return n;
+}
+
+static int same_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
+{
+	for (uint32_t i = 0u; i < n; i++) {
+		if (a[i] != b[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+uint32_t situ_walk_registry_count(const situ_walk_image *image)
+{
+	return image != NULL && image->registry != NULL ? image->registry_count
+	                                                : 0u;
+}
+
+situ_walk_err situ_walk_registry_find(const situ_walk_image *image,
+                                      const char *registry,
+                                      const uint8_t *key, uint32_t len,
+                                      uint32_t *row)
+{
+	if (image == NULL || key == NULL || row == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+	for (uint32_t i = 0u; i < situ_walk_registry_count(image); i++) {
+		const uint8_t *at   = image->registry + i * image->registry_stride;
+		const char    *held = pooled(image, u32_at(at + 4u));
+		if (held == NULL) {
+			return SITU_WALK_MALFORMED;
+		}
+		if (registry != NULL) {
+			const char *owner = pooled(image, u32_at(at));
+			const uint32_t wanted = pooled_len(registry);
+			if (owner == NULL || pooled_len(owner) != wanted
+			    || !same_bytes((const uint8_t *)owner,
+			                   (const uint8_t *)registry, wanted)) {
+				continue;
+			}
+		}
+		const uint32_t width = pooled_len(held);
+		if (at[12] == 0u) {
+			if (width == len && same_bytes(key, (const uint8_t *)held, len)) {
+				*row = i;
+				return SITU_WALK_OK;
+			}
+			continue;
+		}
+		if (len <= width || !same_bytes(key, (const uint8_t *)held, width)) {
+			continue;
+		}
+		uint32_t c = width;
+		for (; c < len; c++) {
+			if (!((key[c] >= 'a' && key[c] <= 'z')
+			      || (key[c] >= '0' && key[c] <= '9'))) {
+				break;
+			}
+		}
+		if (c == len) {
+			*row = i;
+			return SITU_WALK_OK;
+		}
+	}
+	return SITU_WALK_UNSUPPORTED;
+}
+
+/* The cell walked as a message of its type: its verdict, and its value
+ * where the row names one (`*has` set). */
+static situ_walk_err registry_cell(const situ_walk_image *image,
+                                   const uint8_t *at, const uint8_t *cell,
+                                   uint32_t len, situ_walk_err *verdict,
+                                   int64_t *value, int *has)
+{
+	const uint32_t shape = u32_at(at + 8u);
+	*has   = 0;
+	*value = 0;
+	if (shape >= image->struct_count) {
+		return SITU_WALK_MALFORMED;
+	}
+	const uint32_t size = u32_at(image->structs
+	                             + (size_t)shape * image->struct_stride + 8u);
+	if (size != SITU_WALK_NONE && (uint64_t)len * 8u != size) {
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+	static const uint8_t none = 0u;
+	const uint8_t *bytes = cell != NULL ? cell : &none;
+	situ_walk_err err = situ_walk_validate(image, bytes, len, shape, verdict);
+	if (err != SITU_WALK_OK || *verdict != SITU_WALK_OK) {
+		return err;
+	}
+	const uint8_t  kind  = at[14];
+	const uint32_t index = u32_at(at + 16u);
+	if (kind == 1u) {
+		if (image->lets == NULL || index >= image->let_count) {
+			return SITU_WALK_MALFORMED;
+		}
+		const uint8_t *let  = image->lets + (size_t)index * image->let_stride;
+		const uint32_t bits = let[12];
+		walk_ctx       ctx  = {image, bytes, len, shape, 0u};
+		int64_t        held = 0;
+		if (bits == 0u || bits > 64u) {
+			return SITU_WALK_MALFORMED;
+		}
+		err = situ_walk_eval(image, u32_at(let + 8u), ctx_load, &ctx,
+		                     (int64_t)len, &held);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		uint64_t v = (uint64_t)held;
+		if (bits < 64u) {
+			v &= ((uint64_t)1 << bits) - 1u;
+			if (let[13] != 0u && (v >> (bits - 1u)) != 0u) {
+				v |= ~(((uint64_t)1 << bits) - 1u);
+			}
+		}
+		*value = (int64_t)v;
+		*has   = 1;
+	} else if (kind == 2u) {
+		walk_ctx ctx = {image, bytes, len, shape, 0u};
+		err = ctx_load(&ctx, SITU_WALK_ASK_VALUE, index, 0, value);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*has = 1;
+	}
+	return SITU_WALK_OK;
+}
+
+static const uint8_t *registry_row(const situ_walk_image *image, uint32_t row)
+{
+	return row < situ_walk_registry_count(image)
+	       ? image->registry + (size_t)row * image->registry_stride : NULL;
+}
+
+situ_walk_err situ_walk_registry_check(const situ_walk_image *image,
+                                       uint32_t row,
+                                       const uint8_t *cell, uint32_t len,
+                                       situ_walk_err *verdict)
+{
+	const uint8_t *at = image != NULL ? registry_row(image, row) : NULL;
+	int64_t        value = 0;
+	int            has   = 0;
+	if (at == NULL || verdict == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+	const uint32_t smallest = u32_at(at + 36u), largest = u32_at(at + 40u);
+	if (len < smallest || (largest != SITU_WALK_NONE && len > largest)) {
+		*verdict = SITU_WALK_CONSTRAINT;
+		return SITU_WALK_OK;
+	}
+	situ_walk_err err = registry_cell(image, at, cell, len, verdict,
+	                                  &value, &has);
+	if (err != SITU_WALK_OK || *verdict != SITU_WALK_OK || !has) {
+		return err;
+	}
+	const uint8_t bounded = at[15];
+	if (((bounded & 1u) != 0u && value < i64_at(at + 20u))
+	    || ((bounded & 2u) != 0u && value > i64_at(at + 28u))) {
+		*verdict = SITU_WALK_CONSTRAINT;
+	}
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_registry_value(const situ_walk_image *image,
+                                       uint32_t row,
+                                       const uint8_t *cell, uint32_t len,
+                                       int64_t *out)
+{
+	situ_walk_err verdict = SITU_WALK_OK;
+	int           has     = 0;
+	if (out == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+	situ_walk_err err = situ_walk_registry_check(image, row, cell, len,
+	                                             &verdict);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (verdict != SITU_WALK_OK) {
+		return SITU_WALK_CONSTRAINT;
+	}
+	err = registry_cell(image, registry_row(image, row), cell, len,
+	                    &verdict, out, &has);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	return has ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
+}
+
+int situ_walk_registry_safer(const situ_walk_image *image, uint32_t row,
+                             const uint8_t *a, uint32_t a_len,
+                             const uint8_t *b, uint32_t b_len)
+{
+	const uint8_t *at = image != NULL ? registry_row(image, row) : NULL;
+	int64_t first = 0, second = 0;
+	if (at == NULL || (at[13] != 1u && at[13] != 2u)
+	    || situ_walk_registry_value(image, row, a, a_len, &first)
+	       != SITU_WALK_OK
+	    || situ_walk_registry_value(image, row, b, b_len, &second)
+	       != SITU_WALK_OK) {
+		return 0;
+	}
+	return at[13] == 1u ? second < first : second > first;
+}
+

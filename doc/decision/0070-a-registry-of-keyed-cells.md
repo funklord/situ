@@ -2,7 +2,7 @@
 
 Status: proposed -- raised by the copyright holder 2026-11-18, with the
 requirements below. Being built: the gaps 26.1075, 26.1077, 26.1079; the
-declaration 26.1080; C 26.1081
+declaration 26.1080; C 26.1081; walked 26.1084
 Date: 2026-11-18
 
 ## Context
@@ -158,7 +158,8 @@ generated code acts on them (the comparison, the rate).
    `situc explain` describing it are still to do.
 3. C: the table, `find`, `check`, `value`, `safer` (26.1081). The
    four-way holds it once the other three backends emit it (step 6).
-4. The image section and both walkers; the differential.
+4. The image section and both walkers (26.1084), after the walkers
+   learned a token test (26.1082) and a 64-bit ceiling (26.1083).
 5. The writer path: rows written without `situc`, read back by the walker.
 6. C++, Rust, Python.
 

@@ -19,7 +19,7 @@ endian little
 target buffer
 
 enum image_section_tag : u16 unknown=pass
-  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 holds=29 orderings=30 lets=31 names=12 vectors=13
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 holds=29 orderings=30 lets=31 registry=32 registry_words=33 names=12 vectors=13
 
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
@@ -168,6 +168,29 @@ struct image_region size=16
   @0x0008   4         u32        codec  little
   @0x000c   1         u8         region_flags
   @0x000d   3         u8         region_pad  little
+
+struct image_registry_entry size=60
+  @0x0000   4         u32        registry  little
+  @0x0004   4         u32        key  little
+  @0x0008   4         u32        cell  little
+  @0x000c   1         u8         family  max=1
+  @0x000d   1         u8         safe  max=2
+  @0x000e   1         u8         value_kind  max=2
+  @0x000f   1         u8         bounded  max=3
+  @0x0010   4         u32        value  little
+  @0x0014   8         i64        min  little
+  @0x001c   8         i64        max  little
+  @0x0024   4         u32        min_size  little
+  @0x0028   4         u32        max_size  little
+  @0x002c   4         u32        default_value  little
+  @0x0030   4         u32        unit  little
+  @0x0034   4         u32        summary  little
+  @0x0038   4         u32        window_ms  little
+
+struct image_registry_word size=12
+  @0x0000   4         u32        entry  little
+  @0x0004   4         u32        policy  little
+  @0x0008   4         u32        word  little
 
 struct image_relation size=24
   @0x0000   4         u32        name  little

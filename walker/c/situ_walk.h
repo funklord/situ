@@ -255,6 +255,18 @@ typedef struct {
 	uint32_t       let_count;
 	uint32_t       let_stride;
 
+	/* A registry's cells and the policy words they name (0070), and the
+	 * strings their keys are spelled in. NULL where the image carries
+	 * none. */
+	const uint8_t *strings;
+	uint32_t       strings_len;
+	const uint8_t *registry;
+	uint32_t       registry_count;
+	uint32_t       registry_stride;
+	const uint8_t *registry_words;
+	uint32_t       registry_word_count;
+	uint32_t       registry_word_stride;
+
 	/* The arguments this walk was acquired with (decision 0050), in the
 	 * order the schema declares its `parameter` members. `arg_count` is
 	 * what says how many there are; NULL and zero both mean none, and a
@@ -419,6 +431,36 @@ typedef struct {
  * checks (26.991). */
 situ_walk_err situ_walk_open(situ_walk_image *out,
                                  const uint8_t *image, uint32_t len);
+
+/* A registry's cells, walked (0070): the generated C's `_find`, `_check`,
+ * `_value` and `_safer`, read from the image's `registry` rows -- which a
+ * program may have written without the compiler.
+ *
+ * `find` sets `*row` to the cell `key` is, exact or a family's instance
+ * (the family's key, then one word of a-z0-9), in the registry named
+ * `registry` or in any where that is NULL; SITU_WALK_UNSUPPORTED where none
+ * is. `check` walks `cell` as a message of the row's type and asks the
+ * row's bounds; `*verdict` is OK, BOUNDS or CONSTRAINT. `value` reads what
+ * the cell is worth, CONSTRAINT where it is not a cell or has no value.
+ * `safer` is 1 where `b` is strictly safer than `a` by the row's
+ * direction, else 0. */
+uint32_t      situ_walk_registry_count(const situ_walk_image *image);
+situ_walk_err situ_walk_registry_find(const situ_walk_image *image,
+                                      const char *registry,
+                                      const uint8_t *key, uint32_t len,
+                                      uint32_t *row);
+situ_walk_err situ_walk_registry_check(const situ_walk_image *image,
+                                       uint32_t row,
+                                       const uint8_t *cell, uint32_t len,
+                                       situ_walk_err *verdict);
+situ_walk_err situ_walk_registry_value(const situ_walk_image *image,
+                                       uint32_t row,
+                                       const uint8_t *cell, uint32_t len,
+                                       int64_t *out);
+int           situ_walk_registry_safer(const situ_walk_image *image,
+                                       uint32_t row,
+                                       const uint8_t *a, uint32_t a_len,
+                                       const uint8_t *b, uint32_t b_len);
 
 /* Supply the arguments `shape`'s `parameter` members take (decision 0050).
  *

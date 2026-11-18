@@ -75,6 +75,8 @@ enum image_section_tag : u16 {
 	holds        = 29,     // the struct a run of bytes holds (26.898)
 	orderings    = 30,     // a run whose keys ascend (26.985, 26.988)
 	lets         = 31,     // a value a struct's fields assemble (26.1059)
+	registry     = 32,     // a registry's cells (0070)
+	registry_words = 33,   // the policy words a registry's cells name (0070)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -697,6 +699,39 @@ struct image_let {
 	u8   bits;
 	u8   is_signed [max = 1];
 	u8   let_pad[2];
+}
+
+// One cell of a registry (0070): its key, the struct its bytes are a message
+// of, what it is worth and its bounds, and what a client shows. The rows are
+// declarative -- nothing in one is a solved offset -- so a program can write
+// one without the compiler, through this schema's own accessors, and a walker
+// reads it as it reads a packed one.
+struct image_registry_entry {
+	u32  registry;                    // string id: the registry's name
+	u32  key;                         // string id; a family's ends in `/`
+	u32  cell;                        // struct index: the cell's type
+	u8   family [max = 1];
+	u8   safe [max = 2];              // 0 none, 1 lower, 2 higher
+	u8   value_kind [max = 2];        // 0 its bytes, 1 a `let`, 2 a member
+	u8   bounded [max = 3];           // bit 0 `min`, bit 1 `max`
+	u32  value;                       // the `let` row, or the placement
+	i64  min;
+	i64  max;
+	u32  min_size;
+	u32  max_size;                    // `none` where unstated
+	u32  default_value;               // string id, `none` where unstated
+	u32  unit;                        // string id, `none` where unstated
+	u32  summary;                     // string id, `none` where unstated
+	u32  window_ms;
+}
+
+// A policy word a cell names (0070): one row per word, `scope = estate |
+// host` being two. situ checks the words against the schema's `policy` and
+// does not interpret them, so the image carries them as names.
+struct image_registry_word {
+	u32  entry;                       // the registry row
+	u32  policy;                      // string id
+	u32  word;                        // string id
 }
 
 // The three of 0051, and no fourth: a fourth would be situ adopting one

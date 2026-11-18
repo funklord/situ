@@ -133,6 +133,9 @@ RELATION_BYTES		= 24
 RELATION_MUST_BYTES	= 8
 MESSAGE_BYTES		= 20
 LET_BYTES		= 16
+#: `image_registry_entry` and `image_registry_word` (0070).
+REGISTRY_BYTES		= 60
+REGISTRY_WORD_BYTES	= 12
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
@@ -167,9 +170,14 @@ SECTION_VECTORS		= 13
 #: `let`. Ancillary: a walker that does not know it reads every member
 #: exactly as before, a named value occupying no bytes.
 SECTION_LETS		= 31
+#: A registry's cells and the policy words they name (0070). Ancillary: a
+#: walker that does not know them walks every message as before.
+SECTION_REGISTRY	= 32
+SECTION_REGISTRY_WORDS	= 33
 #: Read only to print -- names and capability vectors, under `--metadata`.
 #: A walker that cannot print them walks the same.
-ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_LETS})
+ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_LETS,
+                                SECTION_REGISTRY, SECTION_REGISTRY_WORDS})
 #: A tag and what computes it (26.579), and the kernel tables a polynomial
 #: codec needs. Both are additive: a reader that does not know them reads
 #: every other section exactly as before.
@@ -1892,6 +1900,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# value the four backends' getters return. `WRAP` first: the program
 	# computes in the backends' arithmetic rather than a length's.
 	lets_blob = bytearray()
+	let_row: dict[tuple[str, str], int] = {}
 	for let_owner in schema.structs():
 		if not let_owner.lets or shape_of.get(let_owner.name) is None:
 			continue
@@ -1923,6 +1932,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				coverage.unencodable[f"let {let_owner.name}.{let.name}"] = str(why)
 				continue
 			program.emit(Op.END)
+			let_row[(let_owner.name, let.name)] = len(lets_blob) // LET_BYTES
 			lets_blob += _struct.pack(
 				"<IIIBBxx", strings.intern(let.name), shape_of[let_owner.name] or 0,
 				start, scalar.bits, 1 if scalar.signed else 0)
@@ -3455,7 +3465,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES),
 			(SECTION_PINNED_RUNS, pinned_blob, PINNED_BYTES),
 			(SECTION_MESSAGES, messages_blob, MESSAGE_BYTES),
-			(SECTION_LETS, lets_blob, LET_BYTES)):
+			(SECTION_LETS, lets_blob, LET_BYTES),
+			*_registry_sections(schema, strings, shape_of, let_row,
+			                    placement_index)):
 		if blob:
 			sections.append((section, bytes(blob), stride))
 
@@ -3615,3 +3627,63 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 		(SECTION_NAMES, bytes(names), 4),
 		(SECTION_VECTORS, bytes(vectors), len(list(Axis))),
 	]
+
+
+def _registry_sections(schema: ast.Schema, strings: "object",
+		shape_of: dict[str, int | None],
+		let_row: dict[tuple[str, str], int],
+		placement_index: dict[str, int]) -> list[tuple[int, bytes, int]]:
+	"""A registry's cells and their policy words, as `std/image.situ`'s
+	`image_registry_entry` and `image_registry_word` (0070)."""
+	from situc.wellformed import _policy_words, cell_value
+
+	entries = bytearray()
+	words   = bytearray()
+	structs = {decl.name: decl for decl in schema.structs()}
+	policies = {decl.name for decl in schema.policies()}
+	for registry in schema.registries():
+		for entry in registry.entries:
+			shape = shape_of.get(entry.type_name)
+			if shape is None:
+				continue		# a type the image has no shape for
+			held = {attr.name: attr for attr in entry.attrs}
+
+			def number(name: str, otherwise: int) -> int:
+				attr = held.get(name)
+				return attr.value.value if attr is not None else otherwise  # type: ignore[union-attr]
+
+			def text(name: str | None, raw: str | None = None) -> int:
+				said = raw if name is None else (
+					held[name].value.value if name in held else None)  # type: ignore[union-attr]
+				return NONE if said is None else strings.intern(said)  # type: ignore[attr-defined]
+
+			value = cell_value(structs[entry.type_name])
+			kind, at = 0, NONE
+			if value is not None and (entry.type_name, value) in let_row:
+				kind, at = 1, let_row[(entry.type_name, value)]
+			elif value is not None and \
+					f"{entry.type_name}.{value}" in placement_index:
+				kind, at = 2, placement_index[f"{entry.type_name}.{value}"]
+			safe = held.get("safe")
+			row  = len(entries) // REGISTRY_BYTES
+			entries += _struct.pack(
+				"<IIIBBBBIqqIIIIII",
+				strings.intern(registry.name), strings.intern(entry.key),  # type: ignore[attr-defined]
+				shape or 0, 1 if entry.family else 0,
+				{"lower": 1, "higher": 2}.get(
+					getattr(safe.value, "name", "") if safe else "", 0),
+				kind, (1 if "min" in held else 0) | (2 if "max" in held else 0),
+				at, number("min", 0), number("max", 0),
+				number("min_size", 0), number("max_size", NONE),
+				text("default"), text("unit"), text(None, entry.summary),
+				number("window", 0))
+			for attr in entry.attrs:
+				if attr.name not in policies:
+					continue
+				for word in _policy_words(attr.value) or ():
+					words += _struct.pack("<III", row,
+					                      strings.intern(attr.name),  # type: ignore[attr-defined]
+					                      strings.intern(word))  # type: ignore[attr-defined]
+	return [(SECTION_REGISTRY, bytes(entries), REGISTRY_BYTES),
+	        (SECTION_REGISTRY_WORDS, bytes(words), REGISTRY_WORD_BYTES)]
+

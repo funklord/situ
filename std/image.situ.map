@@ -144,6 +144,29 @@ struct image_region size=16 repr=ValueConverted atomic=NonAtomic
   image_region.region_flags              offset=AbsoluteStatic(0x0C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
   image_region.region_pad                offset=AbsoluteStatic(0x0D) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct image_registry_entry size=60 repr=ValueConverted atomic=NonAtomic
+  image_registry_entry.registry          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.key               offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.cell              offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.family            offset=AbsoluteStatic(0x0C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  image_registry_entry.safe              offset=AbsoluteStatic(0x0D) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_registry_entry.value_kind        offset=AbsoluteStatic(0x0E) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  image_registry_entry.bounded           offset=AbsoluteStatic(0x0F) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_registry_entry.value             offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.min               offset=AbsoluteStatic(0x14) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  image_registry_entry.max               offset=AbsoluteStatic(0x1C) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
+  image_registry_entry.min_size          offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.max_size          offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.default_value     offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.unit              offset=AbsoluteStatic(0x30) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.summary           offset=AbsoluteStatic(0x34) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_registry_entry.window_ms         offset=AbsoluteStatic(0x38) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct image_registry_word size=12 repr=ValueConverted
+  image_registry_word.entry              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_registry_word.policy             offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_registry_word.word               offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
 struct image_relation size=24 repr=ValueConverted
   image_relation.name                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_relation.request_struct          offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
