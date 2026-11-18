@@ -34,6 +34,7 @@ from situc.codegen import reserved_policy as reserved_stated
 from situc.codegen import reserved_want
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
+	check_deferred_collisions,
 	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
 	entities, ident, macro)
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
@@ -213,15 +214,19 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	# Before anything is emitted: two constructs that flatten to one C
 	# identifier would otherwise surface as a redefinition error in generated
 	# code, naming a function nobody wrote.
+	deferred: list = []
 	warnings = check_collisions(resolved, prefix, [
 		*(("struct", decl.name, decl.span) for decl in schema.structs()),
 		*(("enum", decl.name, decl.span) for decl in schema.enums()),
-	])
+	], deferred)
 
 	emitter = Emitter(schema, resolved, basename, prefix, materialize,
 	                  messages)
 	header = emitter.header()
 	source = emitter.source()
+	# An enum and a member path that share a stem, refused only where the
+	# header really defines a name twice (26.1093).
+	check_deferred_collisions(header, deferred)
 
 	# And after emitting, because a generated name is not always `ident()`'s
 	# result -- `_extent_from` is built by appending to one. Nothing has been

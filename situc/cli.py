@@ -603,6 +603,7 @@ def cmd_wire(args: argparse.Namespace) -> int:
 	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
+	_names_hold_in_c(schema, resolved)
 	current  = wire.render(schema, resolved, source.path)
 
 	if not args.check:
@@ -711,11 +712,38 @@ def cmd_verify(args: argparse.Namespace) -> int:
 	return 0 if found and all(one.ok for one in found) else 1
 
 
+def _names_hold_in_c(schema: ast.Schema, resolved: ResolvedSchema) -> None:
+	"""Refuse here what `build --target c` would refuse: names that meet in
+	C (26.1093). A contract committed through `map` and `wire` was
+	otherwise first refused by whoever generated C from it, which fuzznet
+	met in a benchmark. The stem check build makes, and where an enum and a
+	member path share a stem, the header generated to see whether a name is
+	really defined twice -- only that question: a schema the C backend
+	declines for some other reason is build's to report."""
+	from situc.codegen.c import generate
+	from situc.codegen.c.names import check_collisions
+	from situc.diagnostics import SituError
+
+	deferred: list = []
+	check_collisions(resolved, "situ", [
+		*(("struct", decl.name, decl.span) for decl in schema.structs()),
+		*(("enum", decl.name, decl.span) for decl in schema.enums()),
+	], deferred)
+	if not deferred:
+		return
+	try:
+		generate(schema, resolved, "contract")
+	except SituError as why:
+		if "generate the same C identifier" in why.diagnostic.message:
+			raise
+
+
 def cmd_map(args: argparse.Namespace) -> int:
 	source   = apply_defines(read_source(args.schema),
 	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
+	_names_hold_in_c(schema, resolved)
 
 	# Requirements are discharged before the map is printed: a schema whose
 	# budget is blown should fail rather than emit a map recording the breach.

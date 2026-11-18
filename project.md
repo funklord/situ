@@ -9078,6 +9078,10 @@ Moved to `doc/decision/26.1091-an-arm-that-repeats-the-chain-is-not-a-branch.md`
 
 Moved to `doc/decision/26.1092-a-bound-at-a-zero-base-is-asked-as-what-it-is.md`.
 
+### 26.1093 An enum and a member path collide only where a name does
+
+Moved to `doc/decision/26.1093-an-enum-and-a-member-collide-only-where-a-name-does.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

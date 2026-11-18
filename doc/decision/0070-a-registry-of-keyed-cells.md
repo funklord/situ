@@ -170,3 +170,9 @@ generated code acts on them (the comparison, the rate).
 - Whether fuzznet adopts it, and when -- fuzznet's, told when step 3 lands.
 - Storage beyond a registry (records of a declared shape kept under keys,
   sec 1268 there) -- the holder's, after this.
+  fuzznet measured the cost (inbox 20261118T1654Z, its sec 1276): a schema
+  record codec at about 7 ns per 24-byte record over hand-written C,
+  against 5.5 us for its store's load and 450 us for its save -- negligible.
+  What storage would need from a schema is the DERIVED rows: a key computed
+  from fields, newest-by, a bounded newest-N, one-per-key with a winner,
+  counts, and what a reindex rebuilds.

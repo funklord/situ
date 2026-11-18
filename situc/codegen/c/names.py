@@ -298,7 +298,9 @@ def entities(resolved: ResolvedSchema, prefix: str,
 
 
 def check_collisions(resolved: ResolvedSchema, prefix: str,
-		declarations: list[tuple[str, str, Span]]) -> list[Diagnostic]:
+		declarations: list[tuple[str, str, Span]],
+		deferred: "list[tuple[Entity, Entity]] | None" = None
+		) -> list[Diagnostic]:
 	"""Refuse a schema whose names cannot be told apart in C.
 
 	Raises on a genuine collision, because the alternative is generated code
@@ -314,6 +316,18 @@ def check_collisions(resolved: ResolvedSchema, prefix: str,
 	for entity in found:
 		previous = by_stem.get(entity.stem)
 		if previous is not None:
+			# An ENUM and a member path sharing a stem derive different names
+			# from it -- `_t`, `_is_known` and the arms' macros against `_get`,
+			# `_set` and the member's own -- so the stem alone does not say
+			# they collide. `fzn_message_call.outcome` of an enum
+			# `fzn_message_call_outcome` is idiomatic and compiles; refused on
+			# the stem, four fuzznet contracts could not be built (26.1093).
+			# The caller asks the emitted header instead, where it can.
+			kinds = {previous.described.startswith("enum "),
+			         entity.described.startswith("enum ")}
+			if deferred is not None and kinds == {True, False}:
+				deferred.append((previous, entity))
+				continue
 			raise _collision(previous, entity)
 		by_stem[entity.stem] = entity
 
@@ -404,3 +418,57 @@ def _macro_collision(first: Entity, second: Entity) -> Diagnostic:
 			"the accessors would not",
 		],
 	)
+
+
+#: A name the header DEFINES: a macro, a typedef, a function -- a prototype,
+#: whose signature ends in `;`, defines nothing and is skipped, since a cycle's
+#: forward declarations repeat a name legitimately.
+_MACRO    = re.compile(r"^#define\s+(\w+)")
+_TYPEDEF  = re.compile(r"^(?:}\s*|typedef\s[^;{]*?\b)(\w+);")
+#: An enum's constant, `\tSITU_S_M_CHECK = 0,` -- upper case, which no
+#: assignment in a function body is, so a body's `at = ...` is not one.
+_CONSTANT = re.compile(r"^\s+([A-Z][A-Z0-9_]*)\s*=\s*[^=]")
+_FUNCTION = re.compile(
+	r"^(?:static\s+inline\s+)?(?:const\s+)?[A-Za-z_]\w*(?:\s+\**|\s*\*+\s*)(\w+)\(")
+
+
+def _definitions(header: str) -> list[str]:
+	lines = header.splitlines()
+	names: list[str] = []
+	for at, line in enumerate(lines):
+		for pattern in (_MACRO, _TYPEDEF, _CONSTANT):
+			held = pattern.match(line)
+			if held:
+				names.append(held.group(1))
+				break
+		else:
+			held = _FUNCTION.match(line)
+			if held is None:
+				continue
+			# Where the signature ends says which it is.
+			ending = next((one.rstrip() for one in lines[at:at + 12]
+			               if one.rstrip().endswith((")", ");", "{"))), "")
+			if not ending.endswith(";"):
+				names.append(held.group(1))
+	return names
+
+
+def check_deferred_collisions(header: str,
+		deferred: "list[tuple[Entity, Entity]]") -> None:
+	"""Refuse an enum and a member path whose names DO meet (26.1093):
+	some identifier under their shared stem is defined twice in the header.
+	Read off the emitted text, as `check_runtime_collisions` reads it, so
+	no list of suffixes has to be kept in step with the emitter."""
+	if not deferred:
+		return
+	seen: dict[str, int] = {}
+	for name in _definitions(header):
+		seen[name] = seen.get(name, 0) + 1
+	twice = {name for name, count in seen.items() if count > 1}
+	for first, second in deferred:
+		stem = first.stem
+		if any(name == stem or name.startswith(stem + "_")
+		       or name.upper().startswith(stem.upper() + "_")
+		       for name in twice):
+			raise _collision(first, second)
+
