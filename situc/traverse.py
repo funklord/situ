@@ -2404,6 +2404,15 @@ def _has_computable_extent(structs: dict[str, ResolvedStruct],
 			return False		# the extent is the codec's expansion, not a length
 
 		if placement.kind == "variant":
+			# A variant with a length of its own is that long whatever its
+			# arms hold: `variant payload[hdr.size]` choosing between raw
+			# bytes and an xz stream, whose expansion nothing can predict, is
+			# `hdr.size` bytes either way. Asked of the arms first, it was
+			# unmeasurable, so its parent had no extent and every member
+			# after it no place -- openmlx4's MFA lost the CRC32 that
+			# follows, in all four backends and `verify` alike (26.1096).
+			if placement.sized_by is not None or placement.size_expr is not None:
+				continue
 			if not _variant_is_measurable(structs, struct, placement, seen):
 				return False
 			continue

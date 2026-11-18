@@ -60,6 +60,13 @@ enum gather_kind : u8 unknown=error
 enum shade_kind : u8 unknown=error
   idle=0 query=1
 
+struct after_opaque_arm size=3..258
+  @0x0000   2..257    opaque_arm_section one  big
+  ~         1         u8         tail  must_eq=126
+  payload switch: kind
+  payload case 0: raw
+  payload case default: error
+
 struct ahead_held size=5..260
   @0x0000   2         u16        lead  big
   @0x0002   3..258    summed_ahead inner  big
@@ -632,6 +639,14 @@ struct oob_inner size=4..4294967299
 struct oob_run size=1..1095216727036
   @0x0000   1         u8         k
   @0x0001   0..1095216727035 oob_element elements  sized-by=k
+
+struct opaque_arm_section size=2..257
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         len
+  @0x0002   0..255    variant    payload  sized-by=len
+  payload switch: kind
+  payload case 0: raw u8
+  payload case default: error
 
 struct outer_body size=8
   @0x0000   2         u16        outer_value  big

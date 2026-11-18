@@ -2896,3 +2896,21 @@ struct shadowed_arm {
 	u8           query;
 	shade_kind   type  [min = query];
 }
+
+// A variant with a length of its own is that long whatever its arms hold, an
+// `opaque` default included, so the member after the struct holding it has a
+// place (26.1096). Asked of the arms, `one` had no extent and `tail` no
+// accessor in any backend -- the shape that lost openmlx4's MFA its CRC32.
+struct opaque_arm_section {
+	u8 kind;
+	u8 len;
+	variant payload[len] switch (kind) {
+		case 0: u8 raw[remaining];
+		default: opaque;
+	}
+}
+
+struct after_opaque_arm {
+	opaque_arm_section one;
+	u8                 tail [must_eq = 0x7e];
+}

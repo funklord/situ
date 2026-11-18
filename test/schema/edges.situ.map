@@ -26,6 +26,14 @@ codec sealing_aead trusted length_preserving seekable=linear granularity=stream 
 codec stuffed_apart trusted expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec summing derived expansion=+2 seekable=linear granularity=block systematic deterministic
 
+struct after_opaque_arm size=3..258 mutate=Shifting address=Unstable atomic=NonAtomic
+  after_opaque_arm.one                   offset=AbsoluteStatic(0x00) size=Bounded(2, 257) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  after_opaque_arm.one.kind              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  after_opaque_arm.one.len               offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  after_opaque_arm.one.payload           offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  after_opaque_arm.one.payload.raw       offset=AbsoluteStatic(0x02) size=Unbounded align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  after_opaque_arm.tail                  offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
 struct ahead_held size=5..260 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(inner.sum)
   ahead_held.lead                        offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(inner.sum)
   ahead_held.inner                       offset=AbsoluteStatic(0x02) size=Bounded(3, 258) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable auth=Covered(inner.sum)
@@ -699,6 +707,12 @@ struct oob_run size=1..1095216727036 access=Sequential mutate=Shifting address=U
   oob_run.elements[].tail                offset=Dynamic size=Bounded(4, 4294967299) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
   oob_run.elements[].tail.len            offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   oob_run.elements[].tail.payload        offset=FrameStatic(0x04) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+
+struct opaque_arm_section size=2..257 mutate=Shifting atomic=NonAtomic
+  opaque_arm_section.kind                offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  opaque_arm_section.len                 offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  opaque_arm_section.payload             offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  opaque_arm_section.payload.raw         offset=AbsoluteStatic(0x02) size=Unbounded align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct outer_body size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   outer_body.body                        offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(outer_sum)

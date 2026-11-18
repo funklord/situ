@@ -9090,6 +9090,10 @@ Moved to `doc/decision/26.1094-a-bound-may-name-its-own-arm.md`.
 
 Moved to `doc/decision/26.1095-a-wire-bound-written-as-an-arm-is-compared-by-value.md`.
 
+### 26.1096 A variant with a length of its own measures itself
+
+Moved to `doc/decision/26.1096-a-sized-variant-measures-itself.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
