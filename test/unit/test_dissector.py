@@ -363,7 +363,7 @@ def test_a_dynamic_count_is_read_from_the_field_that_drives_it() -> None:
 	struct s { h hdr; r recs[hdr.n]; }
 	""")
 
-	assert "local recs_n = situ_uint(tvb, 1, 2, false)" in text
+	assert "local recs_n = math.max(0, situ_uint(tvb, 1, 2, false))" in text
 	assert "tvb(1, 2):uint()" not in text
 	assert "for i = 0, recs_n - 1 do" in text
 
@@ -535,7 +535,7 @@ def test_an_operator_lua_spells_differently_is_declined() -> None:
 	assert "math.floor(situ_uint(tvb, 0, 1, false) / 2)" in text
 	assert "sized by `n / 2 + 1`" not in text
 	assert "sized by `(n ^ 1) + 1`" in text
-	assert "local sum_n = situ_uint(tvb, 0, 1, false) + 1" in text	# and the rest still walks
+	assert "local sum_n = math.max(0, situ_uint(tvb, 0, 1, false) + 1)" in text	# and the rest still walks
 
 
 
@@ -1269,6 +1269,10 @@ def _walked(image: Image, proto: str,
 			continue
 		parts = line.split()
 		if parts[0] in NOT_A_MEMBER:
+			continue
+		# `crc.covered 0+5`: the range a tag covers, which no dissector row
+		# shows -- the walker's answer to the backends, not to this (26.1071).
+		if parts[0].endswith(".covered"):
 			continue
 		total += 1
 		# `crc.sum refused`: no number, and no verdict the dissector may

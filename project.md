@@ -8998,6 +8998,10 @@ Moved to `doc/decision/26.1071-a-covered-span-refuses-a-region-the-frame-does-no
 
 Moved to `doc/decision/26.1072-a-scaled-number-keeps-its-sign.md`.
 
+### 26.1073 A negative length is zero in the dissector, and an unreadable arm is unselected
+
+Moved to `doc/decision/26.1073-a-negative-length-is-zero-in-the-dissector.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.

@@ -2858,7 +2858,10 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			return [
 				f"\t-- {placement.path}: a length the data decides",
 				*seek,
-				f"\tlocal {name}_n = {length}",
+				# Never below zero: a length the message makes negative reads
+				# as zero (14.2b), and `tvb(at, -12)` is the rest of the frame
+				# in Wireshark, with the cursor moved back (26.1073).
+				f"\tlocal {name}_n = math.max(0, {length})",
 				# The declared length is the message's, so the frame need not
 				# hold it. Advancing by it anyway walked a UDP header's cursor
 				# sixteen bytes past an eight-byte packet -- and `consumed`
@@ -4589,7 +4592,7 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\t-- {placement.path}: "
 			f"{placement.size_shown or placement.size_expr or placement.sized_by or placement.array_count}"
 			" records, each as long as it says", *seek,
-			f"\tlocal {name}_n = {count}",
+			f"\tlocal {name}_n = math.max(0, {count})",
 			f"\tlocal {name}_k = 0",
 			f"\twhile {name}_k < {name}_n and at < tvb:len() do",
 			f"\t\tlocal size = {stride}",
@@ -4605,7 +4608,11 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if each is None:
 		return _uncomputable(placement.path, "elements of no fixed size")
 
-	lines = [f"\t-- {placement.path}", *seek, f"\tlocal {name}_n = {count}"]
+	# Never below zero, as above: TCP's `(data_offset - 5) * 4` with a
+	# data offset of two showed the frame's last 22 bytes as options and
+	# walked the cursor back twelve (26.1073).
+	lines = [f"\t-- {placement.path}", *seek,
+	         f"\tlocal {name}_n = math.max(0, {count})"]
 
 	if element is None:
 		# Scalar elements: one range, shown as bytes.
