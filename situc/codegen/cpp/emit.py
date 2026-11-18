@@ -369,6 +369,14 @@ class Emitter:
 			deferred.extend(out_of_line)
 
 		lines.extend(deferred)
+		# Registries last: each reads the struct classes above (0070).
+		from situc.codegen.cpp.registry import (policy_constants,
+		                                        registry_class)
+		lines.extend(policy_constants(self.schema))
+		for registry in self.schema.registries():
+			lines.extend(registry_class(self.schema, registry,
+			                            self.resolved.structs,
+			                            self.namespace))
 		lines.extend(["", f"}}  /* namespace {self.namespace} */", "",
 		              f"#endif /* {guard} */"])
 		# Twice, because this backend documents two levels. A member sits at
@@ -9559,8 +9567,12 @@ class Emitter:
 			   "\t{",
 			   "\t\tstd::uint64_t value = 0;",
 			   "",
+			   # `u`, as the strict getter above writes it: a `u64`'s
+			   # limit, 2^64 - 1, is too large for any signed type and an
+			   # error under -pedantic-errors -- `decimal u64 v[remaining]`,
+			   # a registry's plainest count, met it first (0070).
 			   f"\t\t(void){_uint_parser(placement)}(situ_base(raw_) + ({start}), {count},"
-			   f" {placement.radix}, {limit}, &value);",
+			   f" {placement.radix}u, {limit}u, &value);",
 			   f"\t\treturn static_cast<{ctype}>(value);",
 			   "\t}"] if sized else []),
 		]

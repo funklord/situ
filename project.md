@@ -9055,6 +9055,10 @@ Moved to `doc/decision/26.1085-a-registry-written-at-runtime-is-read-as-a-packed
 
 Moved to `doc/decision/26.1087-a-registry-is-generated-in-python.md`.
 
+### 26.1088 A registry is generated in C++, and a u64 text number compiles
+
+Moved to `doc/decision/26.1088-a-registry-is-generated-in-cpp.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
