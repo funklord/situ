@@ -2111,12 +2111,22 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# A wide text number's ceiling is derived from its own
 				# width, so `hex u64 v[16]` reaches this with no attribute
 				# written anywhere and 2**64-1 to carry (26.442).
-				if placement.radix_max is None \
-						or not fits_q(placement.radix_max):
+				# An UNSIGNED ceiling past `q`, which `decimal u64` over an
+				# unbounded span reaches -- 2**64 - 1 -- is held as its two's
+				# complement, and both walkers read the row unsigned for an
+				# unsigned member. It deferred every such struct, and a
+				# registry's plainest count is one (26.1083).
+				ceiling = placement.radix_max
+				if ceiling is not None and not fits_q(ceiling) \
+						and not (placement.scalar is not None
+						         and placement.scalar.signed) \
+						and ceiling < 1 << 64:
+					ceiling -= 1 << 64
+				if ceiling is None or not fits_q(ceiling):
 					whole = False
 					continue
 				constraints_blob += _struct.pack(
-					"<IqBxxx", at, placement.radix_max, 9)
+					"<IqBxxx", at, ceiling, 9)
 
 			if kind in (traverse.Check.CONSTRAINED,
 			            traverse.Check.TEXT_NUMBER):

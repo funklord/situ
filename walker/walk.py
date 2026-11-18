@@ -852,8 +852,10 @@ def _value_of(view: View, index: int) -> int:
 		for check, ceiling in view.image.constraints.get(index, ()):
 			if check != _DIGITS_VALID:
 				continue
-			if value > ceiling or (view.image.placements[index].signed
-			                       and value < -ceiling - 1):
+			signed = view.image.placements[index].signed
+			if not signed:
+				ceiling &= (1 << 64) - 1	# held as two's complement
+			if value > ceiling or (signed and value < -ceiling - 1):
 				return 0
 		return value
 	# And a varint's `_value`, for the same reason. An element cut inside its

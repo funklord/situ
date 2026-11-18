@@ -9035,6 +9035,10 @@ Moved to `doc/decision/26.1081-a-registry-is-generated-in-c.md`.
 
 Moved to `doc/decision/26.1082-both-walkers-test-a-token-in-a-named-value.md`.
 
+### 26.1083 Both walkers validate a text number whose ceiling is 2^64 - 1
+
+Moved to `doc/decision/26.1083-both-walkers-validate-a-text-number-whose-ceiling-is-2-64-1.md`.
+
 ### 26.1086 Generated checks size a text number by its digits
 
 Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits.md`.

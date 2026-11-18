@@ -1765,7 +1765,12 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			# derived from it rather than packed beside it: in two's
 			# complement the two are one number, and a second field would
 			# be a second thing to be wrong.
+			# And an unsigned ceiling is read unsigned: `decimal u64` over an
+			# unbounded span reaches 2**64 - 1, which the row holds as its
+			# two's complement (26.1083).
 			floor = -(against + 1) if placement.signed else 0
+			if not placement.signed:
+				against &= (1 << 64) - 1
 			if value > against or value < floor:
 				return fail(ERR_CONSTRAINT, index, DIGITS_VALID)
 
