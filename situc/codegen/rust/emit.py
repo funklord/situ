@@ -2526,7 +2526,11 @@ class Emitter:
 				f"\tpub fn {name}_digits(&self) -> &[u8] {{",
 				f"\t\tlet at = {at};",
 				"\t\tlet room = situ_rt::remaining(self.bytes.len(), at);",
-				f"\t\tlet held = {declared};",
+				# Unwrapped: the length arrives in parentheses, and
+				# `unused_parens` refuses them on an assignment. No corpus
+				# schema counted a text number by a field until
+				# `edges.counted_digits` (26.1078).
+				f"\t\tlet held = {self._unparen(declared)};",
 				"\t\tif at > self.bytes.len() {",
 				"\t\t\treturn &[];",
 				"\t\t}",
