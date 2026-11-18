@@ -9047,6 +9047,10 @@ Moved to `doc/decision/26.1084-a-registry-is-walked-from-its-image.md`.
 
 Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits.md`.
 
+### 26.1085 A registry written at runtime is read as a packed one
+
+Moved to `doc/decision/26.1085-a-registry-written-at-runtime-is-read-as-a-packed-one.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

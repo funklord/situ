@@ -266,6 +266,10 @@ typedef struct {
 	const uint8_t *registry_words;
 	uint32_t       registry_word_count;
 	uint32_t       registry_word_stride;
+	/* The pool a registry's rows spell their strings from: the image's
+	 * own, or that of rows attached beside it. NULL reads as `strings`. */
+	const uint8_t *registry_strings;
+	uint32_t       registry_strings_len;
 
 	/* The arguments this walk was acquired with (decision 0050), in the
 	 * order the schema declares its `parameter` members. `arg_count` is
@@ -444,6 +448,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
  * the cell is worth, CONSTRAINT where it is not a cell or has no value.
  * `safer` is 1 where `b` is strictly safer than `a` by the row's
  * direction, else 0. */
+/* Rows written at runtime, beside `image` (0070, step 5): `rows` is an image
+ * of strings, `registry` and `registry_words` sections over the cell types
+ * `image` carries -- what `walker.registry.build_rows` writes, or a program
+ * through `std/image.situ`'s own accessors. They replace any registry
+ * `image` carries; `rows` must outlive it. MALFORMED where it is not one. */
+situ_walk_err situ_walk_registry_attach(situ_walk_image *image,
+                                        const uint8_t *rows, uint32_t len);
 uint32_t      situ_walk_registry_count(const situ_walk_image *image);
 situ_walk_err situ_walk_registry_find(const situ_walk_image *image,
                                       const char *registry,

@@ -2,7 +2,7 @@
 
 Status: proposed -- raised by the copyright holder 2026-11-18, with the
 requirements below. Being built: the gaps 26.1075, 26.1077, 26.1079; the
-declaration 26.1080; C 26.1081; walked 26.1084
+declaration 26.1080; C 26.1081; walked 26.1084; written at runtime 26.1085
 Date: 2026-11-18
 
 ## Context
@@ -160,7 +160,8 @@ generated code acts on them (the comparison, the rate).
    four-way holds it once the other three backends emit it (step 6).
 4. The image section and both walkers (26.1084), after the walkers
    learned a token test (26.1082) and a 64-bit ceiling (26.1083).
-5. The writer path: rows written without `situc`, read back by the walker.
+5. The writer path: rows written without `situc`, read back by both
+   walkers (26.1085).
 6. C++, Rust, Python.
 
 ## Open, and whose

@@ -109,8 +109,10 @@ static int fits(uint32_t offset, uint32_t count, uint32_t stride,
 	return offset <= len && span <= len - offset;
 }
 
-situ_walk_err situ_walk_open(situ_walk_image *out,
-                             const uint8_t *image, uint32_t len)
+/* Every section the directory names, into `out`; `situ_walk_open` then asks
+ * for the core tables, which rows attached beside an image do not carry. */
+static situ_walk_err read_sections(situ_walk_image *out,
+                                   const uint8_t *image, uint32_t len)
 {
 	if (out == NULL || image == NULL || len < HEADER_BYTES) {
 		return SITU_WALK_MALFORMED;
@@ -386,7 +388,16 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			return SITU_WALK_UNSUPPORTED;	/* critical, and not known here */
 		}
 	}
+	return SITU_WALK_OK;
+}
 
+situ_walk_err situ_walk_open(situ_walk_image *out,
+                             const uint8_t *image, uint32_t len)
+{
+	const situ_walk_err err = read_sections(out, image, len);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
 	return (out->structs == NULL || out->placements == NULL)
 	        ? SITU_WALK_MALFORMED : SITU_WALK_OK;
 }
@@ -8965,18 +8976,47 @@ situ_walk_err situ_walk_let(const situ_walk_image *image,
 
 /* -- a registry (0070) ----------------------------------------------------- */
 
-/* The string at `id`, NUL-ended inside the pool, or NULL. */
+/* The string at `id` in the registry's pool, NUL-ended inside it, or NULL. */
 static const char *pooled(const situ_walk_image *image, uint32_t id)
 {
-	if (image->strings == NULL || id >= image->strings_len) {
+	const uint8_t *pool = image->registry_strings != NULL
+	                      ? image->registry_strings : image->strings;
+	const uint32_t size = image->registry_strings != NULL
+	                      ? image->registry_strings_len : image->strings_len;
+	if (pool == NULL || id >= size) {
 		return NULL;
 	}
-	for (uint32_t i = id; i < image->strings_len; i++) {
-		if (image->strings[i] == 0u) {
-			return (const char *)image->strings + id;
+	for (uint32_t i = id; i < size; i++) {
+		if (pool[i] == 0u) {
+			return (const char *)pool + id;
 		}
 	}
 	return NULL;
+}
+
+situ_walk_err situ_walk_registry_attach(situ_walk_image *image,
+                                        const uint8_t *rows, uint32_t len)
+{
+	situ_walk_image written;
+	if (image == NULL || rows == NULL) {
+		return SITU_WALK_MALFORMED;
+	}
+	situ_walk_err err = read_sections(&written, rows, len);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (written.registry != NULL && written.strings == NULL) {
+		return SITU_WALK_MALFORMED;	/* rows with nothing to spell keys in */
+	}
+	image->registry             = written.registry;
+	image->registry_count       = written.registry_count;
+	image->registry_stride      = written.registry_stride;
+	image->registry_words       = written.registry_words;
+	image->registry_word_count  = written.registry_word_count;
+	image->registry_word_stride = written.registry_word_stride;
+	image->registry_strings     = written.strings;
+	image->registry_strings_len = written.strings_len;
+	return SITU_WALK_OK;
 }
 
 /* The walker reaches for no libc, so the three comparisons a key needs are
