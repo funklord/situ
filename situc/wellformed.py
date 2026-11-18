@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 import difflib
+import re
 
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
@@ -106,6 +107,7 @@ def check(schema: ast.Schema) -> None:
 	check_whens(schema)
 	check_when_sums(schema)
 	check_relations(schema)
+	check_registries(schema)
 
 
 def check_encoding_place(schema: ast.Schema) -> None:
@@ -2264,6 +2266,10 @@ def _named_declarations(schema: ast.Schema) -> list[tuple[str, str, ast.Decl]]:
 			named.append(("endian marker", decl.name, decl))
 		elif isinstance(decl, ast.CodecDecl):
 			named.append(("codec", decl.name, decl))
+		elif isinstance(decl, ast.RegistryDecl):
+			named.append(("registry", decl.name, decl))
+		elif isinstance(decl, ast.PolicyDecl):
+			named.append(("policy", decl.name, decl))
 		elif isinstance(decl, ast.Relation):
 			# Not because an expression could confuse the two -- a relation
 			# name is never referenced from one -- but because it becomes
@@ -6972,3 +6978,132 @@ def _check_one_encoding_from(struct: ast.StructDecl, member: ast.Member,
 				         "message names, or the size of what is being read "
 				         "is a function of a value inside it (0058)"],
 			)
+
+
+#: What a registry entry may say that situ owns (0070); a declared `policy`
+#: adds its own name. `min`/`max` bound the cell's value and `min_size`/
+#: `max_size` its bytes; `safe` says which of two values written apart
+#: stands; `window` is how often it may be written, in milliseconds.
+REGISTRY_ATTRS = ("min", "max", "min_size", "max_size", "default", "unit",
+                  "safe", "window")
+
+#: A key's segments: what fuzznet's keys are spelled with, `net/budget-window`.
+_KEY_SEGMENT = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def cell_value(struct: ast.StructDecl) -> str | None:
+	"""The name of what a cell of type `struct` is worth (0070): its `let
+	value`, or its one member where it has one; None where it has neither,
+	which a text cell -- worth its bytes -- need not have."""
+	if any(let.name == "value" for let in struct.lets):
+		return "value"
+	fields = [member for member in struct.members
+	          if isinstance(member, ast.Field)]
+	return fields[0].name if len(fields) == 1 else None
+
+
+def check_registries(schema: ast.Schema) -> None:
+	"""A registry's keys, types and attributes are each one a reader can act
+	on (0070): a key spelled once and claimed by no family before it, a
+	type that is a struct, and every attribute one situ reads or a declared
+	policy names."""
+	structs  = {decl.name: decl for decl in schema.structs()}
+	policies = {decl.name: decl for decl in schema.policies()}
+	for decl in schema.policies():
+		if len(set(decl.words)) != len(decl.words) or not decl.words:
+			raise error(f"`policy {decl.name}` names a word twice, or none",
+			            decl.span, label = "declared here")
+		if decl.name in REGISTRY_ATTRS:
+			raise error(f"`policy {decl.name}` is a word situ owns", decl.span,
+			            label = "a registry attribute already",
+			            notes = ["situ's own: " + ", ".join(REGISTRY_ATTRS)])
+	for registry in schema.registries():
+		seen: dict[str, ast.RegistryEntry] = {}
+		for entry in registry.entries:
+			_check_registry_key(entry, seen)
+			seen[entry.key] = entry
+			struct = structs.get(entry.type_name)
+			if struct is None:
+				raise error(f"`{entry.type_name}` is not a struct",
+				            entry.type_span, label = "a cell's type",
+				            notes = ["a cell's bytes are a message of its "
+				                     "type, so the type is a struct"])
+			_check_registry_attrs(entry, struct, policies)
+
+
+def _check_registry_key(entry: ast.RegistryEntry,
+		seen: dict[str, ast.RegistryEntry]) -> None:
+	body = entry.key[:-1] if entry.family else entry.key
+	if not body or not all(_KEY_SEGMENT.fullmatch(part)
+	                       for part in body.split("/")):
+		raise error(f"`{entry.key}` is not a key", entry.span,
+		            label = "segments of letters, digits and `._-`, by `/`",
+		            notes = ["a key ending in `/` declares a family, whose "
+		                     "instances add one word"])
+	for key, earlier in seen.items():
+		if key == entry.key:
+			raise error(f"`{entry.key}` is declared twice", entry.span,
+			            label = "already a cell of this registry")
+		inner, outer = ((entry, earlier) if earlier.family
+		                and entry.key.startswith(earlier.key)
+		                else (earlier, entry))
+		if outer.family and inner.key.startswith(outer.key) \
+				and inner is not outer:
+			raise error(f"`{inner.key}` is inside the family `{outer.key}`",
+			            inner.span, label = "one cell claimed twice",
+			            notes = ["a family claims every key under it, so a "
+			                     "reader could not say which entry a key is"])
+
+
+def _check_registry_attrs(entry: ast.RegistryEntry, struct: ast.StructDecl,
+		policies: dict[str, ast.PolicyDecl]) -> None:
+	value = cell_value(struct)
+	for attr in entry.attrs:
+		if attr.name in policies:
+			words = _policy_words(attr.value)
+			unknown = [word for word in words
+			           if word not in policies[attr.name].words]
+			if words is None or unknown or not words:
+				raise error(f"`{attr.name}` takes words of `policy "
+				            f"{attr.name}`", attr.span,
+				            label = "not one of its words",
+				            notes = ["its words: "
+				                     + ", ".join(policies[attr.name].words),
+				                     "several are `a | b`"])
+			continue
+		if attr.name not in REGISTRY_ATTRS:
+			raise error(f"`{attr.name}` is not a registry attribute",
+			            attr.span, label = "not read here",
+			            notes = ["situ's: " + ", ".join(REGISTRY_ATTRS),
+			                     "a word of the consumer's own is a "
+			                     "`policy` declared for it"])
+		if attr.name in ("default", "unit"):
+			if not isinstance(attr.value, ast.StringLiteral):
+				raise error(f"`{attr.name}` is written as it would be stored",
+				            attr.span, label = "expected a string")
+		elif attr.name == "safe":
+			if not (isinstance(attr.value, ast.NameRef)
+			        and attr.value.name in ("lower", "higher")):
+				raise error("`safe` is `lower` or `higher`", attr.span,
+				            label = "which of two values written apart stands")
+		elif not isinstance(attr.value, ast.IntLiteral) \
+				or attr.value.value < 0:
+			raise error(f"`{attr.name}` is a number", attr.span,
+			            label = "expected a non-negative integer")
+		if attr.name in ("min", "max", "safe") and value is None:
+			raise error(f"`{attr.name}` bounds a value `{struct.name}` has "
+			            "not got", attr.span, label = "nothing to compare",
+			            notes = [f"`{struct.name}` has no `let value` and not "
+			                     "one member, so a cell of it is worth its "
+			                     "bytes: `min_size` and `max_size` bound those"])
+
+
+def _policy_words(expr: ast.Expr | None) -> list[str] | None:
+	"""`a` or `a | b | c`, as words; None where it is neither."""
+	if isinstance(expr, ast.NameRef):
+		return [expr.name]
+	if isinstance(expr, ast.Binary) and expr.op == "|":
+		left, right = _policy_words(expr.left), _policy_words(expr.right)
+		return None if left is None or right is None else left + right
+	return None
+

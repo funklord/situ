@@ -3692,10 +3692,13 @@ def test_every_ast_node_that_carries_attributes_is_one_the_walk_reaches()\
 	           if dataclasses.is_dataclass(node) and isinstance(node, type)
 	           and "attrs" in {f.name for f in dataclasses.fields(node)}}
 
+	# `RegistryEntry` carries a vocabulary of its own -- `REGISTRY_ATTRS` and
+	# the schema's declared policies -- which `check_registries` walks and
+	# refuses against, rather than the member vocabulary above (0070).
 	assert bearing == {
 		"Authenticated", "Coded", "Field", "MarkerField", "Opaque", "Pad",
-		"Relation", "Reserved", "Sealed", "StructDecl", "TagField", "Tlv",
-		"Variant",
+		"RegistryEntry", "Relation", "Reserved", "Sealed", "StructDecl",
+		"TagField", "Tlv", "Variant",
 	}, f"the attribute-bearing nodes have moved: {sorted(bearing)}"
 
 
@@ -3736,7 +3739,10 @@ def test_every_attribute_the_compiler_reads_is_one_the_parser_accepts() -> None:
 		f"only {len(compared)} attribute names found in situc/; the pattern "
 		"has probably stopped matching")
 
-	missing = sorted(compared - set(ATTRIBUTE_NAMES))
+	# A registry entry's vocabulary is its own and `check_registries` holds
+	# it (0070); a name in it is accounted for there.
+	from situc.wellformed import REGISTRY_ATTRS
+	missing = sorted(compared - set(ATTRIBUTE_NAMES) - set(REGISTRY_ATTRS))
 	assert not missing, (
 		"the compiler reads attributes the parser does not list, so they are "
 		f"in no vocabulary and no table accounts for them: {missing}")

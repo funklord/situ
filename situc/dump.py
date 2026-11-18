@@ -61,6 +61,13 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.TokensDecl):
 		return _tokens(decl, depth)
 
+	if isinstance(decl, ast.PolicyDecl):
+		return [_indent(depth, f"policy {decl.name} {{ "
+		                       f"{', '.join(decl.words)} }}")]
+
+	if isinstance(decl, ast.RegistryDecl):
+		return _registry(decl, depth)
+
 	if isinstance(decl, ast.StructDecl):
 		return _struct(decl, depth)
 
@@ -162,6 +169,23 @@ def _tokens(decl: ast.TokensDecl, depth: int) -> list[str]:
 	for member in decl.members:
 		lines.append(_indent(depth + 1,
 		                     f"{member.name} = {expr_to_source(member.value)}"))
+	return lines
+
+
+def _registry(decl: ast.RegistryDecl, depth: int) -> list[str]:
+	lines = [_indent(depth, f"registry {decl.name}")]
+	for entry in decl.entries:
+		said = ", ".join(attr.name if attr.value is None
+		                 else f"{attr.name} = {expr_to_source(attr.value)}"
+		                 for attr in entry.attrs)
+		line = f"{entry.key!r} : {entry.type_name}"
+		if said:
+			line += f" [{said}]"
+		if entry.family:
+			line += " family"
+		if entry.summary is not None:
+			line += f" -- {entry.summary}"
+		lines.append(_indent(depth + 1, line))
 	return lines
 
 

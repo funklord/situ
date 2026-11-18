@@ -2856,3 +2856,21 @@ struct named_digits {
 	u8           unit;
 	let u64 doubled = count * 2;
 }
+
+// A registry, fuzznet's settings in miniature (0070): a cell per key, its
+// value a message of a struct above, bounded, defaulted, and a family. Here
+// so every corpus sweep parses, unparses and dumps one; no reader generates
+// from it yet.
+policy cell_scope { estate, host }
+
+struct count_cell {
+	decimal u32  value[remaining]  [minimal];
+}
+
+registry edge_settings {
+	"journal/window"  : count_cell [min = 1, max = 36500, default = "60",
+	                                cell_scope = estate, unit = "days"]
+	                    "how far back the journal reaches";
+	"stream/grant/"   : flag_cell    [cell_scope = estate];
+	"archive/gone"    : duration_cell [default = "14d", cell_scope = estate];
+}

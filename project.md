@@ -582,7 +582,8 @@ decl          = namespace_decl | const_decl | enum_decl | tokens_decl
               | struct_decl | endian_marker_decl | codec_decl
               | register_decl | register_block_decl | requirement
               | invariant | when_decl | relation_decl
-              | impl_decl | varint_decl | pipeline_decl ;
+              | impl_decl | varint_decl | pipeline_decl
+              | policy_decl | registry_decl ;
 
 (* One level; nesting is rejected naming its phase. A declaration inside is
    named `outer::header`, and an unqualified reference within the same
@@ -9021,6 +9022,10 @@ Moved to `doc/decision/26.1078-both-walkers-name-the-same-check-refusing-a-text-
 ### 26.1079 A named value may read a text number, compare, and test a token
 
 Moved to `doc/decision/26.1079-a-named-value-may-read-a-text-number.md`.
+
+### 26.1080 A registry declares a keyspace of typed cells
+
+Moved to `doc/decision/26.1080-a-registry-declares-a-keyspace-of-typed-cells.md`.
 
 ### 26.1086 Generated checks size a text number by its digits
 

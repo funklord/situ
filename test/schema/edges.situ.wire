@@ -191,6 +191,9 @@ struct corrected_nibble size=9
   @0x0000   1         u8         head
   @0x0001   8         extended_hamming body  codec=extended_hamming
 
+struct count_cell size=0..
+  @0x0000   0..       u32        value  sized-by=remaining radix=10 minimal
+
 struct counted_by_bits size=5..37
   @0x0000   4         u32        present  big
   @0x0004   0..32     u8         values  sized-by=popcount(present)

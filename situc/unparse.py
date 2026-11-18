@@ -148,6 +148,19 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.TokensDecl):
 		return _tokens_lines(decl)
 
+	if isinstance(decl, ast.PolicyDecl):
+		return [f"policy {decl.name} {{ {', '.join(decl.words)} }}"]
+
+	if isinstance(decl, ast.RegistryDecl):
+		lines = [f"registry {decl.name} {{"]
+		for entry in decl.entries:
+			summary = ("" if entry.summary is None
+			           else f' "{_escape(entry.summary)}"')
+			lines.append(f'\t"{_escape(entry.key)}" : {entry.type_name}'
+			             f"{_attrs_to_source(entry.attrs)}{summary};")
+		lines.append("}")
+		return lines
+
 	if isinstance(decl, ast.StructDecl):
 		return _struct_lines(decl)
 

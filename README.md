@@ -583,6 +583,8 @@ struct cannot describe:
 | `relation name(a: t, b: t) { must ...; }` | a predicate over two messages, for request/response pairing |
 | `namespace name;` | what the generated symbols are scoped by, where the default prefix is not wanted |
 | `when p.ver == 0 refuse zero_version "..."` | what a message MEANS beyond its layout: an identity a consumer keys on, and a default sentence |
+| `registry settings { "net/metric" : count [max = 255, default = "100"] "..."; }` | a keyspace of typed cells: each key's value is a message of a struct, bounded and described, and a key ending in `/` is a family (0070) |
+| `policy scope { estate, host }` | words a registry's entries may use for an attribute the consumer owns, `[scope = estate \| host]`, checked and not interpreted (0070) |
 
 **A byte order the data declares** is TIFF's, and it is a construct rather
 than a case of `endian native` because the answer is in the bytes rather than

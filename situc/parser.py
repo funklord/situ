@@ -155,6 +155,7 @@ DECLARATION_KEYWORDS = frozenset({
 	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
 	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
 	"impl", "require", "assert", "invariant", "when", "relation",
+	"policy", "registry",
 })
 
 # The settings a register or a register block may declare, from section 15.2.
@@ -602,6 +603,8 @@ class Parser:
 			"invariant":	self.parse_invariant,
 			"when":		self.parse_when,
 			"relation":	self.parse_relation,
+			"policy":	self.parse_policy,
+			"registry":	self.parse_registry,
 		}
 
 		handler = handlers.get(token.text)
@@ -1181,6 +1184,50 @@ class Parser:
 		self.expect_symbol("}", "to close the token set body")
 		return ast.TokensDecl(self.span_from(start), name.text,
 		                      tuple(members), default, insensitive)
+
+	def parse_policy(self) -> ast.PolicyDecl:
+		"""`policy scope { estate, host }` (0070)."""
+		start = self.advance()
+		name  = self.expect_ident("a policy name")
+		self.expect_symbol("{", "to open the policy's words")
+		words: list[str] = []
+		while not self.current.is_symbol("}"):
+			words.append(self.expect_ident("a policy word").text)
+			if self.accept_symbol(",") is None:
+				break
+		self.expect_symbol("}", "to close the policy's words")
+		return ast.PolicyDecl(self.span_from(start), name.text, tuple(words))
+
+	def parse_registry(self) -> ast.RegistryDecl:
+		"""`registry name { "key" : type [attrs] "summary"; ... }` (0070).
+
+		The key comes first because it is what a reader looks a cell up by;
+		the type is a struct the cell's bytes are a message of; the summary
+		last, being what a client shows rather than anything it checks."""
+		start = self.advance()
+		name  = self.expect_ident("a registry name")
+		self.expect_symbol("{", "to open the registry")
+		entries: list[ast.RegistryEntry] = []
+		while not self.current.is_symbol("}"):
+			if self.current.kind is not TokenKind.STRING:
+				raise error(
+					f"expected a key, found {self.current.describe()}",
+					self.current.span,
+					label = "a registry entry opens with its key, quoted")
+			key = self.advance()
+			self.expect_symbol(":", "between the key and its type")
+			kind  = self.expect_ident("the cell's type")
+			attrs = self.parse_attrs()
+			summary: str | None = None
+			if self.current.kind is TokenKind.STRING:
+				summary = self.advance().text
+			self.expect_symbol(";", "after the registry entry")
+			entries.append(ast.RegistryEntry(
+				self.span_from(key), key.text,
+				ast.TypeRef(kind.span, kind.text), attrs, summary))
+		self.expect_symbol("}", "to close the registry")
+		return ast.RegistryDecl(self.span_from(start), name.text,
+		                        tuple(entries))
 
 	def parse_codec(self) -> ast.CodecDecl:
 		"""`codec aes_ctr_128 { length_preserving; seekable = linear; ... }`

@@ -67,7 +67,9 @@ decl		= namespace_decl
 	| relation_decl
 	| impl_decl
 	| varint_decl
-	| pipeline_decl ;
+	| pipeline_decl
+	| policy_decl
+	| registry_decl ;
 
 const_decl	= "const" ident "=" expr ";" ;
 
@@ -83,6 +85,14 @@ enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
  * enum decides its member's extent, so unequal arms would mean a search --
  * and a token set's must not, which is what it is for. *)
 tokens_decl	= "tokens" ident [ attrs ] "{" enum_body "}" ;
+
+(* Decision 0070. A keyspace of typed cells: each entry a key, the struct
+ * its bytes are a message of, attributes bounding and describing it, and a
+ * summary. A key ending in `/` is a family. Every attribute situ does not
+ * own is a word of a `policy` the schema declares. *)
+policy_decl	= "policy" ident "{" [ ident { "," ident } [ "," ] ] "}" ;
+registry_decl	= "registry" ident "{" { registry_entry } "}" ;
+registry_entry	= string ":" ident [ attrs ] [ string ] ";" ;
 
 struct_decl	= "struct" ident [ attrs ] "{" { member | let } "}" ;
 

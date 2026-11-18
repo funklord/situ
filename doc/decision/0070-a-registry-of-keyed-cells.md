@@ -1,7 +1,8 @@
 # 0070: a registry of keyed cells, compiled and walked
 
 Status: proposed -- raised by the copyright holder 2026-11-18, with the
-requirements below; the syntax is settled against fuzznet's table in step 1
+requirements below. Being built: the gaps 26.1075, 26.1077, 26.1079; the
+declaration 26.1080
 Date: 2026-11-18
 
 ## Context
@@ -121,9 +122,10 @@ Each of these is a language gap a byte format can meet too (a token ending a
 datagram, a unit suffix in a text protocol), so each is built as a situ
 feature in its own right, before the registry needs it.
 
-## The syntax, sketched
+## The syntax
 
-Not settled; written so step 1 has something to test against the table:
+As built in 26.1080 (a cell's value is its type's `let value`, or its one
+member):
 
 ```situ
 import "std/cells.situ";
@@ -132,15 +134,14 @@ policy scope   { estate, host }
 policy display { restart, sensitive, advanced, verb, advertised }
 
 registry node_settings {
-	cell "revocation/k" : count [min = 1, max = 255]
-		scope = estate, safe = higher, unit = "root signatures",
-		summary = "the estate's k: root signatures a revocation needs";
-	cell "archive/gone" : duration [min = 1s, max = 3650d]
-		default = "14d", scope = estate, display = advanced;
-	family "stream/grant/" : count [max = 3]
-		scope = estate, display = verb;
-	cell "archive/erasure" : erasure
-		default = "4+2", scope = estate, display = advanced;
+	"revocation/k"    : count [min = 1, max = 255, scope = estate,
+	                           safe = higher, unit = "root signatures"]
+	                    "the estate's k: root signatures a revocation needs";
+	"archive/gone"    : duration [min = 1, max = 315360000, default = "14d",
+	                              scope = estate, display = advanced];
+	"stream/grant/"   : count [max = 3, scope = estate, display = verb];
+	"archive/erasure" : erasure [default = "4+2", scope = estate,
+	                             display = advanced];
 }
 ```
 
@@ -150,10 +151,11 @@ generated code acts on them (the comparison, the rate).
 
 ## Steps
 
-1. This record, and fuzznet's 32 entries written as a situ registry in this
-   tree's corpus (`test/schema/`), which settles the syntax. Nothing is
+1. This record, and the gaps writing fuzznet's types as structs found --
+   26.1075, 26.1077, 26.1079; a character class is still open. Nothing is
    written in fuzznet's tree.
-2. Parse and resolve it; the map and `situc explain` describe it.
+2. Parse and check it, dump and round-trip it (26.1080). The map and
+   `situc explain` describing it are still to do.
 3. C: the table, `check`, `parse`, `safer`; the four-way holds it.
 4. The image section and both walkers; the differential.
 5. The writer path: rows written without `situc`, read back by the walker.

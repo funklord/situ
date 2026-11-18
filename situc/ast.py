@@ -1223,6 +1223,60 @@ class EnumDecl(Decl):
 
 
 @dataclass(frozen=True)
+class PolicyDecl(Decl):
+	"""`policy scope { estate, host }` -- words a registry's entries may use
+	for an attribute situ does not own (0070).
+
+	A registry's consumer has policy of its own -- fuzznet's cells stand at
+	an estate or a host, and a client hides the advanced ones -- and situ
+	checks the words without deciding what they mean: an entry naming a
+	word its policy does not declare is a typo, refused at compile time
+	rather than carried to a reader that would ignore it."""
+
+	span: Span
+	name: str
+	words: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RegistryEntry(Node):
+	"""`"archive/gone" : duration [min = 1, default = "14d"] "summary";`
+
+	One cell of a keyspace: the key, the struct its value is a message of,
+	the attributes bounding and describing it, and what a client shows for
+	it. A key ending in `/` is a FAMILY, whose instances add one word."""
+
+	span: Span
+	key: str
+	#: The struct the cell's bytes are a message of, as a member's type is
+	#: held -- its own span inside it, so a round trip compares the name.
+	type_ref: "TypeRef"
+	attrs: tuple[Attr, ...] = ()
+	summary: str | None = None
+
+	@property
+	def family(self) -> bool:
+		return self.key.endswith("/")
+
+	@property
+	def type_name(self) -> str:
+		return self.type_ref.name
+
+	@property
+	def type_span(self) -> Span:
+		return self.type_ref.span
+
+
+@dataclass(frozen=True)
+class RegistryDecl(Decl):
+	"""`registry node_settings { ... }` -- a keyspace of typed cells (0070)."""
+
+	span: Span
+	name: str
+	entries: tuple[RegistryEntry, ...]
+
+
+@dataclass(frozen=True)
 class TokensDecl(Decl):
 	"""`tokens verb { helo = "HELO", ... }` -- a set of text keywords (0055).
 
@@ -1966,6 +2020,12 @@ class Schema(Node):
 
 	def token_sets(self) -> list[TokensDecl]:
 		return [decl for decl in self.decls if isinstance(decl, TokensDecl)]
+
+	def policies(self) -> list[PolicyDecl]:
+		return [decl for decl in self.decls if isinstance(decl, PolicyDecl)]
+
+	def registries(self) -> list[RegistryDecl]:
+		return [decl for decl in self.decls if isinstance(decl, RegistryDecl)]
 
 	def consts(self) -> list[ConstDecl]:
 		return [decl for decl in self.decls if isinstance(decl, ConstDecl)]
