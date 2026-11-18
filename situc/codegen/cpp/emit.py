@@ -2014,6 +2014,10 @@ class Emitter:
 		held  = self._over_fields(struct, other.discriminant)
 		chain = "1u"
 		for arm, unit in reversed(arms):
+			# Not an arm that answers what the chain already does: C's
+			# carries the reasoning (duplicateValueTernary).
+			if arm.value is not None and f"{unit}u" == chain:
+				continue
 			chain = (f"{unit}u" if arm.value is None
 			         else f"({held} == {arm.value}u ? {unit}u : {chain})")
 		return chain
@@ -5328,6 +5332,8 @@ class Emitter:
 			if member.since is not None and member.version_field:
 				version = self._over_fields(struct, member.version_field)
 				length = f"({version} >= {member.since}u ? {length} : 0u)"
+			if arm.value is not None and length == chain:
+				continue		# the two branches would agree; C's says why
 			chain = (length if arm.value is None
 			         else f"({held} == {arm.value}u ? {length} : {chain})")
 		return chain

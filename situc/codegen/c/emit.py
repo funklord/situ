@@ -10575,6 +10575,11 @@ class Emitter:
 		held  = self._over_fields(struct, other.discriminant, "view")
 		chain = "1u"
 		for arm, unit in reversed(arms):
+			# An arm that answers what the chain already does adds a branch
+			# whose two values agree -- cppcheck's duplicateValueTernary,
+			# hundreds of times over a corpus -- and nothing else.
+			if arm.value is not None and f"{unit}u" == chain:
+				continue
 			chain = (f"{unit}u" if arm.value is None
 			         else f"({held} == {arm.value}u ? {unit}u : {chain})")
 		return chain
@@ -10632,7 +10637,10 @@ class Emitter:
 				length = f"({version} >= {member.since}u ? {length} : 0u)"
 			if arm.value is None:
 				chain = length		# `default:` with an arm; matches anything
-			else:
+			elif length != chain:
+				# Not where it answers what the chain already does: the two
+				# branches would agree, which is the same number spelled
+				# with a comparison in front of it.
 				chain = (f"({held_disc} == {arm.value}u"
 				         f" ? {length} : {chain})")
 		return chain

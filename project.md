@@ -9070,6 +9070,10 @@ Moved to `doc/decision/26.1089-a-registry-is-generated-in-rust.md`.
 
 Moved to `doc/decision/26.1090-a-registry-default-is-a-cell-of-its-type.md`.
 
+### 26.1091 An arm that answers what the chain already does is not a branch
+
+Moved to `doc/decision/26.1091-an-arm-that-repeats-the-chain-is-not-a-branch.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
