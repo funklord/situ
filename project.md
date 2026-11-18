@@ -8994,6 +8994,10 @@ Moved to `doc/decision/26.1070-an-authenticated-region-hides-nothing-from-the-wa
 
 Moved to `doc/decision/26.1071-a-covered-span-refuses-a-region-the-frame-does-not-hold.md`.
 
+### 26.1072 A scaled number keeps its sign, and the walker reads text numbers
+
+Moved to `doc/decision/26.1072-a-scaled-number-keeps-its-sign.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.

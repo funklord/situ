@@ -1362,7 +1362,13 @@ static inline int situ_parse_scaled(const uint8_t *data, uint32_t len,
 
 	/* The magnitude a signed value may reach is one larger going down than
 	 * going up; built from the bound for `situ_parse_int`'s reason. */
-	ceiling = negative ? (uint64_t)(-(min + 1)) + 1u : (uint64_t)max;
+	/* Where `min` is zero or more a minus sign leaves room for zero alone
+	 * -- `-0`, which the other three accept -- and the expression beside it
+	 * wrapped to a ceiling of zero, `0 - digit` then wrapping too, so every
+	 * digit passed and `-75` read as 65461 in a `u16` (26.1072). */
+	ceiling = !negative ? (uint64_t)max
+	        : min >= 0  ? 0u
+	        : (uint64_t)(-(min + 1)) + 1u;
 
 	/* The integer part. At least one digit: a leading point is refused,
 	 * because no digits is not the number zero -- the rule the empty run
@@ -1373,7 +1379,10 @@ static inline int situ_parse_scaled(const uint8_t *data, uint32_t len,
 		if (c < (uint8_t)'0' || c > (uint8_t)'9') {
 			break;
 		}
-		if (magnitude > (ceiling - (uint64_t)(c - (uint8_t)'0')) / 10u) {
+		/* The digit against the ceiling first, so the subtraction
+		 * cannot wrap where the ceiling is below nine. */
+		if ((uint64_t)(c - (uint8_t)'0') > ceiling
+		    || magnitude > (ceiling - (uint64_t)(c - (uint8_t)'0')) / 10u) {
 			return -1;
 		}
 		magnitude = magnitude * 10u + (uint64_t)(c - (uint8_t)'0');
@@ -1395,7 +1404,10 @@ static inline int situ_parse_scaled(const uint8_t *data, uint32_t len,
 			if (c < (uint8_t)'0' || c > (uint8_t)'9') {
 				break;
 			}
-			if (magnitude > (ceiling - (uint64_t)(c - (uint8_t)'0')) / 10u) {
+			/* The digit against the ceiling first, so the subtraction
+			 * cannot wrap where the ceiling is below nine. */
+			if ((uint64_t)(c - (uint8_t)'0') > ceiling
+			    || magnitude > (ceiling - (uint64_t)(c - (uint8_t)'0')) / 10u) {
 				return -1;
 			}
 			magnitude = magnitude * 10u + (uint64_t)(c - (uint8_t)'0');

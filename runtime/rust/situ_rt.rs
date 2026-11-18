@@ -700,10 +700,16 @@ pub fn parse_scaled(bytes: &[u8], low: i64, high: i64) -> Option<(i64, i32)> {
 
 	let negative = bytes[0] == b'-';
 	let rest = if negative { &bytes[1..] } else { bytes };
-	let ceiling = if negative {
-		(-(low + 1)) as u64 + 1
-	} else {
+	// Where `low` is zero or more a minus sign leaves room for zero alone --
+	// `-0`, which the other three accept. The expression below overflowed
+	// from such a `low`: a panic in a debug build, and in a release one
+	// `-75` read as 65461 in a `u16` (26.1072).
+	let ceiling = if !negative {
 		high as u64
+	} else if low >= 0 {
+		0
+	} else {
+		(-(low + 1)) as u64 + 1
 	};
 
 	let mut magnitude: u64 = 0;
@@ -715,7 +721,7 @@ pub fn parse_scaled(bytes: &[u8], low: i64, high: i64) -> Option<(i64, i32)> {
 	let start = at;
 	while at < rest.len() && rest[at].is_ascii_digit() {
 		let digit = u64::from(rest[at] - b'0');
-		if magnitude > (ceiling - digit) / 10 {
+		if digit > ceiling || magnitude > (ceiling - digit) / 10 {
 			return None;
 		}
 		magnitude = magnitude * 10 + digit;
@@ -732,7 +738,7 @@ pub fn parse_scaled(bytes: &[u8], low: i64, high: i64) -> Option<(i64, i32)> {
 		let first = at;
 		while at < rest.len() && rest[at].is_ascii_digit() {
 			let digit = u64::from(rest[at] - b'0');
-			if magnitude > (ceiling - digit) / 10 {
+			if digit > ceiling || magnitude > (ceiling - digit) / 10 {
 				return None;
 			}
 			magnitude = magnitude * 10 + digit;
