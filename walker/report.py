@@ -235,9 +235,19 @@ def _offset_computable(image: Image, struct_index: int, index: int) -> bool:
 			return False
 		delimited_member = (before in image.delimiters
 		                    and earlier.type_struct == NONE)
+		# One nested struct the walk measures by its extent, as `_nested`
+		# does to answer `ok= extent=`. Refused here, FLAC's frame CRC
+		# after its variable-length `fields` was never summed while all
+		# four backends summed it -- unseen, the sweep comparing only
+		# lines both sides print (26.1069).
+		nested_member = (earlier.type_struct not in (NONE, None)
+		                 and earlier.kind == FIELD
+		                 and earlier.array_count == NONE
+		                 and earlier.size_code == NONE
+		                 and before not in image.delimiters)
 		if (not earlier.fixed and earlier.size_code == NONE
 				and before not in image.varints
-				and not delimited_member):
+				and not delimited_member and not nested_member):
 			return False
 	return True
 

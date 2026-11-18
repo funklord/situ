@@ -362,6 +362,19 @@ def test_the_walker_agrees_with_the_compiled_backends(
 				f"  buffer: {packet.hex()}")
 			checked += 1
 
+		# Except a sum. The differ asks one only where every reader computes
+		# it, so a sum C answers and this walker does not -- a value or
+		# `refused` -- is a sum the walker declined, and the intersection
+		# above dropped it in silence. TCP's and UDP's were dropped that way
+		# until 26.1066, and the dissector's refused ones until 26.1067.
+		unanswered = sorted(f"{where}.{member}"
+		                    for where, member in compiled
+		                    if member.endswith(".sum")
+		                    and (where, member) not in walked)
+		assert not unanswered, (
+			f"{schema.name}: C answers sums the walker does not: "
+			f"{unanswered}\n  buffer: {packet.hex()}")
+
 	# Not asserted per schema: `http` and `smtp` are delimited throughout and
 	# have no member this subset renders, which is a true answer rather than
 	# a silent one. The corpus-wide floor below is what keeps the whole thing

@@ -8982,6 +8982,10 @@ Moved to `doc/decision/26.1067-the-dissector-checks-no-span-the-frame-cut.md`.
 
 Moved to `doc/decision/26.1068-std-carries-xz-and-zstd.md`.
 
+### 26.1069 A sum the walker declines is a failure, and FLAC's frame CRC is summed
+
+Moved to `doc/decision/26.1069-a-sum-the-walker-declines-is-a-failure.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.
