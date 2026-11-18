@@ -701,6 +701,23 @@ def _gates(image: Image, struct_index: int) -> list[int]:
 	return found
 
 
+def _text_numbers(image: Image, struct_index: int) -> list[int]:
+	"""Text numbers -- digits read as a value -- that are a member here.
+
+	Every backend answered `name ok= value=` for each and this walker
+	answered nothing: `_scalars` leaves out a text number, which is digits
+	rather than bits, and no other list took them. cpio's header is thirteen
+	of them (26.1072). An arm's own is `_arm_values`'.
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if image.placements[index].radix
+	        and image.placements[index].kind == FIELD
+	        and index not in image.arms
+	        and not image.placements[index].is_tag
+	        and not _behind_gate(image, index)
+	        and _offset_computable(image, struct_index, index)]
+
+
 def _gated(image: Image, gate: int) -> list[int]:
 	"""Plain scalars inside one sealed region, in declaration order.
 
@@ -2756,6 +2773,25 @@ def _members(image: Image, view: View, struct_index: int,
 		except Refused:
 			continue
 		lines.append(f"{local} len={content} term={1 if terminated else 0}")
+
+	for index in _text_numbers(image, struct_index):
+		local = _local(image, index)
+		placement = image.placements[index]
+		# `ok=0 value=0` where the digits are not a number, as each
+		# backend's getter refuses them; a scaled one carries its power of
+		# ten (26.1072).
+		try:
+			if placement.text_flags & SCALED:
+				value, power = parse_scaled_digits(view, index)
+				lines.append(f"{local} ok=1 value={value} exp={power}")
+			else:
+				value = parse_digits(view, index)
+				lines.append(f"{local} ok=1"
+				             f" value={value & 0xFFFFFFFFFFFFFFFF}")
+		except Refused:
+			lines.append(f"{local} ok=0 value=0"
+			             + (" exp=0" if placement.text_flags & SCALED
+			                else ""))
 
 	for index in _gates(image, struct_index):
 		local = _local(image, index)
