@@ -6204,6 +6204,15 @@ class Emitter:
 			return None
 		return {"remaining": f"max(0, self._len - ({start}))"}
 
+	def _let_reads(self, struct: ResolvedStruct) -> dict[str, str]:
+		"""Each `let` of the struct as its getter, for a `when` that reads one
+		(26.1102): a let is a value of the view as a field is, computed modulo
+		2^64 and held to its width by that getter alone."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		return {let.name: f"self.{py_name(let.name)}"
+		        for let in (decl.lets if decl is not None else ())}
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			held: str, bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -9529,7 +9538,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len'})}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct)})}:",
 				f'\t\t\traise ConstraintError("{struct.name}: {when.name}")',
 			])
 		return lines
@@ -9568,7 +9577,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t# {when.severity.value} {when.name}",
-				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len'})}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct)})}:",
 				f"\t\t\tfound.append(self.MSG_{py_name(when.name).upper()})",
 			])
 		lines.append("\t\treturn found")

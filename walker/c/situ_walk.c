@@ -1996,6 +1996,39 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 	 * carries at `base`, compared whole, folding ASCII case where the set
 	 * does. A span the frame does not hold spells nothing, as each
 	 * backend's `which` over its clamped pointer and length answers. */
+	/* A `let` (26.1102): its own program over this frame, held to its width and
+	 * read back signed where the let is, as `situ_walk_let` holds it. */
+	if (what == SITU_WALK_ASK_LET) {
+		const uint8_t *row;
+		int64_t        held = 0;
+		uint64_t       value;
+		uint32_t       bits;
+
+		if (ctx->image->lets == NULL || index >= ctx->image->let_count) {
+			return SITU_WALK_MALFORMED;
+		}
+		row  = ctx->image->lets + index * ctx->image->let_stride;
+		bits = row[12];
+		if (bits == 0u || bits > 64u) {
+			return SITU_WALK_MALFORMED;
+		}
+		const situ_walk_err err = situ_walk_eval(ctx->image, u32_at(row + 8u),
+		                                         ctx_load, ctx,
+		                                         (int64_t)ctx->len, &held);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		value = (uint64_t)held;
+		if (bits < 64u) {
+			value &= ((uint64_t)1 << bits) - 1u;
+			if (row[13] != 0u && (value >> (bits - 1u)) != 0u) {
+				value |= ~(((uint64_t)1 << bits) - 1u);
+			}
+		}
+		*out = (int64_t)value;
+		return SITU_WALK_OK;
+	}
+
 	if (what == SITU_WALK_ASK_SPELLS) {
 		const uint8_t *operand = ctx->image->code + (uint32_t)base;
 		const uint8_t  fold    = (uint8_t)(operand[0] & 1u);
@@ -8214,6 +8247,8 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 /* Whether a token member spells one arm (26.1082): a u32 placement, a flags
  * byte, a length byte and that many bytes. */
 #define OP_SPELLS 0x0Du
+/* A `let` by its row in the lets section (26.1102), a u32 operand. */
+#define OP_LET 0x0Eu
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -8441,6 +8476,22 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				what = SITU_WALK_ASK_SUM;
 			}
 			const situ_walk_err err = load(ctx, what,
+			                               u32_at(image->code + pc), 0,
+			                               &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = value;
+			pc += 4u;
+			continue;
+		}
+
+		if (op == OP_LET) {
+			if (pc + 4u > image->code_len || depth >= STACK_DEPTH) {
+				return SITU_WALK_MALFORMED;
+			}
+			int64_t value = 0;
+			const situ_walk_err err = load(ctx, SITU_WALK_ASK_LET,
 			                               u32_at(image->code + pc), 0,
 			                               &value);
 			if (err != SITU_WALK_OK) {

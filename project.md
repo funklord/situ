@@ -9134,6 +9134,10 @@ Moved to `doc/decision/26.1100-an-opaque-default-takes-any-value.md`.
 
 Moved to `doc/decision/26.1101-the-dissector-counts-a-text-number-in-digits.md`.
 
+### 26.1102 A `when` may read a `let` of its struct
+
+Moved to `doc/decision/26.1102-a-when-may-read-a-let.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

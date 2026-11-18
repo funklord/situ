@@ -2948,3 +2948,14 @@ struct classed {
 	u8 word[] until ";" [chars = "a-z"];
 	u8 rest[remaining] [chars = "0-9"];
 }
+
+// A `when` reading a `let` (26.1102): held to the let's width, so 255 + 2
+// is 1 here and passes, where the sum the arithmetic computes would not.
+struct let_rule {
+	u8 a;
+	u8 b;
+	let u8 total = a + b;
+}
+
+when let_rule.total > 200
+	refuse let_rule_too_big "a and b, held to a byte, may not pass 200";

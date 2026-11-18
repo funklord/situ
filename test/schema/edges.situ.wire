@@ -540,6 +540,11 @@ struct length_table size=2..
   ~         0..       u8         chunks  sized-by=sum(chunk_lens)
   ~         1         u8         after_chunks
 
+struct let_rule size=2
+  @0x0000   1         u8         a
+  @0x0001   1         u8         b
+  let_rule refuses: let_rule_too_big when let_rule.total > 200
+
 struct link size=4..1024
   @0x0000   1         u8         kind
   @0x0001   1         u8         units

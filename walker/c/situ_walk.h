@@ -846,7 +846,11 @@ typedef enum {
 	 * member, and `base` the offset in the code section of the operand
 	 * that follows `spells` -- a flags byte (bit 0 folds ASCII case), the
 	 * arm's length and its bytes. 1 or 0. */
-	SITU_WALK_ASK_SPELLS = 8
+	SITU_WALK_ASK_SPELLS = 8,
+	/* A struct's `let` (26.1102): `index` is its row in the lets section, and
+	 * the answer is its program's value held to the let's width and sign,
+	 * as the getter returns it. `base` is unused. */
+	SITU_WALK_ASK_LET = 9
 } situ_walk_ask;
 
 typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,

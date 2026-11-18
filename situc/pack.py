@@ -364,6 +364,9 @@ class Op:
 	#: needed and a `default = pass` set reads like any other; the flags
 	#: byte says to fold ASCII case.
 	SPELLS		= 0x0D		# + u32 placement, u8 flags, u8 len, bytes
+	#: A struct's `let` in a `when` (26.1102), by its row in the lets section:
+	#: the walker runs that row's program and holds it to the let's width.
+	LET		= 0x0E		# + u32 let row
 
 
 BINARY = {
@@ -409,6 +412,9 @@ class Program:
 
 	def __init__(self) -> None:
 		self.code = bytearray()
+		#: `owner.let` paths to their rows in the lets section, which a
+		#: `when` program reads with `LET`. Filled once the lets are packed.
+		self.lets: dict[str, int] = {}
 
 	def character(self, expr: "ast.CharLiteral") -> int:
 		"""A character literal, as the number the parser resolved it to.
@@ -517,6 +523,9 @@ class Program:
 				# report saying so (26.484, 26.517).
 				if path is not None and path in folded:
 					self.emit(Op.PUSH, folded[path], "<q")
+					return
+				if path is not None and path in self.lets:
+					self.emit(Op.LET, self.lets[path])
 					return
 				raise PackError(f"no placement for `{path or expr}`")
 			index, base = found
@@ -1887,40 +1896,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# evaluate cannot answer `validate` either -- and the flag that says so
 	# is decided a few lines down.
 	messages_blob = bytearray()
-	severities = {ast.Severity.REFUSE: 0, ast.Severity.WARN: 1,
-	              ast.Severity.NOTE: 2}
-	#: Structs with a `refuse` this image could not encode.
-	refusal_lost: set[str] = set()
-	for when in schema.whens():
-		owners = [path.partition(".")[0] for path in paths_in(when.expr)
-		          if path.partition(".")[0] in shape_of]
-		owner  = owners[0] if owners else ""
-		if not owner or shape_of.get(owner) is None:
-			coverage.unencodable[f"when {when.name}"] = \
-				"names no struct in this image"
-			continue
-
-		start = len(program.code)
-		try:
-			program.compile(_measured(when.expr, resolved.structs[owner],
-			                          resolved),
-			                resolve_path, consts, enum_members)
-		except PackError as why:
-			# Recorded rather than dropped: an image that carried a message
-			# it cannot evaluate would answer about a schema nobody wrote,
-			# and `Coverage` exists because an image is opaque (26.76).
-			del program.code[start:]
-			coverage.unencodable[f"when {when.name}"] = str(why)
-			if when.severity is ast.Severity.REFUSE:
-				refusal_lost.add(owner)
-			continue
-		program.emit(Op.END)
-
-		messages_blob += _struct.pack(
-			"<IIIIBxxx", strings.intern(when.name), strings.intern(when.text),
-			shape_of[owner] or 0, start, severities[when.severity])
-		coverage.messages += 1
-
 	# What a struct's `let`s assemble (26.1059), so both walkers read the
 	# value the four backends' getters return. `WRAP` first: the program
 	# computes in the backends' arithmetic rather than a length's.
@@ -1958,9 +1933,47 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				continue
 			program.emit(Op.END)
 			let_row[(let_owner.name, let.name)] = len(lets_blob) // LET_BYTES
+			program.lets[f"{let_owner.name}.{let.name}"] = \
+				let_row[(let_owner.name, let.name)]
 			lets_blob += _struct.pack(
 				"<IIIBBxx", strings.intern(let.name), shape_of[let_owner.name] or 0,
 				start, scalar.bits, 1 if scalar.signed else 0)
+
+	# The `when`s after the `let`s, so a predicate reading one has a row
+	# to name with `LET` (26.1102).
+	severities = {ast.Severity.REFUSE: 0, ast.Severity.WARN: 1,
+	              ast.Severity.NOTE: 2}
+	#: Structs with a `refuse` this image could not encode.
+	refusal_lost: set[str] = set()
+	for when in schema.whens():
+		owners = [path.partition(".")[0] for path in paths_in(when.expr)
+		          if path.partition(".")[0] in shape_of]
+		owner  = owners[0] if owners else ""
+		if not owner or shape_of.get(owner) is None:
+			coverage.unencodable[f"when {when.name}"] = \
+				"names no struct in this image"
+			continue
+
+		start = len(program.code)
+		try:
+			program.compile(_measured(when.expr, resolved.structs[owner],
+			                          resolved),
+			                resolve_path, consts, enum_members)
+		except PackError as why:
+			# Recorded rather than dropped: an image that carried a message
+			# it cannot evaluate would answer about a schema nobody wrote,
+			# and `Coverage` exists because an image is opaque (26.76).
+			del program.code[start:]
+			coverage.unencodable[f"when {when.name}"] = str(why)
+			if when.severity is ast.Severity.REFUSE:
+				refusal_lost.add(owner)
+			continue
+		program.emit(Op.END)
+
+		messages_blob += _struct.pack(
+			"<IIIIBxxx", strings.intern(when.name), strings.intern(when.text),
+			shape_of[owner] or 0, start, severities[when.severity])
+		coverage.messages += 1
 
 	validatable: dict[str, bool] = {name: True for name, _ in order}
 	nests: dict[str, set[str]] = {}

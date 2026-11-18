@@ -1636,6 +1636,11 @@ def check_whens(schema: ast.Schema) -> None:
 					notes = ["name a member, `s.m`, measure one, `size(s.m)`, "
 					         "or measure the struct, `size(s)` (0051)"],
 				)
+			# A `let` of the struct, which is a value of the view as a field
+			# is: the README says one is usable by any expression after it,
+			# and a `when` refused it as a field that does not exist (26.1102).
+			if field in {let.name for let in struct.lets}:
+				continue
 			reached = _step_through(structs, struct, field, held, path)
 			holder = _conditional_holder(*reached)
 			if holder is not None:

@@ -13114,6 +13114,16 @@ class Emitter:
 			])
 		return lines
 
+	def _let_reads(self, struct: ResolvedStruct) -> dict[str, str]:
+		"""Each `let` of the struct as its getter over the view, for a `when`
+		that reads one (26.1102): a let is a value of the view as a field is,
+		computed modulo 2^64 and held to its width by that getter alone."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		return {let.name: f"{ident(self.prefix, struct.name, c_name(let.name), 'get')}"
+		                  "(view)"
+		        for let in (decl.lets if decl is not None else ())}
+
 	def _messages_body(self, struct: ResolvedStruct,
 			linkage: str = "") -> list[str]:
 		"""`messages`, and its text table where one was asked for."""
@@ -13140,7 +13150,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"	/* {when.severity.value} {when.name} */",
-				f"	if ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit'})}) {{",
+				f"	if ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit', **self._let_reads(struct)})}) {{",
 				"		if (held < cap) {",
 				f"			ids[held] = "
 				f"{macro(self.prefix, struct.name, when.name, 'MSG')};",
@@ -13440,7 +13450,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\tif ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit'})}) {{",
+				f"\tif ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit', **self._let_reads(struct)})}) {{",
 				f"\t\t/* {when.name} */",
 				f"\t\t*which = {_NO_CHECK};",
 				"\t\treturn SITU_ERR_CONSTRAINT;",

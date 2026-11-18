@@ -5560,8 +5560,20 @@ class Emitter:
 		             for held in readable_names(struct)
 		             if re.search(rf"\b{re.escape(local_name(struct, held))}\b",
 		                          local))
+		# A `let` it reads (26.1102), through its getter, and its sign counts in
+		# the width chosen above as a field's does.
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		lets = [let for let in (decl.lets if decl is not None else ())
+		        if re.search(rf"\b{re.escape(let.name)}\b", local)]
+		signed = signed or any(let.type_ref.scalar is not None
+		                       and let.type_ref.scalar.signed for let in lets)
+		cast = "i128" if signed else "usize"
+		extra = {**(extra or {}),
+		         **{let.name: f"self.{_ident(c_name(let.name))}()"
+		            for let in lets}}
 		return self._over_fields(struct, local, "self", extra = extra,
-		                         cast = "i128" if signed else "usize")
+		                         cast = cast)
 
 	def _remaining_from(self, struct: ResolvedStruct,
 			placement: Placement) -> dict[str, str] | None:

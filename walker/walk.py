@@ -889,6 +889,7 @@ def _evaluate(view: View, code_at: int,
 		count_of   = lambda i: _count(view, i),
 		sum_of     = lambda i: _sum(view, i),
 		spells     = lambda i, run, fold: _spells(view, i, run, fold),
+		let_of     = lambda row: let_value(view, row),
 		# A THUNK, so the offset it is measured from is computed only by a
 		# program that asks for it (26.585). Every caller passed
 		# `offset_bits(...)` eagerly, and for a member interior to a region
@@ -905,6 +906,16 @@ def _evaluate(view: View, code_at: int,
 		# nested view being made over the one buffer (26.1045).
 		here       = view.at,
 	)
+
+
+def let_value(view: View, row: int) -> int:
+	"""A `let`'s value over this view: its program, held to its width and
+	sign as the backends' getter holds it (26.1059, 26.1102)."""
+	held  = view.image.lets[row]
+	value = _evaluate(view, held.code) & ((1 << held.bits) - 1)
+	if held.signed and value >> (held.bits - 1):
+		value -= 1 << held.bits
+	return value
 
 
 def _sizes_in_bytes(image: Image, code_at: int) -> bool:

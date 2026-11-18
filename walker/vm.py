@@ -59,6 +59,9 @@ WRAP = 0x0C
 #: Whether a token member spells one arm (26.1082): the placement, a flags
 #: byte (bit 0 folds ASCII case), the arm's length and its bytes. 1 or 0.
 SPELLS = 0x0D
+#: A struct's `let`, by its row in the lets section (26.1102): the value its own
+#: program assembles, held to its width and sign as the getter is.
+LET = 0x0E
 _U64 = (1 << 64) - 1
 
 
@@ -149,7 +152,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
         tag: int | None = None,
         sum_of: Callable[[int], int] | None = None,
         here: int | None = None,
-        spells: Callable[[int, bytes, bool], int] | None = None) -> int:
+        spells: Callable[[int, bytes, bool], int] | None = None,
+        let_of: Callable[[int], int] | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -195,6 +199,14 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 				raise VmError("this program tests a token and nothing here "
 				              "reads one")
 			stack.append(spells(index, run, fold))
+			continue
+		if op == LET:
+			row = _struct.unpack_from("<I", code, pc)[0]
+			pc += 4
+			if let_of is None:
+				raise VmError("this program reads a `let` and nothing here "
+				              "computes one")
+			stack.append(let_of(row))
 			continue
 		if op == SUM:
 			if sum_of is None:

@@ -4427,6 +4427,15 @@ class Emitter:
 			return None
 		return {"remaining": f"situ_remaining_u32(raw_.limit, {start})"}
 
+	def _let_reads(self, struct: ResolvedStruct) -> dict[str, str]:
+		"""Each `let` of the struct as its getter, for a `when` that reads one
+		(26.1102): a let is a value of the view as a field is, computed modulo
+		2^64 and held to its width by that getter alone."""
+		decl = next((one for one in self.schema.structs()
+		             if one.name == struct.name), None)
+		return {let.name: f"this->{c_name(let.name)}()"
+		        for let in (decl.lets if decl is not None else ())}
+
 	def _over_fields(self, struct: ResolvedStruct, source: str,
 			bounded: bool = False,
 			extra: dict[str, str] | None = None) -> str:
@@ -11141,7 +11150,7 @@ class Emitter:
 			source = unparse_expr(when.expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit'})}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct)})}) {{",
 				f"\t\t\t/* {when.name} */",
 				*(["\t\t\t*which_ = no_check;"] if named else []),
 				"\t\t\treturn ::situ::rt::err::constraint;",
@@ -11186,7 +11195,7 @@ class Emitter:
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t/* {when.severity.value} {when.name} */",
-				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit'})}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct)})}) {{",
 				"\t\t\tif (found < cap) {",
 				f"\t\t\t\tids[found] = msg_{c_name(when.name)};",
 				"\t\t\t}",
