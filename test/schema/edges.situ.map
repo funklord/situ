@@ -261,6 +261,10 @@ struct derived size=13 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   derived.sequence                       offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(tag)
   derived.tag                            offset=AbsoluteStatic(0x09) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
+struct duration_cell size=1.. mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
+  duration_cell.count                    offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
+  duration_cell.unit                     offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+
 struct dynamic_text size=5.. access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
   dynamic_text.head                      offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
   dynamic_text.tag                       offset=Scanned size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential address=Unstable

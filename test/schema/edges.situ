@@ -2831,3 +2831,20 @@ struct counted_digits {
 	decimal u32  count[n]  [minimal];
 	u8           rest[remaining];
 }
+
+// Digits, then a one-byte unit, which is how fuzznet writes a duration
+// (`14d`): a text number run to the frame less a fixed tail, and the tail a
+// sized token (0070). Before, `[remaining]` left a tail only to plain `u8`
+// (26.1077).
+tokens time_unit {
+	d = "d",
+	h = "h",
+	m = "m",
+	s = "s",
+	default = error,
+}
+
+struct duration_cell {
+	decimal u32  count[remaining]  [minimal];
+	time_unit    unit[1];
+}

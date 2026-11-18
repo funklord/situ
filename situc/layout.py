@@ -1297,7 +1297,7 @@ class Solver:
 		# rather than by a check.
 		state  = Walk(fields={}, cursor=Extent(0, 0))
 		self.place_members(decl, decl.members, scope, layout, name, state)
-		_leave_the_tail(layout, state)
+		_leave_the_tail(layout, state, set(self.tokens))
 		# Kept for the `when` rules, which read the same fields by the same
 		# ranges and were checked against none of them (26.956).
 		layout.value_ranges = dict(state.fields)
@@ -4514,7 +4514,8 @@ def _region_argument(region: ast.Member, name: str) -> str | None:
 	return None
 
 
-def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
+def _leave_the_tail(layout: StructLayout, state: Walk,
+		tokens: set[str] = frozenset()) -> None:
 	"""A `[remaining]` run leaves the fixed members after it their bytes.
 
 	`commitment[32] | ciphertext | tag[16]` is most AEAD frames, and a frame
@@ -4541,7 +4542,13 @@ def _leave_the_tail(layout: StructLayout, state: Walk) -> None:
 	sized   = [held for held in movable if _sized_before(
 	           held, layout.placements[:at], parent)]
 	movable = [held for held in movable if held not in sized]
-	if movable or run.element_bits != BITS_PER_BYTE or run.type_name != "u8":
+	# The run is bytes: plain `u8`, or bytes read AS something -- a text
+	# number's digits, a token set's spelling -- whose span is the same
+	# frame less the tail. `14d` is digits then a unit (0070).
+	bytes_run = run.element_bits == BITS_PER_BYTE and (
+		run.type_name == "u8" or run.radix is not None
+		or run.type_name in tokens)
+	if movable or not bytes_run:
 		raise error(
 			"`[remaining]` must be the last member of its frame",
 			state.closed_span,

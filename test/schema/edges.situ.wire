@@ -247,6 +247,10 @@ struct derived size=13
   tag covers: body sequence
   derived refuses: derived_total_contradicted when derived.total != size(derived.a) + size(derived.b)
 
+struct duration_cell size=1..
+  @0x0000   0..       u32        count  sized-by=remaining radix=10 minimal leaves=1
+  ~         1         time_unit  unit
+
 struct dynamic_text size=5..
   @0x0000   until:3b  u8         head
   ~         4         u8         tag  big encoding=ascii

@@ -9010,6 +9010,10 @@ Moved to `doc/decision/26.1074-a-guard-at-a-zero-cursor-is-not-emitted.md`.
 
 Moved to `doc/decision/26.1075-a-token-set-may-end-where-its-length-says.md`.
 
+### 26.1077 A text number or a token may run to the frame less a fixed tail
+
+Moved to `doc/decision/26.1077-a-text-number-or-a-token-may-leave-a-tail.md`.
+
 ### 26.1078 Both walkers name the same check refusing a text number
 
 Moved to `doc/decision/26.1078-both-walkers-name-the-same-check-refusing-a-text-number.md`.
