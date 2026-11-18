@@ -209,8 +209,12 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: directory (26.969, 26.970): an entry's value is `u16 shorts[2]` for a
 #: SHORT and `u32 long` otherwise, two ordinary scalar arms at a constant
 #: offset, read 2026-11-12.
+#: And 82 -> 87 on 2026-11-18, five scalar arms in `edges`: `raw` in
+#: `opaque_arm_section` (26.1096), and `one` and `rest` in each of
+#: `deep_switch` and `off_switch` (26.1097) -- ordinary arms whose
+#: discriminant is the new part, not the arm.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                82,
+	("scalar", "not-struct", ""):                87,
 	("no-scalar", "struct", "fixed"):            123,
 	("no-scalar", "struct", "unmeasurable"):     86,
 	("no-scalar", "not-struct", ""):              1,

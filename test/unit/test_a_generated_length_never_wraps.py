@@ -125,7 +125,10 @@ RUST_CENSUS = {
 	# `here > msg.len()` (26.1050).
 	# 27 -> 28 the same day, when `unbounded_nest`, `exact_frame` and
 	# `scrambled_summed` joined: read the same way, 27 with them cut.
-	"edges.situ": 28,
+	# 28 -> 32 on 2026-11-18, when `opaque_arm_section`, `after_opaque_arm`
+	# (26.1096), `deep_switch` and `off_switch` (26.1097) joined: the
+	# emitter over the edges before them still gives 28.
+	"edges.situ": 32,
 	"ethernet.situ": 2,
 	"header.situ": 1,
 	"http.situ": 2,

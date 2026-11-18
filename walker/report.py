@@ -750,7 +750,7 @@ def _gated(image: Image, gate: int) -> list[int]:
 
 
 def _arm_runs(image: Image,
-		struct_index: int) -> list[tuple[int, int, int, str]]:
+		struct_index: int) -> list[tuple[int, int, int | tuple[int, ...], str]]:
 	"""A variant's arms that are a RUN, as (arm, discriminant, case, shape).
 
 	`_arm_values` says SCALAR in its name and means it. This is the other
@@ -785,9 +785,16 @@ def _arm_runs(image: Image,
 		selects, arms = image.arms[index]
 		if selects == NONE:
 			continue
+		claimed = tuple(case for case, _, flags in arms if not flags & 1)
 		for case, chosen, flags in arms:
-			if flags or chosen == NONE:
-				continue		# the default arm, or `default: error`
+			if chosen == NONE:
+				continue		# `default: error`, or `opaque`
+			# The DEFAULT arm too, as the cases it is not: the differ asks
+			# four backends about `default: u8 rest[len]` and this skipped
+			# it, so the comparison intersected it away (26.1097's
+			# `deep_switch`). Its `case` is the tuple of values it loses to.
+			if flags & 1:
+				case = claimed
 			arm = image.placements[chosen]
 			if arm.is_tag:
 				continue
@@ -2881,7 +2888,9 @@ def _members(image: Image, view: View, struct_index: int,
 			# And the message's version reaches it: an arm `[since]` gates
 			# is absent from an older message, as every backend's accessor
 			# answers VERSION for it (26.424, 26.947).
-			chosen = read_scalar(view, selects) == case \
+			value  = read_scalar(view, selects)
+			chosen = (value not in case if isinstance(case, tuple)
+			          else value == case) \
 				and not _arm_predates(view, arm)
 			if shape == "delimited":
 				# The same number `_delimited` renders for a plain member:
