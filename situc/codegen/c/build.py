@@ -1019,6 +1019,13 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 		            inner=ident(prefix, placement.type_name))
 	if placement.array_count is not None:
 		return Part(RUN, placement, local, placement.array_count)
+	# A run to the end of the arm is bytes and a length, not one scalar:
+	# `u8 raw[remaining]` carries a u8 and no count, and as the arm of a
+	# variant that states its size it was written as one byte while the
+	# size field asked for a `raw_len` nothing declared -- a builder header
+	# that did not compile (26.1096's `opaque_arm_section`).
+	if placement.sized_by == "remaining" and placement.radix is None:
+		return Part(SPAN, placement, local)
 	return _value_part(SCALAR, placement, local)
 
 
