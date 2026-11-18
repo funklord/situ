@@ -2838,6 +2838,11 @@ def _members(image: Image, view: View, struct_index: int,
 				and not _arm_predates(view, arm)
 			value  = read_scalar(view, arm) if chosen else 0
 		except Refused:
+			# Not readable is not selected, as each driver answers it:
+			# `ok=0 value=0` rather than no line, which left radiotap's
+			# arms uncompared on every frame too short to hold them
+			# (26.1073).
+			lines.append(f"{local} ok=0 value=0")
 			continue
 		# The pattern the compiled drivers print: `%llu` makes a signed arm's
 		# -60 into 2^64 - 60 there (26.889), and `_arm_values` reaches arms
