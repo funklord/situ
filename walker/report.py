@@ -126,8 +126,7 @@ def _scalars(image: Image, struct_index: int) -> list[int]:
 		# addresses `Packet.hdr.seq`. Skipping them too left every field of
 		# `example/icmp`'s `authenticated message` out of the listing, and
 		# `example/udp`'s whole header once its checksum covered one.
-		if index in image.regions \
-				and image.region_flags.get(index, 0) & SEALED:
+		if _behind_gate(image, index):
 			continue			# read through a gate, not directly
 		if placement.size_code != NONE or placement.array_count != NONE:
 			continue			# a run, not a scalar
@@ -174,7 +173,7 @@ def _runs(image: Image, struct_index: int) -> list[tuple[int, str]]:
 		placement = image.placements[index]
 		if placement.kind != FIELD or placement.type_struct != NONE:
 			continue
-		if index in image.delimiters or index in image.regions:
+		if index in image.delimiters or _behind_gate(image, index):
 			continue
 		if placement.since or placement.marker_governed or placement.radix:
 			continue
@@ -203,6 +202,20 @@ def _runs(image: Image, struct_index: int) -> list[tuple[int, str]]:
 		elif sized and placement.element_bits <= 64:
 			chosen.append((index, "run_element"))
 	return chosen
+
+
+def _behind_gate(image: Image, index: int) -> bool:
+	"""Whether a member is read through a `sealed` region's gate rather than
+	where it sits -- `_scalars`' question, asked by every list here.
+
+	Each other list asked whether the member was in ANY region, so a nested
+	struct or a run inside an `authenticated` one -- which has no gate, its
+	members read directly -- was left out of the listing while every
+	backend answered it: IPv4's `source` and `options`, ICMP's `rest`,
+	FLAC's `fields` (26.1070).
+	"""
+	return index in image.regions \
+		and bool(image.region_flags.get(index, 0) & SEALED)
 
 
 def _offset_computable(image: Image, struct_index: int, index: int) -> bool:
@@ -367,7 +380,7 @@ def _nested(image: Image, struct_index: int) -> list[int]:
 			continue			# a run of them, not one
 		if placement.repeat_code != NONE or index in image.delimiters:
 			continue
-		if index in image.regions or placement.is_tag:
+		if _behind_gate(image, index) or placement.is_tag:
 			continue
 		found.append(index)
 	return found
@@ -496,7 +509,7 @@ def _record_runs(image: Image, struct_index: int) -> list[int]:
 	        if index in image.delimiters
 	        and image.placements[index].type_struct != NONE
 	        and not image.placements[index].is_tag
-	        and index not in image.regions]
+	        and not _behind_gate(image, index)]
 
 
 def _sized_runs(image: Image, struct_index: int) -> list[int]:
@@ -517,7 +530,7 @@ def _sized_runs(image: Image, struct_index: int) -> list[int]:
 	        and image.placements[index].repeat_code == NONE
 	        and not image.placements[index].is_tag
 	        and index not in image.delimiters
-	        and index not in image.regions
+	        and not _behind_gate(image, index)
 	        and index not in image.tlvs
 	        and index not in image.indexes]
 
@@ -597,7 +610,7 @@ def _delimited(image: Image, struct_index: int) -> list[int]:
 		if index not in image.delimiters:
 			continue
 		placement = image.placements[index]
-		if placement.is_tag or index in image.regions:
+		if placement.is_tag or _behind_gate(image, index):
 			continue
 		if placement.radix:
 			continue		# a delimited text *number*: value, not bytes

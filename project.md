@@ -8986,6 +8986,10 @@ Moved to `doc/decision/26.1068-std-carries-xz-and-zstd.md`.
 
 Moved to `doc/decision/26.1069-a-sum-the-walker-declines-is-a-failure.md`.
 
+### 26.1070 An authenticated region hides nothing from the walker's listing
+
+Moved to `doc/decision/26.1070-an-authenticated-region-hides-nothing-from-the-walker.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.
