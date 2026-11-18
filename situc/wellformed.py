@@ -6505,6 +6505,9 @@ def _declared_depth(decl: ast.StructDecl) -> int | None:
 #: every backend spells alike once each read is widened to 64 bits.
 LET_BINARY = ("+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^")
 LET_UNARY  = ("-", "~")
+#: And a comparison, which is 1 or 0 (0070): what a duration's seconds
+#: need, `count * ((unit == time_unit.d) * 86400 + ...)`.
+LET_COMPARE = ("==", "!=", "<", "<=", ">", ">=")
 
 
 def check_lets(schema: ast.Schema) -> None:
@@ -6517,6 +6520,7 @@ def check_lets(schema: ast.Schema) -> None:
 	a parameter or a call has no such single reading, so each is refused by
 	name rather than given four."""
 	consts = {decl.name for decl in schema.consts()}
+	tokens = {decl.name: decl for decl in schema.token_sets()}
 	for struct in schema.structs():
 		names = {getattr(member, "name", None) for member in struct.members}
 		lets_seen: set[str] = set()
@@ -6533,31 +6537,66 @@ def check_lets(schema: ast.Schema) -> None:
 				            label = "a named value needs a name of its own")
 			ahead = {getattr(member, "name", None): member
 			         for member in struct.members[:let.after]}
-			_check_let_expr(let, let.expr, ahead, consts)
+			_check_let_expr(let, let.expr, ahead, consts, tokens)
 			lets_seen.add(let.name)
 
 
 def _check_let_expr(let: ast.Let, expr: ast.Expr,
-		ahead: dict[str | None, ast.Member], consts: set[str]) -> None:
+		ahead: dict[str | None, ast.Member], consts: set[str],
+		tokens: dict[str, ast.TokensDecl] | None = None) -> None:
+	tokens = tokens or {}
 	def refuse(why: str, span: object) -> SituError:
 		return error(f"`let {let.name}` {why}", span,  # type: ignore[arg-type]
 		             label = "not something every reader computes alike",
-		             notes = ["a named value reads integer fields declared "
-		                      "before it, constants and literals, through "
-		                      + " ".join(LET_BINARY) + " and unary - ~ "
-		                      "(26.1056)"])
+		             notes = ["a named value reads integer fields and text "
+		                      "numbers declared before it, constants and "
+		                      "literals, through "
+		                      + " ".join(LET_BINARY) + ", unary - ~, and "
+		                      + " ".join(LET_COMPARE) + " as 1 or 0; a "
+		                      "token member only against one of its own "
+		                      "arms (26.1056, 26.1079)"])
+
+	def token_of(side: ast.Expr) -> str | None:
+		"""The token set a member read names, or None."""
+		if isinstance(side, ast.NameRef):
+			held = ahead.get(side.name)
+			if isinstance(held, ast.Field) and held.type_ref.name in tokens:
+				return held.type_ref.name
+		return None
+
+	def arm_of(side: ast.Expr) -> str | None:
+		"""The token set `set.arm` names, where it names one of its arms."""
+		if isinstance(side, ast.Access) and isinstance(side.base, ast.NameRef) \
+				and side.base.name in tokens and any(
+					arm.name == side.name
+					for arm in tokens[side.base.name].members):
+			return side.base.name
+		return None
+
 	if isinstance(expr, ast.IntLiteral):
 		return
 	if isinstance(expr, ast.Binary):
-		if expr.op not in LET_BINARY:
+		# A token member is compared, never computed with: its reading is
+		# which arm it spells, and the order the arms were declared in is
+		# not a number a schema means.
+		held = token_of(expr.left) or token_of(expr.right)
+		armed = arm_of(expr.left) or arm_of(expr.right)
+		if held is not None or armed is not None:
+			if expr.op not in ("==", "!="):
+				raise refuse(f"uses `{expr.op}` on a token", expr.span)
+			if held is None or armed is None or held != armed:
+				raise refuse("compares a token member with something other "
+				             "than one of its own arms", expr.span)
+			return
+		if expr.op not in LET_BINARY and expr.op not in LET_COMPARE:
 			raise refuse(f"uses `{expr.op}`", expr.span)
-		_check_let_expr(let, expr.left, ahead, consts)
-		_check_let_expr(let, expr.right, ahead, consts)
+		_check_let_expr(let, expr.left, ahead, consts, tokens)
+		_check_let_expr(let, expr.right, ahead, consts, tokens)
 		return
 	if isinstance(expr, ast.Unary):
 		if expr.op not in LET_UNARY:
 			raise refuse(f"uses `{expr.op}`", expr.span)
-		_check_let_expr(let, expr.operand, ahead, consts)
+		_check_let_expr(let, expr.operand, ahead, consts, tokens)
 		return
 	if isinstance(expr, ast.NameRef):
 		if expr.name in consts:
@@ -6567,7 +6606,18 @@ def _check_let_expr(let: ast.Let, expr: ast.Expr,
 			raise refuse(f"reads `{expr.name}`, which is not a field declared "
 			             "before it", expr.span)
 		scalar = held.type_ref.scalar
-		if held.array is not None or held.parameter \
+		if held.type_ref.name in tokens:
+			raise refuse(f"reads `{expr.name}`, a token member, outside a "
+			             "comparison with one of its arms", expr.span)
+		# A TEXT NUMBER is one integer however many digits spell it: its
+		# value, and 0 where the digits are not one, as every reader's
+		# getter answers (26.1079). A scaled one is a pair, and is not.
+		if held.scaled:
+			raise refuse(f"reads `{expr.name}`, a scaled number, which is "
+			             "a significand and an exponent rather than one "
+			             "integer in the frame", expr.span)
+		text = held.radix is not None
+		if (held.array is not None and not text) or held.parameter \
 				or getattr(held, "located", None) is not None \
 				or scalar is None or scalar.kind.name not in ("UINT", "SINT"):
 			raise refuse(f"reads `{expr.name}`, which is not one integer "

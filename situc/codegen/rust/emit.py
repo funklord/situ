@@ -53,6 +53,7 @@ from situc.traverse import (
 	LetSpelling,
 	let_source,
 	let_split,
+	let_tokens,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -1779,6 +1780,11 @@ class Emitter:
 			held = fields[name]
 			assert isinstance(held, ast.Field) \
 				and held.type_ref.scalar is not None
+			if held.radix is not None:
+				# Through the checked getter, 0 where it refuses (26.1079).
+				if held.type_ref.scalar.signed:
+					return f"self.{_ident(name)}().map_or(0u64, |v| (v as i64) as u64)"
+				return f"self.{_ident(name)}().map_or(0u64, |v| v as u64)"
 			got = f"self.{_ident(name)}()"
 			if held.type_ref.scalar.signed:
 				return f"(({got} as i64) as u64)"
@@ -1802,12 +1808,21 @@ class Emitter:
 				        f" {{ {left} {op} {right} }})")
 			return f"({left} {op} {right})"
 
+		held_tokens = let_tokens(self.schema, decl)
+
+		def token(name: str, index: int) -> str:
+			set_name = held_tokens[name][0]
+			return (f"(({set_name}::which(self.{_ident(c_name(name))}())"
+			        f" == {index}) as u64)")
+
 		spell = LetSpelling(
 			read = read,
 			literal = lambda value: f"{value}u64",
 			binary = binary,
 			negate = lambda inner: f"{inner}.wrapping_neg()",
-			invert = lambda inner: f"(!{inner})")
+			invert = lambda inner: f"(!{inner})",
+			compare = lambda op, left, right: f"(({left} {op} {right}) as u64)",
+			token = token)
 		consts = dict(self.resolved.layout.env.consts)
 		lines: list[str] = []
 		for let in decl.lets:
@@ -1819,7 +1834,7 @@ class Emitter:
 				f"\t/// `{let.name}`: `{expr_to_source(let.expr)}`, computed",
 				"\t/// modulo 2^64 and held to its width (26.1056).",
 				f"\tpub fn {_ident(let.name)}(&self) -> {rtype} {{",
-				f"\t\t({let_source(let.expr, spell, consts)}) as {rtype}",
+				f"\t\t({let_source(let.expr, spell, consts, held_tokens)}) as {rtype}",
 				"\t}",
 			]
 		return lines

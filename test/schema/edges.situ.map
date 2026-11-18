@@ -630,6 +630,11 @@ struct mmc_command size=6 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   mmc_command.crc                        offset=AbsoluteStatic(0x05) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
   mmc_command.<reserved0>                offset=AbsoluteStatic(0x05:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
 
+struct named_digits size=1.. mutate=Shifting address=Unstable repr=TextConverted
+  named_digits.count                     offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
+  named_digits.unit                      offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  named_digits.doubled                   let u64 = count * 2
+
 struct narrow_text size=2.. mutate=Shifting repr=TextConverted atomic=NonAtomic
   narrow_text.d                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Unaligned repr=TextConverted atomic=NonAtomic
   narrow_text.h                          offset=AbsoluteStatic(0x01) size=Fixed(1) align=Unaligned repr=TextConverted atomic=NonAtomic

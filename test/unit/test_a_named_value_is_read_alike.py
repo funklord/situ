@@ -57,7 +57,9 @@ def _build(tmp_path: Path, target: str) -> Path:
 	("let u8 x = later;", "not a field declared before it"),
 	("let u8 a = b;", "already a member"),
 	("let u24 x = a;", "not 8, 16, 32 or 64"),
-	("let u8 x = a < b;", "uses `<`"),
+	# A comparison is 1 or 0 since 26.1079; a logical operator still is
+	# not arithmetic every reader spells alike.
+	("let u8 x = a && b;", "uses `&&`"),
 ])
 def test_what_a_named_value_may_not_say(bad: str, why: str) -> None:
 	with pytest.raises(SituError, match=why):

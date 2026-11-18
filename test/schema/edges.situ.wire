@@ -568,6 +568,10 @@ struct mmc_command size=6
   @0x0005:7 1bit      u1         <reserved0>  msb_first must_be_one
   crc covers: argument command index
 
+struct named_digits size=1..
+  @0x0000   0..       u32        count  sized-by=remaining radix=10 minimal leaves=1
+  ~         1         u8         unit
+
 struct narrow_text size=2..
   @0x0000   1         u3         d  radix=10
   @0x0001   1         u2         h  radix=16

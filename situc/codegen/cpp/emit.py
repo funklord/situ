@@ -56,6 +56,7 @@ from situc.traverse import (
 	LetSpelling,
 	let_source,
 	let_split,
+	let_tokens,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -10383,6 +10384,17 @@ class Emitter:
 			held = fields[name]
 			assert isinstance(held, ast.Field) \
 				and held.type_ref.scalar is not None
+			if held.radix is not None:
+				# Through the checked getter, 0 where it refuses -- the
+				# bounds case included, which `_value` does not see
+				# (26.1079).
+				scalar = held.type_ref.scalar
+				ctype = f"std::{'int' if scalar.signed else 'uint'}{scalar.bits}_t"
+				widen = (f"static_cast<{wide}>(static_cast<std::int64_t>(v))"
+				         if scalar.signed else f"static_cast<{wide}>(v)")
+				return (f"([this]() noexcept {{ {ctype} v{{}};"
+				        f" return this->{bare_name(name)}(v)"
+				        f" == ::situ::rt::err::ok ? {widen} : {wide}{{0u}}; }}())")
 			got = f"this->{bare_name(name)}()"
 			if held.type_ref.scalar.signed:
 				return (f"static_cast<{wide}>(static_cast<std::int64_t>"
@@ -10402,12 +10414,24 @@ class Emitter:
 				        f" : static_cast<{wide}>({left} {op} {right}))")
 			return f"static_cast<{wide}>({left} {op} {right})"
 
+		held_tokens = let_tokens(self.schema, decl)
+
+		def token(name: str, index: int) -> str:
+			set_name = held_tokens[name][0]
+			return (f"static_cast<{wide}>({c_name(set_name)}::which("
+			        f"this->{bare_name(name)}().data(),"
+			        f" static_cast<std::uint32_t>(this->{bare_name(name)}().size()))"
+			        f" == {index}u)")
+
 		spell = LetSpelling(
 			read = read,
 			literal = lambda value: f"({wide}{{{value}u}})",
 			binary = binary,
 			negate = lambda inner: f"static_cast<{wide}>(0u - {inner})",
-			invert = lambda inner: f"static_cast<{wide}>(~{inner})")
+			invert = lambda inner: f"static_cast<{wide}>(~{inner})",
+			compare = lambda op, left, right:
+				f"static_cast<{wide}>({left} {op} {right})",
+			token = token)
 		consts = dict(self.resolved.layout.env.consts)
 		lines: list[str] = []
 		for let in decl.lets:
@@ -10421,7 +10445,7 @@ class Emitter:
 				f"\t[[nodiscard]] {ctype} {bare_name(let.name)}() const noexcept",
 				"\t{",
 				f"\t\treturn static_cast<{ctype}>("
-				f"{let_source(let.expr, spell, consts)});",
+				f"{let_source(let.expr, spell, consts, held_tokens)});",
 				"\t}",
 			]
 		return lines

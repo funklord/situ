@@ -54,6 +54,7 @@ from situc.traverse import (
 	LetSpelling,
 	let_source,
 	let_split,
+	let_tokens,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -945,16 +946,41 @@ class Emitter:
 			return []
 		fields = {getattr(member, "name", None): member
 		          for member in decl.members}
+		texts: list[str] = []		# text numbers a let reads (26.1079)
 
 		def read(name: str) -> str:
 			held = fields[name]
 			assert isinstance(held, ast.Field) \
 				and held.type_ref.scalar is not None
 			signed = held.type_ref.scalar.signed
+			if held.radix is not None:
+				# Its value where the getter has one, and 0 where it has
+				# not, which is every reader's `ok=0 value=0`. Not
+				# `_value`, which parses to the 64-bit ceiling rather than
+				# the member's own.
+				if name not in texts:
+					texts.append(name)
+				got = (f"{ident(self.prefix, struct.name, c_name(name), 'let')}"
+				       "(view)")
+				return got
 			got = (f"{ident(self.prefix, struct.name, c_name(name), 'get')}"
 			       "(view)")
 			return (f"(uint64_t)(int64_t){got}" if signed
 			        else f"(uint64_t){got}")
+
+		held_tokens = let_tokens(self.schema, decl)
+
+		def token(name: str, index: int) -> str:
+			set_name = held_tokens[name][0]
+			local = c_name(name)
+			ptr  = ident(self.prefix, struct.name, local, "ptr")
+			member = self.resolved.find(f"{struct.name}.{name}")
+			count = (member.placement.array_count
+			         if member is not None else None)
+			wide = (f"{count}u" if count is not None
+			        else f"{ident(self.prefix, struct.name, local, 'len')}(view)")
+			return (f"(uint64_t)({ident(self.prefix, set_name, 'which')}"
+			        f"({ptr}(view), {wide}) == {index}u)")
 
 		def binary(op: str, left: str, right: str) -> str:
 			if op in ("/", "%"):
@@ -969,15 +995,40 @@ class Emitter:
 				        f" : (uint64_t)({left} {op} {right}))")
 			return f"(uint64_t)({left} {op} {right})"
 
+		def compare(op: str, left: str, right: str) -> str:
+			return f"(uint64_t)({left} {op} {right})"
+
 		spell = LetSpelling(
 			read = read,
 			literal = lambda value: f"UINT64_C({value})",
 			binary = binary,
 			negate = lambda inner: f"(uint64_t)(0u - {inner})",
-			invert = lambda inner: f"(uint64_t)~{inner}")
+			invert = lambda inner: f"(uint64_t)~{inner}",
+			compare = compare,
+			token = token)
 		consts = dict(self.resolved.layout.env.consts)
+		bodies = [(let, let_source(let.expr, spell, consts, held_tokens))
+		          for let in decl.lets]
 		lines: list[str] = []
-		for let in decl.lets:
+		for name in texts:
+			scalar = fields[name].type_ref.scalar
+			ctype = f"{'int' if scalar.signed else 'uint'}{scalar.bits}_t"
+			widen = "(uint64_t)(int64_t)" if scalar.signed else "(uint64_t)"
+			lines += [
+				"",
+				f"/* {struct.name}.{name} as a named value reads it: its value,",
+				" * or 0 where its digits are not one of its type (26.1079). */",
+				f"static inline uint64_t "
+				f"{ident(self.prefix, struct.name, c_name(name), 'let')}"
+				"(situ_view_t view)",
+				"{",
+				f"\t{ctype} value = 0;",
+				"",
+				f"\treturn {ident(self.prefix, struct.name, c_name(name), 'get')}"
+				f"(view, &value) == SITU_OK ? {widen}value : UINT64_C(0);",
+				"}",
+			]
+		for let, body in bodies:
 			scalar = let.type_ref.scalar
 			assert scalar is not None
 			ctype = f"{'int' if scalar.signed else 'uint'}{scalar.bits}_t"
@@ -990,7 +1041,7 @@ class Emitter:
 				f"{ident(self.prefix, struct.name, c_name(let.name), 'get')}"
 				"(situ_view_t view)",
 				"{",
-				f"\treturn ({ctype}){let_source(let.expr, spell, consts)};",
+				f"\treturn ({ctype}){body};",
 				"}",
 			]
 		return lines

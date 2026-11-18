@@ -1627,6 +1627,34 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
                              uint32_t start_bits, uint32_t width_bits,
                              uint64_t *out);
 
+static const uint8_t *check_rows(const situ_walk_image *image, uint32_t index,
+                                 uint32_t *count);
+
+/* Whether a text number's parsed value lies outside the ceiling its digits
+ * row carries -- `CHECK_DIGITS_VALID`, 9, which is defined with the other
+ * checks further down -- or below a signed one's floor (26.1079). */
+static int digits_out_of_domain(const situ_walk_image *image, uint32_t index,
+                                const situ_walk_placement *held,
+                                uint64_t value)
+{
+	uint32_t       rows   = 0u;
+	const uint8_t *checks = check_rows(image, index, &rows);
+
+	for (uint32_t c = 0u; checks != NULL && c < rows; c++) {
+		const uint8_t *row = checks + c * image->constraint_stride;
+
+		if (row[12] != 9u) {
+			continue;
+		}
+		const int64_t want = i64_at(row + 4);
+		if ((held->flags & FLAG_SIGNED) != 0u) {
+			return (int64_t)value > want || (int64_t)value < -want - 1;
+		}
+		return value > (uint64_t)want;
+	}
+	return 0;
+}
+
 static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
                               int32_t base, int64_t *out);
 
@@ -2085,6 +2113,21 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		}
 		*out = 0;
 		return SITU_WALK_OK;
+	}
+	/* And held to the member's domain, which `_value` parses against:
+	 * `4294967296` in a `decimal u32` is no value of it, and every backend
+	 * reads 0 where this read the number (26.1079). The digits row carries
+	 * the ceiling; a signed member's floor is one below its negation. */
+	{
+		situ_walk_placement held;
+
+		if (situ_walk_placement_at(ctx->image, index, &held) == SITU_WALK_OK
+		                && held.radix != 0u
+		                && digits_out_of_domain(ctx->image, index, &held,
+		                                        value)) {
+			*out = 0;
+			return SITU_WALK_OK;
+		}
 	}
 	*out = (int64_t)value;
 	return SITU_WALK_OK;

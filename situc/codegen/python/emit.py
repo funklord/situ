@@ -53,6 +53,7 @@ from situc.traverse import (
 	LetSpelling,
 	let_source,
 	let_split,
+	let_tokens,
 	located_value, summed_width, version_readable_from,
 	behind_a_length, read_through_its_struct,
 	bytes_of_a_read,
@@ -2507,10 +2508,20 @@ class Emitter:
 			held = fields[name]
 			assert isinstance(held, ast.Field) \
 				and held.type_ref.scalar is not None
-			got = f"self.{py_name(name)}"
+			# A text number through `_value`, which is 0 wherever the
+			# checked getter raises (26.1079).
+			got = (f"self.{py_name(name)}_value" if held.radix is not None
+			       else f"self.{py_name(name)}")
 			if held.type_ref.scalar.signed:
 				return f"({got} & {mask})"
 			return got
+
+		held_tokens = let_tokens(self.schema, decl)
+
+		def token(name: str, index: int) -> str:
+			set_name = held_tokens[name][0]
+			return (f"(1 if {py_name(set_name)}.which(self.{py_name(name)})"
+			        f" == {index} else 0)")
 
 		def binary(op: str, left: str, right: str) -> str:
 			if op in ("/", "%"):
@@ -2529,14 +2540,18 @@ class Emitter:
 			literal = lambda value: f"{value}",
 			binary = binary,
 			negate = lambda inner: f"((-{inner}) & {mask})",
-			invert = lambda inner: f"((~{inner}) & {mask})")
+			invert = lambda inner: f"((~{inner}) & {mask})",
+			compare = lambda op, left, right:
+				f"(1 if {left} {op} {right} else 0)",
+			token = token)
 		consts = dict(self.resolved.layout.env.consts)
 		lines: list[str] = []
 		for let in decl.lets:
 			scalar = let.type_ref.scalar
 			assert scalar is not None
 			bits = scalar.bits
-			held = f"({let_source(let.expr, spell, consts)}) & {(1 << bits) - 1:#x}"
+			held = (f"({let_source(let.expr, spell, consts, held_tokens)})"
+			        f" & {(1 << bits) - 1:#x}")
 			lines += [
 				"",
 				"\t@property",

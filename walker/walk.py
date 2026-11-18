@@ -813,6 +813,11 @@ def _value_in(view: View, index: int, base: int) -> int:
 	return _read_at(view, index, start, width)
 
 
+#: `report.DIGITS_VALID`, whose row carries a text number's ceiling; named
+#: here because `report` imports this module.
+_DIGITS_VALID = 9
+
+
 def _value_of(view: View, index: int) -> int:
 	"""A member's value as a size or offset expression reads it.
 
@@ -836,9 +841,21 @@ def _value_of(view: View, index: int) -> int:
 		return argument(view, index)
 	if view.image.placements[index].radix:
 		try:
-			return parse_digits(view, index)
+			value = parse_digits(view, index)
 		except Refused:
 			return 0
+		# And held to the member's domain, which `_value` parses against:
+		# `4294967296` in a `decimal u32` is no value of it, and every
+		# backend reads 0 where this read the number (26.1079). The digits
+		# row carries the ceiling; a signed member's floor is one below its
+		# negation, as `report._validate` reads it.
+		for check, ceiling in view.image.constraints.get(index, ()):
+			if check != _DIGITS_VALID:
+				continue
+			if value > ceiling or (view.image.placements[index].signed
+			                       and value < -ceiling - 1):
+				return 0
+		return value
 	# And a varint's `_value`, for the same reason. An element cut inside its
 	# length is measured by the backends, whose read is zero there, and this
 	# refused and ended the run a member early (26.921).

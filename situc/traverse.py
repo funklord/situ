@@ -5058,6 +5058,26 @@ class LetSpelling:
 	binary: Callable[[str, str, str], str]
 	negate: Callable[[str], str]
 	invert: Callable[[str], str]
+	#: (op, left, right) for `== != < <= > >=`, as 1 or 0 (26.1079).
+	compare: "Callable[[str, str, str], str] | None" = None
+	#: (member, arm index): 1 where the token member spells that arm, else
+	#: 0 -- an unknown spelling is no arm (26.1079).
+	token: "Callable[[str, int], str] | None" = None
+
+
+LET_COMPARE = ("==", "!=", "<", "<=", ">", ">=")
+
+
+def let_tokens(schema: "ast.Schema",
+		decl: "ast.StructDecl") -> dict[str, tuple[str, list[str]]]:
+	"""Each token member of `decl`: its set's name and its arms in order,
+	which is the order every reader numbers them in (26.1079)."""
+	sets = {one.name: [arm.name for arm in one.members]
+	        for one in schema.token_sets()}
+	return {member.name: (member.type_ref.name, sets[member.type_ref.name])
+	        for member in decl.members
+	        if isinstance(member, ast.Field)
+	        and member.type_ref.name in sets}
 
 
 def let_split(decl: "ast.StructDecl", let: "ast.Let",
@@ -5130,9 +5150,19 @@ def let_split(decl: "ast.StructDecl", let: "ast.Let",
 
 
 def let_source(expr: "ast.Expr", spell: LetSpelling,
-		consts: dict[str, int]) -> str:
+		consts: dict[str, int],
+		tokens: "dict[str, tuple[str, list[str]]] | None" = None) -> str:
 	"""A named value's definition in one language (26.1056); `check_lets`
-	has held it to what this can spell."""
+	has held it to what this can spell. `tokens` is `let_tokens`."""
+	tokens = tokens or {}
+	if isinstance(expr, ast.Binary) and expr.op in ("==", "!="):
+		pair = _token_comparison(expr, tokens)
+		if pair is not None:
+			assert spell.token is not None, "a backend that cannot spell it"
+			member, index = pair
+			said = spell.token(member, index)
+			return said if expr.op == "==" \
+				else spell.binary("^", said, spell.literal(1))
 	if isinstance(expr, ast.IntLiteral):
 		return spell.literal(expr.value & 0xFFFF_FFFF_FFFF_FFFF)
 	if isinstance(expr, ast.NameRef):
@@ -5140,12 +5170,29 @@ def let_source(expr: "ast.Expr", spell: LetSpelling,
 			return spell.literal(consts[expr.name] & 0xFFFF_FFFF_FFFF_FFFF)
 		return spell.read(expr.name)
 	if isinstance(expr, ast.Unary):
-		inner = let_source(expr.operand, spell, consts)
+		inner = let_source(expr.operand, spell, consts, tokens)
 		return spell.negate(inner) if expr.op == "-" else spell.invert(inner)
 	if isinstance(expr, ast.Binary):
-		return spell.binary(expr.op, let_source(expr.left, spell, consts),
-		                    let_source(expr.right, spell, consts))
+		left  = let_source(expr.left, spell, consts, tokens)
+		right = let_source(expr.right, spell, consts, tokens)
+		if expr.op in LET_COMPARE:
+			assert spell.compare is not None, "a backend that cannot spell it"
+			return spell.compare(expr.op, left, right)
+		return spell.binary(expr.op, left, right)
 	raise ValueError(f"not a named value's arithmetic: {expr!r}")
+
+
+def _token_comparison(expr: "ast.Binary",
+		tokens: dict[str, tuple[str, list[str]]]) -> tuple[str, int] | None:
+	"""`member == set.arm` either way round: the member and the arm's index."""
+	for side, other in ((expr.left, expr.right), (expr.right, expr.left)):
+		if isinstance(side, ast.NameRef) and side.name in tokens \
+				and isinstance(other, ast.Access):
+			set_name, arms = tokens[side.name]
+			if isinstance(other.base, ast.NameRef) \
+					and other.base.name == set_name and other.name in arms:
+				return side.name, arms.index(other.name)
+	return None
 
 
 def takes_its_frame(schema: "ast.Schema", name: str) -> bool:

@@ -2848,3 +2848,11 @@ struct duration_cell {
 	decimal u32  count[remaining]  [minimal];
 	time_unit    unit[1];
 }
+
+// A named value over a text number (26.1079): its value, and 0 where the
+// digits are not one of `u32` -- which both walkers took as the number.
+struct named_digits {
+	decimal u32  count[remaining]  [minimal];
+	u8           unit;
+	let u64 doubled = count * 2;
+}

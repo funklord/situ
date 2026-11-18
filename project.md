@@ -9018,6 +9018,10 @@ Moved to `doc/decision/26.1077-a-text-number-or-a-token-may-leave-a-tail.md`.
 
 Moved to `doc/decision/26.1078-both-walkers-name-the-same-check-refusing-a-text-number.md`.
 
+### 26.1079 A named value may read a text number, compare, and test a token
+
+Moved to `doc/decision/26.1079-a-named-value-may-read-a-text-number.md`.
+
 ### 26.1086 Generated checks size a text number by its digits
 
 Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits.md`.
