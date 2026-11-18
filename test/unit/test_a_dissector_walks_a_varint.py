@@ -122,8 +122,12 @@ def test_every_form_is_as_wide_as_the_walker_reads_it(tmp_path: Path) -> None:
 			# calls refused. The dissector places nothing past it, which is
 			# the answer `_uncomputable` exists to give, so only numbers
 			# the walker decoded are compared.
-			# A one-byte number is listed as a plain value, `v 54`.
-			if "v#len" not in read and "v" not in read:
+			# A one-byte number is listed as a plain value, `v 54`. And a
+			# number the frame cuts off is listed `len=0 value=0`, as the
+			# drivers list it (56a0e2e7) -- not decoded either, so it is
+			# skipped as the refusal it used to be listed as.
+			if ("v#len" not in read and "v" not in read) \
+					or read.get("v#len") == 0:
 				assert not any(abbrev == f"{name}.last"
 				               for abbrev, _, _, _ in rows), packet.hex()
 				continue
