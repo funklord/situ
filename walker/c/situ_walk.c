@@ -5794,6 +5794,7 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
 	uint32_t       count = 0u;
 	const uint8_t *rows  = arm_rows(image, index, &count);
 	uint32_t       fallback = SITU_WALK_NONE;
+	int            taken    = 0;	/* a default that is not `error` */
 	uint32_t       selects;
 	uint64_t       value = 0u;
 	situ_walk_err  err;
@@ -5831,6 +5832,7 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
 		if ((flags & ARM_DEFAULT) != 0u) {
 			if ((flags & ARM_ERROR) == 0u) {
 				fallback = chosen;
+				taken    = 1;
 			}
 			continue;	/* the default arm names no case */
 		}
@@ -5846,6 +5848,28 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
 	if (permissive && fallback != SITU_WALK_NONE) {
 		return arm_validates(image, message, len, shape, index, fallback,
 		                     depth, verdict, why);
+	}
+	/* `default: opaque` selects no member and takes any value, so the one
+	 * question left is whether the variant's own length fits the frame
+	 * (26.1100). It read as `error` here, as it did in every reader. */
+	if (permissive && taken) {
+		uint32_t at = 0u, wide = 0u;
+
+		err = offset_bits_deep(image, message, len, shape, index, depth,
+		                       &at);
+		if (err == SITU_WALK_OK) {
+			err = size_bits_deep(image, message, len, shape, index,
+			                     depth, &wide);
+		}
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK || (uint64_t)at + wide
+		                > (uint64_t)len * 8u) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+		}
+		return SITU_WALK_OK;
 	}
 	record(why, index, CHECK_ARM_SELECTED);
 	*verdict = SITU_WALK_VERSION;

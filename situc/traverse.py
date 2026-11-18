@@ -2436,7 +2436,11 @@ def unmatched_values_pass(variant: Placement) -> bool:
 	swallows the rest. False for `default: error` and for a variant with no
 	default at all, which mean the same thing.
 	"""
-	return any(arm.value is None and arm.member is not None
+	# The opaque half was in this docstring and not in the test, so a bare
+	# `default: opaque;` -- which selects no member -- read as `error`: all
+	# four backends and both walkers answered VERSION for a discriminant the
+	# arm exists to take, agreeing with each other the whole time (26.1100).
+	return any(arm.value is None and (arm.member is not None or arm.opaque)
 	           for arm in variant.arm_cases)
 
 

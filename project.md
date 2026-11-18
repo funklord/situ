@@ -9102,6 +9102,10 @@ Moved to `doc/decision/26.1097-a-selector-reaches-through-nested-structs.md`.
 
 Moved to `doc/decision/26.1098-an-at-through-checksummed-bytes-carries-no-marker.md`.
 
+### 26.1100 A bare `default: opaque` takes any discriminant
+
+Moved to `doc/decision/26.1100-an-opaque-default-takes-any-value.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

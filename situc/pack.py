@@ -920,7 +920,10 @@ def _arm_fields(arm: object) -> tuple[int, str | None, int]:
 	kind     = 0
 	if value is None:
 		kind |= 1				# the default arm
-	if selected is None:
+	# `default: error` -- and NOT `default: opaque`, which selects no member
+	# either and takes whatever is left. Both carried the bit, so the C walk
+	# refused a discriminant the opaque arm exists to take (26.1100).
+	if selected is None and not getattr(arm, "opaque", False):
 		kind |= 2				# `default: error`
 	return (int(value) if value is not None else 0,
 	        selected if isinstance(selected, str) else None, kind)

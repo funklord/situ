@@ -2117,6 +2117,16 @@ def _arm_selects(image: Image, view: View, index: int,
 	# validate -- the same descent as above, through the arm this value
 	# actually reaches.
 	if permissive and fallback is not None:
+		# `default: opaque` selects no member, so nothing below asks whether
+		# the variant's own length fits: a `[len]` naming more bytes than the
+		# frame holds is BOUNDS, as every backend says (26.1100).
+		if fallback == NONE:
+			try:
+				end = offset_bits(view, index) + size_bits(view, index)
+			except Refused:
+				return ERR_BOUNDS
+			if end > (view.limit - view.at) * BITS_PER_BYTE:
+				return ERR_BOUNDS
 		return _arm_validates(image, view, index, fallback)
 
 	return ERR_VERSION
