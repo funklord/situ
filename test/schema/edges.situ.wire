@@ -54,6 +54,12 @@ enum arm_kind : u8 unknown=error
 enum arm_shape : u8 unknown=error
   counted=17 fixed=34 bytes=51
 
+enum gather_kind : u8 unknown=error
+  query=1 lines=2
+
+enum shade_kind : u8 unknown=error
+  idle=0 query=1
+
 struct ahead_held size=5..260
   @0x0000   2         u16        lead  big
   @0x0002   3..258    summed_ahead inner  big
@@ -100,6 +106,10 @@ struct assembled size=10..13
   @0x0008   1         u8         zero
   @0x0009   1         u8         big
   @0x000a   0..3      u8         tail  sized-by=b&3
+
+struct bare_arm size=1..
+  @0x0000   1         gather_kind type  must_eq=2
+  @0x0001   0..       u8         lines  sized-by=remaining
 
 struct beacon size=3
   @0x0000   2         u16        seq  big
@@ -796,6 +806,10 @@ struct separated_arm size=2..
   held case 1: line u8
   held case 2: fixed u8
   held case default: error
+
+struct shadowed_arm size=2
+  @0x0000   1         u8         query
+  @0x0001   1         shade_kind type  min=query
 
 struct shadowing size=20
   @0x0000   4         u32        base  big

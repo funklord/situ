@@ -84,6 +84,10 @@ struct assembled size=10..13 mutate=Shifting repr=ValueConverted atomic=NonAtomi
   assembled.negated                      let i32 = -a
   assembled.m                            let u8 = b & 3
 
+struct bare_arm size=1.. mutate=Shifting
+  bare_arm.type                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  bare_arm.lines                         offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct beacon size=3 repr=ValueConverted
   beacon.seq                             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   beacon.flags                           offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
@@ -910,6 +914,10 @@ struct separated_arm size=2.. mutate=Shifting address=Unstable atomic=NonAtomic 
   separated_arm.held.line                offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
   separated_arm.held.fixed               offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   separated_arm.after                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
+struct shadowed_arm size=2
+  shadowed_arm.query                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  shadowed_arm.type                      offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
 
 struct shadowing size=20 repr=ValueConverted atomic=NonAtomic
   shadowing.base                         offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

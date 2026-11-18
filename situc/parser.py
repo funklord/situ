@@ -554,6 +554,7 @@ class Parser:
 		namespaces.flatten(schema)
 		kernels.resolve_signatures(schema)
 		_widen_byte_enum_fields(schema)
+		_qualify_own_enum_arms(schema)
 		_type_marker_parameters(schema)
 		_fold_relation_constants(schema)
 		wellformed.check(schema)
@@ -3804,6 +3805,71 @@ def _type_marker_parameters(schema: ast.Schema) -> None:
 			for member in decl.members)
 		if members != decl.members:
 			schema.decls[i] = replace(decl, members = members)
+
+
+def _qualify_own_enum_arms(schema: ast.Schema) -> None:
+	"""A bound naming an arm of the member's own enum, bare, is that arm
+	(26.1094): `kind type [must_eq = query]` is `[must_eq = kind.query]`.
+
+	fuzznet writes it so, and the four backends refused it as "neither a
+	constant nor a member" while `map` and `wire` let it pass -- the layout
+	skips a bound it cannot fold. Unambiguous where nothing else has the
+	name, so a sibling member or a `const` of that name keeps it: a bound
+	may read a scalar sibling, and that reading came first. Rewritten here, as
+	`_widen_byte_enum_fields` is, because every reader already knows what
+	`kind.query` means.
+	"""
+	enums  = {decl.name: {member.name for member in decl.members}
+	          for decl in schema.enums()}
+	consts = {decl.name for decl in schema.consts()}
+	if not enums:
+		return
+
+	def own(field: ast.Field, siblings: set[str]) -> ast.Field:
+		arms = enums.get(field.type_ref.name)
+		if arms is None:
+			return field
+		attrs = []
+		for attr in field.attrs:
+			value = attr.value
+			if attr.name in ("must_eq", "min", "max") \
+					and isinstance(value, ast.NameRef) \
+					and value.name in arms and value.name not in siblings \
+					and value.name not in consts:
+				value = ast.Access(value.span, ast.NameRef(
+					value.span, field.type_ref.name), value.name)
+				attr = replace(attr, value = value)
+			attrs.append(attr)
+		return replace(field, attrs = tuple(attrs))
+
+	def walk(members: tuple[ast.Member, ...],
+			siblings: set[str]) -> tuple[ast.Member, ...]:
+		out: list[ast.Member] = []
+		for member in members:
+			held = getattr(member, "members", None)
+			if held is not None:
+				member = replace(member, members = walk(held, siblings))  # type: ignore[type-var]
+			if isinstance(member, ast.Variant):
+				member = replace(member, arms = tuple(
+					arm if arm.member is None
+					else replace(arm, member = walk((arm.member,), siblings)[0])
+					for arm in member.arms))
+			if isinstance(member, ast.Field):
+				member = own(member, siblings)
+			out.append(member)
+		return tuple(out)
+
+	for i, decl in enumerate(schema.decls):
+		if isinstance(decl, ast.StructDecl):
+			# Only a SCALAR sibling can be what a bound reads, so only one
+			# shadows an arm: fuzznet's `fzn_gather_lines` has a run named
+			# `lines` beside `type [must_eq = lines]`, the arm.
+			names = {one.name for one in decl.members
+			         if isinstance(one, ast.Field)
+			         and one.type_ref.scalar is not None
+			         and one.array is None}
+			schema.decls[i] = replace(decl, members = walk(decl.members,
+			                                                names))  # type: ignore[arg-type]
 
 
 def _widen_byte_enum_fields(schema: ast.Schema) -> None:

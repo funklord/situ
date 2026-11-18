@@ -9082,6 +9082,10 @@ Moved to `doc/decision/26.1092-a-bound-at-a-zero-base-is-asked-as-what-it-is.md`
 
 Moved to `doc/decision/26.1093-an-enum-and-a-member-collide-only-where-a-name-does.md`.
 
+### 26.1094 A bound may name an arm of the member's own enum, bare
+
+Moved to `doc/decision/26.1094-a-bound-may-name-its-own-arm.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

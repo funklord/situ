@@ -2874,3 +2874,25 @@ registry edge_settings {
 	"stream/grant/"   : flag_cell    [cell_scope = estate];
 	"archive/gone"    : duration_cell [default = "14d", cell_scope = estate];
 }
+
+// A bound naming an arm of the member's own enum, bare (26.1094): fuzznet's
+// `type [must_eq = lines]`, beside a run also called `lines` -- not a scalar,
+// so not what a bound could read, and the arm is meant.
+enum gather_kind : u8 { query = 1, lines = 2, }
+
+struct bare_arm {
+	gather_kind  type  [must_eq = lines];
+	u8           lines[remaining];
+}
+
+// And a scalar sibling of the arm's name, which a bound may read and so
+// keeps the name: `[min = query]` is the member `query`, not the arm --
+// `query = 2, type = 1` is refused as the sibling and would pass as the arm.
+// `min`, and an arm at 0: the generated checks start from a zeroed instance
+// and do not satisfy a bound over a sibling, so zero has to validate.
+enum shade_kind : u8 { idle = 0, query = 1, }
+
+struct shadowed_arm {
+	u8           query;
+	shade_kind   type  [min = query];
+}
