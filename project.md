@@ -9051,6 +9051,10 @@ Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits
 
 Moved to `doc/decision/26.1085-a-registry-written-at-runtime-is-read-as-a-packed-one.md`.
 
+### 26.1087 A registry is generated in Python
+
+Moved to `doc/decision/26.1087-a-registry-is-generated-in-python.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

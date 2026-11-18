@@ -515,6 +515,7 @@ class Emitter:
 		]
 		exported = [py_name(decl.name) for decl in self.schema.enums()]
 		exported += [py_name(name) for name in sorted(self.structs)]
+		exported += [py_name(decl.name) for decl in self.schema.registries()]
 		lines.extend(f'\t"{name}",' for name in exported)
 		lines.extend(["]", ""])
 		lines.extend(body)
@@ -601,6 +602,14 @@ class Emitter:
 
 		for name in self._order():
 			lines.extend(self._struct(self.resolved.structs[name]))
+
+		# Registries last: each reads the struct classes above (0070).
+		from situc.codegen.python.registry import (policy_constants,
+		                                           registry_class)
+		lines.extend(policy_constants(self.schema))
+		for registry in self.schema.registries():
+			lines.extend(registry_class(self.schema, registry,
+			                            self.resolved.structs, py_name))
 		return lines
 
 	def _tlv_items(self) -> list[tuple[ResolvedStruct, Placement]]:
