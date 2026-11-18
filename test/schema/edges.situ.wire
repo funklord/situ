@@ -551,6 +551,11 @@ struct mmc_command size=6
   @0x0005:7 1bit      u1         <reserved0>  msb_first must_be_one
   crc covers: argument command index
 
+struct narrow_text size=2..
+  @0x0000   1         u3         d  radix=10
+  @0x0001   1         u2         h  radix=16
+  @0x0002   0..       u8         rest  sized-by=remaining
+
 struct negotiated size=5..516
   parameter -         u8         block [stream]
   @0x0000   0..255    u8         payload  sized-by=block

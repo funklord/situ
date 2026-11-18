@@ -2781,13 +2781,23 @@ def _members(image: Image, view: View, struct_index: int,
 		# backend's getter refuses them; a scaled one carries its power of
 		# ten (26.1072).
 		try:
+			power = None
 			if placement.text_flags & SCALED:
 				value, power = parse_scaled_digits(view, index)
-				lines.append(f"{local} ok=1 value={value} exp={power}")
 			else:
 				value = parse_digits(view, index)
-				lines.append(f"{local} ok=1"
-				             f" value={value & 0xFFFFFFFFFFFFFFFF}")
+			# The member's own range, which the image carries on the
+			# `DIGITS_VALID` row as `validate` reads it: the parse reads any
+			# number of digits, and `4` is not a `hex u2` (26.1072).
+			for check, against in image.constraints.get(index, ()):
+				floor = -(against + 1) if placement.signed else 0
+				if check == DIGITS_VALID \
+						and not floor <= value <= against:
+					raise Refused("a number outside the member's range")
+			lines.append(f"{local} ok=1 value={value} exp={power}"
+			             if power is not None else
+			             f"{local} ok=1"
+			             f" value={value & 0xFFFFFFFFFFFFFFFF}")
 		except Refused:
 			lines.append(f"{local} ok=0 value=0"
 			             + (" exp=0" if placement.text_flags & SCALED

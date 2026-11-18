@@ -2762,6 +2762,16 @@ struct overrun_summed {
 	}
 }
 
+// Text numbers narrower than a digit can be: a `decimal u3` holds 0 to 7
+// and a `hex u2` 0 to 3, so `9` and `F` are not numbers here. The integer
+// parse admitted them in C, C++ and Rust, its overflow bound wrapping
+// below fifteen (26.1072); random draws ask it every run from here.
+struct narrow_text {
+	decimal u3  d[1];
+	hex     u2  h[1];
+	u8          rest[remaining];
+}
+
 // Three constructs with tests of their own and no corpus schema, put here so
 // the sweeps ask them: a recursion that states only how deep this build
 // follows it (26.1047), a struct its frame holds exactly (26.981), and a
