@@ -55,3 +55,34 @@ def test_all_four_refuse_a_negative_unsigned_scaled_number(
 			        fourway.answers(argv, raw, tmp_path).splitlines()
 			        if line.startswith("value ok=")]
 			assert said == [want], (name, digits, said)
+
+
+NARROW = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct narrow {
+	decimal u3  d[1];
+	hex     u2  h[1];
+	u8          rest[remaining];
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_all_four_refuse_a_digit_wider_than_its_member(tmp_path: Path) -> None:
+	"""`situ_parse_uint` checked `value > (max - digit) / radix`, and below
+	sixteen `max - digit` wrapped: `9` read into a `decimal u3` and `F` into
+	a `hex u2` in C, C++ and Rust, `validate` passing the message, where
+	Python refused both (26.1072). No corpus schema has a text number this
+	narrow, so no sweep had asked."""
+	schema = tmp_path / "narrow.situ"
+	schema.write_text(NARROW, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for raw, want in ((b"9F", ["d ok=0 value=0", "h ok=0 value=0"]),
+	                  (b"73", ["d ok=1 value=7", "h ok=1 value=3"])):
+		for name, argv in command.items():
+			said = [line for line in
+			        fourway.answers(argv, raw, tmp_path).splitlines()
+			        if line.startswith(("d ok=", "h ok="))]
+			assert said == want, (name, raw, said)

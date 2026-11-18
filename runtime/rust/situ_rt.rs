@@ -606,7 +606,9 @@ pub fn parse_uint(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
 		if digit >= radix {
 			return None;
 		}
-		if value > (max - digit as u64) / radix as u64 {
+		// The digit against `max` first: below sixteen the subtraction
+		// wrapped, and `9` read into a `decimal u3` (26.1072).
+		if digit as u64 > max || value > (max - digit as u64) / radix as u64 {
 			return None;
 		}
 		value = value * radix as u64 + digit as u64;

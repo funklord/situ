@@ -1163,7 +1163,9 @@ static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
 		if (digit >= radix) {
 			return -1;
 		}
-		if (value > (max - digit) / radix) {
+		/* The digit against `max` first: below sixteen the subtraction
+		 * wrapped, and `9` read into a `decimal u3` (26.1072). */
+		if (digit > max || value > (max - digit) / radix) {
 			return -1;
 		}
 		value = value * radix + digit;
