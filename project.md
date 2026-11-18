@@ -9031,6 +9031,10 @@ Moved to `doc/decision/26.1080-a-registry-declares-a-keyspace-of-typed-cells.md`
 
 Moved to `doc/decision/26.1081-a-registry-is-generated-in-c.md`.
 
+### 26.1082 Both walkers test a token in a named value
+
+Moved to `doc/decision/26.1082-both-walkers-test-a-token-in-a-named-value.md`.
+
 ### 26.1086 Generated checks size a text number by its digits
 
 Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits.md`.

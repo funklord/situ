@@ -14,8 +14,8 @@ neither a comparison nor a token member was arithmetic. 0070's third gap.
   and nothing else: its reading is which arm it spells, and the order the
   arms were declared in is not a number a schema means.
 
-The walkers do not compute a token comparison yet; the packer records the
-`let` as one it cannot encode and both answer nothing for it.
+Both walkers compute a token test through `spells` (26.1082), the arm's
+bytes carried in the program.
 """
 from __future__ import annotations
 
@@ -116,11 +116,7 @@ def test_six_readers_read_a_text_number_in_a_named_value(
 		walked = python_lets(blob, raw, shape)
 		assert _run_driver(drive, tmp_path, raw, shape, by_line=True) \
 			== walked, (struct, raw)
-		if struct == "duration":
-			# Declined, not guessed: the image carries no token test.
-			assert walked == [], (raw, walked)
-		else:
-			assert walked == [line.split()[1] for line in want], (raw, walked)
+		assert walked == [line.split()[1] for line in want], (raw, walked)
 
 
 @pytest.mark.parametrize("let, why", [

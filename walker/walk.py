@@ -886,6 +886,7 @@ def _evaluate(view: View, code_at: int,
 		offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 		count_of   = lambda i: _count(view, i),
 		sum_of     = lambda i: _sum(view, i),
+		spells     = lambda i, run, fold: _spells(view, i, run, fold),
 		# A THUNK, so the offset it is measured from is computed only by a
 		# program that asks for it (26.585). Every caller passed
 		# `offset_bits(...)` eagerly, and for a member interior to a region
@@ -1996,6 +1997,25 @@ def decode_varint(view: View, start: int, max_bytes: int,
 		if not byte & 0x80:
 			return i + 1, acc
 	raise Refused("the buffer ends mid-varint")
+
+
+def _spells(view: View, index: int, run: bytes, fold: bool) -> int:
+	"""1 where a token member's span is `run`, compared whole, folding ASCII
+	case where its set does; 0 otherwise (26.1082). A span the frame does
+	not hold spells nothing, as each backend's `which` over its clamped
+	pointer and length answers no arm."""
+	try:
+		if index in view.image.delimiters:
+			content, _, _ = scan(view, index)
+		else:
+			content = content_bits(view, index) // BITS_PER_BYTE
+		start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	except (Refused, Unplaceable):
+		return 0
+	held = bytes(view.buffer[start:min(start + content, view.limit)])
+	if fold:
+		return int(held.lower() == run.lower())
+	return int(held == run)
 
 
 def digits_of(view: View, index: int) -> bytes:

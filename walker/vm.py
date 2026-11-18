@@ -56,6 +56,9 @@ MIN, MAX, ALIGN_UP, POPCOUNT = range(0x30, 0x34)
 #: 0 -- `traverse.LetSpelling`, which all four backends spell. A length is
 #: never computed this way: its division by zero is still refused.
 WRAP = 0x0C
+#: Whether a token member spells one arm (26.1082): the placement, a flags
+#: byte (bit 0 folds ASCII case), the arm's length and its bytes. 1 or 0.
+SPELLS = 0x0D
 _U64 = (1 << 64) - 1
 
 
@@ -145,7 +148,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
         load_field_in: Callable[[int, int], int] | None = None,
         tag: int | None = None,
         sum_of: Callable[[int], int] | None = None,
-        here: int | None = None) -> int:
+        here: int | None = None,
+        spells: Callable[[int, bytes, bool], int] | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -180,6 +184,17 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 		if op == PUSH:
 			stack.append(_struct.unpack_from("<q", code, pc)[0])
 			pc += 8
+			continue
+		if op == SPELLS:
+			index = _struct.unpack_from("<I", code, pc)[0]
+			fold  = bool(code[pc + 4] & 1)
+			width = code[pc + 5]
+			run   = bytes(code[pc + 6:pc + 6 + width])
+			pc   += 6 + width
+			if spells is None:
+				raise VmError("this program tests a token and nothing here "
+				              "reads one")
+			stack.append(spells(index, run, fold))
 			continue
 		if op == SUM:
 			if sum_of is None:

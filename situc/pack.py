@@ -272,6 +272,21 @@ class PackError(Exception):
 #: One byte each, operands little-endian and fixed width. No jumps: section
 #: 10 has no control flow, so a program is a straight line and its length is
 #: its own bound.
+def _token_test(expr: ast.Binary,
+		spellings: "dict[str, tuple[str, dict[str, bytes], bool]]"
+		) -> "tuple[str, bytes, bool] | None":
+	"""`member == set.arm` either way round: the member, the arm's bytes,
+	and whether the set folds case (26.1082)."""
+	for side, other in ((expr.left, expr.right), (expr.right, expr.left)):
+		if isinstance(side, ast.NameRef) and side.name in spellings \
+				and isinstance(other, ast.Access) \
+				and isinstance(other.base, ast.NameRef):
+			set_name, arms, fold = spellings[side.name]
+			if other.base.name == set_name and other.name in arms:
+				return side.name, arms[other.name], fold
+	return None
+
+
 class Op:
 	END		= 0x00
 	PUSH		= 0x01		# + i64
@@ -332,6 +347,11 @@ class Op:
 	#: zero 0 -- the four backends' `traverse.LetSpelling`, not the
 	#: section 10 arithmetic a length is computed in (26.1059).
 	WRAP		= 0x0C
+	#: Whether a token member spells one arm (26.1082): `member == set.arm`
+	#: in a named value. The arm's bytes are the operand, so no table is
+	#: needed and a `default = pass` set reads like any other; the flags
+	#: byte says to fold ASCII case.
+	SPELLS		= 0x0D		# + u32 placement, u8 flags, u8 len, bytes
 
 
 BINARY = {
@@ -409,7 +429,9 @@ class Program:
 
 	def compile(self, expr: ast.Expr, resolve_path: Resolver,
 	            consts: dict[str, int] | None = None,
-	            enum_members: dict[str, int] | None = None) -> None:
+	            enum_members: dict[str, int] | None = None,
+	            spellings: "dict[str, tuple[str, dict[str, bytes], bool]] | None"
+	            = None) -> None:
 		"""Append a postfix program computing `expr`.
 
 		`resolve_path` maps a dotted path to a placement index, and returns
@@ -432,6 +454,23 @@ class Program:
 		"""
 		known: dict[str, int] = consts or {}
 		folded: dict[str, int] = enum_members or {}
+		spelled = spellings or {}
+		if isinstance(expr, ast.Binary) and expr.op in ("==", "!=") \
+				and spelled:
+			pair = _token_test(expr, spelled)
+			if pair is not None:
+				member, run, fold = pair
+				found = resolve_path(member)
+				if found is None or found[1] or len(run) > 255:
+					raise PackError(f"no placement to spell `{member}` from")
+				self.emit(Op.SPELLS, found[0])
+				self.code.append(1 if fold else 0)
+				self.code.append(len(run))
+				self.code += run
+				if expr.op == "!=":
+					self.emit(Op.PUSH, 1, "<q")
+					self.emit(Op.XOR)
+				return
 		if isinstance(expr, ast.IntLiteral):
 			# A literal of 2^63 or more is only reachable in a named
 			# value's wrapping arithmetic, where its two's complement is
@@ -476,7 +515,7 @@ class Program:
 				self.emit(Op.FIELD, index)
 			return
 		if isinstance(expr, ast.Unary):
-			self.compile(expr.operand, resolve_path, known, folded)
+			self.compile(expr.operand, resolve_path, known, folded, spelled)
 			op = UNARY.get(expr.op, ...)
 			if op is ...:
 				raise PackError(f"unary `{expr.op}`")
@@ -487,8 +526,8 @@ class Program:
 			op = BINARY.get(expr.op)
 			if op is None:
 				raise PackError(f"binary `{expr.op}`")
-			self.compile(expr.left, resolve_path, known, folded)
-			self.compile(expr.right, resolve_path, known, folded)
+			self.compile(expr.left, resolve_path, known, folded, spelled)
+			self.compile(expr.right, resolve_path, known, folded, spelled)
 			self.emit(op)
 			return
 		if isinstance(expr, ast.Call) and expr.name == traverse.HERE:
@@ -1867,11 +1906,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			assert scalar is not None
 			start = len(program.code)
 			program.emit(Op.WRAP)
+			sets = {one.name: one for one in schema.token_sets()}
+			spellings = {
+				member: (set_name,
+				         dict(resolved.layout.env.token_sets[set_name]),
+				         sets[set_name].case_insensitive)
+				for member, (set_name, _) in
+				traverse.let_tokens(schema, let_owner).items()}
 			try:
 				program.compile(
 					let.expr,
 					in_owner,
-					consts, enum_members)
+					consts, enum_members, spellings)
 			except PackError as why:
 				del program.code[start:]
 				coverage.unencodable[f"let {let_owner.name}.{let.name}"] = str(why)

@@ -788,7 +788,12 @@ typedef enum {
 	SITU_WALK_ASK_SUM = 6,
 	/* `offset(s)` of a `when`'s own struct: where the frame being walked
 	 * starts in the message (26.1045). The index is unused. */
-	SITU_WALK_ASK_HERE = 7
+	SITU_WALK_ASK_HERE = 7,
+	/* Whether a token member spells one arm (26.1082): `index` is the
+	 * member, and `base` the offset in the code section of the operand
+	 * that follows `spells` -- a flags byte (bit 0 folds ASCII case), the
+	 * arm's length and its bytes. 1 or 0. */
+	SITU_WALK_ASK_SPELLS = 8
 } situ_walk_ask;
 
 typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,

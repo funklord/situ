@@ -1959,6 +1959,38 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		return SITU_WALK_OK;
 	}
 
+	/* A token test (26.1082): the member's span against the arm the code
+	 * carries at `base`, compared whole, folding ASCII case where the set
+	 * does. A span the frame does not hold spells nothing, as each
+	 * backend's `which` over its clamped pointer and length answers. */
+	if (what == SITU_WALK_ASK_SPELLS) {
+		const uint8_t *operand = ctx->image->code + (uint32_t)base;
+		const uint8_t  fold    = (uint8_t)(operand[0] & 1u);
+		const uint32_t width   = operand[1];
+		const uint8_t *run     = operand + 2;
+		const uint8_t *held    = NULL;
+		uint32_t       count   = 0u;
+		const situ_walk_err err = situ_walk_bytes(ctx->image, ctx->message,
+		                                          ctx->len, ctx->shape,
+		                                          index, &held, &count);
+		*out = 0;
+		if (err != SITU_WALK_OK || count != width) {
+			return err == SITU_WALK_UNSUPPORTED ? err : SITU_WALK_OK;
+		}
+		for (uint32_t i = 0u; i < width; i++) {
+			uint8_t a = held[i], b = run[i];
+			if (fold) {
+				a = (uint8_t)(a >= 'A' && a <= 'Z' ? a + 32u : a);
+				b = (uint8_t)(b >= 'A' && b <= 'Z' ? b + 32u : b);
+			}
+			if (a != b) {
+				return SITU_WALK_OK;
+			}
+		}
+		*out = 1;
+		return SITU_WALK_OK;
+	}
+
 	/* A relation's `arg_field` names a message this callback does not
 	 * hold one of two of; answering from the one it does would answer a
 	 * question about another pair (26.755). */
@@ -8084,6 +8116,9 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 /* The rest of the program computes as a named value does (26.1059): modulo
  * 2^64 on the bits, `/` `%` `>>` unsigned, `/` and `%` by zero 0. */
 #define OP_WRAP 0x0Cu
+/* Whether a token member spells one arm (26.1082): a u32 placement, a flags
+ * byte, a length byte and that many bytes. */
+#define OP_SPELLS 0x0Du
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -8318,6 +8353,26 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			}
 			stack[depth++] = value;
 			pc += 4u;
+			continue;
+		}
+
+		if (op == OP_SPELLS) {
+			if (pc + 6u > image->code_len || depth >= STACK_DEPTH) {
+				return SITU_WALK_MALFORMED;
+			}
+			const uint32_t index = u32_at(image->code + pc);
+			const uint32_t width = image->code[pc + 5u];
+			if ((uint64_t)pc + 6u + width > image->code_len) {
+				return SITU_WALK_MALFORMED;
+			}
+			int64_t value = 0;
+			const situ_walk_err err = load(ctx, SITU_WALK_ASK_SPELLS, index,
+			                               (int32_t)(pc + 4u), &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = value;
+			pc += 6u + width;
 			continue;
 		}
 
