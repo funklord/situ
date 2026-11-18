@@ -1842,7 +1842,8 @@ def _check_marks(struct: ResolvedStruct, checked: list[Checked],
 		before = one.tag.tag_before
 		if when == "before":
 			if placement.path == one.first:
-				lines.append(f"\tlocal situ_{tag}_from = at")
+				lines += [f"\tlocal situ_{tag}_from = at",
+				          f"\tlocal situ_{tag}_short = situ_check.short"]
 			if placement.path == one.tag.path:
 				lines.append(f"\tlocal situ_{tag}_at = at")
 				# The MESSAGE ahead of the tag (26.1050): from its first
@@ -1854,7 +1855,9 @@ def _check_marks(struct: ResolvedStruct, checked: list[Checked],
 					          " - situ_root.base + at"]
 			continue
 		if placement.path == one.last:
-			lines.append(f"\tlocal situ_{tag}_to = at")
+			lines += [f"\tlocal situ_{tag}_to = at",
+			          f"\tlocal situ_{tag}_cut = situ_check.short"
+			          f" ~= situ_{tag}_short"]
 		# After whichever of the two comes later.
 		later = (one.tag.path if before
 		         else one.last if _after(struct, one.last, one.tag.path)
@@ -1873,7 +1876,8 @@ def _check_marks(struct: ResolvedStruct, checked: list[Checked],
 			" as the readers",
 			"\t-- compute it, and Wireshark's verdict beside it (26.1031).",
 			f"\tif situ_{tag}_to <= {source}:len() and situ_{tag}_at + {n}"
-			" <= tvb:len() then",
+			" <= tvb:len()" + ("" if before else f" and not situ_{tag}_cut")
+			+ " then",
 			f"\t\tlocal want = situ_check.{_lua(one.codec.name)}({source}, "
 			f"situ_{tag}_from, situ_{tag}_to, {hole})",
 			f"\t\tlocal got = situ_uint(tvb, situ_{tag}_at, {n}, {little})",
@@ -1889,6 +1893,27 @@ def _check_marks(struct: ResolvedStruct, checked: list[Checked],
 			"\tend",
 		]
 	return lines
+
+
+def _bump() -> str:
+	"""The statement that counts a run cut short by the frame, where a tag
+	is checked; nothing where none is, since `situ_check` is then absent.
+
+	A declared length the frame does not hold is clamped, so the cursor
+	alone cannot say a covered span was cut: `options[count]` with a count
+	of ten in a two-byte frame advanced to the frame's end and the sum ran
+	over what was there, reporting `Bad, should be ...` for a message every
+	other reader refuses. Each place a run stops short adds one, and a
+	check runs only where its span added none (cb6ce2ac, the walkers').
+	"""
+	return " situ_check.short = situ_check.short + 1" if _CHECKED else ""
+
+
+def _stop_short() -> list[str]:
+	"""An element walk's stop: no progress ends it, an element reaching past
+	the frame ends it as cut short."""
+	return ["\t\tif size == 0 then break end",
+	        f"\t\tif at + size > tvb:len() then{_bump()} break end"]
 
 
 def _after(struct: ResolvedStruct, one: str, other: str) -> bool:
@@ -1918,6 +1943,9 @@ def _check_helpers() -> list[str]:
 	lines = ["",
 	         "-- Checksums recomputed as the readers compute them (26.1031).",
 	         "local situ_check = {}",
+	         "-- Runs cut short by the frame, counted; a span that saw one is"
+	         " not checked.",
+	         "situ_check.short = 0",
 	         "if bit32 then",
 	         "\tsitu_check.xor, situ_check.band = bit32.bxor, bit32.band",
 	         "\tsitu_check.shl, situ_check.shr = bit32.lshift, bit32.rshift",
@@ -2730,6 +2758,8 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 				f"\tif tvb:len() >= at + {digits} then",
 				f"\t\tsubtree:add({field}, tvb(at, {digits}){shown})",
 				"\tend",
+				*([f"\tif at + {digits} > tvb:len() then{_bump()} end"]
+				  if _CHECKED else []),
 				f"\tat = math.min(at + {digits}, tvb:len())",
 			]
 
@@ -2979,7 +3009,7 @@ def _record_walk(resolved: ResolvedSchema, placement: Placement,
 		"\t\t\tbreak",
 		"\t\tend",
 		f"\t\tlocal size = {_element_stride(resolved, element)}",
-		"\t\tif size == 0 or at + size > tvb:len() then break end",
+		*_stop_short(),
 		*([f"\t\t{dissect}"] if dissect else []),
 		"\t\tat = at + size",
 		"\tend",
@@ -3585,7 +3615,7 @@ def _run_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 		"	local n = 0",
 		f"	while at < tvb:len(){guard} do",
 		f"		local size = {_element_stride(resolved, element)}",
-		"		if size == 0 or at + size > tvb:len() then break end",
+		*_stop_short(),
 		"		local last = at",
 		"		n = n + 1",
 		"		at = at + size",
@@ -3668,10 +3698,11 @@ def _counted_span(resolved: ResolvedSchema, struct: ResolvedStruct,
 		"	local n = 0",
 		"	while n < count and at < tvb:len() do",
 		f"		local size = {_extent_name(element)}(tvb, at)",
-		"		if size == 0 or at + size > tvb:len() then break end",
+		*_stop_short(),
 		"		at = at + size",
 		"		n = n + 1",
 		"	end",
+		*([f"	if n < count then{_bump()} end"] if _CHECKED else []),
 		"	return at - start",
 		"end",
 	]
@@ -4311,7 +4342,7 @@ def _run(resolved: ResolvedSchema, struct: ResolvedStruct,
 		"\tlocal n = 0",
 		f"\twhile at < tvb:len(){guard} do",
 		f"\t\tlocal size = {_element_stride(resolved, element)}",
-		"\t\tif size == 0 or at + size > tvb:len() then break end",
+		*_stop_short(),
 		"\t\tlocal last = at",
 		"\t\tn = n + 1",
 		f"\t\tDissector.get(\"{placement.type_name}\"):call("
@@ -4525,7 +4556,7 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 				*seek,
 				"\twhile at < tvb:len() do",
 				f"\t\tlocal size = {stride}",
-				"\t\tif size == 0 or at + size > tvb:len() then break end",
+				*_stop_short(),
 				f"\t\tDissector.get(\"{placement.type_name}\"):call("
 				"tvb(at, size):tvb(), pinfo, subtree)",
 				"\t\tat = at + size",
@@ -4562,12 +4593,14 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tlocal {name}_k = 0",
 			f"\twhile {name}_k < {name}_n and at < tvb:len() do",
 			f"\t\tlocal size = {stride}",
-			"\t\tif size == 0 or at + size > tvb:len() then break end",
+			*_stop_short(),
 			f"\t\tDissector.get(\"{placement.type_name}\"):call("
 			"tvb(at, size):tvb(), pinfo, subtree)",
 			"\t\tat = at + size",
 			f"\t\t{name}_k = {name}_k + 1",
 			"\tend",
+			*([f"\tif {name}_k < {name}_n then{_bump()} end"]
+			  if _CHECKED else []),
 		]
 	if each is None:
 		return _uncomputable(placement.path, "elements of no fixed size")
@@ -4598,6 +4631,8 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			# anyway. A dissector returns what it consumed, so an eight-byte
 			# UDP header declaring a length of 24 reported consuming 24 --
 			# and the run walking it is the same shape.
+			*([f"\tif at + {name}_len > tvb:len() then{_bump()} end"]
+			  if _CHECKED else []),
 			(f"\tat = math.min(at + {footprint}, tvb:len())"
 			 if footprint is not None else
 			 f"\tat = math.min(at + {name}_len, tvb:len())"),
@@ -4606,7 +4641,7 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	lines.extend([
 		f"\tfor i = 0, {name}_n - 1 do",
-		f"\t\tif tvb:len() < at + {each} then break end",
+		f"\t\tif tvb:len() < at + {each} then{_bump()} break end",
 		f"\t\tDissector.get(\"{placement.type_name}\"):call("
 		f"tvb(at, {each}):tvb(), pinfo, subtree)",
 		f"\t\tat = at + {each}",

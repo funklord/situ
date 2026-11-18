@@ -96,3 +96,28 @@ def test_wireshark_shows_the_verdict(tmp_path: Path) -> None:
 		assert want in shown.stdout, shown.stdout
 		assert ("Expert Info (Error/Checksum)" in shown.stdout) \
 			== ("Bad" in want), shown.stdout
+
+
+@pytest.mark.skipif(LUA is None, reason = "no Lua interpreter")
+@pytest.mark.parametrize("packet,status", [
+	("0a0000aabb", None),
+	("020000aabbcc", "Bad, should be 0xbe76"),
+	("02be76aabbcc", "Good"),
+])
+def test_a_span_the_frame_cut_short_is_not_checked(tmp_path: Path,
+		packet: str, status: str | None) -> None:
+	"""`options[count]` with a count of ten in a five-byte frame: the
+	cursor is clamped at the frame's end and `text[remaining]` starts there,
+	so the span looked whole and the sum ran over what was in the frame --
+	`Bad, should be 0x3a55` for a message every other reader refuses as
+	malformed. Each run the frame cuts short is counted now, and a span
+	that saw one gets no status (26.1067, the walkers' cb6ce2ac)."""
+	path = ROOT / "test" / "schema" / "edges.situ"
+	source, resolved, _ = analyse(path)
+	lua = tmp_path / "edges.lua"
+	lua.write_text(generate(parse(source), resolved, "edges"),
+	               encoding = "ascii")
+
+	_, rows = read_back(lua, "overrun_summed", bytes.fromhex(packet))
+	shown = [text for field, _, _, text in rows if field.endswith(".status")]
+	assert shown == ([] if status is None else [status]), rows

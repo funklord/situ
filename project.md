@@ -8974,6 +8974,10 @@ Moved to `doc/decision/26.1065-blockwise-is-a-local-permutation.md`.
 
 Moved to `doc/decision/26.1066-the-walkers-sum-a-pseudo-header-they-are-handed.md`.
 
+### 26.1067 The dissector checks no span the frame cut short
+
+Moved to `doc/decision/26.1067-the-dissector-checks-no-span-the-frame-cut.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.

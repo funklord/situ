@@ -1173,6 +1173,13 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 		if abbrev.endswith(".status") and value.startswith("Bad, should be 0x"):
 			member = abbrev[len(proto) + 1:-len(".status")]
 			values[f"{member}.sum"] = int(value.rsplit("0x", 1)[1], 16)
+		# And that it gave a verdict at all, held to whether the walker
+		# summed or refused: the two numbers alone compared only where both
+		# printed one, so a dissector summing a span whose declared length
+		# overran the frame -- which the walker refuses -- went unseen.
+		if abbrev.endswith(".status"):
+			member = abbrev[len(proto) + 1:-len(".status")]
+			values[f"{member}.sum#shown"] = 1
 			continue
 		if kind in ("bytes", "string"):
 			if declined is not None and abbrev in declined:
@@ -1264,8 +1271,12 @@ def _walked(image: Image, proto: str,
 		if parts[0] in NOT_A_MEMBER:
 			continue
 		total += 1
+		# `crc.sum refused`: no number, and no verdict the dissector may
+		# show either -- `#shown` is held to the dissector's status row.
+		if parts[0].endswith(".sum") and len(parts) == 2:
+			values[f"{parts[0]}#shown"] = int(parts[1] != "refused")
 		if len(parts) == 2 and parts[1] == "refused":
-			continue	# `crc.sum refused`: the dissector gives no verdict
+			continue
 		if len(parts) == 2 and "=" not in parts[1]:
 			values[parts[0]] = int(parts[1])
 			continue

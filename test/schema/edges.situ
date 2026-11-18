@@ -2748,6 +2748,20 @@ struct ahead_held {
 	summed_ahead inner;
 }
 
+// A covered run whose count the frame may not hold, with a `remaining` run
+// after it that the clamp puts back inside the frame. Every reader refuses
+// the sum when `count` overruns; the walkers summed it, judging the span by
+// where its last member ends (cb6ce2ac), and so did the dissector, its
+// cursor clamped at the frame's end (26.1067). Random draws overrun it.
+struct overrun_summed {
+	authenticated summed {
+		u8 count;
+		checksum u8 check[2] covers(summed) is summing [self_as = 0];
+		u8 options[count];
+		u8 text[remaining];
+	}
+}
+
 // Three constructs with tests of their own and no corpus schema, put here so
 // the sweeps ask them: a recursion that states only how deep this build
 // follows it (26.1047), a struct its frame holds exactly (26.981), and a

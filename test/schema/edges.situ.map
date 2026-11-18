@@ -675,6 +675,13 @@ struct outer_body size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   outer_body.nested.inner_sum            offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
   outer_body.outer_sum                   offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
+struct overrun_summed size=3.. mutate=Immutable address=Unstable atomic=NonAtomic auth=Covered(check)
+  overrun_summed.summed                  offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(check)
+  overrun_summed.count                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(check)
+  overrun_summed.check                   offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  overrun_summed.options                 offset=AbsoluteStatic(0x03) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(check)
+  overrun_summed.text                    offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(check)
+
 struct packed_driver size=3..63 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   packed_driver.hi                       offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   packed_driver.n                        offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic

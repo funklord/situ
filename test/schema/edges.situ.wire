@@ -601,6 +601,13 @@ struct outer_body size=8
   nested.inner_sum covers: nested.body nested.inner_value
   outer_sum covers: body outer_value
 
+struct overrun_summed size=3..
+  @0x0000   1         u8         count
+  @0x0001   2         u8         check  codec=summing self_as=0
+  @0x0003   0..255    u8         options  sized-by=count
+  ~         0..       u8         text  sized-by=remaining
+  check covers: count options summed text
+
 struct packed_driver size=3..63
   @0x0000   4bit      u4         hi  msb_first
   @0x0000:4 4bit      u4         n  msb_first
