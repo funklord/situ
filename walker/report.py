@@ -2744,6 +2744,11 @@ def _members(image: Image, view: View, struct_index: int,
 		try:
 			consumed, value = varint(view, index)
 		except Refused:
+			# A varint the frame cuts off has no value, and every driver
+			# says so as `len=0 value=0` rather than with no line; wasm's
+			# sizes and cbor's heads went uncompared on any short frame
+			# (26.1073).
+			lines.append(f"{local} len=0 value=0")
 			continue
 		lines.append(f"{local} len={consumed} value={value}")
 
