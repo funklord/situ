@@ -9086,6 +9086,10 @@ Moved to `doc/decision/26.1093-an-enum-and-a-member-collide-only-where-a-name-do
 
 Moved to `doc/decision/26.1094-a-bound-may-name-its-own-arm.md`.
 
+### 26.1095 A wire bound written as an enum arm is compared by its value
+
+Moved to `doc/decision/26.1095-a-wire-bound-written-as-an-arm-is-compared-by-value.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

@@ -1059,6 +1059,17 @@ def _format_version(signature: str) -> int:
 
 
 def compare(before: str, after: str) -> Verdict:
+	"""Classify what changed between two committed signatures, with each
+	side's enum arms in reach of the constraint comparison (26.1095)."""
+	global _ARMS
+	_ARMS = (_enum_arms(before), _enum_arms(after))
+	try:
+		return _compare(before, after)
+	finally:
+		_ARMS = ({}, {})
+
+
+def _compare(before: str, after: str) -> Verdict:
 	"""Classify what changed between two committed signatures.
 
 	Positional, because situ is: a member's identity is where it sits, so a
@@ -1103,6 +1114,32 @@ def compare(before: str, after: str) -> Verdict:
 		findings.extend(_compare_struct(name, old, new))
 
 	return Verdict(findings)
+
+
+#: Each side's enums as `{enum: {arm: value}}`, for the comparison under way;
+#: set by `compare` for its own duration rather than passed through the four
+#: layers between it and `_compare_facts`.
+_ARMS: tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]] = ({}, {})
+
+
+def _enum_arms(text: str) -> dict[str, dict[str, int]]:
+	"""The `enum NAME ...` blocks of a signature: each arm's value."""
+	found: dict[str, dict[str, int]] = {}
+	current: dict[str, int] | None = None
+	for line in text.splitlines():
+		if line.startswith("enum "):
+			current = found.setdefault(line.split()[1], {})
+			continue
+		if current is not None and line.startswith("  ") and "=" in line:
+			for token in line.split():
+				arm, _, value = token.partition("=")
+				try:
+					current[arm] = int(value, 0)
+				except ValueError:
+					pass
+			continue
+		current = None
+	return found
 
 
 def _compare_globals(before: str, after: str) -> list[Finding]:
@@ -1493,7 +1530,8 @@ def _compare_member(struct: str, index: int, was: str | None,
 			"bytes now mean something else"))
 
 	return findings + _compare_facts(where, _name_of(was),
-	                                 _facts_of(was), _facts_of(now))
+	                                 _facts_of(was), _facts_of(now),
+	                                 (old_bits[2], new_bits[2]))
 
 
 #: Facts that say what the bytes *are*, rather than which of them are allowed.
@@ -1522,7 +1560,7 @@ def _is_interpretation(fact: str) -> bool:
 
 
 def _compare_facts(where: str, name: str, was: set[str],
-		now: set[str]) -> list[Finding]:
+		now: set[str], types: tuple[str, str] = ("", "")) -> list[Finding]:
 	"""A constraint added is a demand; one removed is a promise withdrawn.
 
 	Which of those breaks depends on the direction, and conflating them is
@@ -1546,8 +1584,14 @@ def _compare_facts(where: str, name: str, was: set[str],
 	# says `must_eq=1297368663`, and the two are one constraint -- openmlx4's
 	# FS2 magics reported four BREAKING findings over an unchanged schema
 	# (26.1010).
-	was = {_by_value(fact) for fact in was}
-	now = {_by_value(fact) for fact in now}
+	# And an ARM by its value: `must_eq=data` in a contract rendered before
+	# a bare arm was read as the arm (26.1094) is `must_eq=4` today, one
+	# constraint -- fuzznet's unchanged `spool/message` reported four
+	# breaking findings (26.1095). Each side's own enum table, which the
+	# signature carries.
+	old_arms, new_arms = _ARMS
+	was = {_by_value(fact, old_arms.get(types[0], {})) for fact in was}
+	now = {_by_value(fact, new_arms.get(types[1], {})) for fact in now}
 	findings = []
 	moved    = {fact for fact in (now - was) | (was - now)
 	            if _is_interpretation(fact)}
@@ -1583,12 +1627,15 @@ def _compare_facts(where: str, name: str, was: set[str],
 	return findings
 
 
-def _by_value(fact: str) -> str:
-	"""`key=<integer literal>` with the literal as its decimal value; any
-	other fact as it stands."""
+def _by_value(fact: str, arms: dict[str, int] | None = None) -> str:
+	"""`key=<integer literal>` with the literal as its decimal value, and
+	`key=<arm>` of the member's enum as the arm's; any other fact as it
+	stands."""
 	key, equals, value = fact.partition("=")
 	if not equals:
 		return fact
+	if arms and value in arms:
+		return f"{key}={arms[value]}"
 	try:
 		return f"{key}={int(value, 0)}"
 	except ValueError:
