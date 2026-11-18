@@ -1378,6 +1378,44 @@ The access attributes are the hardware's vocabulary -- `[ro]`, `[rw]`, `[wo]`,
 `[must_be_zero]`, which the generated validator enforces. `register_block`
 groups registers that share bus settings.
 
+### Registries: keyed cells, compiled and walked
+
+A settings store, a configuration database, a property list: a keyspace
+where each key's value is a short message of its own -- `on`, `14d`,
+`4+2`, `host 2947`. A `registry` declares one, each cell's value a message
+of a struct, so it is parsed by the same readers as any other message:
+
+```situ
+policy scope { estate, host }
+
+struct duration {
+	decimal u32  count[remaining]  [minimal];
+	time_unit    unit[1];
+	let u64 value = count * ((unit == time_unit.d) * 86400
+	                       + (unit == time_unit.h) * 3600 + ...);
+}
+
+registry settings {
+	"archive/gone"  : duration [min = 1, max = 315360000, default = "14d",
+	                            scope = estate, safe = lower]
+	                  "how long a keeper may be silent";
+	"stream/grant/" : count [max = 3, scope = estate];
+}
+```
+
+A key ending in `/` is a family, whose instances add one word. `min` and
+`max` bound the cell's value -- its type's `let value`, or its one number --
+and `min_size`/`max_size` its bytes; `safe` says which of two values
+written apart stands; `default` is held to be a cell of its type when the
+schema is compiled. Every other attribute is a word of a `policy` the
+schema declares, checked and not interpreted.
+
+All four backends generate the table with `find`, `check`, `value` and
+`safer`, and both walkers read the same rows from an image. Those rows are
+declarative -- no solved offset in them -- so a program can write them at
+runtime, over an image of the cell types, and a schema editor in a GUI
+needs no compiler to add a setting (decision 0070).
+
 ### Versions
 
 A version byte in a header is a promise, and section 19 is where keeping it

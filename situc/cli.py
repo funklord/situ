@@ -532,6 +532,9 @@ def analyse(path: Path, defines: Sequence[str] | None = None,
 	source   = apply_defines(read_source(path), defines)
 	schema   = parse(source, read)
 	resolved = resolve(schema, solve(schema))
+	# A registry's defaults, each a cell of its type (0070).
+	from situc import registry_defaults
+	registry_defaults.check(schema, resolved)
 	outcomes = requirements.discharge(schema, resolved)
 	return source, resolved, outcomes
 

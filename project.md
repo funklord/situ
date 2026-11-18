@@ -5389,6 +5389,9 @@ situ/
                               bytecode, for a walker to read; emits only,
                               never walks; 26.33
     requirements.py           predicate evaluation and discharge
+    registry_defaults.py      a registry's defaults, each held to be a cell
+                              of its type through the in-memory Python
+                              accessors; 0070, 26.1090
     namespaces.py             `::` qualification and `--prefix`; decision 0012
     capmap.py                 capability map construction
     diagnostics.py            diagnostic construction, blame chains, rendering
@@ -9062,6 +9065,10 @@ Moved to `doc/decision/26.1088-a-registry-is-generated-in-cpp.md`.
 ### 26.1089 A registry is generated in Rust
 
 Moved to `doc/decision/26.1089-a-registry-is-generated-in-rust.md`.
+
+### 26.1090 A registry's default is a cell of its type
+
+Moved to `doc/decision/26.1090-a-registry-default-is-a-cell-of-its-type.md`.
 
 ### 26.1076 A registry of keyed cells, compiled and walked
 
