@@ -3369,12 +3369,14 @@ def check_token_sets(schema: ast.Schema) -> None:
 			seen[key] = member.name
 
 	for struct in schema.structs():
+		direct = {id(one) for one in struct.members}
 		for field in _walk_members(struct.members):
 			if not isinstance(field, ast.Field):
 				continue
 			used = sets.get(field.type_ref.name)
 			if used is not None:
-				_check_token_member(used, field)
+				_check_token_member(used, field,
+				                    nested = id(field) not in direct)
 
 
 def _token_bytes(decl: ast.TokensDecl, member: ast.EnumMember) -> bytes:
@@ -3409,18 +3411,55 @@ def _token_bytes(decl: ast.TokensDecl, member: ast.EnumMember) -> bytes:
 	return held
 
 
-def _check_token_member(decl: ast.TokensDecl, member: ast.Field) -> None:
+def _check_token_member(decl: ast.TokensDecl, member: ast.Field,
+		nested: bool = False) -> None:
 	"""Where the extent comes from, and whether the arms can reach it."""
-	if member.array is not None and member.array.size is not None:
+	# A SIZED token member (0070): its extent comes from the message -- a
+	# length field, or `remaining` where the value is the whole of a cell or
+	# a datagram -- and the span is compared against the arms as a
+	# delimited one is. A token set still decides no width of its own; the
+	# size says where the member ends, as the delimiter does. Only a
+	# constant no arm is as long as is refused, since nothing could match.
+	# A width AND a delimiter is two ends for one member.
+	if member.array is not None and member.array.size is not None \
+			and member.until is not None:
 		raise error(
 			f"`{member.name}` gives a width to a token set",
 			member.span,
-			label = "a fixed width here",
-			notes = [f"`{decl.name}` has no width: its arms may differ in "
-			         "length, and the delimiter is what says where one ends",
+			label = "a width here, and a delimiter after it",
+			notes = [f"`{decl.name}` ends where one of the two says, not "
+			         "both: a length the message gives, or the delimiter",
 			         "a set of fixed-width spellings is `enum "
 			         f"{decl.name} : u8[k]`, which sizes the member itself "
 			         "(0052)"])
+	if member.array is not None and member.array.size is not None:
+		size = member.array.size
+		if isinstance(size, ast.IntLiteral) and not any(
+				len(_token_bytes(decl, arm)) == size.value
+				for arm in decl.members):
+			raise error(
+				f"`{member.name}` is {size.value} byte(s), and no spelling "
+				f"of `{decl.name}` is",
+				member.span,
+				label = "a fixed width here",
+				notes = ["the span is compared whole, so a width no arm has "
+				         "can never match",
+				         "a set of fixed-width spellings is `enum "
+				         f"{decl.name} : u8[k]`, which sizes the member "
+				         "itself (0052)"])
+		# A variant arm's member is checked through a different path in
+		# every reader, and none of them asks a sized token there yet: refused
+		# rather than read unchecked.
+		if nested:
+			raise error(
+				f"`{member.name}` is a sized `{decl.name}` inside a variant arm",
+				member.span,
+				label = "not checked here yet",
+				notes = ["a sized token set is read as a struct's own member "
+				         "(0070); inside an arm no reader compares it yet",
+				         'frame it with `until "D"`, or make it a member of '
+				         "the arm's own struct"])
+		return
 
 	if member.until is None:
 		raise error(

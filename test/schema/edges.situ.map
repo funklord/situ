@@ -215,6 +215,11 @@ struct counted_fixed size=2..642 mutate=Shifting repr=ValueConverted atomic=NonA
   counted_fixed.rows[].month             offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   counted_fixed.rows[].digest            offset=FrameStatic(0x02) size=Fixed(8) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
 
+struct counted_word size=1.. mutate=Shifting address=Unstable
+  counted_word.n                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  counted_word.word                      offset=AbsoluteStatic(0x01) size=Bounded(0, 3) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  counted_word.rest                      offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
 struct countless_varints size=1.. access=Sequential mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   countless_varints.lead                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   countless_varints.loose                offset=AbsoluteStatic(0x01) size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=InPlaceSlack canonical=NonCanonical
@@ -296,6 +301,9 @@ struct fixed_row size=10 repr=ValueConverted atomic=NonAtomic
 
 struct fixed_text size=3 atomic=NonAtomic
   fixed_text.body                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
+struct flag_cell size=0.. mutate=Shifting
+  flag_cell.word                         offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct floor_element size=4..33 mutate=Shifting
   floor_element.len                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

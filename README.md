@@ -1329,7 +1329,11 @@ The arms may differ in length, which is what separates it from
 `enum m : u8[k]`, and the difference is about extent rather than spelling:
 an enum decides how wide its member is, so unequal arms would mean trying
 each in turn -- a search. A token set decides nothing, because the delimiter
-already ended the member, so it is a comparison against a list.
+already ended the member, so it is a comparison against a list. A length
+ends it as well as a delimiter does -- `verb keyword[n];`, or
+`[remaining]` where the word is the whole of its frame, as a settings
+cell's `on` is -- and the span is compared whole, so a prefix of an arm is
+no spelling.
 `verb::which(...)` reports *which* arm matched, `default = pass` admits an
 unknown spelling as an extension point, and the case fold never consults a
 locale, so a wire vocabulary does not move with the reader's environment.

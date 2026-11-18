@@ -9991,7 +9991,27 @@ class Emitter:
 		          else self._fits_check(struct, entry.placement)),
 		        *self._arm_checks(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
-		        *self._member_check(struct, entry)]
+		        *self._member_check(struct, entry),
+		        *self._sized_token_check(struct, entry.placement)]
+
+	def _sized_token_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A SIZED token member holds one of its arms (0070): the span its
+		length says, compared as a delimited one's is. C's carries it."""
+		if placement.type_name not in self.tokens or placement.delimiters \
+				or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		decl = self.tokens[placement.type_name]
+		if decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+		held = py_name(decl.name)
+		name = py_name(local_name(struct, placement))
+		return [
+			f"\t\tif {held}.which(self.{name}) == {held}.UNKNOWN:",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\t"{placement.path} is not one of {decl.name}\'s '
+			f'{len(decl.members)} spelling(s)")',
+		]
 
 	def _tlv_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

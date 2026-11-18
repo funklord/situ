@@ -12719,7 +12719,8 @@ class Emitter:
 	# -- validation -----------------------------------------------------
 
 	def _token_check(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+			placement: Placement,
+			fixed: int | None = None) -> list[str]:
 		"""A delimited member typed by a token set holds one of its arms.
 
 		Only where the set says `default = error`. `pass` means the protocol
@@ -12734,12 +12735,14 @@ class Emitter:
 
 		local = c_name(self._local(struct, placement))
 		ptr   = ident(self.prefix, struct.name, local, "ptr")
-		wide  = ident(self.prefix, struct.name, local, "len")
+		# A FIXED width has no `_len` accessor; the number is the length.
+		wide  = (f"{fixed}u" if fixed is not None
+		         else f"{ident(self.prefix, struct.name, local, 'len')}(view)")
 		return [
 			f"\t/* `{placement.name}` is one of `{decl.name}`'s"
 			f" {len(decl.members)} spelling(s). */",
 			f"\tif ({ident(self.prefix, decl.name, 'which')}({ptr}(view),"
-			f" {wide}(view))",
+			f" {wide})",
 			f"\t\t\t== {macro(self.prefix, decl.name, 'unknown')}) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
@@ -13634,6 +13637,13 @@ class Emitter:
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			]
+
+		# A SIZED token member (0070): the span its length says, compared
+		# against the arms as a delimited one's is. Its fit is `_fits_check`'s.
+		if placement.type_name in self.tokens and not placement.delimiters \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			return self._token_check(struct, placement,
+			                         fixed = placement.array_count)
 
 		# An element's own members are checked under the element's struct, not
 		# here -- the same rule the delimiter case applies below, and the same

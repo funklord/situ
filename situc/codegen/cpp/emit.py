@@ -11550,7 +11550,29 @@ class Emitter:
 		          else self._fits_check(struct, entry.placement)),
 		        *self._arm_checks(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
-		        *self._member_check(struct, entry)]
+		        *self._member_check(struct, entry),
+		        *self._sized_token_check(struct, entry.placement)]
+
+	def _sized_token_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A SIZED token member holds one of its arms (0070): the span its
+		length says, compared as a delimited one's is. C's carries it."""
+		if placement.type_name not in self.tokens or placement.delimiters \
+				or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		decl = self.tokens[placement.type_name]
+		if decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+		name = bare_name(local_name(struct, placement))
+		return [
+			f"\t\t/* {placement.path} is one of `{decl.name}`'s"
+			f" {len(decl.members)} spelling(s). */",
+			f"\t\tif ({c_name(decl.name)}::which(this->{name}().data(),",
+			f"\t\t\t\tstatic_cast<std::uint32_t>(this->{name}().size()))"
+			f" == {c_name(decl.name)}::unknown) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
 
 	def _tlv_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

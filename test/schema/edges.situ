@@ -2798,3 +2798,26 @@ struct scrambled_summed {
 	coded body(masking) covers(head) [tag_order = after] { u8 payload[4]; }
 	checksum u8  sum[2] covers(head) is summing;
 }
+
+// A token set sized by a length rather than ended by a delimiter (0070):
+// a settings cell's `on` is the whole of the cell, and a keyword may end
+// where its datagram does. One-byte spellings beside two- and three-byte
+// ones, so the random draws land on an arm, a prefix of two arms (`o`), and
+// the empty span a zero length gives.
+tokens flag_word {
+	on   = "on",
+	off  = "off",
+	one  = "1",
+	zero = "0",
+	default = error,
+}
+
+struct flag_cell {
+	flag_word  word[remaining];
+}
+
+struct counted_word {
+	u8         n [max = 3];
+	flag_word  word[n];
+	u8         rest[remaining];
+}

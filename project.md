@@ -9006,6 +9006,20 @@ Moved to `doc/decision/26.1073-a-negative-length-is-zero-in-the-dissector.md`.
 
 Moved to `doc/decision/26.1074-a-guard-at-a-zero-cursor-is-not-emitted.md`.
 
+### 26.1075 A token set may end where its length says
+
+Moved to `doc/decision/26.1075-a-token-set-may-end-where-its-length-says.md`.
+
+### 26.1076 A registry of keyed cells, compiled and walked
+
+Raised by the copyright holder 2026-11-18 and recorded as
+`doc/decision/0070-a-registry-of-keyed-cells.md`, `Status: proposed`:
+fuzznet's settings registry (`state/schema.h`) is hand-written C because
+situ has no construct for keyed, text-valued cells with policy, and the
+holder asked for both a compiled reader and a walked one, since a schema
+may be edited at runtime in a GUI. 0070 holds the design, the gaps measured
+against fuzznet's table, and the steps; 26.1075 is the first gap closed.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.

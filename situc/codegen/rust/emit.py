@@ -6343,6 +6343,23 @@ class Emitter:
 		])
 		return lines
 
+	def _sized_token_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A SIZED token member holds one of its arms (0070): the span its
+		length says, compared as a delimited one's is. C's carries it."""
+		if placement.type_name not in self.tokens or placement.delimiters \
+				or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		decl = self.tokens[placement.type_name]
+		if decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+		return [
+			f"\t\tif {decl.name}::which(self.{_ident(c_name(placement.name))}())"
+			f" == {decl.name}::UNKNOWN {{",
+			"\t\t\treturn Err(Error::Constraint);",
+			"\t\t}",
+		]
+
 	def _token_checks(self, placement: Placement, base: str) -> list[str]:
 		"""A delimited member typed by a token set holds one of its arms.
 
@@ -10941,6 +10958,7 @@ class Emitter:
 		groups: list[tuple[str, list[str]]] = []
 		for entry in own_entries(struct):
 			lines = [*self._member_checks(struct, entry),
+			         *self._sized_token_check(struct, entry.placement),
 			         *self._holds_check(struct, entry.placement),
 			         *self._ordering_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):

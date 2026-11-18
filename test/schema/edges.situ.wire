@@ -200,6 +200,11 @@ struct counted_fixed size=2..642
   @0x0000   2         u16        rows_held  big max=64
   @0x0002   0..640    fixed_row  rows  sized-by=rows_held
 
+struct counted_word size=1..
+  @0x0000   1         u8         n  max=3
+  @0x0001   0..3      flag_word  word  sized-by=n
+  ~         0..       u8         rest  sized-by=remaining
+
 struct countless_varints size=1..
   @0x0000   1         u8         lead
   @0x0001   0..       edge_varint loose  sized-by=remaining varint=edge_varint
@@ -283,6 +288,9 @@ struct fixed_row size=10
 
 struct fixed_text size=3
   @0x0000   3         u8         body  big encoding=ascii
+
+struct flag_cell size=0..
+  @0x0000   0..       flag_word  word  sized-by=remaining
 
 struct floor_element size=4..33
   @0x0000   1         u8         len  min=3 max=32

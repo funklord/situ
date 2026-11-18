@@ -1963,6 +1963,25 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					and traverse.must_end(placement) \
 					and "." not in placement.path[len(rstruct.name) + 1:]:
 				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
+			# A SIZED token member (0070) is the delimited one's question of
+			# a span its length sized: membership, the same row. Written
+			# ahead of the kinds because a sized run classifies as a plain
+			# run, or as nothing for `[remaining]`, and the fit check below
+			# still applies to it. A member another reads its encoding from
+			# is not mapped for a sized token yet, so it defers.
+			if placement.type_name in tokens and not placement.delimiters \
+					and "." not in placement.path[len(rstruct.name) + 1:]:
+				arms = tuple(resolved.layout.env
+				             .token_sets[placement.type_name].values())
+				if encoding_arms.get(at) \
+						or any(len(run) > PINNED_OCTETS for run in arms):
+					whole = False
+					continue
+				for run in arms:
+					pinned_blob += _struct.pack(
+						f"<IB{PINNED_OCTETS}s", at, len(run), run)
+				constraints_blob += _struct.pack(
+					"<IqBxxx", at, len(arms), 14)
 			if kind is traverse.Check.NOTHING and placement.kind != "variant":
 				continue
 			# A marker states one of its two literals (26.964): membership
