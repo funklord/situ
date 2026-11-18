@@ -14926,6 +14926,24 @@ class Emitter:
 			for held in self._arguments(struct)
 			if re.search(rf"\b{self._argument_name(held)}\b", text))
 
+	def _covered_nested(self, struct: ResolvedStruct,
+			member: Placement) -> bool:
+		"""Whether a covered member is one nested struct of no fixed size,
+		which `_fits_check` gives no extent to: measured inside a view
+		already clamped to the frame, its overrun was a span cut short
+		(`edges.blocked_arg`, 26.1071). Asked through its own accessor,
+		which refuses a struct the frame does not hold."""
+		from situc.traverse import has_computable_extent, is_struct_run
+		inner = self.resolved.structs.get(member.type_name or "")
+		return (inner is not None and member.kind == "field"
+		        and not inner.layout.is_fixed_size
+		        and has_computable_extent(self.resolved.structs, inner)
+		        and member.located is None
+		        and member.array_count is None
+		        and member.repeat_while is None
+		        and not is_struct_run(self.resolved.structs, member)
+		        and "." not in member.path[len(struct.name) + 1:])
+
 	def _covered_fits(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""What `_covered` asks before it answers: that every length a
@@ -14946,6 +14964,21 @@ class Emitter:
 			# became a span of nothing at the frame's end (26.1071). A
 			# `[since]` member absent at this version is not in the span.
 			if member.since:
+				continue
+			if self._covered_nested(struct, member):
+				local = c_name(self._local(struct, member))
+				lines += [
+					f"\t/* {member.path}: a nested struct whose own extent the",
+					"\t * frame has to hold; its view is refused where not (26.1071). */",
+					"\t{",
+					"\t\tsitu_view_t nested;",
+					"",
+					f"\t\tif ({ident(self.prefix, struct.name, local, 'view')}"
+					f"(view, &nested{self._member_args(struct, member)}) != SITU_OK) {{",
+					"\t\t\treturn SITU_ERR_BOUNDS;",
+					"\t\t}",
+					"\t}",
+				]
 				continue
 			lines.extend(self._fits_check(struct, member))
 		# And a coded or sealed region's extent, which is the codec's and
