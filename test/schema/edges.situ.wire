@@ -193,6 +193,13 @@ struct chains size=5..
   tail case 7: more
   tail case default: stop
 
+struct classed size=4..
+  @0x0000   2         u8         tag  big chars="A-Z"
+  @0x0002   1         u8         n
+  @0x0003   0..255    u8         host  sized-by=n chars="\x2D.0-:A-Za-z"
+  ~         until:3b  u8         word  chars="a-z"
+  ~         0..       u8         rest  sized-by=remaining chars="0-9"
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling

@@ -6370,6 +6370,36 @@ class Emitter:
 		])
 		return lines
 
+	def _chars_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[chars = "..."]`: every byte of the run is in the class (26.1099),
+		against the table `situc.chars` computes, through the run's own
+		accessor. A nested struct's member is that struct's to check."""
+		from situc import chars
+
+		held = chars.of(placement.attrs)
+		if held is None or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		name  = _ident(c_name(local_name(struct, placement)))
+		table = chars.table(held)
+		rows  = [", ".join(f"0x{one:02X}" for one in table[at:at + 8])
+		         for at in range(0, len(table), 8)]
+		shown = chars.canonical(held)
+		# A block of its own, so two classes in one `validate` do not
+		# declare one constant twice.
+		return [
+			f'\t\t// {placement.path} [chars = "{shown}"]',
+			"\t\t{",
+			"\t\t\tconst CHARS_TABLE: [u8; 32] = [",
+			*(f"\t\t\t\t{row}," for row in rows),
+			"\t\t\t];",
+			f"\t\t\tif self.{name}().iter()"
+			".any(|&b| (CHARS_TABLE[usize::from(b >> 3)] >> (b & 7)) & 1 == 0) {",
+			"\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _sized_token_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A SIZED token member holds one of its arms (0070): the span its
@@ -10986,6 +11016,7 @@ class Emitter:
 		for entry in own_entries(struct):
 			lines = [*self._member_checks(struct, entry),
 			         *self._sized_token_check(struct, entry.placement),
+			         *self._chars_check(struct, entry.placement),
 			         *self._holds_check(struct, entry.placement),
 			         *self._ordering_check(struct, entry.placement)]
 			if not any(_REFUSES.match(one) for one in lines):

@@ -538,6 +538,10 @@ enum image_check : u8 {
 	                      // does -- and it is the kind a refusal reports.
 	enum_each      = 23,  // every element of an enum run is one of its
 	                      // members: `value` is the enum's id (26.1013)
+	chars_low      = 24,  // `[chars]` (26.1099): every byte of the run is in
+	chars_mid      = 25,  // its class. Four rows, `value` holding 64 bits of
+	chars_high     = 26,  // the class's 256-bit table each, low bit first:
+	chars_top      = 27,  // byte b is bit b % 64 of row 24 + b / 64
 	encoding_arm = 16,    // one per arm of the token set a member holds, in
 	                      // declaration order, `value` being the encoding
 	                      // code an `encoded_as` would carry. Rows on the

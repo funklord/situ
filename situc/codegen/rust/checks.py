@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.capability import Axis
-from situc.codegen import (CHECK_KINDS, PROBE_BYTES,
+from situc.codegen import (class_run, CHECK_KINDS, PROBE_BYTES,
                            buffer_size,
                            digit_pattern,
                            passes_unknown, placed_bytes, refuse_only_arguments,
@@ -341,7 +341,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 			              for i, byte in enumerate(digits))
 			continue
 
-		run = required_run(placement)
+		run = required_run(placement) or class_run(placement)
 		if run is not None:
 			if placement.offset_bits % BITS_PER_BYTE:
 				return None

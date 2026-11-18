@@ -10016,7 +10016,29 @@ class Emitter:
 		        *self._arm_checks(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
 		        *self._member_check(struct, entry),
-		        *self._sized_token_check(struct, entry.placement)]
+		        *self._sized_token_check(struct, entry.placement),
+		        *self._chars_check(struct, entry.placement)]
+
+	def _chars_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[chars = "..."]`: every byte of the run is in the class (26.1099),
+		against the table `situc.chars` computes, through the run's own
+		accessor. A nested struct's member is that struct's to check."""
+		from situc import chars
+
+		held = chars.of(placement.attrs)
+		if held is None or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		name  = py_name(local_name(struct, placement))
+		table = chars.table(held)
+		return [
+			f"\t\t# {placement.path} [chars = {chars.canonical(held)!r}]",
+			f"\t\tchars_table = {table!r}",
+			f"\t\tif any(not (chars_table[b >> 3] >> (b & 7)) & 1"
+			f" for b in self.{name}):",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\t"{placement.path} holds a byte outside its class")',
+		]
 
 	def _sized_token_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

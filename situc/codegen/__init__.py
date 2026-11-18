@@ -584,6 +584,22 @@ def required_run(placement: Placement, every: bool = False):	# type: ignore[no-u
 	return found[0] if found else None
 
 
+def class_run(placement: Placement) -> bytes | None:
+	"""Bytes a fixed-count `[chars]` run validates with, for a baseline: its
+	class's lowest byte, repeated (26.1099). A zeroed buffer holds zeros,
+	which few classes admit, so a check built on it would assert SITU_OK
+	about a buffer `validate` already refuses. None where the run is not
+	counted by the schema -- a sized one is empty in a zeroed buffer, and
+	an empty run holds no bad byte."""
+	from situc import chars
+
+	held = chars.of(placement.attrs)
+	if held is None or not placement.array_count \
+			or placement.element_bits != 8:
+		return None
+	return bytes([min(held)]) * placement.array_count
+
+
 def required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> int | None:
 	"""The value this member must hold for the struct to validate, if any."""

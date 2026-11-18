@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import re
 from pathlib import PurePath
 
-from situc import ast
+from situc import ast, chars
 from situc.types import pinned_shown
 from situc.layout import (
 	Arm, BITS_PER_BYTE, IndexTable, KnownTag, Placement, ValueRule)
@@ -528,6 +528,9 @@ WIRE_ATTRS = (
 	# A run its keys must ascend through refuses what an unordered one
 	# takes, which is a receiver's whole question (26.985).
 	"ascending",
+	# The bytes a run may hold (26.1099), in one canonical spelling so two
+	# ways of typing a class are one fact.
+	"chars",
 )
 
 
@@ -687,6 +690,11 @@ def _attribute_facts(placement: Placement, env: Env) -> list[str]:
 			continue
 		if attr.value is None:
 			facts.append(attr.name)
+			continue
+		if attr.name == "chars":
+			held = chars.of((attr,))
+			assert held is not None
+			facts.append(f'chars="{chars.canonical(held)}"')
 			continue
 
 		# The VALUE, not the author's spelling of it. This file is read by
@@ -1702,6 +1710,18 @@ def _tightened(key: str, was: str, now: str) -> bool | None:
 	`[max = n * 2]` is a bound whose value is an expression, and two spellings
 	of one are not ordered by anything this file can see.
 	"""
+	if key == "chars":
+		# A class is a set, and a narrower one refuses bytes the wider took
+		# (26.1099). Neither inside the other is both at once, which the
+		# caller reports under the heading that warns.
+		old_set, new_set = _class_of(was), _class_of(now)
+		if old_set == new_set:
+			return None
+		if new_set < old_set:
+			return True
+		if new_set > old_set:
+			return False
+		return None
 	if key not in TIGHTENS_UP + TIGHTENS_DOWN:
 		return None
 	try:
@@ -1714,6 +1734,13 @@ def _tightened(key: str, was: str, now: str) -> bool | None:
 		return None
 	return (new_value > old_value) if key in TIGHTENS_UP else (
 		new_value < old_value)
+
+
+def _class_of(fact: str) -> frozenset[int]:
+	"""A `chars="..."` fact's bytes, read back from its canonical spelling."""
+	text = fact.partition("=")[2].strip('"')
+	return chars.parse(text.encode("ascii").decode("unicode_escape"),
+	                   None)					# type: ignore[arg-type]
 
 
 def _name_of(line: str) -> str:

@@ -80,6 +80,7 @@ def check(schema: ast.Schema) -> None:
 	check_member_arguments(schema)
 	check_parameter_nesting(schema)
 	check_holds(schema)
+	check_chars(schema)
 	check_varint_arms(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
@@ -2925,6 +2926,23 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 		return ("a run of `u8` -- the bytes the frame gives the struct "
 		        "(26.898)")
 
+	# 26.1099: a class is checked byte by byte, so it means something only
+	# where each byte is one -- a run of `u8`, counted, sized, delimited or
+	# to the end. A text number's digits are already a class, its radix's.
+	if attr.name == "chars":
+		if isinstance(member, ast.Field) and member.type_ref.name == "u8" \
+				and (member.array is not None or member.until is not None) \
+				and member.radix is None:
+			from situc import chars
+			if not isinstance(attr.value, ast.StringLiteral):
+				raise error("`[chars]` takes a string, the bytes it admits",
+				            attr.span, label = 'such as "a-z0-9-"')
+			chars.parse(attr.value.value, attr.span)
+			return None
+		return ("a run of `u8` -- a class is checked one byte at a time, and "
+		        "a text number's digits are already its radix's class "
+		        "(26.1099)")
+
 	if attr.name == "must_be_zero":
 		if isinstance(member, ast.Reserved):
 			return None
@@ -4428,6 +4446,31 @@ def _own_members(members: tuple[ast.Member, ...]) -> list[ast.Member]:
 		if isinstance(member, TRANSPARENT_BLOCKS):
 			found.extend(_own_members(nested(member)))
 	return found
+
+
+def check_chars(schema: ast.Schema) -> None:
+	"""`[chars]` is on a member of the struct itself (26.1099).
+
+	`check_holds`' rule, for its reason: every reader checks the class
+	through the member's own accessors, which an arm and a sealed or coded
+	interior do not have on the struct's view. A transparent block keeps its
+	members the struct's own. An arm's member is refused rather than checked
+	where the arm can be dispatched and not where it cannot -- a `default`
+	arm is the second kind -- because a class some readers enforce and others
+	skip is a schema the readers disagree about.
+	"""
+	for struct in schema.structs():
+		own = _own_members(struct.members)
+		for member in _walk_members(struct.members):
+			attr = next((one for one in getattr(member, "attrs", ())
+			             if one.name == "chars"), None)
+			if attr is None or member in own:
+				continue
+			raise error(
+				"`[chars]` is on a member of the struct itself", attr.span,
+				label = "inside an arm or a sealed or coded region",
+				notes = ["a struct holding the run carries its class to "
+				         "wherever the struct is placed; nest one (26.1099)"])
 
 
 def check_holds(schema: ast.Schema) -> None:

@@ -11602,7 +11602,41 @@ class Emitter:
 		        *self._arm_checks(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
 		        *self._member_check(struct, entry),
-		        *self._sized_token_check(struct, entry.placement)]
+		        *self._sized_token_check(struct, entry.placement),
+		        *self._chars_check(struct, entry.placement)]
+
+	def _chars_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[chars = "..."]`: every byte of the run is in the class (26.1099),
+		against the table `situc.chars` computes -- C's check, through the
+		run's own accessor. A nested struct's member is that struct's to
+		check; `check_chars` refuses one in an arm or a sealed region."""
+		from situc import chars
+
+		held = chars.of(placement.attrs)
+		if held is None or "." in placement.path[len(struct.name) + 1:]:
+			return []
+		name  = bare_name(local_name(struct, placement))
+		table = chars.table(held)
+		rows  = [", ".join(f"0x{one:02X}u" for one in table[at:at + 8])
+		         for at in range(0, len(table), 8)]
+		shown = chars.canonical(held).replace("*/", "*\\/")
+		return [
+			f'\t\t/* {placement.path} [chars = "{shown}"] */',
+			"\t\t{",
+			"\t\t\tstatic constexpr std::uint8_t chars_table[32] = {",
+			*(f"\t\t\t\t{row}," for row in rows),
+			"\t\t\t};",
+			f"\t\t\tconst auto chars_run = this->{name}();",
+			"\t\t\tfor (std::size_t chars_i = 0; chars_i < chars_run.size();"
+			" chars_i++) {",
+			"\t\t\t\tconst std::uint8_t b = chars_run.data()[chars_i];",
+			"\t\t\t\tif (((chars_table[b >> 3] >> (b & 7u)) & 1u) == 0u) {",
+			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t\t}",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _sized_token_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

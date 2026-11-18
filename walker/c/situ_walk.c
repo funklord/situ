@@ -4725,6 +4725,11 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_ASCENDING      22u
 /* Every element of an enum run is one of its members (26.1013). */
 #define CHECK_ENUM_EACH      23u
+/* `[chars]` (26.1099): four rows, each holding 64 bits of the class's
+ * 256-bit table, low bit first -- byte b is bit b % 64 of the row whose kind
+ * is CHECK_CHARS + b / 64. */
+#define CHECK_CHARS          24u
+#define CHECK_CHARS_LAST     27u
 
 /* `text_flags` bit 2: the member compares case-insensitively (0055). */
 #define TEXT_CASE_INSENSITIVE 4u
@@ -6830,7 +6835,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_ENCODING_ARM
 			                && kind != CHECK_PAD_LENGTH_MIN
 			                && kind != CHECK_PAD_LENGTH_MAX
-			                && kind != CHECK_ENUM_EACH) {
+			                && kind != CHECK_ENUM_EACH
+			                && (kind < CHECK_CHARS
+			                    || kind > CHECK_CHARS_LAST)) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 		}
@@ -7609,7 +7616,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				if (kind == CHECK_NUL_TERMINATED || kind == CHECK_ENCODED_AS
 				                || kind == CHECK_ZERO_RUN
 				                || kind == CHECK_PINNED_RUN
-				                || kind == CHECK_ENCODED_FROM) {
+				                || kind == CHECK_ENCODED_FROM
+				                || kind == CHECK_CHARS) {
 					span += 1u;
 				}
 			}
@@ -7683,6 +7691,34 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 						if ((int64_t)seen != want) {
 							return SITU_WALK_MALFORMED;
 						}
+					} else if (kind == CHECK_CHARS) {
+						/* The class whole, from its four quarters, which
+						 * the packer writes together for one placement
+						 * (26.1099). A quarter missing is the image's
+						 * fault, as a pinned run miscounted is. */
+						uint64_t quarter[4] = { 0u, 0u, 0u, 0u };
+						uint32_t found      = 0u;
+
+						for (uint32_t q = 0u; q < rows; q++) {
+							const uint8_t *other =
+							        checks + q * image->constraint_stride;
+							const uint8_t  which = other[12];
+
+							if (which >= CHECK_CHARS
+							                && which <= CHECK_CHARS_LAST) {
+								quarter[which - CHECK_CHARS]
+								        = (uint64_t)i64_at(other + 4);
+								found += 1u;
+							}
+						}
+						if (found != 4u) {
+							return SITU_WALK_MALFORMED;
+						}
+						for (uint32_t d = 0u; d < content && !bad; d++) {
+							const uint8_t b = data[d];
+
+							bad = ((quarter[b >> 6] >> (b & 63u)) & 1u) == 0u;
+						}
 					} else if (kind == CHECK_ENCODED_AS) {
 						const int ok = encoded_ok(data, content,
 						                          i64_at(row + 4));
@@ -7750,7 +7786,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                || kind == CHECK_ARM_SELECTED
 			                || kind == CHECK_PAD_LENGTH_MIN
 			                || kind == CHECK_PAD_LENGTH_MAX
-			                || kind == CHECK_ENUM_EACH) {
+			                || kind == CHECK_ENUM_EACH
+			                || (kind >= CHECK_CHARS
+			                    && kind <= CHECK_CHARS_LAST)) {
 				continue;	/* asked above, over the span rather than a value */
 			}
 

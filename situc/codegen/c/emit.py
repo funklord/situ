@@ -13476,7 +13476,8 @@ class Emitter:
 		        *self._arm_fits_check(struct, entry.placement),
 		        *self._arm_validation(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
-		        *self._member_checks(struct, entry)]
+		        *self._member_checks(struct, entry),
+		        *self._own_chars_check(struct, entry.placement)]
 
 	def _tlv_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -14880,6 +14881,61 @@ class Emitter:
 			f"\t/* {placement.path} [encoding = {named}] */",
 			f"\tif (!situ_{named}_valid({ptr}, {count})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
+	def _own_chars_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The class check for a member of this struct, and nothing else: a
+		nested struct's member is checked by that struct's `validate`, and
+		`check_chars` refuses one in an arm or a sealed or coded region."""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+		return self._chars_check(struct, placement)
+
+	def _chars_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[chars = "..."]`: every byte of the run is in the class (26.1099).
+
+		One table lookup per byte, against the 256-bit table `situc.chars`
+		computes -- the same table the image carries, so no reader has its
+		own idea of what a range includes. Read through the member's `_ptr`
+		and `_len`, which every form of byte run has, so the check reaches a
+		run wherever it sits.
+		"""
+		from situc import chars
+
+		held = chars.of(placement.attrs)
+		if held is None:
+			return []
+		local = c_name(self._local(struct, placement))
+		args  = self._member_args(struct, placement)
+		table = chars.table(held)
+		rows  = [", ".join(f"0x{one:02X}u" for one in table[at:at + 8])
+		         for at in range(0, len(table), 8)]
+		shown = chars.canonical(held).replace("*/", "*\\/")
+		return [
+			f'\t/* {placement.path} [chars = "{shown}"] */',
+			"\t{",
+			"\t\tstatic const uint8_t chars_table[32] = {",
+			*(f"\t\t\t{row}," for row in rows),
+			"\t\t};",
+			f"\t\tconst uint8_t *chars_at = "
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(view{args});",
+			# A counted run has no `_len`: its length is the schema's.
+			"\t\tconst uint32_t chars_n = " + (
+				f"{placement.array_count}u;" if placement.array_count
+				else f"{ident(self.prefix, struct.name, local, 'len')}"
+				f"(view{args});"),
+			"\t\tuint32_t chars_i;",
+			"",
+			"\t\tfor (chars_i = 0; chars_i < chars_n; chars_i++) {",
+			"\t\t\tconst uint8_t b = chars_at[chars_i];",
+			"",
+			"\t\t\tif (((chars_table[b >> 3] >> (b & 7u)) & 1u) == 0u) {",
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+			"\t\t}",
 			"\t}",
 		]
 

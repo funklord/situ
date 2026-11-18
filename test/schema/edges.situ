@@ -2937,3 +2937,14 @@ struct off_switch {
 		default: u8 rest[inner.len];
 	}
 }
+
+// The bytes a run may hold (26.1099), on each form a run takes: counted,
+// sized, delimited and to the end. The counted one is what a checks
+// baseline has to fill, a zero being in no class here.
+struct classed {
+	u8 tag[2] [chars = "A-Z"];
+	u8 n;
+	u8 host[n] [chars = "A-Za-z0-9.:-"];
+	u8 word[] until ";" [chars = "a-z"];
+	u8 rest[remaining] [chars = "0-9"];
+}

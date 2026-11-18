@@ -1308,6 +1308,16 @@ case-insensitive token is `NonCanonical` on the lattice, because
 `Content-Length` and `content-length` are one value with two spellings, and
 the generated comparison folds case the way the schema says.
 
+`[chars = "A-Za-z0-9.:-"]` says which bytes a run may hold, and is
+narrower than any encoding: a host name, an HTTP token (RFC 9110's
+`tchar`), a DNS label, a base64 or hex body. It is written as a regular
+expression's bracket is, without the brackets -- characters, `a-z`
+ranges, a `-` literal at either end -- and there is no negation, because a
+class says what a reader accepts. Every reader checks it byte by byte
+against one 256-bit table, and the wire signature carries it in one
+canonical spelling, so two ways of typing a class are one contract and a
+narrower one is reported as the tightening it is.
+
 String literals know `\n \t \r \0 \\ \"` and `\xNN`, so a frame delimiter
 outside ASCII -- SLIP's 0xC0 -- can be written.
 

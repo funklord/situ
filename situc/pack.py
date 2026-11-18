@@ -31,7 +31,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 
-from situc import ast, traverse
+from situc import ast, chars, traverse
 from situc.capability import DOMAINS, Axis
 from situc.diagnostics import SituError
 from situc.expr import evaluate
@@ -164,6 +164,10 @@ SECTION_DEPTHS		= 21
 SECTION_RELATIONS	= 18
 SECTION_RELATION_MUSTS	= 19
 SECTION_PINNED_RUNS	= 20
+
+#: `image_check`'s first of four `[chars]` rows (26.1099): kind 24 holds bytes
+#: 0-63 of the class, 25 bytes 64-127, 26 and 27 the rest.
+CHECK_CHARS		= 24
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
 #: A value a struct's fields assemble (26.1059): `image_let`, one row per
@@ -2059,6 +2063,19 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						f"<IB{PINNED_OCTETS}s", at, len(run), run)
 				constraints_blob += _struct.pack(
 					"<IqBxxx", at, len(arms), 14)
+			# `[chars]` (26.1099): the class's 256-bit table as four rows,
+			# one 64-bit quarter each, so a row's `value` says which bytes it
+			# admits and no section is needed. Ahead of the kinds for the
+			# sized token's reason: a `[remaining]` run classifies as nothing.
+			held = chars.of(placement.attrs)
+			if held is not None \
+					and "." not in placement.path[len(rstruct.name) + 1:]:
+				bits = chars.table(held)
+				for quarter in range(4):
+					constraints_blob += _struct.pack(
+						"<IqBxxx", at, int.from_bytes(
+							bits[quarter * 8:quarter * 8 + 8], "little",
+							signed=True), CHECK_CHARS + quarter)
 			if kind is traverse.Check.NOTHING and placement.kind != "variant":
 				continue
 			# A marker states one of its two literals (26.964): membership

@@ -923,6 +923,8 @@ PINNED_RUN = 14
 ASCENDING = 22
 #: `enum_each` (26.1013): every element of an enum run is one of its members.
 ENUM_EACH = 23
+#: `[chars]` (26.1099): four rows, each 64 bits of the class's table.
+CHARS = (24, 25, 26, 27)
 #: `pack.ORDER_*`, which `walk` cannot import from the packer.
 ORDER_BYTES, ORDER_UNSIGNED, ORDER_SIGNED = 0, 1, 2
 #: `[encoding = from(f)]` (0058), and the mapping it reads. ENCODED_FROM sits
@@ -1805,6 +1807,25 @@ def _validate_here(image: Image, view: View, struct_index: int,
 				if check == PAD_LENGTH_MAX and length > against:
 					return fail(ERR_CONSTRAINT, index, check)
 
+		# The class, whole: its four quarters joined back into the table the
+		# packer split, so a byte's bit is found exactly as every backend
+		# finds it (26.1099).
+		quarters = {check: against for check, against in held
+		            if check in CHARS}
+		if quarters:
+			if len(quarters) != len(CHARS):
+				raise Refused(f"placement {index}: {len(quarters)} of the "
+				              "four [chars] rows")
+			table = b"".join(
+				(quarters[check] & (2**64 - 1)).to_bytes(8, "little")
+				for check in CHARS)
+			try:
+				data = _span_bytes(image, view, index)
+			except Refused:
+				return fail(ERR_BOUNDS, index)
+			if any(not (table[b >> 3] >> (b & 7)) & 1 for b in data):
+				return fail(ERR_CONSTRAINT, index, CHARS[0])
+
 		span = [pair for pair in held
 		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN,
 		                       PINNED_RUN, ENCODED_FROM)]
@@ -1877,7 +1898,7 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		                                   ENCODED_AS, ZERO_RUN,
 		                                   PINNED_RUN, ENCODED_FROM,
 		                                   ENCODING_ARM, PAD_LENGTH_MIN,
-		                                   PAD_LENGTH_MAX, ENUM_EACH)]
+		                                   PAD_LENGTH_MAX, ENUM_EACH, *CHARS)]
 		if not value_checks:
 			continue
 		try:
@@ -2040,6 +2061,7 @@ CHECK_NAMES = {
 	19: "must_eq", 20: "min", 21: "max",
 	ASCENDING: "ascending",
 	ENUM_EACH: "enum_each",
+	**{one: "chars" for one in CHARS},
 }
 
 
@@ -2050,7 +2072,7 @@ ALL_CHECKS = frozenset({
 	FITS_FRAME, TERMINATED, ARM_SELECTED, DIGITS_VALID, DIGITS_MINIMAL,
 	NUL_TERMINATED, ENCODED_AS, ZERO_RUN, PINNED_RUN, ENCODED_FROM,
 	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX, *BOUND_BY, ASCENDING,
-	ENUM_EACH,
+	ENUM_EACH, *CHARS,
 })
 
 

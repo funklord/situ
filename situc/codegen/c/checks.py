@@ -24,7 +24,7 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
-from situc.codegen import (INSTANCE_CEILING, PROBE_BYTES, argued_sides,
+from situc.codegen import (class_run, INSTANCE_CEILING, PROBE_BYTES, argued_sides,
 	arguments, buffer_size, digit_pattern, passes_unknown, placed_bytes,
 	no_baseline_stands, refuse_parameters, zero_is_no_message, required_pattern, required_run,
 	reserved_policy, selected_arms)
@@ -2139,7 +2139,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# builds failed `validate` before any check had broken anything --
 		# and every check built on it asserted `SITU_OK` about a buffer that
 		# was already refused.
-		run = required_run(placement)
+		run = required_run(placement) or class_run(placement)
 		if run is not None:
 			if placement.offset_bits % BITS_PER_BYTE:
 				return None

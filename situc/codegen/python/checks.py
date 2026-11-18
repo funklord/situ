@@ -25,7 +25,7 @@ from typing import Literal
 
 from situc import __version__, ast
 from situc.capability import Axis
-from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
+from situc.codegen import (class_run, CHECK_KINDS, PROBE_BYTES, arguments,
                            buffer_size,
                            digit_pattern, passes_unknown, placed_bytes,
                            refuse_only_arguments, required_pattern,
@@ -1022,7 +1022,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# spellings of one are arrays and the skip takes every one of them.
 		# `edges.sig` is `u8 sig[4] [must_eq = "WOZ2"]`, and skipping it
 		# left the baseline claiming a validity it did not have.
-		run = required_run(placement)
+		run = required_run(placement) or class_run(placement)
 		if run is not None:
 			if placement.offset_bits % BITS_PER_BYTE:
 				return None
