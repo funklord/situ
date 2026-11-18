@@ -162,7 +162,7 @@ generated code acts on them (the comparison, the rate).
    learned a token test (26.1082) and a 64-bit ceiling (26.1083).
 5. The writer path: rows written without `situc`, read back by both
    walkers (26.1085).
-6. Python (26.1087), C++ (26.1088), Rust.
+6. Python (26.1087), C++ (26.1088), Rust (26.1089).
 
 ## Open, and whose
 

@@ -9059,6 +9059,10 @@ Moved to `doc/decision/26.1087-a-registry-is-generated-in-python.md`.
 
 Moved to `doc/decision/26.1088-a-registry-is-generated-in-cpp.md`.
 
+### 26.1089 A registry is generated in Rust
+
+Moved to `doc/decision/26.1089-a-registry-is-generated-in-rust.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

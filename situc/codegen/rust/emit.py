@@ -459,6 +459,14 @@ class Emitter:
 		for name in sorted(self.structs):
 			body.extend(self._struct(self.resolved.structs[name]))
 
+		# Registries last: each reads the struct views above (0070).
+		from situc.codegen.rust.registry import (policy_constants,
+		                                         registry_items)
+		body.extend(policy_constants(self.schema))
+		for registry in self.schema.registries():
+			body.extend(registry_items(self.schema, registry,
+			                           self.resolved.structs, _pascal))
+
 		# The body first, so the imports can follow what it uses. An unused
 		# import is a warning, and a generated file that warns on sight
 		# teaches a reader to ignore warnings from generated files -- which
