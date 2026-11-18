@@ -7357,6 +7357,30 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			break;
 		}
 
+		/* And a TEXT NUMBER the message counts, for any way of counting:
+		 * past the frame its digits are absent, which is a run that does
+		 * not fit rather than a parse to fail. The packer writes no
+		 * `CHECK_FITS_FRAME` row for one, the text-number rows being its
+		 * own, and `report._validate` asks it from the placement; this
+		 * walk read the digits and named the spelling or the read, so
+		 * `u8 n; decimal u32 count[n]` with `n` past the frame was
+		 * `digits_minimal` here and `fits_frame` there (26.1078). */
+		if (held.radix != 0u && held.radix_digits == 0u
+		                && delimiter_rules(image, index) == NULL) {
+			uint32_t held_bits = 0u;
+
+			err = content_bits_deep(image, message, len, shape, index,
+			                        depth, &held_bits);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if ((held_bits + 7u) / 8u > len - at / 8u) {
+				record(why, index, CHECK_FITS_FRAME);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+		}
+
 		/* AND EVERY ELEMENT A COUNTED RUN DECLARES, which no span check
 		 * can see: a span is how far the run reached, and a walk that gave
 		 * up early reaches less -- so nine bytes whose one element
@@ -7599,7 +7623,13 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 
 			uint64_t value = 0u;
-			err = situ_walk_read(image, message, len, shape, index, &value);
+			/* Not for the SPELLING row: `[minimal]` asks how the digits
+			 * are written, before anything asks what they are worth, as
+			 * the runtime's `situ_digits_minimal` does. Parsing first
+			 * named `a5` non-minimal where the Python walk and every
+			 * backend call it not a number (26.1078). */
+			err = kind == CHECK_DIGITS_MINIMAL ? SITU_WALK_OK
+			      : situ_walk_read(image, message, len, shape, index, &value);
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
 			}

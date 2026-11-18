@@ -2821,3 +2821,13 @@ struct counted_word {
 	flag_word  word[n];
 	u8         rest[remaining];
 }
+
+// A `[minimal]` text number the message counts, the shape that found two
+// ways the C walk named a different refusing check from the Python walk
+// (26.1078): it parsed the value before the spelling, and had no fit check
+// for digits the count put past the frame.
+struct counted_digits {
+	u8           n [max = 4];
+	decimal u32  count[n]  [minimal];
+	u8           rest[remaining];
+}

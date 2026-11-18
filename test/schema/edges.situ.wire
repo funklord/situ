@@ -196,6 +196,11 @@ struct counted_by_bits size=5..37
   @0x0004   0..32     u8         values  sized-by=popcount(present)
   ~         1         u8         after
 
+struct counted_digits size=1..
+  @0x0000   1         u8         n  max=4
+  @0x0001   0..4      u32        count  sized-by=n radix=10 minimal
+  ~         0..       u8         rest  sized-by=remaining
+
 struct counted_fixed size=2..642
   @0x0000   2         u16        rows_held  big max=64
   @0x0002   0..640    fixed_row  rows  sized-by=rows_held
