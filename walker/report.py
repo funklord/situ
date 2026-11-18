@@ -853,7 +853,8 @@ def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 
 
 def listing(image: Image, buffer: bytes, args: Sequence[int] = (),
-		prefix: bytes | None = None) -> str:
+		prefix: bytes | None = None,
+		argued: "dict[str, Sequence[int]] | None" = None) -> str:
 	"""What this schema says about this buffer, one struct at a time.
 
 	`args` are the schema's `parameter` members (0050), positionally. One
@@ -866,13 +867,20 @@ def listing(image: Image, buffer: bytes, args: Sequence[int] = (),
 	(14.2a), the same per-stream kind of fact: handed to every such tag,
 	and refused by one whose schema fixes another size, as the backends
 	refuse it (26.1066). Without it those sums are not listed at all.
+
+	`argued` gives a struct its OWN arguments by name, over `args`: the
+	differential's drivers hand each argued struct invented values
+	(`differ.argued`, 26.1051), and a walk handed none answered
+	`needs-arguments` for every one, so the comparison dropped them
+	(26.1103).
 	"""
 	lines: list[str] = []
 	for struct_index, _ in enumerate(image.structs):
 		name = image.struct_name(struct_index)
 		lines.append(f"-- {name}")
 		try:
-			view = acquire(image, buffer, struct_index, args)
+			view = acquire(image, buffer, struct_index,
+			               (argued or {}).get(name, args))
 		except Unsupplied:
 			# Its own line and not `no-view`, because the two send a reader
 			# somewhere different: `no-view` is a frame too short for the

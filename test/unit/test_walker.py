@@ -329,10 +329,23 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	# key-intersection below would skip TCP's and UDP's sums in silence.
 	ahead = schema_prefix(resolved)
 
+	# And the arguments each argued struct's driver is handed (26.1051): a
+	# walk handed none said `needs-arguments` and the intersection below
+	# dropped every such struct (26.1103).
+	from situc.codegen.differ import argued as argued_values
+	argued = {name: [value for _, value in argued_values(struct)]
+	          for name, struct in resolved.structs.items()
+	          if argued_values(struct)}
+
 	for packet in [draw(rng) for _ in range(12)] + versioned + stamped:
 		answer   = answers(command["c"], packet, tmp_path)
 		compiled = _by_member(answer)
-		walked   = _by_member(report.listing(image, packet, prefix=ahead))
+		walked   = _by_member(report.listing(image, packet, prefix=ahead,
+		                                     argued=argued))
+		# Under the section name the drivers print for one: `-- argued x`.
+		walked   = {((f"argued {where}" if where in argued else where),
+		             member): line
+		            for (where, member), line in walked.items()}
 
 		# AND THE WRITES, which no differential compared (26.589). This
 		# walker was the fifth READER and the four backends compared their

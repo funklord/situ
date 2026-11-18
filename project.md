@@ -9138,6 +9138,10 @@ Moved to `doc/decision/26.1101-the-dissector-counts-a-text-number-in-digits.md`.
 
 Moved to `doc/decision/26.1102-a-when-may-read-a-let.md`.
 
+### 26.1103 Argued structs reach the walker differential
+
+Moved to `doc/decision/26.1103-argued-structs-reach-the-walker-differential.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
