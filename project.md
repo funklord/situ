@@ -9027,6 +9027,10 @@ Moved to `doc/decision/26.1079-a-named-value-may-read-a-text-number.md`.
 
 Moved to `doc/decision/26.1080-a-registry-declares-a-keyspace-of-typed-cells.md`.
 
+### 26.1081 A registry is generated in C
+
+Moved to `doc/decision/26.1081-a-registry-is-generated-in-c.md`.
+
 ### 26.1086 Generated checks size a text number by its digits
 
 Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits.md`.

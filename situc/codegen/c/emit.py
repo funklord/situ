@@ -349,6 +349,12 @@ class Emitter:
 		                              list(self.resolved.structs)):
 			lines.extend(self._struct_header(self.resolved.structs[name]))
 
+		# Registries last: each reads the structs its cells are (0070).
+		from situc.codegen.c.registry import Registry, policy_macros
+		lines.extend(policy_macros(self.schema, self.prefix))
+		for registry in self.schema.registries():
+			lines.extend(Registry(self, registry).header())
+
 		lines.extend([
 			"",
 			"#ifdef __cplusplus",
@@ -13158,6 +13164,10 @@ class Emitter:
 					and not self._imported(struct.name):
 				lines.extend(self._validate_body(struct))
 				lines.extend(self._messages_body(struct))
+
+		from situc.codegen.c.registry import Registry
+		for registry in self.schema.registries():
+			lines.extend(Registry(self, registry).source())
 
 		return "\n".join(lines) + "\n"
 

@@ -6999,7 +6999,18 @@ def cell_value(struct: ast.StructDecl) -> str | None:
 		return "value"
 	fields = [member for member in struct.members
 	          if isinstance(member, ast.Field)]
-	return fields[0].name if len(fields) == 1 else None
+	if len(fields) != 1:
+		return None
+	only   = fields[0]
+	scalar = only.type_ref.scalar
+	# One integer: a scalar, or a text number -- not a token set, whose
+	# reading is which arm it spells, nor a byte run. Those say what they
+	# are worth through a `let value`.
+	if scalar is None or scalar.kind.name not in ("UINT", "SINT") \
+			or only.scaled \
+			or (only.array is not None and only.radix is None):
+		return None
+	return only.name
 
 
 def check_registries(schema: ast.Schema) -> None:
