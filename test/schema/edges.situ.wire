@@ -249,6 +249,21 @@ struct declared_text size=2..
   @0x0000   until:3b  document_charset says
   ~         until:00  u8         body  encoding=from(says)
 
+struct deep_inner size=2
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         len
+
+struct deep_mid size=3
+  @0x0000   1         u8         tag
+  @0x0001   2         deep_inner inner  big
+
+struct deep_switch size=3..258
+  @0x0000   3         deep_mid   mid  big
+  @0x0003   0..255    variant    body
+  body switch: mid.inner.kind
+  body case 1: one u8
+  body case default: rest u8
+
 struct delimited_arm size=3..
   @0x0000   1         u8         pick
   @0x0001   1..       variant    held
@@ -625,6 +640,14 @@ struct nest_item size=1..
   body switch: tag
   body case 91: as_group nest_group
   body case default: as_byte u8
+
+struct off_switch size=3..258
+  @0x0000   1         u8         pad
+  @0x0001   2         deep_inner inner  big
+  @0x0003   0..255    variant    body
+  body switch: inner.kind
+  body case 1: one u8
+  body case default: rest u8
 
 struct oob_element size=7..4294967557
   @0x0000   1         u8         n

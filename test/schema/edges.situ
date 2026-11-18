@@ -2914,3 +2914,26 @@ struct after_opaque_arm {
 	opaque_arm_section one;
 	u8                 tail [must_eq = 0x7e];
 }
+
+// A discriminant and a length read two levels down, through plain nested
+// structs (26.1097): FS2's sentinel `switch (section.hdr.next)` is this.
+struct deep_inner { u8 kind; u8 len; }
+struct deep_mid { u8 tag; deep_inner inner; }
+struct deep_switch {
+	deep_mid mid;
+	variant body switch (mid.inner.kind) {
+		case 1:  u8 one;
+		default: u8 rest[mid.inner.len];
+	}
+}
+
+// And one level down at an offset, which both walkers had wrong before
+// 26.1097: the arms table carries no base, and `inner` is a byte in.
+struct off_switch {
+	u8         pad;
+	deep_inner inner;
+	variant body switch (inner.kind) {
+		case 1:  u8 one;
+		default: u8 rest[inner.len];
+	}
+}

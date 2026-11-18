@@ -1348,6 +1348,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# in `edges.situ` was a sealed region in another struct
 			# (26.523, 26.525).
 			wanted = wanted or placement.kind == "authenticated"
+			# A discriminant inside a nested struct, as the owner's own
+			# flattened placement: its offset is the owner's, so the arms
+			# table -- an index and no base -- can name it (26.1097).
+			wanted = wanted or (placement.offset_bits is not None and any(
+				owner == name and other.kind == "variant"
+				and other.discriminant
+				and f"{name}.{other.discriminant}" == placement.path
+				for owner, other in rows))
 			if wanted:
 				rows.append((name, placement))
 
@@ -1402,6 +1410,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			return None
 		if path in placement_index:
 			return placement_index[path], 0
+		# The owner's own flattened placement, where it has one: its offset
+		# is already the owner's, so the base is 0 and a table that carries
+		# no base -- the arms' -- can name it. Stepping through `resolve_in`
+		# gave `inner.kind` one byte into `off_switch` a base of 1, which
+		# the arms table drops: the C walker said cannot-say and the Python
+		# walker BOUNDS, over bytes all four backends accept (26.1097).
+		if owner is not None:
+			flat = placement_index.get(f"{owner}.{path}")
+			if flat is not None and rows[flat][1].offset_bits is not None:
+				return flat, 0
 		parts = path.split(".")
 		if owner is not None:
 			found = resolve_in(owner, parts)

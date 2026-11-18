@@ -261,6 +261,26 @@ struct declared_text size=2.. access=Sequential mutate=Shifting address=Unstable
   declared_text.says                     offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
   declared_text.body                     offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
 
+struct deep_inner size=2
+  deep_inner.kind                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  deep_inner.len                         offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
+struct deep_mid size=3 atomic=NonAtomic
+  deep_mid.tag                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  deep_mid.inner                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  deep_mid.inner.kind                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  deep_mid.inner.len                     offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+
+struct deep_switch size=3..258 mutate=Shifting atomic=NonAtomic
+  deep_switch.mid                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  deep_switch.mid.tag                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  deep_switch.mid.inner                  offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  deep_switch.mid.inner.kind             offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  deep_switch.mid.inner.len              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  deep_switch.body                       offset=AbsoluteStatic(0x03) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  deep_switch.body.one                   offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  deep_switch.body.rest                  offset=AbsoluteStatic(0x03) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct delimited_arm size=3.. mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
   delimited_arm.pick                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   delimited_arm.held                     offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
@@ -684,6 +704,15 @@ struct nest_item size=1.. mutate=Shifting atomic=NonAtomic effect=EffectOnRead
   nest_item.body.as_group.open           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   nest_item.body.as_group.items          offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
   nest_item.body.as_byte                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+
+struct off_switch size=3..258 mutate=Shifting atomic=NonAtomic
+  off_switch.pad                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  off_switch.inner                       offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  off_switch.inner.kind                  offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  off_switch.inner.len                   offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  off_switch.body                        offset=AbsoluteStatic(0x03) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  off_switch.body.one                    offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  off_switch.body.rest                   offset=AbsoluteStatic(0x03) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct oob_element size=7..4294967557 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   oob_element.n                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

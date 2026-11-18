@@ -3133,6 +3133,28 @@ class Solver:
 		if nested is None:
 			return
 
+		# Any depth, through plain struct members (26.1097). One level was
+		# the rule, so FS2's sentinel `switch (section.hdr.next)` was refused
+		# as "not readable before" -- by depth, not by the CRC over `hdr`,
+		# which openmlx4 took it for: one level into the same authenticated
+		# body built. A path is readable when every step before its leaf is
+		# a nested struct held once, at a place the struct decides: not a
+		# variant's arm, not a run, not a located member, not a region's.
+		steps = {one.path[len(nested.name) + 1:]: one
+		         for one in nested.placements}
+
+		def reachable(tail: str) -> bool:
+			head = tail.split(".")[:-1]
+			for at in range(len(head)):
+				step = steps.get(".".join(head[:at + 1]))
+				if step is None or step.kind != "field" \
+						or step.type_name not in self.result.structs \
+						or step.array_count is not None \
+						or step.size_expr is not None \
+						or getattr(step, "located", None) is not None:
+					return False
+			return True
+
 		for inner in nested.placements:
 			# A varint is a field like any other here: a header that ends in
 			# its body's length is the shape QUIC and MQTT both have (26.920).
@@ -3140,7 +3162,7 @@ class Solver:
 			if declared is not None and inner.kind == "field" \
 					and inner.array_count is None and inner.size_expr is None:
 				tail = inner.path[len(nested.name) + 1 :]
-				if "." not in tail:
+				if reachable(tail):
 					state.fields[f"{name}.{tail}"] = self.constrain(
 						scalar_interval(declared.max_bits,
 						                signed=declared.transform is not None),
@@ -3155,7 +3177,7 @@ class Solver:
 			if inner.array_count is not None and inner.radix is None:
 				continue
 			tail = inner.path[len(nested.name) + 1 :]
-			if "." in tail:
+			if not reachable(tail):
 				continue
 
 			limit = inner.radix_max
