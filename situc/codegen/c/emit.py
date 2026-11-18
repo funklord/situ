@@ -6418,6 +6418,18 @@ class Emitter:
 			ready = (f"{early}u" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
+			# WHERE THE CURSOR IS STILL ZERO -- before the first variable
+			# member, with no fixed bytes in front of it -- `have < pos` is
+			# a comparison no unsigned value can make true: dead code a
+			# static analyser names, six times in raidcfgd's three schemas
+			# (26.1074). Only zero is replaced; a nonzero start keeps the
+			# name, so `pos` is still read where it is declared. The nested
+			# and variant framings below ask the same guard again, and are
+			# told it was asked.
+			known = ("0u" if cursor is not None and gaps
+			         and index == 0 and gaps[0] == 0 else None)
+			if ready == cursor and known is not None:
+				ready = known
 			# And before a nested struct's bytes arrive, its own floor
 			# is owed already: it needs no reading (26.946). `at` holds it
 			# from the start, and gives it back here (26.952).
@@ -6427,10 +6439,10 @@ class Emitter:
 				f"\t/* {placement.path}: reading its length means reading bytes"
 				" that",
 				"\t * have to be here first. */",
-				f"\tif (have < {ready}) {{",
-				"\t\t*need = at;",
-				"\t\treturn SITU_ERR_TRUNCATED;",
-				"\t}",
+				*([f"\tif (have < {ready}) {{",
+				   "\t\t*need = at;",
+				   "\t\treturn SITU_ERR_TRUNCATED;",
+				   "\t}"] if ready != "0u" else []),
 				*([f"\tif (at < UINT32_MAX) {{",
 				   f"\t\tat -= {floor}u; /* its own length goes in below */",
 				   "\t}"] if floor else []),
@@ -6541,9 +6553,9 @@ class Emitter:
 			# and dead arithmetic reads as arithmetic somebody meant.
 			ahead = cursor if index + 1 < len(variable) else None
 			nested = (self._nested_framing(struct, placement, cursor,
-			                               ahead)
+			                               ahead, ready, known)
 			          or self._variant_framing(struct, placement, cursor,
-			                                   ahead))
+			                                   ahead, ready, known))
 			if nested is not None:
 				steps.extend(nested)
 				steps.extend(self._gap_step(cursor, gaps, index))
@@ -6605,8 +6617,13 @@ class Emitter:
 		# arriving in C by the same route (26.702). `uses_cursor` is tested
 		# the same way for the same reason: nothing stops a member being
 		# named for the cursor either.
+		# A comment's continuation is `*` and then a space, a slash or the
+		# end of the line; `*need = ...` is code. The bare `*` read every
+		# `_partial_need` line as a comment, and only a dead `have < pos`
+		# guard kept `pos` declared where that line was its one reader
+		# (26.1074).
 		code = [line for line in steps
-		        if not line.lstrip().startswith(("/*", "*", "//"))]
+		        if not re.match(r"\s*(/\*|//|\*(\s|/|$))", line)]
 		uses_cursor = cursor is not None \
 			and any(cursor in line for line in code)
 		uses_view = any("view" in line for line in code)
@@ -6738,7 +6755,9 @@ class Emitter:
 	def _nested_framing(self, struct: ResolvedStruct,
 			placement: Placement,
 			cursor: str | None,
-			ahead: str | None = None) -> list[str] | None:
+			ahead: str | None = None,
+			checked: str | None = None,
+			known: str | None = None) -> list[str] | None:
 		"""Framing a nested struct: through its own `required` (26.684).
 
 		`framed` added the nested member's EXTENT, and an extent walk
@@ -6784,10 +6803,7 @@ class Emitter:
 			"\t\tuint32_t   part = 0u;",
 			"\t\tsitu_err_t e;",
 			"",
-			f"\t\tif (have < {cursor}) {{",
-			"\t\t\t*need = at;",
-			"\t\t\treturn SITU_ERR_TRUNCATED;",
-			"\t\t}",
+			*self._framing_guard(cursor, cursor, checked, known),
 			f"\t\te = {required}(data + {cursor},",
 			f"\t\t                situ_remaining_u32(have, {cursor}),"
 			f" &part{self._child_args(struct, placement)});",
@@ -6804,7 +6820,9 @@ class Emitter:
 	def _variant_framing(self, struct: ResolvedStruct,
 			placement: Placement,
 			cursor: str | None,
-			ahead: str | None = None) -> list[str] | None:
+			ahead: str | None = None,
+			checked: str | None = None,
+			known: str | None = None) -> list[str] | None:
 		"""Framing a variant: through the selected arm's own `required`.
 
 		`_nested_framing` with a discriminant in front of it, and the
@@ -6886,10 +6904,7 @@ class Emitter:
 			"\t\tuint32_t   part = 0u;",
 			"\t\tsitu_err_t e = SITU_OK;",
 			"",
-			f"\t\tif (have < {opens}) {{",
-			"\t\t\t*need = at;",
-			"\t\t\treturn SITU_ERR_TRUNCATED;",
-			"\t\t}",
+			*self._framing_guard(opens, cursor, checked, known),
 		]
 		opened = False
 		for case, call, size, handed in plan:
@@ -6924,6 +6939,23 @@ class Emitter:
 			"\t}",
 		])
 		return lines
+
+	@staticmethod
+	def _framing_guard(operand: str, cursor: str, checked: str | None,
+			known: str | None) -> list[str]:
+		"""`have < operand`, unless it cannot be true or was just asked.
+
+		Where the operand is the cursor and the cursor is known to be zero,
+		the comparison is dead; where the caller's own guard asked the same
+		number a line above, it would be asked twice (26.1074).
+		"""
+		value = known if operand == cursor and known is not None else operand
+		if value == "0u" or value == checked:
+			return []
+		return [f"\t\tif (have < {value}) {{",
+		        "\t\t\t*need = at;",
+		        "\t\t\treturn SITU_ERR_TRUNCATED;",
+		        "\t\t}"]
 
 	def _gap_step(self, cursor: str | None, gaps: list[int] | None,
 			index: int) -> list[str]:

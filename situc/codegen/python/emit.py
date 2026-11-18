@@ -6886,6 +6886,12 @@ class Emitter:
 			ready = (f"{early}" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
+			# A cursor still at zero makes `have < pos` dead (26.1074);
+			# the C emitter carries the reasoning.
+			known = ("0" if cursor is not None and gaps
+			         and index == 0 and gaps[0] == 0 else None)
+			if ready == cursor and known is not None:
+				ready = known
 			# And before a nested struct's bytes arrive, its own floor
 			# is owed already: it needs no reading (26.946). `at` holds it
 			# from the start, and gives it back here (26.952).
@@ -6894,9 +6900,9 @@ class Emitter:
 				"",
 				f"\t\t# {placement.path}: reading its length means reading",
 				"\t\t# bytes that have to be here first.",
-				f"\t\tif have < {ready}:",
-				f'\t\t\traise TruncatedError("{placement.path}: '
-				'incomplete", at)',
+				*([f"\t\tif have < {ready}:",
+				   f'\t\t\traise TruncatedError("{placement.path}: '
+				   'incomplete", at)'] if ready != "0" else []),
 				*([f"\t\tif at < 0xFFFFFFFF:",
 				   f"\t\t\tat -= {floor}  # its own length goes in below"]
 				  if floor else []),
@@ -6976,9 +6982,9 @@ class Emitter:
 			# silence.
 			ahead = cursor if index + 1 < len(variable) else None
 			handed = (self._nested_framing(struct, placement, cursor,
-			                               ahead)
+			                               ahead, ready, known)
 			          or self._variant_framing(struct, placement, cursor,
-			                                   ahead))
+			                                   ahead, ready, known))
 			if handed is not None:
 				steps.extend(handed)
 				steps.extend(self._gap_step(cursor, gaps, index))
@@ -7057,7 +7063,9 @@ class Emitter:
 	def _nested_framing(self, struct: ResolvedStruct,
 			placement: Placement,
 			cursor: str | None,
-			ahead: str | None = None) -> list[str] | None:
+			ahead: str | None = None,
+			checked: str | None = None,
+			known: str | None = None) -> list[str] | None:
 		"""Framing a nested struct: through its own `required` (26.684).
 
 		The C emitter's `_nested_framing` carries the reasoning.
@@ -7084,9 +7092,7 @@ class Emitter:
 			f"\t\t# {placement.path}: a nested `{inner.name}` frames",
 			"\t\t# itself. Its EXTENT shrinks when the bytes run out, so",
 			"\t\t# adding that reported a complete message (26.684).",
-			f"\t\tif have < {cursor}:",
-			f'\t\t\traise TruncatedError("{placement.path}:'
-			' incomplete", at)',
+			*self._framing_guard(placement, cursor, cursor, checked, known),
 			"\t\ttry:",
 			f"\t\t\tlen_ = {py_name(inner.name)}.required"
 			f"(data[{cursor}:]{self._child(struct, placement, 'probe')[1]})",
@@ -7098,10 +7104,24 @@ class Emitter:
 			  if ahead else []),
 		]
 
+	@staticmethod
+	def _framing_guard(placement: Placement, operand: str, cursor: str,
+			checked: str | None, known: str | None) -> list[str]:
+		"""`have < operand`, unless it cannot be true or was just asked --
+		the C emitter's `_framing_guard` (26.1074)."""
+		value = known if operand == cursor and known is not None else operand
+		if value == "0" or value == checked:
+			return []
+		return [f"\t\tif have < {value}:",
+		        f'\t\t\traise TruncatedError("{placement.path}:'
+		        ' incomplete", at)']
+
 	def _variant_framing(self, struct: ResolvedStruct,
 			placement: Placement,
 			cursor: str | None,
-			ahead: str | None = None) -> list[str] | None:
+			ahead: str | None = None,
+			checked: str | None = None,
+			known: str | None = None) -> list[str] | None:
 		"""Framing a variant: through the selected arm's own `required`.
 
 		None unless every arm is accounted for, since a chain handling
@@ -7169,9 +7189,7 @@ class Emitter:
 			f"\t\t# {placement.path}: the arm the discriminant selects",
 			"\t\t# frames itself -- reported by bbq-predictor against a",
 			"\t\t# variant arm, whose extent shrank (26.684).",
-			f"\t\tif have < {opens}:",
-			f'\t\t\traise TruncatedError("{placement.path}:'
-			' incomplete", at)',
+			*self._framing_guard(placement, opens, cursor, checked, known),
 		]
 		opened = False
 		for case, call, size, handed in plan:

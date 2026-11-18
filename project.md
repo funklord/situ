@@ -9002,6 +9002,10 @@ Moved to `doc/decision/26.1072-a-scaled-number-keeps-its-sign.md`.
 
 Moved to `doc/decision/26.1073-a-negative-length-is-zero-in-the-dissector.md`.
 
+### 26.1074 A framing guard at a zero cursor is not emitted, nor asked twice
+
+Moved to `doc/decision/26.1074-a-guard-at-a-zero-cursor-is-not-emitted.md`.
+
 ### 26.1062 A sum over the message ahead is walked, and refused past the frame
 
 Moved to `doc/decision/26.1062-a-sum-over-the-message-ahead-is-walked.md`.

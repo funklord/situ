@@ -3320,6 +3320,12 @@ class Emitter:
 			ready = (f"{early}u" if early is not None
 			         and not is_run(placement, self.structs)
 			         else cursor or "at")
+			# A cursor still at zero makes `have < pos` dead (26.1074);
+			# the C emitter carries the reasoning.
+			known = ("0u" if cursor is not None and gaps
+			         and index == 0 and gaps[0] == 0 else None)
+			if ready == cursor and known is not None:
+				ready = known
 			# And before a nested struct's bytes arrive, its own floor
 			# is owed already: it needs no reading (26.946). `at` holds it
 			# from the start, and gives it back here (26.952).
@@ -3328,10 +3334,10 @@ class Emitter:
 				"",
 				f"\t\t/* {placement.path}: reading its length means reading",
 				"\t\t * bytes that have to be here first. */",
-				f"\t\tif (have < {ready}) {{",
-				"\t\t\tneed = at;",
-				"\t\t\treturn ::situ::rt::err::truncated;",
-				"\t\t}",
+				*([f"\t\tif (have < {ready}) {{",
+				   "\t\t\tneed = at;",
+				   "\t\t\treturn ::situ::rt::err::truncated;",
+				   "\t\t}"] if ready != "0u" else []),
 				*([f"\t\tif (at < UINT32_MAX) {{",
 				   f"\t\t\tat -= {floor}u; /* its own length goes in below */",
 				   "\t\t}"] if floor else []),
@@ -3420,9 +3426,9 @@ class Emitter:
 			# silence.
 			ahead = cursor if index + 1 < len(variable) else None
 			handed = (self._nested_framing(struct, placement, cursor,
-			                               ahead)
+			                               ahead, ready, known)
 			          or self._variant_framing(struct, placement, cursor,
-			                                   ahead))
+			                                   ahead, ready, known))
 			if handed is not None:
 				steps.extend(handed)
 				steps.extend(self._gap_step(cursor, gaps, index))
@@ -3504,7 +3510,9 @@ class Emitter:
 	def _nested_framing(self, struct: ResolvedStruct,
 			placement: Placement,
 			cursor: str | None,
-			ahead: str | None = None) -> list[str] | None:
+			ahead: str | None = None,
+			checked: str | None = None,
+			known: str | None = None) -> list[str] | None:
 		"""Framing a nested struct: through its own `required` (26.684).
 
 		The C emitter's `_nested_framing` carries the reasoning.
@@ -3536,10 +3544,7 @@ class Emitter:
 			"\t\t{",
 			"\t\t\tstd::uint32_t part = 0;",
 			"",
-			f"\t\t\tif (have < {cursor}) {{",
-			"\t\t\t\tneed = at;",
-			"\t\t\t\treturn ::situ::rt::err::truncated;",
-			"\t\t\t}",
+			*self._framing_guard(cursor, cursor, checked, known),
 			f"\t\t\tconst ::situ::rt::err e = {call}(",
 			f"\t\t\t\tsitu_base(raw_) + {cursor},",
 			f"\t\t\t\tsitu_remaining_u32(have, {cursor})"
@@ -3554,10 +3559,25 @@ class Emitter:
 			"\t\t}",
 		]
 
+	@staticmethod
+	def _framing_guard(operand: str, cursor: str, checked: str | None,
+			known: str | None) -> list[str]:
+		"""`have < operand`, unless it cannot be true or was just asked --
+		the C emitter's `_framing_guard` (26.1074)."""
+		value = known if operand == cursor and known is not None else operand
+		if value == "0u" or value == checked:
+			return []
+		return [f"\t\t\tif (have < {value}) {{",
+		        "\t\t\t\tneed = at;",
+		        "\t\t\t\treturn ::situ::rt::err::truncated;",
+		        "\t\t\t}"]
+
 	def _variant_framing(self, struct: ResolvedStruct,
 			placement: Placement,
 			cursor: str | None,
-			ahead: str | None = None) -> list[str] | None:
+			ahead: str | None = None,
+			checked: str | None = None,
+			known: str | None = None) -> list[str] | None:
 		"""Framing a variant: through the selected arm's own `required`.
 
 		None unless every arm is accounted for, since a chain handling
@@ -3610,10 +3630,7 @@ class Emitter:
 			"\t\t\tstd::uint32_t part = 0;",
 			"\t\t\t::situ::rt::err e = ::situ::rt::err::ok;",
 			"",
-			f"\t\t\tif (have < {opens}) {{",
-			"\t\t\t\tneed = at;",
-			"\t\t\t\treturn ::situ::rt::err::truncated;",
-			"\t\t\t}",
+			*self._framing_guard(opens, cursor, checked, known),
 		]
 		opened = False
 		for case, call, size, handed in plan:
