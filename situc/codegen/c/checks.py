@@ -593,6 +593,12 @@ MIN_INSTANCE = 32
 
 def _element_bytes(resolved: ResolvedSchema, placement: Placement) -> int | None:
 	"""How many bytes one element of an array member takes."""
+	# A TEXT NUMBER's elements are its digits, a byte each, whatever the
+	# value's type: `decimal u32 count[n]` is `n` bytes, not `4 * n`, and
+	# the instance placed `rest` six bytes too far (26.1078's
+	# `edges.counted_digits`, the first counted text number in the corpus).
+	if placement.radix is not None:
+		return 1
 	if placement.scalar is not None:
 		if placement.scalar.bits % BITS_PER_BYTE:
 			return None

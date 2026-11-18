@@ -9010,6 +9010,10 @@ Moved to `doc/decision/26.1074-a-guard-at-a-zero-cursor-is-not-emitted.md`.
 
 Moved to `doc/decision/26.1075-a-token-set-may-end-where-its-length-says.md`.
 
+### 26.1086 Generated checks size a text number by its digits
+
+Moved to `doc/decision/26.1086-generated-checks-size-a-text-number-by-its-digits.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
