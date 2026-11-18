@@ -32,3 +32,5 @@ codec lz4 unbound expansion=unbounded seekable=none granularity=stream invertibl
 codec manchester unbound expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec nrzi unbound length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
 codec reed_solomon_255_223 unbound expansion=+32 seekable=linear granularity=block(255) systematic invertible deterministic error_propagating
+codec xz unbound expansion=unbounded seekable=none granularity=stream invertible
+codec zstd unbound expansion=unbounded seekable=none granularity=stream invertible

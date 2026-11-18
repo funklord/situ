@@ -1075,9 +1075,9 @@ impl aes_gcm_128 extern "my_gcm";   // called as my_gcm_encode/_decode
 
 The map marks such a codec `trusted` for exactly that reason, and
 `situc gen-codec-tests` emits the property tests that would falsify a lying
-one, against the ABI the `impl` binds. `std/codecs.situ` carries 19 such
+one, against the ABI the `impl` binds. `std/codecs.situ` carries 21 such
 signatures -- AES-CTR and AES-CBC, ChaCha20, AES-GCM, ChaCha20-Poly1305,
-HMAC-SHA256, deflate, lz4 -- and deliberately binds none of them: they are
+HMAC-SHA256, deflate, lz4, xz, zstd -- and deliberately binds none of them: they are
 contracts, and which implementation satisfies one is the adopter's to name.
 
 **Tier 2 is `derived`,** and it is the interesting half. The schema gives a

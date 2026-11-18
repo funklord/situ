@@ -275,3 +275,23 @@ codec lz4 {
 	invertible;
 	deterministic;
 }
+
+// xz (LZMA2 in the .xz container) and Zstandard: what firmware images,
+// packages and archives carry -- an MFA image is xz, as openmlx4 reported.
+// Not `deterministic`, for deflate's reason: the bytes depend on the
+// encoder's preset or level, so two correct encoders disagree. Not seekable
+// either: an .xz index or a zstd seekable frame table is an optional layout
+// on top of the stream, and a schema that has one describes it.
+codec xz {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+}
+
+codec zstd {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+}
