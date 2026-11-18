@@ -8764,18 +8764,21 @@ class Emitter:
 		were the message's. `validate` calls such a message malformed with
 		these same checks; the span refuses it for the same reason.
 		"""
-		from situc.traverse import covered_members
+		from situc.traverse import covered_members, covered_regions
 		lines: list[str] = []
 		for member in covered_members(struct, placement):
-			# A length the message DECLARES, which is what the accessors
-			# clamp. Not every member `_fits_check` asks about: it also
-			# wants each scalar at a computed offset inside the frame, and
-			# a `[since]` member absent at this version would then refuse
-			# a span that does not include it.
-			if member.since or (member.size_expr is None
-			                    and member.sized_by is None):
+			# Every covered member asked to fit: a declared length is what the
+			# accessors clamp, and a fixed member placed after a run the frame
+			# clamps is clamped with it -- `covered_tail`'s three-byte `head`
+			# became a span of nothing at the frame's end (26.1071). A
+			# `[since]` member absent at this version is not in the span.
+			if member.since:
 				continue
 			lines.extend(self._fits_check(struct, member))
+		# And a coded or sealed region's extent, which is the codec's and
+		# declared by no member above (26.1071).
+		for region in covered_regions(struct, placement):
+			lines.extend(self._region_fits(struct, region))
 		return lines
 
 	def _fits_check(self, struct: ResolvedStruct,

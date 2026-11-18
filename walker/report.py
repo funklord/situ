@@ -446,14 +446,9 @@ def _sum(image: Image, view: View, index: int, local: str,
 	if held.first == NONE or held.last == NONE:
 		return []
 	try:
-		first = offset_bits(view, held.first) // BITS_PER_BYTE
-		end   = (offset_bits(view, held.last) // BITS_PER_BYTE
-		         + size_bits(view, held.last) // BITS_PER_BYTE)
+		first, end = _covered_span(view, held.first, held.last)
 		start = offset_bits(view, index) // BITS_PER_BYTE
 		wide  = size_bits(view, index) // BITS_PER_BYTE
-		if end < first or view.at + end > view.limit \
-				or _covered_overruns(view, held.first, held.last):
-			return [f"{local}.sum refused"]
 		hole = (None if start < first or start + wide > end
 		        else (start - first, wide))
 		value = derived.compute(
@@ -464,6 +459,69 @@ def _sum(image: Image, view: View, index: int, local: str,
 	except derived.Uncomputable:
 		return []
 	return [f"{local}.sum {value}"]
+
+
+def _covered_span(view: View, first: int, last: int,
+		whole: bool = False) -> tuple[int, int]:
+	"""The bytes from covered member `first` to the end of `last`, view-
+	relative, `Refused` where they are not all in the frame.
+
+	A member inside a `coded` or `sealed` region stands for the region:
+	the tag covers what is on the wire, which is the codec's output, and
+	the member's own size is the interior's -- `edges.stuffed_seal`'s one
+	plaintext byte is forty-eight of stuffing (26.1071). The region's
+	extent is measured, as each backend's `_covered` measures it.
+	"""
+	image = view.image
+	head  = (image.region_owner.get(first, first)
+	         if first in image.region_codec else first)
+	tail  = (image.region_owner.get(last, last)
+	         if last in image.region_codec else last)
+	# `whole`: the bytes the span touches, rounded out, which is what each
+	# backend's `_covered` hands back -- a last member of four bits at bit
+	# four ends a byte past its start (`two_tags`). The sum keeps the kernel's
+	# own arithmetic, which the C walker shares; USB's five-bit CRC over
+	# eleven bits is computed from the bytes as they stand.
+	start = offset_bits(view, head) // BITS_PER_BYTE
+	if whole:
+		end = -(-(offset_bits(view, tail) + size_bits(view, tail))
+		        // BITS_PER_BYTE)
+	else:
+		end = (offset_bits(view, tail) // BITS_PER_BYTE
+		       + size_bits(view, tail) // BITS_PER_BYTE)
+	if end < start or view.at + end > view.limit \
+			or _covered_overruns(view, first, last):
+		raise Refused("the covered span is not all in the frame")
+	return start, end
+
+
+def _covered(image: Image, view: View, index: int, local: str) -> list[str]:
+	"""`name.covered at+len`: the bytes a tag says it covers -- the
+	differential's `COVERED_RANGE`, which every backend answered and this
+	walker did not (26.1071).
+
+	The same span `_sum` sums, asked whatever the codec: which bytes a tag
+	covers is the layout's answer, and the four backends disagreed about it
+	once while agreeing with the layout (26.448). `refused` where the span
+	is not all in the frame, as each backend's `_covered` refuses it.
+	"""
+	held = image.tags.get(index)
+	if held is None:
+		return []
+	try:
+		if held.before:
+			# The message ahead of the tag, from its first byte (26.1050).
+			start = offset_bits(view, index) // BITS_PER_BYTE
+			wide  = size_bits(view, index) // BITS_PER_BYTE
+			if view.at + start + wide > view.limit:
+				return [f"{local}.covered refused"]
+			return [f"{local}.covered 0+{view.at + start}"]
+		if held.first == NONE or held.last == NONE:
+			return []
+		first, end = _covered_span(view, held.first, held.last, whole=True)
+	except Refused:
+		return [f"{local}.covered refused"]
+	return [f"{local}.covered {first}+{end - first}"]
 
 
 def _covered_overruns(view: View, first: int, last: int) -> bool:
@@ -2618,6 +2676,7 @@ def _members(image: Image, view: View, struct_index: int,
 			             f"first={span[0] if span else -1}")
 		except Refused:
 			lines.append(f"{local} present=0 bytes=0 first=-1")
+		lines.extend(_covered(image, view, index, local))
 		lines.extend(_sum(image, view, index, local, prefix))
 
 	for index in _while_runs(image, struct_index):

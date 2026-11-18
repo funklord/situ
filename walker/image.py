@@ -438,6 +438,10 @@ class Image:
 	#: placement index -> the region it sits inside. A region names itself,
 	#: so a gate's interior is everything whose owner is the gate.
 	region_owner: dict[int, int]		= field(default_factory=dict)
+	#: placement index -> the codec of the region it sits inside, where that
+	#: region has one: a `coded` or `sealed` region, whose bytes on the wire
+	#: are the codec's output rather than its members' (26.1071).
+	region_codec: dict[int, int]		= field(default_factory=dict)
 	#: Placements whose width is decoded rather than declared. A varint's
 	#: length is in its own bytes, so nothing after one has a computable
 	#: offset until the walk can decode it.
@@ -718,10 +722,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if REGIONS in found:
 		at, records, stride = found[REGIONS]
 		for i in range(records):
-			where, owner, _codec, rflags = _struct.unpack_from(
+			where, owner, codec, rflags = _struct.unpack_from(
 				"<IIIB", blob, at + i * stride)
 			image.regions.add(where)
 			image.region_flags[where] = rflags
+			if codec != NONE:
+				image.region_codec[where] = codec
 			# NONE means the image holds no row for the region this
 			# member sits in, which is what an `authenticated` region
 			# is today -- it carries no placement of its own, so its
