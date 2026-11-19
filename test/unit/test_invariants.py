@@ -213,8 +213,10 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: `opaque_arm_section` (26.1096), and `one` and `rest` in each of
 #: `deep_switch` and `off_switch` (26.1097) -- ordinary arms whose
 #: discriminant is the new part, not the arm.
+#: And 87 -> 90 on 2026-11-19, `classed_arm`'s three byte-run arms
+#: (26.1105): the class is new, the arms are the ordinary shape.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                87,
+	("scalar", "not-struct", ""):                90,
 	("no-scalar", "struct", "fixed"):            123,
 	("no-scalar", "struct", "unmeasurable"):     86,
 	("no-scalar", "not-struct", ""):              1,
