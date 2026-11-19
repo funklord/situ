@@ -1616,8 +1616,6 @@ static inline int situ_ascii_ci_eq(const uint8_t *a, uint32_t alen,
 static inline int situ_digits_minimal(const uint8_t *data, uint32_t len,
         uint32_t radix)
 {
-	uint32_t i;
-
 	if (len > 0u && data[0] == (uint8_t)'-') {
 		data += 1;
 		len  -= 1u;
@@ -1629,6 +1627,9 @@ static inline int situ_digits_minimal(const uint8_t *data, uint32_t len,
 		return 0;		/* a leading zero, and the value is not zero */
 	}
 	if (radix > 10u) {
+		uint32_t i;	/* in the block that uses it: cppcheck counted it
+				 * once for every schema including this header */
+
 		for (i = 0u; i < len; i++) {
 			if (data[i] >= (uint8_t)'A' && data[i] <= (uint8_t)'F') {
 				return 0;	/* upper case is the second spelling */
