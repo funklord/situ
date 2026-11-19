@@ -135,6 +135,71 @@ Rules for the implementer:
 
 ---
 
+
+## 0a. Where the work stands
+
+**Read this first; section 26 has the history.** Updated 2026-11-19 at the
+end of /go run 6, master `4b766d8b`, level with origin, every batch through
+the full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
+`map --check`/`wire --check`) passing against it.
+
+**Every phase of section 26 is complete, and every aim of section 1 is
+served**: accessors in four languages that agree, the capability map, the
+advisor, golden vectors and a fuzz harness per target, the layer ladder,
+both walkers and the dissector. What a user cannot yet do is listed under
+*Open* below, each with what it waits for.
+
+**Run 6 (2026-11-18/19), what landed** -- each a record in
+`doc/decision/`:
+
+- From consumers' inboxes. fuzznet: an enum and a member sharing a C stem
+  refused only where names really meet (26.1093); a bound naming its own
+  enum's arm bare (26.1094); `wire --check` comparing an arm by value
+  (26.1095). openmlx4: a variant with its own length measures itself, which
+  had lost MFA's CRC32 behind an xz arm in all four backends (26.1096); a
+  discriminant or length reads through nested structs at any depth, FS2's
+  sentinel (26.1097); no marker for an `at` through checksummed bytes, by
+  0051 (26.1098).
+- Found by putting those shapes in `test/schema/edges.situ`: a bare
+  `default: opaque` answered VERSION in all six readers, agreeing (26.1100);
+  both walkers dropped a discriminant one level down at an offset (in
+  26.1097); the dissector counted a text number's digits as scalars
+  (26.1101); the C builder wrote a `[remaining]` arm as one byte (fb5bbcf3).
+- Built: `[chars = "..."]`, the bytes a run may hold, on members and arms
+  (26.1099, 26.1105); a `when` may read a `let` (26.1102, new image op
+  `LET` 0x0E); argued structs in both walker differentials (26.1103,
+  26.1104); a registry's keyspace in the wire contract (26.1106); the
+  compiled-outer / walked-inner seam test
+  (`test_a_compiled_outer_hands_its_span_to_a_walker`).
+- Consumer-clean C: cppcheck over the corpus, knownConditionTrueFalse 102
+  to 41 and variableScope 96 to 33 (26.1107, 26.1108, `runtime/c/situ.h`).
+
+**Open, and what each waits for**:
+
+- The rest of the cppcheck noise: 22 `e != SITU_OK` need cppcheck's
+  cross-function view of an arm whose `required` cannot fail; 12
+  `size == 0u` guard an empty struct's walk from looping and stay unless
+  the size is known nonzero; 33 `pos` scopes per generated function. Each
+  is noise in a consumer build, not behaviour -- taken up again when a
+  consumer reports one.
+- The dissector shows a `let` and a `when` reading one without evaluating
+  either: exact 64-bit arithmetic in the emitted Lua (UInt64) would do it.
+  Nobody has asked.
+- `situc map` does not describe a registry; its contract is in `wire`.
+- Coverage-guided fuzzing of the Rust and Python harnesses needs
+  cargo-fuzz and atheris, not installed here -- the holder's machine.
+- Schema-driven storage for fuzznet (derived rows, 0070's storage notes)
+  is fuzznet's to ask for; told via its inbox.
+
+**How the gate was run this session, and the traps met** (memory has the
+long form): `make check` is reaped on this machine, so the gate runs in a
+worktree as four pytest groups, three `test_walker_c` selections,
+`make test-c` and `make cross-test` in parallel, each under its own
+`timeout`. A targeted subset missed a list membership twice
+(`PLACED_ATTRS`, the arm census) -- only the full gate saw it. A value
+kept on the C emitter was overwritten by a nested `_required`; thread such
+facts as arguments. Never edit the tree a suite is running from.
+
 ## 1. What Situ is
 
 Situ describes the exact byte layout of data that already has, or is being
@@ -6003,7 +6068,7 @@ Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
 backends and the Python walk, and 26.755 gave the C walker rung 3: it
 refused `arg_field` until it could hold the two messages of a relation.
 
-**What is open as of 2026-10-29**, with the record that carries each
+**For where the work stands now, see 0a at the top.** **What was open as of 2026-10-29**, with the record that carries each
 reproduction. **None is now the copyright holder's.** Three were: whether
 `required` should read every readable length (26.693), settled yes on
 2026-11-09 and built for the plain sized member (26.946); which walker is
