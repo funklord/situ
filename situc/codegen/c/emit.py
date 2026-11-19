@@ -7237,9 +7237,15 @@ class Emitter:
 			assert placement.delimiters
 			delim = placement.delimiter
 			sym   = ident(self.prefix, struct.name, local, "delim")
+			# The room for the terminator, asked so that it cannot wrap:
+			# `pos` saturates, and `pos + 1u` past UINT32_MAX was the case
+			# the `have < pos` guard below existed to catch. Asked this way,
+			# that guard asked a question already answered -- the one shape
+			# of cppcheck's `have < pos` findings, 10 over the corpus
+			# (26.1108).
 			body.extend([
 				"",
-				f"\t\tif (have < pos + {len(delim)}u) {{",
+				f"\t\tif (have < pos || have - pos < {len(delim)}u) {{",
 				f"\t\t\t*need = at + {len(delim)}u;",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
@@ -7258,17 +7264,8 @@ class Emitter:
 				*([f"\t\t\tpos = situ_need_u32(pos, {len(delim)}u);"] if ahead else []),
 				"\t\t\tbreak;",
 				"\t\t}",
-				"",
-				# The guard above covers reading the LENGTH; this covers
-				# using it. `at` has since been advanced by a length the
-				# message chose, so `have - at` underflows and `data + at`
-				# is past the end -- with `n = 8` in a two-byte message the
-				# varint reader walked from outside the buffer (26.678).
-				# Saturating as well, so the two defences are independent.
-				"\t\tif (have < pos) {",
-				"\t\t\t*need = at;",
-				"\t\t\treturn SITU_ERR_TRUNCATED;",
-				"\t\t}",
+				# No `have < pos` here: the terminator's guard above holds
+				# `have >= pos` already, without wrapping (26.1108).
 				f"\t\te = {required}(data + pos,"
 				" situ_remaining_u32(have, pos),"
 				f" &part{self._child_args(struct, placement)});",

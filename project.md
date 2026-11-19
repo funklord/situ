@@ -9158,6 +9158,10 @@ Moved to `doc/decision/26.1106-a-registry-is-in-the-wire-contract.md`.
 
 Moved to `doc/decision/26.1107-required-asks-have-nothing-twice.md`.
 
+### 26.1108 A terminated run's framing asks for the terminator without wrapping
+
+Moved to `doc/decision/26.1108-a-terminator-guard-that-cannot-wrap.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
