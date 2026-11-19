@@ -3103,7 +3103,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"preserve", "unknown", "must_be_one", "encoding", "self_as", "volatile",
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 	"no_rmw", "truncated", "size", "trim", "case_insensitive",
-	"nul_terminated", "must_be_zero", "holds", "ascending",
+	"nul_terminated", "must_be_zero", "holds", "ascending", "chars",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here
