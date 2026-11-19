@@ -11623,7 +11623,10 @@ class Emitter:
 		from situc import chars
 
 		held = chars.of(placement.attrs)
-		if held is None or "." in placement.path[len(struct.name) + 1:]:
+		if held is None:
+			return []
+		arm = arm_of(struct, placement) is not None
+		if not arm and "." in placement.path[len(struct.name) + 1:]:
 			return []
 		name  = bare_name(local_name(struct, placement))
 		table = chars.table(held)
@@ -11636,7 +11639,16 @@ class Emitter:
 			"\t\t\tstatic constexpr std::uint8_t chars_table[32] = {",
 			*(f"\t\t\t\t{row}," for row in rows),
 			"\t\t\t};",
-			f"\t\t\tconst auto chars_run = this->{name}();",
+			# An arm's accessor answers VERSION where another arm is
+			# selected, which is nothing to check (26.1105).
+			*([f"\t\t\t::situ::rt::bytes chars_run{{}};",
+			   f"\t\t\tconst ::situ::rt::err got = this->{name}(chars_run);",
+			   "\t\t\tif (got == ::situ::rt::err::version) {",
+			   "\t\t\t\tchars_run = ::situ::rt::bytes{};",
+			   "\t\t\t} else if (got != ::situ::rt::err::ok) {",
+			   "\t\t\t\treturn got;",
+			   "\t\t\t}"] if arm else
+			  [f"\t\t\tconst auto chars_run = this->{name}();"]),
 			"\t\t\tfor (std::size_t chars_i = 0; chars_i < chars_run.size();"
 			" chars_i++) {",
 			"\t\t\t\tconst std::uint8_t b = chars_run.data()[chars_i];",
@@ -11710,6 +11722,7 @@ class Emitter:
 				found.extend(self._arm_validation(struct, member))
 				found.extend(self._arm_member_checks(struct, member))
 				found.extend(self._arm_pinned_check(struct, member))
+				found.extend(self._chars_check(struct, member))
 		return found
 
 	def _arm_member_checks(self, struct: ResolvedStruct,

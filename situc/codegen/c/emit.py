@@ -14899,9 +14899,53 @@ class Emitter:
 		"""The class check for a member of this struct, and nothing else: a
 		nested struct's member is checked by that struct's `validate`, and
 		`check_chars` refuses one in an arm or a sealed or coded region."""
+		if arm_of(struct, placement) is not None:
+			return self._arm_chars_check(struct, placement)
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
 		return self._chars_check(struct, placement)
+
+	def _arm_chars_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""An arm's class, behind the arm accessor's own gate (26.1105): the
+		`_ptr` answers SITU_ERR_VERSION where another arm is selected, which
+		is nothing to check, as `_arm_member_checks` reads a field arm."""
+		from situc import chars
+
+		held = chars.of(placement.attrs)
+		if held is None:
+			return []
+		local = c_name(self._local(struct, placement))
+		table = chars.table(held)
+		rows  = [", ".join(f"0x{one:02X}u" for one in table[at:at + 8])
+		         for at in range(0, len(table), 8)]
+		shown = chars.canonical(held).replace("*/", "*\\/")
+		return [
+			f'\t/* {placement.path} [chars = "{shown}"], where selected */',
+			"\t{",
+			"\t\tstatic const uint8_t chars_table[32] = {",
+			*(f"\t\t\t{row}," for row in rows),
+			"\t\t};",
+			"\t\tconst uint8_t *chars_at = NULL;",
+			"\t\tuint32_t chars_n = 0u;",
+			"\t\tuint32_t chars_i;",
+			f"\t\tconst situ_err_t got = "
+			f"{ident(self.prefix, struct.name, local, 'ptr')}(view, &chars_at,"
+			f" &chars_n{self._member_args(struct, placement)});",
+			"",
+			"\t\tif (got == SITU_OK) {",
+			"\t\t\tfor (chars_i = 0; chars_i < chars_n; chars_i++) {",
+			"\t\t\t\tconst uint8_t b = chars_at[chars_i];",
+			"",
+			"\t\t\t\tif (((chars_table[b >> 3] >> (b & 7u)) & 1u) == 0u) {",
+			"\t\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t\t}",
+			"\t\t\t}",
+			"\t\t} else if (got != SITU_ERR_VERSION) {",
+			"\t\t\treturn got;",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _chars_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

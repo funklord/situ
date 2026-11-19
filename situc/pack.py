@@ -2681,6 +2681,19 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			kind = traverse.classify_check(rstruct, placement,
 			                               set(resolved.structs))
 
+			# An arm's `[chars]`, as its four rows, keyed by the arm's own
+			# placement and checked only where the arm is selected, as every
+			# backend's arm accessor gates it (26.1105).
+			held_class = chars.of(placement.attrs)
+			if held_class is not None \
+					and traverse.arm_of(rstruct, placement) is not None:
+				bits = chars.table(held_class)
+				for quarter in range(4):
+					arm_checks.append((at, _struct.pack(
+						"<IqBxxx", at, int.from_bytes(
+							bits[quarter * 8:quarter * 8 + 8], "little",
+							signed=True), CHECK_CHARS + quarter)))
+
 			# A run a terminator ends, as for one outside an arm (26.926).
 			if (placement.delimiters or placement.repeat_while is not None) \
 					and placement.type_name in resolved.structs \

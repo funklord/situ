@@ -200,6 +200,15 @@ struct classed size=4..
   ~         until:3b  u8         word  chars="a-z"
   ~         0..       u8         rest  sized-by=remaining chars="0-9"
 
+struct classed_arm size=2..257
+  @0x0000   1         u8         kind
+  @0x0001   1         u8         n
+  @0x0002   0..255    variant    body
+  body switch: kind
+  body case 1: word u8
+  body case 2: code u8
+  body case default: digits u8
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling

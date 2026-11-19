@@ -10036,15 +10036,26 @@ class Emitter:
 		from situc import chars
 
 		held = chars.of(placement.attrs)
-		if held is None or "." in placement.path[len(struct.name) + 1:]:
+		if held is None:
+			return []
+		arm = arm_of(struct, placement) is not None
+		if not arm and "." in placement.path[len(struct.name) + 1:]:
 			return []
 		name  = py_name(local_name(struct, placement))
 		table = chars.table(held)
+		# An arm's accessor raises VersionError where another arm is
+		# selected, which is nothing to check (26.1105).
+		read  = (["\t\ttry:",
+		          f"\t\t\tchars_run = bytes(self.{name})",
+		          "\t\texcept VersionError:",
+		          "\t\t\tchars_run = b\"\""] if arm else
+		         [f"\t\tchars_run = bytes(self.{name})"])
 		return [
 			f"\t\t# {placement.path} [chars = {chars.canonical(held)!r}]",
 			f"\t\tchars_table = {table!r}",
-			f"\t\tif any(not (chars_table[b >> 3] >> (b & 7)) & 1"
-			f" for b in self.{name}):",
+			*read,
+			"\t\tif any(not (chars_table[b >> 3] >> (b & 7)) & 1"
+			" for b in chars_run):",
 			"\t\t\traise ConstraintError(",
 			f'\t\t\t\t"{placement.path} holds a byte outside its class")',
 		]
@@ -10104,6 +10115,7 @@ class Emitter:
 				found.extend(self._arm_validation(struct, member))
 				found.extend(self._arm_member_checks(struct, placement,
 				                                     arm, member))
+				found.extend(self._chars_check(struct, member))
 		return found
 
 	def _arm_validation(self, struct: ResolvedStruct,

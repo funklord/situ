@@ -2959,3 +2959,15 @@ struct let_rule {
 
 when let_rule.total > 200
 	refuse let_rule_too_big "a and b, held to a byte, may not pass 200";
+
+// An arm's class (26.1105), on a named arm and the default, checked only
+// where the arm is selected.
+struct classed_arm {
+	u8 kind;
+	u8 n;
+	variant body switch (kind) {
+		case 1:  u8 word[n] [chars = "a-z"];
+		case 2:  u8 code[n];
+		default: u8 digits[n] [chars = "0-9"];
+	}
+}

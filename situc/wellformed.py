@@ -4454,18 +4454,20 @@ def _own_members(members: tuple[ast.Member, ...]) -> list[ast.Member]:
 
 
 def check_chars(schema: ast.Schema) -> None:
-	"""`[chars]` is on a member of the struct itself (26.1099).
+	"""`[chars]` is on a member of the struct itself, or an arm's (26.1099).
 
-	`check_holds`' rule, for its reason: every reader checks the class
-	through the member's own accessors, which an arm and a sealed or coded
-	interior do not have on the struct's view. A transparent block keeps its
-	members the struct's own. An arm's member is refused rather than checked
-	where the arm can be dispatched and not where it cannot -- a `default`
-	arm is the second kind -- because a class some readers enforce and others
-	skip is a schema the readers disagree about.
+	Every reader checks the class through the member's own accessor: a
+	member of the struct through its plain one, a transparent block's
+	members being the struct's own, and an arm's member through the arm
+	accessor every backend answers VERSION from where another arm is
+	selected (26.1105). A sealed or coded interior has neither on the
+	struct's view, and is refused.
 	"""
 	for struct in schema.structs():
 		own = _own_members(struct.members)
+		own = own + [arm.member for variant in own
+		             if isinstance(variant, ast.Variant)
+		             for arm in variant.arms if arm.member is not None]
 		for member in _walk_members(struct.members):
 			attr = next((one for one in getattr(member, "attrs", ())
 			             if one.name == "chars"), None)
@@ -4473,7 +4475,7 @@ def check_chars(schema: ast.Schema) -> None:
 				continue
 			raise error(
 				"`[chars]` is on a member of the struct itself", attr.span,
-				label = "inside an arm or a sealed or coded region",
+				label = "inside a sealed or coded region",
 				notes = ["a struct holding the run carries its class to "
 				         "wherever the struct is placed; nest one (26.1099)"])
 

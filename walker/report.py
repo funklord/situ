@@ -2231,6 +2231,22 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 		elif data not in arms:
 			return ERR_CONSTRAINT
 
+	# An arm's `[chars]` (26.1105): its four rows joined back into the class's
+	# table, as the member path joins them, over the selected arm's span.
+	quarters = {check: against for check, against in held if check in CHARS}
+	if quarters:
+		if len(quarters) != len(CHARS):
+			raise Refused(f"placement {chosen}: {len(quarters)} of the "
+			              "four [chars] rows")
+		table = b"".join((quarters[check] & (2**64 - 1)).to_bytes(8, "little")
+		                 for check in CHARS)
+		try:
+			data = _span_bytes(image, view, chosen)
+		except Refused:
+			return ERR_BOUNDS
+		if any(not (table[b >> 3] >> (b & 7)) & 1 for b in data):
+			return ERR_CONSTRAINT
+
 	# The member path's list, kept whole rather than trimmed to what the
 	# packer writes today -- which for an arm is `must_eq`, `min` and `max`
 	# and nothing else, the three C's own `arm_constraints` switch accepts.

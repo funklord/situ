@@ -6390,7 +6390,10 @@ class Emitter:
 		from situc import chars
 
 		held = chars.of(placement.attrs)
-		if held is None or "." in placement.path[len(struct.name) + 1:]:
+		if held is None:
+			return []
+		arm = arm_of(struct, placement) is not None
+		if not arm and "." in placement.path[len(struct.name) + 1:]:
 			return []
 		name  = _ident(c_name(local_name(struct, placement)))
 		table = chars.table(held)
@@ -6405,7 +6408,15 @@ class Emitter:
 			"\t\t\tconst CHARS_TABLE: [u8; 32] = [",
 			*(f"\t\t\t\t{row}," for row in rows),
 			"\t\t\t];",
-			f"\t\t\tif self.{name}().iter()"
+			# An arm's accessor is `Err(Version)` where another arm is
+			# selected, which is nothing to check (26.1105).
+			*([f"\t\t\tlet chars_run: &[u8] = match self.{name}() {{",
+			   "\t\t\t\tOk(run) => run,",
+			   "\t\t\t\tErr(Error::Version) => &[],",
+			   "\t\t\t\tErr(other) => return Err(other),",
+			   "\t\t\t};"] if arm else
+			  [f"\t\t\tlet chars_run: &[u8] = self.{name}();"]),
+			"\t\t\tif chars_run.iter()"
 			".any(|&b| (CHARS_TABLE[usize::from(b >> 3)] >> (b & 7)) & 1 == 0) {",
 			"\t\t\t\treturn Err(Error::Constraint);",
 			"\t\t\t}",
@@ -11968,6 +11979,7 @@ class Emitter:
 					out.extend(self._arm_validation(struct, member))
 					out.extend(self._arm_member_checks(
 						struct, placement, arm, member))
+					out.extend(self._chars_check(struct, member))
 			return out
 
 		# A RUN of structs: each element through its own validator, which

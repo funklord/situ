@@ -1221,10 +1221,10 @@ brackets -- characters, `a-z` ranges, a `-` literal at either end, the
 string literal's escapes -- with no negation, since a class says what a
 reader accepts. It goes on a run of `u8` (counted, sized, delimited or to
 the end) that is a member of the struct itself, a transparent block
-included; one in an arm or a sealed or coded region is refused, because an
-arm's member is checked where its arm can be dispatched and not where it
-cannot, and a class some readers enforce and others skip is a schema they
-disagree about. Every reader checks it against one 256-bit table
+included, or an arm's member, named or default, which every reader checks
+through its arm accessor only where that arm is selected (26.1105). One in
+a sealed or coded region is refused: no reader has an accessor for it on
+the struct's view. Every reader checks it against one 256-bit table
 (`situc/chars.py`), the image carries that table as four constraint rows,
 and the wire signature carries the class in one canonical spelling. The
 dissector shows such a run and checks it no more than it checks an
@@ -9145,6 +9145,10 @@ Moved to `doc/decision/26.1103-argued-structs-reach-the-walker-differential.md`.
 ### 26.1104 The C walker is handed an argued struct's arguments too
 
 Moved to `doc/decision/26.1104-the-c-walker-is-handed-arguments-too.md`.
+
+### 26.1105 An arm's member may name its bytes too
+
+Moved to `doc/decision/26.1105-an-arms-member-may-name-its-bytes.md`.
 
 ### 26.1076 A registry of keyed cells, compiled and walked
 

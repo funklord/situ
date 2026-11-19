@@ -205,6 +205,14 @@ struct classed size=4.. access=Sequential mutate=Shifting address=Unstable atomi
   classed.word                           offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable effect=EffectOnRead
   classed.rest                           offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct classed_arm size=2..257 mutate=Shifting atomic=NonAtomic
+  classed_arm.kind                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  classed_arm.n                          offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  classed_arm.body                       offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  classed_arm.body.word                  offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  classed_arm.body.code                  offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  classed_arm.body.digits                offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct coded_run size=2..512 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic stage=TransformTime
   coded_run.n                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   coded_run.body                         offset=AbsoluteStatic(0x01) size=Bounded(0, 510) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting

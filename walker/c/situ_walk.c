@@ -5164,7 +5164,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		if (kind == CHECK_PINNED_RUN || kind == CHECK_NUL_TERMINATED
 		                || kind == CHECK_ENCODED_AS
 		                || kind == CHECK_ZERO_RUN
-		                || kind == CHECK_TERMINATED) {
+		                || kind == CHECK_TERMINATED
+		                || kind == CHECK_CHARS) {
 			pinned += 1u;
 		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
 		                || kind == CHECK_MAXIMUM
@@ -5291,6 +5292,36 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 				for (uint32_t b = 0u; b < content; b++) {
 					if (data[b] != 0u) {
 						record(why, chosen, CHECK_ZERO_RUN);
+						*verdict = SITU_WALK_CONSTRAINT;
+						return SITU_WALK_OK;
+					}
+				}
+				continue;
+			}
+			/* An arm's `[chars]` (26.1105): the class whole from its four
+			 * rows, as the member path builds it, over the arm's span. */
+			if (row[12] == CHECK_CHARS) {
+				uint64_t quarter[4] = { 0u, 0u, 0u, 0u };
+				uint32_t found      = 0u;
+
+				for (uint32_t q = 0u; q < rows; q++) {
+					const uint8_t *other =
+					        checks + q * image->constraint_stride;
+
+					if (other[12] >= CHECK_CHARS
+					                && other[12] <= CHECK_CHARS_LAST) {
+						quarter[other[12] - CHECK_CHARS]
+						        = (uint64_t)i64_at(other + 4);
+						found += 1u;
+					}
+				}
+				if (found != 4u) {
+					return SITU_WALK_MALFORMED;
+				}
+				for (uint32_t b = 0u; b < content; b++) {
+					if (((quarter[data[b] >> 6] >> (data[b] & 63u)) & 1u)
+					                == 0u) {
+						record(why, chosen, CHECK_CHARS);
 						*verdict = SITU_WALK_CONSTRAINT;
 						return SITU_WALK_OK;
 					}

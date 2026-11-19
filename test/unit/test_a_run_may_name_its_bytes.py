@@ -58,8 +58,6 @@ def test_a_class_is_the_bytes_it_names(text: str, admits: bytes,
 	('decimal u8 n[3] [chars = "0-9"];', "means nothing here"),
 	('u8 n[2] [chars = ""];', "names no byte"),
 	('u8 n[2] [chars = "z-a"];', "runs backwards"),
-	('u8 k; variant v switch (k) { case 1: u8 a[2] [chars = "a"]; '
-	 'default: u8 b; }', "member of the struct itself"),
 ])
 def test_a_class_where_it_cannot_be_checked_is_refused(member: str,
 		why: str) -> None:
@@ -68,11 +66,71 @@ def test_a_class_where_it_cannot_be_checked_is_refused(member: str,
 		check(parse_schema(Source("c.situ", text)))
 
 
+def test_a_class_inside_a_coded_region_is_refused() -> None:
+	"""A coded interior is the codec's input, with no accessor on the
+	struct's view for any reader to check a class through."""
+	text = HEAD + """codec zz {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+}
+impl zz extern "zz";
+struct s { coded stream(zz) { u8 a[remaining] [chars = "a"]; } }
+"""
+	with pytest.raises(SituError, match="member of the struct"):
+		check(parse_schema(Source("c.situ", text)))
+
+
 def _validate(said: str, struct: str) -> str:
 	lines = said.splitlines()
 	at = lines.index(f"-- {struct}")
 	return next(line.split()[1] for line in lines[at + 1:]
 	            if line.startswith("validate "))
+
+
+#: An arm's class, named and default, checked only where its arm is
+#: selected (26.1105).
+TAGGED = HEAD + """struct tagged {
+	u8 kind;
+	u8 n;
+	variant body switch (kind) {
+		case 1:  u8 word[n] [chars = "a-z"];
+		case 2:  u8 code[n];
+		default: u8 digits[n] [chars = "0-9"];
+	}
+}
+"""
+
+TAGGED_CASES = [(b"\x01\x03abc", "0"), (b"\x01\x03aBc", "2"),
+                (b"\x02\x03aB!", "0"),		# no class on this arm
+                (b"\x07\x0242", "0"), (b"\x07\x024x", "2"),
+                (b"\x01\x05ab", "1")]			# short, not a class
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_four_backends_check_an_arms_class(tmp_path: Path) -> None:
+	schema = tmp_path / "tagged.situ"
+	schema.write_text(TAGGED, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for raw, want in TAGGED_CASES:
+		for name, argv in command.items():
+			got = _validate(fourway.answers(argv, raw, tmp_path), "tagged")
+			assert got == want, (name, raw.hex(), got)
+
+
+def test_both_walkers_check_an_arms_class(tmp_path: Path) -> None:
+	from test_walker_c import (COMPILER, VERDICT, _build_driver, c_verdict,
+	                           packed_text, python_verdict, shape_named_text)
+	blob  = packed_text(TAGGED)
+	shape = shape_named_text(TAGGED, "tagged")
+	drive = (_build_driver(tmp_path, blob, VERDICT)
+	         if COMPILER is not None else None)
+	for raw, want in TAGGED_CASES:
+		assert python_verdict(blob, raw, shape) == want, ("python", raw.hex())
+		if drive is not None:
+			assert c_verdict(tmp_path, blob, raw, shape, drive) == want, \
+				("c walker", raw.hex())
 
 
 CASES = [(b"\x00\x05ab-9:abc;80", "0"),
