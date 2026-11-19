@@ -9142,6 +9142,10 @@ Moved to `doc/decision/26.1102-a-when-may-read-a-let.md`.
 
 Moved to `doc/decision/26.1103-argued-structs-reach-the-walker-differential.md`.
 
+### 26.1104 The C walker is handed an argued struct's arguments too
+
+Moved to `doc/decision/26.1104-the-c-walker-is-handed-arguments-too.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

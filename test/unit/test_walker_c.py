@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,20 @@ int main(int argc, char **argv)
 	 * packer put there and a run's *container* is the interesting one. */
 	const uint32_t shape = (argc > 3) ? (uint32_t)strtoul(argv[3], NULL, 10)
 	                                  : 0u;
+
+	/* The struct's `parameter` arguments, positionally, after the shape:
+	 * the values the backends' drivers hand an argued struct (26.1051), so
+	 * the two walks compare it rather than skipping it (26.1104). */
+	int64_t  args[16];
+	uint32_t argn = 0u;
+	for (int a = 4; a < argc && argn < 16u; a++) {
+		args[argn++] = (int64_t)strtoll(argv[a], NULL, 10);
+	}
+	if (argn > 0u && situ_walk_acquire(&image, shape, args, argn)
+	                != SITU_WALK_OK) {
+		free(msg);
+		return 1;
+	}
 
 	uint32_t first = 0;
 	uint32_t count = 0;
@@ -509,9 +524,9 @@ def _build_driver(tmp_path: Path, blob: bytes, ask: str) -> Path:
 
 
 def _run_driver(drive: Path, tmp_path: Path, message: bytes, shape: int,
-		by_line: bool) -> list[str]:
+		by_line: bool, args: Sequence[int] = ()) -> list[str]:
 	ran = subprocess.run([str(drive), str(tmp_path / "img"),
-	                      message.hex(), str(shape)],
+	                      message.hex(), str(shape), *map(str, args)],
 	                     capture_output=True, text=True)
 	# Not an assertion. Four sweeps read AssertionError as "no driver can
 	# acquire this shape" and go on, which filed a walker that overflowed
@@ -531,7 +546,7 @@ def _run_driver(drive: Path, tmp_path: Path, message: bytes, shape: int,
 
 def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
 		shape: int = 0, by_line: bool = False,
-		drive: Path | None = None) -> list[str]:
+		drive: Path | None = None, args: Sequence[int] = ()) -> list[str]:
 	"""One answer, building the driver unless the caller already has one.
 
 	`drive` is a driver already built for this `blob` and this `ask`, and
@@ -544,7 +559,7 @@ def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
 	"""
 	if drive is None:
 		drive = _build_driver(tmp_path, blob, ask)
-	return _run_driver(drive, tmp_path, message, shape, by_line)
+	return _run_driver(drive, tmp_path, message, shape, by_line, args)
 
 
 def c_answers(tmp_path: Path, blob: bytes, message: bytes,
@@ -1906,7 +1921,8 @@ WHY = """situ_walk_err verdict = SITU_WALK_OK;
 
 
 def c_why(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int = 0, drive: Path | None = None) -> tuple[str, str] | str:
+		shape: int = 0, drive: Path | None = None,
+		args: Sequence[int] = ()) -> tuple[str, str] | str:
 	"""The C walk's `(member, check)`, spelled the Python walk's way.
 
 	`_drive` splits on whitespace, so a refusal comes back as two fields and
@@ -1914,7 +1930,8 @@ def c_why(tmp_path: Path, blob: bytes, message: bytes,
 	`report.failed_check` gives, and is why this renders the ids rather than
 	the names: the names are a rendering and the ids are the contract.
 	"""
-	said = _drive(tmp_path, blob, message, WHY, shape, drive=drive)
+	said = _drive(tmp_path, blob, message, WHY, shape, drive=drive,
+	              args=args)
 	if len(said) == 1:
 		return report.CLEAN if said[0] == "clean" else report.CANNOT_SAY
 
@@ -1937,11 +1954,14 @@ VERDICT = """situ_walk_err verdict = SITU_WALK_OK;
 
 
 def c_verdict(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int = 0, drive: Path | None = None) -> str:
-	return _drive(tmp_path, blob, message, VERDICT, shape, drive=drive)[0]
+		shape: int = 0, drive: Path | None = None,
+		args: Sequence[int] = ()) -> str:
+	return _drive(tmp_path, blob, message, VERDICT, shape, drive=drive,
+	              args=args)[0]
 
 
-def python_verdict(blob: bytes, message: bytes, shape: int = 0) -> str:
+def python_verdict(blob: bytes, message: bytes, shape: int = 0,
+		args: Sequence[int] = ()) -> str:
 	"""The same question of the fifth column.
 
 	A frame too short for the struct's own minimum is refused when the view
@@ -1952,7 +1972,7 @@ def python_verdict(blob: bytes, message: bytes, shape: int = 0) -> str:
 	"""
 	image = load(blob)
 	try:
-		view = acquire(image, message, shape)
+		view = acquire(image, message, shape, args)
 	except Refused:
 		return "1"
 	answer = report._validate(image, view, shape)
@@ -2868,10 +2888,14 @@ def test_they_agree_about_the_corpus_being_well_formed(
 	rng   = random.Random(20260913)
 	drive = _build_driver(tmp_path, blob, VERDICT)
 
+	handed = argued_by_index(schema)
+
 	asked = declined = 0
 	for which in range(len(image.structs)):
 		for packet in (draw(rng), draw(rng)):
-			pair = _verdict_pair(tmp_path, blob, packet, which, drive)
+			pair = _verdict_pair(tmp_path, blob, packet, which, drive,
+			                     handed[which] if which < len(handed)
+			                     else ())
 			if pair is None:
 				continue	# no driver can acquire this shape
 			c_said, p_said = pair
@@ -2939,15 +2963,17 @@ def test_the_two_walkers_agree_about_which_check_refused(
 	# keyed by name because an index moves when somebody adds a struct.
 	named = [struct.name for struct in parse(
 		Source(str(schema), schema.read_text(encoding="ascii"))).structs()]
+	argued = argued_by_index(schema)
 
 	asked = 0
 	for which in range(len(image.structs)):
 		if which < len(named) \
 				and (schema.name, named[which]) in IDENTITY_APART:
 			continue
+		handed = argued[which] if which < len(argued) else []
 		for packet in (draw(rng), draw(rng)):
 			try:
-				view = acquire(image, packet, which)
+				view = acquire(image, packet, which, handed)
 			except (Refused, Unplaceable):
 				continue
 			except Unsupplied:
@@ -2965,11 +2991,9 @@ def test_the_two_walkers_agree_about_which_check_refused(
 				# struct, and the population guard below is what noticed
 				# -- 117 refusals compared where 197 were expected.
 				#
-				# Comparing them under a SUPPLIED argument is the better
-				# test and is its own piece of work: the C driver takes
-				# its arguments as trailing argv, so the two sides would
-				# have to agree on how one is passed. Recorded beside the
-				# differ's version of the same question in 0050.
+				# Both walks are handed the drivers' arguments now
+				# (26.1104), so this is reached only by a struct whose
+				# invented arguments do not satisfy its own acquisition.
 				continue
 			try:
 				p_said = report.failed_check(image, view, which)
@@ -2985,7 +3009,8 @@ def test_the_two_walkers_agree_about_which_check_refused(
 				continue
 
 			try:
-				c_said = c_why(tmp_path, blob, packet, which, drive)
+				c_said = c_why(tmp_path, blob, packet, which, drive,
+				               args=handed)
 			except (AssertionError, IndexError):
 				continue	# no driver can acquire this shape
 			if c_said in (report.CLEAN, report.CANNOT_SAY):
@@ -3034,8 +3059,20 @@ def test_the_identity_comparison_asked_something() -> None:
 VERDICTS_ASKED: dict[str, tuple[int, int]] = {}
 
 
+def argued_by_index(schema: Path) -> list[list[int]]:
+	"""Each struct's `parameter` arguments, by its index in the image: the
+	values the backends' drivers hand it (26.1051), empty for a struct that
+	takes none -- so both walks are handed the same ones (26.1104)."""
+	from situc.codegen.differ import argued as argued_values
+	parsed   = parse(Source(str(schema), schema.read_text(encoding="ascii")))
+	resolved = resolve(parsed, solve(parsed))
+	return [[value for _, value in argued_values(struct)]
+	        for struct in resolved.structs.values()]
+
+
 def _verdict_pair(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int, drive: Path | None = None) -> tuple[str, str] | None:
+		shape: int, drive: Path | None = None,
+		args: Sequence[int] = ()) -> tuple[str, str] | None:
 	"""Both walkers' verdicts, or None where the drivers cannot be asked.
 
 	The C driver walks a struct's members and exits non-zero for one with
@@ -3045,8 +3082,8 @@ def _verdict_pair(tmp_path: Path, blob: bytes, message: bytes,
 	made this test red for five schemas over its own plumbing.
 	"""
 	try:
-		c_said = c_verdict(tmp_path, blob, message, shape, drive)
-		p_said = python_verdict(blob, message, shape)
+		c_said = c_verdict(tmp_path, blob, message, shape, drive, args)
+		p_said = python_verdict(blob, message, shape, args)
 	except (AssertionError, IndexError, Refused, Unplaceable):
 		return None
 	except Unsupplied:
