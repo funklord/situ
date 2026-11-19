@@ -2858,9 +2858,9 @@ struct named_digits {
 }
 
 // A registry, fuzznet's settings in miniature (0070): a cell per key, its
-// value a message of a struct above, bounded, defaulted, and a family. Here
-// so every corpus sweep parses, unparses and dumps one; no reader generates
-// from it yet.
+// value a message of a struct above, bounded, defaulted, and a family. Every
+// backend generates its table and both walkers read it (26.1081-26.1089),
+// and the wire contract carries its keyspace (26.1106).
 policy cell_scope { estate, host }
 
 struct count_cell {

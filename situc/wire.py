@@ -94,7 +94,57 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 		lines.extend(_struct(resolved.structs[name], resolved.layout.env))
 		lines.extend(_refusals(schema, name))
 
+	lines.extend(_registries(schema))
+
 	return "\n".join(lines) + "\n"
+
+
+#: A registry entry's attributes that say nothing a peer relies on: how a
+#: client labels a value is not which values it may send.
+PRESENTATIONAL = ("unit",)
+
+
+def _spelled(text: str) -> str:
+	"""A string with no space, quote or backslash in it, so a fact stays one
+	whitespace-separated token: `\\xNN` for anything outside the printable
+	ASCII the class syntax would also write bare."""
+	return "".join(one if 0x21 <= ord(one) <= 0x7E and one not in '"\\'
+	               else f"\\x{ord(one):02X}" for one in text)
+
+
+def _registries(schema: ast.Schema) -> list[str]:
+	"""Each registry's keyspace, one line per key (0070, 26.1106).
+
+	A registry is a contract between peers as a struct is -- which keys
+	exist, what each cell is a message of, its bounds, the value a peer
+	assumes where the cell is absent, which way it is safe to move -- and
+	none of it was in this file, so `wire --check` passed a key removed or
+	a bound narrowed. The summary and a unit are how a client shows the
+	cell, not what may be sent, and are left out so that rewording one is
+	not a contract change.
+	"""
+	lines: list[str] = []
+	for decl in sorted(schema.registries(), key=lambda one: one.name):
+		lines += ["", f"registry {decl.name}"]
+		for entry in sorted(decl.entries, key=lambda one: one.key):
+			facts = [f'key="{_spelled(entry.key)}"', f"cell={entry.type_name}"]
+			if entry.family:
+				facts.append("family")
+			for attr in sorted(entry.attrs, key=lambda one: one.name):
+				if attr.name in PRESENTATIONAL:
+					continue
+				value = attr.value
+				if isinstance(value, ast.StringLiteral):
+					facts.append(f'{attr.name}="{_spelled(value.value)}"')
+				elif isinstance(value, ast.IntLiteral):
+					facts.append(f"{attr.name}={value.value}")
+				elif value is None:
+					facts.append(attr.name)
+				else:
+					facts.append(f"{attr.name}="
+					              f"{_spelled(expr_to_source(value))}")
+			lines.append("  " + " ".join(facts))
+	return lines
 
 
 def _refusals(schema: ast.Schema, struct: str) -> list[str]:
@@ -1121,6 +1171,7 @@ def _compare(before: str, after: str) -> Verdict:
 			continue
 		findings.extend(_compare_struct(name, old, new))
 
+	findings.extend(_compare_registries(before, after))
 	return Verdict(findings)
 
 
@@ -1279,6 +1330,71 @@ def _parse_signature(text: str) -> dict[str, list[str]]:
 		elif not line.startswith("  "):
 			current = None
 	return structs
+
+
+def _parse_registries(text: str) -> dict[str, dict[str, set[str]]]:
+	"""Registry name to its keys, each to the facts its line states."""
+	found: dict[str, dict[str, set[str]]] = {}
+	current: dict[str, set[str]] | None = None
+	for line in text.splitlines():
+		if line.startswith("registry "):
+			current = found.setdefault(line.split()[1], {})
+		elif line.startswith("  ") and current is not None:
+			facts = line.split()
+			current[facts[0].partition("=")[2]] = set(facts[1:])
+		elif not line.startswith("  "):
+			current = None
+	return found
+
+
+def _compare_registries(before: str, after: str) -> list[Finding]:
+	"""A registry's keyspace, as a peer reads it (26.1106).
+
+	A key removed is a cell an old peer still writes and a new one does not
+	know: breaking. A key added is one no old peer writes: forward. A cell
+	type changed reads the same bytes as another message: breaking. Every
+	other fact -- a bound, a size, a default, `safe`, a policy word -- is a
+	constraint, compared as a member's are, so a narrowed bound is the
+	tightening it is.
+	"""
+	was, now = _parse_registries(before), _parse_registries(after)
+	findings: list[Finding] = []
+	for name in sorted(set(was) | set(now)):
+		where = f"registry {name}"
+		if name not in now:
+			findings.append(Finding("breaking", where,
+			                        "registry removed; an old peer still "
+			                        "writes its cells"))
+			continue
+		if name not in was:
+			findings.append(Finding("forward", where,
+			                        "new registry; no old peer writes it"))
+			continue
+		old_keys, new_keys = was[name], now[name]
+		for key in sorted(set(old_keys) | set(new_keys)):
+			if key not in new_keys:
+				findings.append(Finding(
+					"breaking", where,
+					f"{key} removed; an old peer still writes that cell"))
+				continue
+			if key not in old_keys:
+				findings.append(Finding(
+					"forward", where,
+					f"{key} is new; no old peer writes it"))
+				continue
+			cell_was = {one for one in old_keys[key] if one.startswith("cell=")}
+			cell_now = {one for one in new_keys[key] if one.startswith("cell=")}
+			if cell_was != cell_now:
+				findings.append(Finding(
+					"breaking", where,
+					f"{key}: {' '.join(sorted(cell_was))} -> "
+					f"{' '.join(sorted(cell_now))}; the same bytes are now a "
+					"message of another type"))
+				continue
+			findings.extend(_compare_facts(where, key,
+			                               old_keys[key] - cell_was,
+			                               new_keys[key] - cell_now))
+	return findings
 
 
 def _parse_enums(text: str) -> dict[str, tuple[str, list[str]]]:

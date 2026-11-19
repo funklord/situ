@@ -9150,6 +9150,10 @@ Moved to `doc/decision/26.1104-the-c-walker-is-handed-arguments-too.md`.
 
 Moved to `doc/decision/26.1105-an-arms-member-may-name-its-bytes.md`.
 
+### 26.1106 A registry's keyspace is part of the wire contract
+
+Moved to `doc/decision/26.1106-a-registry-is-in-the-wire-contract.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as

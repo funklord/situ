@@ -1424,7 +1424,10 @@ All four backends generate the table with `find`, `check`, `value` and
 `safer`, and both walkers read the same rows from an image. Those rows are
 declarative -- no solved offset in them -- so a program can write them at
 runtime, over an image of the cell types, and a schema editor in a GUI
-needs no compiler to add a setting (decision 0070).
+needs no compiler to add a setting (decision 0070). The wire signature
+carries the keyspace -- each key, its cell type, bounds, default and safe
+direction -- so `situc wire --check` calls a removed key or a changed cell
+type breaking and a narrowed bound the tightening it is.
 
 ### Versions
 

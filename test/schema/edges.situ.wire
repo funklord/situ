@@ -1121,3 +1121,8 @@ struct wide_run size=7..31
 struct wire::framed_body size=3
   @0x0000   1         u8         kind
   @0x0001   2         u16        length  big
+
+registry edge_settings
+  key="archive/gone" cell=duration_cell cell_scope=estate default="14d"
+  key="journal/window" cell=count_cell cell_scope=estate default="60" max=36500 min=1
+  key="stream/grant/" cell=flag_cell family cell_scope=estate
