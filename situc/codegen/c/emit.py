@@ -245,6 +245,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	)
 
 
+
+def _already_have(ready: str, floor: int) -> bool:
+	"""Whether `have < ready` is already known false: `ready` a literal at or
+	below the floor `_required`'s opening guard established (26.1107)."""
+	held = ready[:-1] if ready.endswith("u") else ready
+	return held.isdigit() and int(held) <= (floor or 0)
+
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
 			basename: str, prefix: str, materialize: bool = False,
@@ -6352,6 +6359,18 @@ class Emitter:
 
 		steps: list[str] = []
 		floor = peek_floor(struct)
+		# What the opening guard establishes for the rest of the function:
+		# `have` never changes, so a later `have < K` for a K at or below it
+		# cannot be true and a `have >= K` cannot be false -- the condition a
+		# static analyser calls known, 54 times over the corpus (26.1107).
+		# Local, not on `self`: framing a variant asks `_required` of its
+		# arms' structs, which would overwrite it mid-function. And its own
+		# name: `floor` is each member's floor further down.
+		opened = floor
+		# And every constant guard after it raises it, the members being
+		# framed in order on one path: a `have < 5u` after `have < 6u` was
+		# the commonest of the rest (26.1107).
+		established = opened or 0
 		if floor:
 			steps.extend(["", f"\tif (have < {floor}u) {{",
 			              f"\t\t*need = {floor}u;",
@@ -6505,19 +6524,24 @@ class Emitter:
 			# here, and where that is zero, `*need < at` cannot be true --
 			# the clamp below asks nothing (26.1092).
 			at_is_zero = index == 0 and int(at.rstrip("u")) - floor == 0
+			guarded = ready != "0u" and not _already_have(ready, established)
 			steps.extend([
 				"",
-				f"\t/* {placement.path}: reading its length means reading bytes"
-				" that",
-				"\t * have to be here first. */",
-				*([f"\tif (have < {ready}) {{",
+				# The sentence only over the guard it explains: alone, it
+				# reads as a check somebody forgot to write.
+				*([f"\t/* {placement.path}: reading its length means reading"
+				   " bytes that",
+				   "\t * have to be here first. */",
+				   f"\tif (have < {ready}) {{",
 				   "\t\t*need = at;",
 				   "\t\treturn SITU_ERR_TRUNCATED;",
-				   "\t}"] if ready != "0u" else []),
+				   "\t}"] if guarded else []),
 				*([f"\tif (at < UINT32_MAX) {{",
 				   f"\t\tat -= {floor}u; /* its own length goes in below */",
 				   "\t}"] if floor else []),
 			])
+			if guarded and ready[:-1].isdigit() and ready.endswith("u"):
+				established = max(established, int(ready[:-1]))
 			# A counted run of variable-size elements is framed the same way,
 			# and was not. `is_run` names the two spellings that END where the
 			# bytes decide; a count ends where the count says, which reads as
@@ -6626,9 +6650,10 @@ class Emitter:
 			# and dead arithmetic reads as arithmetic somebody meant.
 			ahead = cursor if index + 1 < len(variable) else None
 			nested = (self._nested_framing(struct, placement, cursor,
-			                               ahead, ready, known)
+			                               ahead, ready, known, established)
 			          or self._variant_framing(struct, placement, cursor,
-			                                   ahead, ready, known))
+			                                   ahead, ready, known,
+			                                   established))
 			if nested is not None:
 				steps.extend(nested)
 				steps.extend(self._gap_step(cursor, gaps, index))
@@ -6830,7 +6855,8 @@ class Emitter:
 			cursor: str | None,
 			ahead: str | None = None,
 			checked: str | None = None,
-			known: str | None = None) -> list[str] | None:
+			known: str | None = None,
+			established: int = 0) -> list[str] | None:
 		"""Framing a nested struct: through its own `required` (26.684).
 
 		`framed` added the nested member's EXTENT, and an extent walk
@@ -6876,7 +6902,7 @@ class Emitter:
 			"\t\tuint32_t   part = 0u;",
 			"\t\tsitu_err_t e;",
 			"",
-			*self._framing_guard(cursor, cursor, checked, known),
+			*self._framing_guard(cursor, cursor, checked, known, established),
 			f"\t\te = {required}(data + {cursor},",
 			f"\t\t                situ_remaining_u32(have, {cursor}),"
 			f" &part{self._child_args(struct, placement)});",
@@ -6895,7 +6921,8 @@ class Emitter:
 			cursor: str | None,
 			ahead: str | None = None,
 			checked: str | None = None,
-			known: str | None = None) -> list[str] | None:
+			known: str | None = None,
+			established: int = 0) -> list[str] | None:
 		"""Framing a variant: through the selected arm's own `required`.
 
 		`_nested_framing` with a discriminant in front of it, and the
@@ -6960,7 +6987,8 @@ class Emitter:
 				and held.offset_bits % BITS_PER_BYTE == 0:
 			reach = (held.offset_bits + held.scalar.bits + BITS_PER_BYTE - 1) \
 			        // BITS_PER_BYTE
-			disc = f"(have >= {reach}u ? {disc} : 0u)"
+			if reach > max(peek_floor(struct), established):
+				disc = f"(have >= {reach}u ? {disc} : 0u)"
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
@@ -6977,7 +7005,7 @@ class Emitter:
 			"\t\tuint32_t   part = 0u;",
 			"\t\tsitu_err_t e = SITU_OK;",
 			"",
-			*self._framing_guard(opens, cursor, checked, known),
+			*self._framing_guard(opens, cursor, checked, known, established),
 		]
 		opened = False
 		for case, call, size, handed in plan:
@@ -7015,7 +7043,7 @@ class Emitter:
 
 	@staticmethod
 	def _framing_guard(operand: str, cursor: str, checked: str | None,
-			known: str | None) -> list[str]:
+			known: str | None, established: int = 0) -> list[str]:
 		"""`have < operand`, unless it cannot be true or was just asked.
 
 		Where the operand is the cursor and the cursor is known to be zero,
@@ -7023,7 +7051,8 @@ class Emitter:
 		number a line above, it would be asked twice (26.1074).
 		"""
 		value = known if operand == cursor and known is not None else operand
-		if value == "0u" or value == checked:
+		if value == "0u" or value == checked \
+				or _already_have(value, established):
 			return []
 		return [f"\t\tif (have < {value}) {{",
 		        "\t\t\t*need = at;",

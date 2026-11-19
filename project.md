@@ -9154,6 +9154,10 @@ Moved to `doc/decision/26.1105-an-arms-member-may-name-its-bytes.md`.
 
 Moved to `doc/decision/26.1106-a-registry-is-in-the-wire-contract.md`.
 
+### 26.1107 `required` asks `have` no question it has already answered
+
+Moved to `doc/decision/26.1107-required-asks-have-nothing-twice.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
