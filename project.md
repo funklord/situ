@@ -155,6 +155,18 @@ without huge dependencies kept, and the pertinent code shared:
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
 - The holder's earlier question -- vendor qtty for the window? -- is
   settled by that request: yes, beside the curses TUI, not instead of it.
+- Later in the run, for fuzznet: replay windows (26.1120) in all four
+  backends -- the counter form adopted there; the nonce table the
+  caller's, `expiry = caller` -- and designs for its items 1 and 2 put to
+  it for review before code: reply matching after the tag (26.1122) and
+  datagram reassembly (26.1123). Also the shifting write, member-by-member
+  display, checksums over an image (26.1115-7, part C of 26.1117 waiting
+  on openmlx4), the wire check through `[holds]`, capped remaining runs
+  and in-place builders (26.1118-21).
+- File identification (26.1124), the holder's shape: `identify` in the
+  format's schema, `situc identify` judging files in named levels, and
+  `--magic`, `--mime` and `--c` from the same declaration, each held to
+  its real consumer (file(1), gio) or to the other matcher.
 - From fuzznet (inbox 20261120T1231Z, against add80c9a; its sec 1311): the
   holder wants fuzznet on situ as fully as possible, losing no function or
   performance. ~3500 hand-written lines remain on its wire path. What would
