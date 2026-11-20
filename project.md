@@ -170,12 +170,19 @@ without huge dependencies kept, and the pertinent code shared:
   one); (b) one call building a message with an arm's fields instead of
   row-then-message; (c) an `embed`/opaque tail naming its schema; (d) the
   runtime banner still names c24fe412. Not yet taken up.
-- The holder's, to discuss first (2026-11-20): a vocabulary for file
-  identification -- extensions, media type, and a detector that is a
-  standard cheap subset of the schema (constant bytes at static offsets in
-  a bounded window) for a multi-file search tool -- and whether
-  fuzzypickles' sticker editor can be the situ editor over fuzznet's
-  `sticker/pack.situ`. Nothing built until the shape is agreed.
+- File identification (holder, 2026-11-20; LOW PRIORITY, other work
+  first): an identification declaration INSIDE the schema of a `target
+  file` format, made of evidence items that name the format's own members,
+  preambles and enums rather than restating its layout; each item
+  sufficient, required or supporting, and an extension either a hint or
+  proof within a weak routine -- the format and how it is detected are not
+  assumed to be one thing. Confidence in named LEVELS (certain, likely,
+  possible), not a score: "numeric classification rarely works for
+  cooperative ventures". Weak text formats (CSV, JSON, INI) are in scope,
+  through named built-in heuristics rather than a language to write them
+  in. The compiler costs each item so a search tool can run the cheap tier
+  across every format in one pass; magic(5) and shared-mime-info exports
+  from the same declaration.
 - The shifting write's first slice (26.1115): a byte run takes a new
   length, the scalar sizing it follows, a covered CRC is recomputed. Left:
   a window inside a larger message (needs 12.3's invalidation model to
@@ -269,10 +276,10 @@ both walkers and the dissector. What a user cannot yet do is listed under
   rules ahead of a descent through `at` is a change of verdict order in
   six readers, not yet made; (d) a checksum whose tag sits in a nested
   header and covers the header, BOOT2 and each section the chain reaches
-  -- openmlx4 asks whether that is in scope, which is the holder's: it
-  needs a tag covering bytes outside its own struct, coverage gathered
-  along a chain's links, and the tag read as a constant inside its own
-  span; the guess is in scope, as its own decision record; (e) a failsafe flash's
+  -- in scope (holder, 2026-11-20), gated part by part in 26.1117: its own
+  bytes as 0xFFFF already exist (`[self_as]`); a tag covering bytes outside
+  its struct is to build (GPT and U-Boot need it too); coverage along a
+  chain waits on openmlx4 measuring whether real images are back to back; (e) a failsafe flash's
   chunk interleave, whose chunk size is read from inside what it permutes
   -- a scope question, low priority. Also told: a schema with an
   unbounded codec builds Python only at `--layer edit`, and a view-layer
@@ -9351,6 +9358,10 @@ Moved to `doc/decision/26.1114-an-enum-is-a-choice.md`.
 ### 26.1115 A run written at a new length moves what sizes it
 
 Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
+
+### 26.1117 A checksum over an image, part by part
+
+Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
 ### 26.1116 A display reads member by member
 
