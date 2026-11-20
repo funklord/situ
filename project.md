@@ -9456,7 +9456,8 @@ Moved to `doc/decision/26.1123-datagram-reassembly.md`.
 
 ### 26.1122 A reply matched only after its tag verifies
 
-Moved to `doc/decision/26.1122-a-reply-matched-after-its-tag.md`.
+Also fuzznet's item 5, the peer in the key (a caller-assigned `peer` beside
+the relation's key). Moved to `doc/decision/26.1122-a-reply-matched-after-its-tag.md`.
 
 ### 26.1121 A message is built around an arm already in its buffer
 
