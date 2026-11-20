@@ -106,7 +106,8 @@ def _counter(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 
 
 def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
-	capacity = _number(replay, "capacity")
+	least    = (_number(replay, "capacity")
+	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
 	required = _word(replay, "expiry", "required") == "required"
@@ -120,27 +121,23 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 	return [
 		f"/// `{replay.name}`: each `{_path(replay, 'nonce')}` accepted once"
 		f" until `{_path(replay, 'expires')}`,",
-		f"/// in {unit}, no further ahead than {ahead}. {capacity} slots; FULL"
-		" refuses and",
-		"/// never evicts. capacity >= peak admitted rate x ahead.",
+		f"/// in {unit}, no further ahead than {ahead}. The table is the caller's:",
+		"/// count >= peak admitted rate x ahead. FULL refuses, never evicts.",
 		"#[derive(Debug)]",
-		f"pub struct {name} {{",
-		f"\tpub slots: [(u64, u64); {capacity}],\t// (nonce, expires)",
+		f"pub struct {name}<'a> {{",
+		"\tpub slots: &'a mut [(u64, u64)],\t// (nonce, expires), zeroed",
 		"}",
 		"",
-		f"impl Default for {name} {{",
-		"\tfn default() -> Self {",
-		f"\t\tSelf {{ slots: [(0, 0); {capacity}] }}",
-		"\t}",
-		"}",
-		"",
-		f"impl {name} {{",
-		f"\tpub const CAPACITY: usize = {capacity};",
+		f"impl<'a> {name}<'a> {{",
+		f"\tpub const LEAST: usize = {least};",
 		f"\tpub const AHEAD: u64 = {ahead}; // {unit}",
 		"",
 		"\t/// Pure: ask it BEFORE the tag.",
 		f"\tpub fn check(&self, {param}: &{kind}<'_>, now: u64)"
 		" -> Result<Verdict> {",
+		"\t\tif self.slots.len() < Self::LEAST {",
+		"\t\t\treturn Err(Error::Bounds);",
+		"\t\t}",
 		*reads,
 		f"\t\tif {expires} == 0 {{",
 		zero,
@@ -200,7 +197,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"// `record` after it. The state is the caller's.",
 		"",
 		f"use crate::{basename}::*;",
-		"use crate::situ_rt::Result;",
+		"use crate::situ_rt::{Error, Result};",
 		"",
 		"#[derive(Debug, Clone, Copy, PartialEq, Eq)]",
 		"pub enum Verdict {",

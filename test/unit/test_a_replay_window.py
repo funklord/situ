@@ -62,7 +62,9 @@ static situ_view_t at(uint32_t seq, uint64_t nonce, uint64_t exp)
 int main(void)
 {
 	static situ_w_t w;
-	static situ_n_t n;
+	static situ_n_slot_t slots[4];
+	situ_n_t n = {slots, 4};
+	situ_n_t small = {slots, 3};
 	printf("w");
 	situ_w_record(&w, at(10, 0, 0), &v); printf(" %d", v);
 	situ_w_record(&w, at(10, 0, 0), &v); printf(" %d", v);
@@ -81,7 +83,8 @@ int main(void)
 		situ_n_record(&n, at(0, 20 + (uint64_t)i, 1900), 1000, &v);
 	situ_n_record(&n, at(0, 30, 1900), 1000, &v); printf(" %d", v);
 	situ_n_record(&n, at(0, 30, 2600), 2000, &v); printf(" %d", v);
-	printf("\n");
+	printf("\nsmall %d\n",
+	       situ_n_check(&small, at(0, 40, 2900), 2000, &v) == SITU_ERR_BOUNDS);
 	return 0;
 }
 """
@@ -101,6 +104,7 @@ static ::situ::f at(std::uint32_t seq, std::uint64_t nonce, std::uint64_t exp)
 int main()
 {
 	using namespace situ_replay; w win; n set; verdict v;
+	n::slot slots[4] = {}; set.slots = slots; set.count = 4;
 	auto r = [&](::situ::f m) { (void)win.record(m, v); std::printf(" %d", int(v)); };
 	auto c = [&](::situ::f m) { (void)win.check(m, v); std::printf(" %d", int(v)); };
 	std::printf("w");
@@ -125,7 +129,8 @@ fn bytes(seq: u32, nonce: u64, exp: u64) -> Vec<u8> {
 	let mut b = seq.to_be_bytes().to_vec(); b.extend(nonce.to_be_bytes()); b.extend(exp.to_be_bytes()); b
 }
 fn main() {
-	let mut w = W::default(); let mut n = N::default(); let mut out = vec![];
+	let mut table = [(0u64, 0u64); 4];
+	let mut w = W::default(); let mut n = N { slots: &mut table }; let mut out = vec![];
 	for (seq, check) in [(10, false), (10, false), (12, false), (11, true), (200, false), (136, false), (137, false)] {
 		let b = bytes(seq, 0, 0); let f = rp::F::new(&b).unwrap();
 		out.push(if check { w.check(&f) } else { w.record(&f) }.unwrap() as i32);
@@ -177,6 +182,7 @@ def _numbers(text: str) -> list[list[int]]:
 	("[counter = seq, window = 8]", "names a field of `m`"),
 	("[counter = m.head.seq, window = 8, expiry = optional]",
 	 "has no expiry"),
+	("[counter = m.head.seq, window = 8, capacity = 4]", "has no capacity"),
 ])
 def test_what_cannot_hold_is_refused(attrs: str, refusal: str) -> None:
 	with pytest.raises(SituError, match=refusal):
@@ -199,7 +205,7 @@ def test_python(tmp_path: Path) -> None:
 			                + exp.to_bytes(8, "big"))
 			return rp.f.at(Message(raw), 0, 20)
 
-		w, n = replay.W(), replay.N()
+		w, n = replay.W(), replay.N(4)
 		said = [w.record(at(10, 0, 0)), w.record(at(10, 0, 0)),
 		        w.record(at(12, 0, 0)), w.check(at(11, 0, 0)),
 		        w.record(at(200, 0, 0)), w.record(at(136, 0, 0)),
@@ -231,7 +237,7 @@ def test_c(tmp_path: Path) -> None:
 	assert built.returncode == 0, built.stderr
 	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
 	                     text=True, timeout=60)
-	assert _numbers(ran.stdout) == [COUNTER, NONCES], ran.stdout
+	assert _numbers(ran.stdout) == [COUNTER, NONCES, [1]], ran.stdout
 
 
 @pytest.mark.skipif(shutil.which("g++") is None, reason="no C++ compiler")

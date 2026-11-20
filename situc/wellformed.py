@@ -1767,7 +1767,7 @@ def check_invariants(schema: ast.Schema) -> None:
 #: What each form of a replay window states (26.1120), and the rest each
 #: may also say.
 REPLAY_COUNTER = {"counter", "window"}
-REPLAY_NONCE   = {"nonce", "expires", "capacity", "ahead", "unit"}
+REPLAY_NONCE   = {"nonce", "expires", "ahead", "unit"}
 REPLAY_UNITS   = {"ns", "us", "ms", "s"}
 
 
@@ -1789,6 +1789,11 @@ def check_replays(schema: ast.Schema) -> None:
 			            "which is not a struct of this schema", where,
 			            label="here")
 		counter = REPLAY_COUNTER & set(said)
+		# `capacity` is the nonce form's, and optional: the table is the
+		# consumer's, sized by its own admitted rate (fuzznet, inbox
+		# 20261120T1900Z); stated, it is the smallest table allowed. Like
+		# `expiry` it does not decide the form, and is refused below on a
+		# counter window with a reason of its own.
 		nonce   = REPLAY_NONCE & set(said)
 		if counter and nonce or not counter and not nonce:
 			raise error(
@@ -1796,13 +1801,17 @@ def check_replays(schema: ast.Schema) -> None:
 				where, label="here",
 				notes=["a counter window: `[counter = m.seq, window = 64]`",
 				       "a nonce set: `[nonce = m.nonce, expires = m.exp, "
-				       "capacity = 4096, ahead = 30000, unit = ms]`"])
+				       "ahead = 30000, unit = ms]`"])
 		needed = REPLAY_COUNTER if counter else REPLAY_NONCE
 		missing = sorted(needed - set(said))
 		if missing:
 			raise error(f"`{replay.name}` does not state "
 			            f"{', '.join(f'`{one}`' for one in missing)}",
 			            where, label="here")
+		if "capacity" in said and counter:
+			raise error(f"`{replay.name}` is a counter window, whose state "
+			            "is one word and has no capacity", said["capacity"].span,
+			            label="here")
 		if "expiry" in said and counter:
 			raise error(f"`{replay.name}` is a counter window and has no "
 			            "expiry to rule on", said["expiry"].span,

@@ -105,7 +105,8 @@ def _counter(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 
 
 def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
-	capacity = _number(replay, "capacity")
+	least    = (_number(replay, "capacity")
+	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
 	required = _word(replay, "expiry", "required") == "required"
@@ -118,14 +119,15 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 	return [
 		f"/** `{replay.name}`: each `{_path(replay, 'nonce')}` accepted once"
 		f" until `{_path(replay, 'expires')}`,",
-		f" *  in {unit}, no further ahead than {ahead}. {capacity} slots; FULL"
-		" refuses",
-		" *  and never evicts. capacity >= peak admitted rate x ahead. */",
+		f" *  in {unit}, no further ahead than {ahead}. The table is the"
+		" caller's:",
+		" *  count >= peak admitted rate x ahead. FULL refuses, never evicts. */",
 		f"struct {replay.name} {{",
-		f"\tstatic constexpr std::uint32_t capacity = {capacity};",
+		f"\tstatic constexpr std::uint32_t least = {least};",
 		f"\tstatic constexpr std::uint64_t ahead = {ahead};\t// {unit}",
 		"\tstruct slot { std::uint64_t nonce = 0, expires = 0; };",
-		"\tslot slots[capacity] = {};",
+		"\tslot *slots = nullptr;",
+		"\tstd::uint32_t count = 0;",
 		"",
 		"\t/** Pure: ask it BEFORE the tag. */",
 		f"\t[[nodiscard]] ::situ::rt::err check({view},",
@@ -134,6 +136,9 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		*(f"\t{line}" for line in reads),
 		"\t\tbool free_slot = false;",
 		"",
+		"\t\tif (slots == nullptr || count < least) {",
+		"\t\t\treturn ::situ::rt::err::bounds;",
+		"\t\t}",
 		"\t\tout = verdict::ok;",
 		f"\t\tif ({expires} == 0u) {{",
 		zero,
@@ -147,7 +152,8 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		"\t\t\tout = verdict::horizon;",
 		"\t\t\treturn ::situ::rt::err::ok;",
 		"\t\t}",
-		"\t\tfor (const slot &held : slots) {",
+		"\t\tfor (std::uint32_t i = 0; i < count; i++) {",
+		"\t\t\tconst slot &held = slots[i];",
 		"\t\t\tif (held.expires <= now) {",
 		"\t\t\t\tfree_slot = true;",
 		f"\t\t\t}} else if (held.nonce == {nonce}) {{",
@@ -173,7 +179,8 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		f"\t\tif ({expires} == 0u) {{",
 		"\t\t\treturn ::situ::rt::err::ok;",
 		"\t\t}",
-		"\t\tfor (slot &held : slots) {",
+		"\t\tfor (std::uint32_t i = 0; i < count; i++) {",
+		"\t\t\tslot &held = slots[i];",
 		"\t\t\tif (held.expires <= now) {",
 		f"\t\t\t\theld.nonce = {nonce};",
 		f"\t\t\t\theld.expires = {expires};",

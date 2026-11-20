@@ -177,6 +177,18 @@ def macro(*parts: str) -> str:
 	return ident(*parts).upper()
 
 
+def header_guard(prefix: str, basename: str, *rest: str) -> str:
+	"""A header's include guard: the prefix, the schema's stem and what the
+	header is -- once. A project whose prefix already ends in the stem
+	(`--prefix fzn_session_frame_wire` for `session_frame_wire.situ`) got
+	`FZN_SESSION_FRAME_WIRE_SESSION_FRAME_WIRE_REPLAY_H` (fuzznet, inbox
+	20261120T1900Z); the stem is said once now. With the default prefix
+	nothing changes."""
+	if prefix == basename or prefix.endswith("_" + basename):
+		return macro(prefix, *rest)
+	return macro(prefix, basename, *rest)
+
+
 def c_name(path: str) -> str:
 	"""A path rendered as a C identifier fragment.
 

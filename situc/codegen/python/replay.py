@@ -77,7 +77,8 @@ def _counter(replay: ast.Replay) -> list[str]:
 
 
 def _nonce(replay: ast.Replay) -> list[str]:
-	capacity = _number(replay, "capacity")
+	least    = (_number(replay, "capacity")
+	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
 	required = _word(replay, "expiry", "required") == "required"
@@ -90,16 +91,18 @@ def _nonce(replay: ast.Replay) -> list[str]:
 		f"class {_class(replay.name)}:",
 		f'\t"""`{replay.name}`: each `{_path(replay, "nonce")}` accepted once until',
 		f"\tits `{_path(replay, 'expires')}`, in {unit}, no further ahead of `now`",
-		f"\tthan {ahead} {unit}. {capacity} slots; FULL refuses and never evicts,",
-		"\tsince evicting re-admits the evicted nonce when it is resent. Size",
-		"\tit as capacity >= peak admitted rate x ahead, admitted meaning after",
-		'\tthe tag (26.1120)."""',
+		f"\tthan {ahead} {unit}. The table's size is the CALLER's: size it as",
+		"\tcount >= peak admitted rate x ahead, admitted meaning after the tag",
+		"\t(26.1120). FULL refuses and never evicts, since evicting re-admits",
+		'\tthe evicted nonce when it is resent."""',
 		"",
-		f"\tCAPACITY = {capacity}",
+		f"\tLEAST = {least}\t# the smallest table allowed",
 		f"\tAHEAD = {ahead}\t# {unit}",
 		"",
-		"\tdef __init__(self) -> None:",
-		"\t\tself.slots = [(0, 0)] * self.CAPACITY\t# (nonce, expires)",
+		"\tdef __init__(self, count: int) -> None:",
+		"\t\tif count < self.LEAST:",
+		'\t\t\traise ValueError(f"a table of {count} is below {self.LEAST}")',
+		"\t\tself.slots = [(0, 0)] * count\t# (nonce, expires)",
 		"",
 		f"\tdef check(self, {param}, now: int) -> int:",
 		f'\t\t"""Whether the nonce may be accepted at `now` ({unit}). Pure: ask',

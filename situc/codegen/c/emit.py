@@ -36,7 +36,7 @@ from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	Entity, check_deferred_collisions,
 	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
-	entities, ident, macro)
+	entities, header_guard, ident, macro)
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
 from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
@@ -327,7 +327,7 @@ class Emitter:
 	# -- header ---------------------------------------------------------
 
 	def header(self) -> str:
-		guard = macro(self.prefix, self.basename, "h")
+		guard = header_guard(self.prefix, self.basename, "h")
 		lines = [
 			*self._banner(),
 			f"#ifndef {guard}",
