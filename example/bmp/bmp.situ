@@ -12,7 +12,7 @@
 //    targets and is slow on others, which is why situ tracks alignment on its
 //    own axis rather than assuming it.
 
-target buffer;
+target file;
 endian little;
 
 struct bitmap_file_header {
@@ -92,3 +92,16 @@ require stable_address(bitmap_info_header.width);
 // message on every call, because there is no frame it can be inside by
 // construction.
 assert absolute_static(bitmap_file.pixels);
+
+// How a file is known to be this BMP (26.1124), from what the layout
+// already pins rather than spelled again. "BM" alone is two bytes, which
+// plenty of other files start with, so it gates without deciding:
+// `required`. With the 40-byte info header and its one plane -- the
+// BITMAPINFOHEADER this schema describes -- it is certain. A BMP with a
+// later header (108 or 124 bytes) passes the gate and, named `.bmp`, is
+// likely: the levels saying what this schema can and cannot vouch for.
+identify bmp(f: bitmap_file) [media = "image/bmp"] {
+	required   f.file.signature;
+	sufficient f.file.signature && f.info.header_size && f.info.planes;
+	supporting extension "bmp", "dib";
+}

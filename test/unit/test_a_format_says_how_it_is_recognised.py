@@ -449,3 +449,55 @@ def test_the_editor_reads_a_file_as_the_format_it_is(tmp_path: Path) -> None:
 	ran = _edit(str(schemas), str(table))
 	assert ran.returncode == 1
 	assert "a text format" in ran.stderr, ran.stderr
+
+
+def _real_png() -> bytes:
+	import struct
+	import zlib
+
+	def chunk(kind: bytes, data: bytes) -> bytes:
+		return (struct.pack(">I", len(data)) + kind + data
+		        + struct.pack(">I", zlib.crc32(kind + data)))
+	return (SIGNATURE + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 1, 8, 2,
+	                                               0, 0, 0))
+	        + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00\x00\xff\x00"))
+	        + chunk(b"IEND", b""))
+
+
+def _bmp(header_size: int = 40) -> bytes:
+	"""A 2x2 24-bit BMP as Windows 3.x writes it, or with a later info
+	header's size, which this schema does not describe."""
+	import struct
+	pixels = b"\x00\x00\xff\x00\x00\xff\x00\x00" * 2
+	info = struct.pack("<IiiHHIIiiII", header_size, 2, 2, 1, 24, 0,
+	                   len(pixels), 3780, 3780, 0, 0)
+	return (b"BM" + struct.pack("<IHHI", 54 + len(pixels), 0, 0, 54) + info
+	        + pixels)
+
+
+def test_the_examples_recognise_their_own_files(tmp_path: Path) -> None:
+	"""PNG and BMP from the example tree, on files an encoder's layout
+	writes: each certain as itself and nothing as the other; a BMP with a
+	later info header only gated by "BM", so likely when named `.bmp` and
+	possible when not -- what this schema can vouch for, said as a level."""
+	files = {"a.png": _real_png(), "a.bmp": _bmp(), "v5.bmp": _bmp(124),
+	         "v5.bin": _bmp(124)}
+	for name, data in files.items():
+		(tmp_path / name).write_bytes(data)
+	ran = subprocess.run(
+		[sys.executable, str(ROOT / "bin" / "situc"), "identify",
+		 "-s", str(ROOT / "example" / "png" / "png.situ"),
+		 "-s", str(ROOT / "example" / "bmp" / "bmp.situ"),
+		 *(str(tmp_path / name) for name in files)],
+		capture_output=True, text=True, timeout=120)
+	assert ran.returncode == 0, ran.stderr
+	said = {line.split(": ")[0].rsplit("/", 1)[-1]: line.split(": ")[1]
+	        for line in ran.stdout.splitlines()}
+	assert said == {"a.png": "png (certain) image/png",
+	                "a.bmp": "bmp (certain) image/bmp",
+	                "v5.bmp": "bmp (likely) image/bmp",
+	                "v5.bin": "bmp (possible) image/bmp"}, said
+	edited = _edit(str(ROOT / "example"), str(tmp_path / "a.png"))
+	assert edited.returncode == 0, edited.stderr
+	assert edited.stdout.startswith("png_file "), edited.stdout
+	assert "[ok]" in edited.stdout.splitlines()[0], edited.stdout

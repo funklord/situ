@@ -16,7 +16,7 @@
 # entry that moved.
 
 endian little
-target buffer
+target file
 
 enum compression : u32 unknown=error
   rgb=0 rle8=1 rle4=2 bitfields=3
