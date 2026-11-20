@@ -2340,8 +2340,15 @@ class Solver:
 			arm_cases.append(Arm(source, value,
 			                     f"{prefix}.{variant.name}.{_arm_name(arm)}"))
 			seen   = len(layout.placements)
+			# A variant that states its size is its arms' frame (26.1040):
+			# an arm's `[remaining]` ends where the variant does, so what
+			# follows the variant is not after it in its frame. Passing the
+			# variant's own position refused `rec r[remaining]` in such an
+			# arm whenever a member came after the variant (openmlx4,
+			# 2026-11-19, while 26.1109 was being written).
 			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant,
-			                         state, last_in_frame)
+			                         state,
+			                         last_in_frame or variant.size is not None)
 
 			# **An anonymous arm member is named by the placement, not by a
 			# placeholder.** `_arm_name` falls back to the string `"arm"`

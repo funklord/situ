@@ -13,6 +13,8 @@ as a bare record. Two faults, in all six readers:
   Python walker agreed on the first; the walkers agreed on the second; every
   one of them was wrong, which is why the verdicts below are computed by
   hand and not by comparing readers.
+- **`[remaining]` in such an arm was refused** whenever a member came
+  after the variant, though the arm's frame is the variant (26.1110).
 - **A variant whose only arm is `default`** -- the one way to frame a single
   struct by a length the message carries -- got no arm accessor in any
   backend, while `validate` called one: the generated C did not compile and
@@ -46,6 +48,11 @@ struct one {
 	u8 len;
 	variant body[len] switch (len) { default: rec r; }
 }
+struct tailed {
+	u8 len;
+	variant body[len] switch (len) { default: rec r[remaining]; }
+	u8 t [must_eq = 0x7e];
+}
 """
 
 #: (struct, bytes, refused?), each worked by hand. `len` frames the body;
@@ -58,6 +65,12 @@ CASES = [
 	("sized_plain", "03 00 05 aa bb", True),
 	("one", "03 02 aa bb", False),
 	("one", "03 05 aa bb", True),
+	# A member after the variant: the arm's `[remaining]` ends with the
+	# variant, which `layout` refused to accept until 26.1110.
+	("tailed", "03 02 aa bb 7e", False),
+	("tailed", "04 00 01 aa 00 7e", False),	# three recs, the last empty
+	("tailed", "03 05 aa bb 7e", True),		# rec wants 6 of the body's 3
+	("tailed", "03 02 aa bb 7f", True),		# the tail's own check
 ]
 
 
