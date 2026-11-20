@@ -975,9 +975,15 @@ def test_every_attribute_is_accounted_for() -> None:
 	# the accounting above could not notice. Widening the unknown-attribute
 	# walk is what surfaced it, by refusing the construct seven tests
 	# exercise (26.544).
+	#   counter ... expiry  `check_replays` -- a replay window's form is its
+	#                    attributes taken together, one form or the other,
+	#                    and a position table placing each alone could not
+	#                    say "one form whole" (26.1120).
+	from situc.parser import REPLAY_ATTRIBUTES
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries", "resend_ms",
 	             "resend_part_ms", "retries_part", "align",
-	             "bits", "since", "require_aligned", "stream", "tag_order"}
+	             "bits", "since", "require_aligned", "stream", "tag_order",
+	             *REPLAY_ATTRIBUTES}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
 	         | set(wellformed.UNIMPLEMENTED_ATTRS))
@@ -3695,10 +3701,13 @@ def test_every_ast_node_that_carries_attributes_is_one_the_walk_reaches()\
 	# `RegistryEntry` carries a vocabulary of its own -- `REGISTRY_ATTRS` and
 	# the schema's declared policies -- which `check_registries` walks and
 	# refuses against, rather than the member vocabulary above (0070).
+	# `Replay` carries its own vocabulary too, `parser.REPLAY_ATTRIBUTES`,
+	# which `check_replays` refuses against as a whole form (26.1120); an
+	# unknown name on it is still refused by `check_attribute_names`.
 	assert bearing == {
 		"Authenticated", "Coded", "Field", "MarkerField", "Opaque", "Pad",
-		"RegistryEntry", "Relation", "Reserved", "Sealed", "StructDecl",
-		"TagField", "Tlv", "Variant",
+		"RegistryEntry", "Relation", "Replay", "Reserved", "Sealed",
+		"StructDecl", "TagField", "Tlv", "Variant",
 	}, f"the attribute-bearing nodes have moved: {sorted(bearing)}"
 
 

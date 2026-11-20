@@ -466,7 +466,15 @@ where a schema states no policy the generated code has none. A deployment may
 override a declared *value* at the command line and may never introduce a
 *shape*. Rung 6 owns I/O and never owns the clock: time enters as a parameter,
 so a timeout bug reproduces every run instead of racing a deadline nobody
-wrote down.
+wrote down. Which messages a receiver accepts once is the same kind of
+agreement: `replay window(m: frame) [counter = m.seq, window = 64]` keeps a
+session's last 64 counters, and `[nonce = ..., expires = ..., capacity = N,
+ahead = T, unit = ms]` a set of nonces until they expire, with `expiry =
+required` or `optional` saying whether a message may state none. Each
+generates a
+pure `check` to ask before the tag -- a replay costs no decryption -- and a
+`record` to ask after it, so a forgery records nothing; the state is the
+caller's.
 
 ## The language
 

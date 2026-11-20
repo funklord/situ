@@ -219,6 +219,10 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		        *[f"\tmust {expr_to_source(must.expr)};" for must in decl.body],
 		        "}"]
 
+	if isinstance(decl, ast.Replay):
+		return [f"replay {decl.name}({decl.param.name}: "
+		        f"{decl.param.type_name}){_attrs_to_source(decl.attrs)};"]
+
 	raise TypeError(f"cannot unparse {type(decl).__name__}")
 
 

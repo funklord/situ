@@ -1,0 +1,295 @@
+"""A replay window in C: `<basename>_replay.h` (26.1120).
+
+Which messages a receiver accepts once, in the two forms fuzznet's own code
+uses: a COUNTER window -- the last `window` counters, DTLS's and IPsec's
+bitmap -- and a NONCE set with expiries, `capacity` slots of the caller's
+memory, nothing further ahead than `ahead`. Two calls, because fuzznet's
+review of the design showed the one `admit` first drafted loses a property:
+`check` is pure and asked BEFORE the tag, so a replay costs no AEAD work,
+and `record` is asked AFTER it, so a forgery records nothing.
+
+What `check` answers is a verdict beside the read's own error: a message
+whose counter cannot be read is BOUNDS like any accessor's, and one that
+reads and has been seen is a verdict, not a malformed message.
+"""
+
+from __future__ import annotations
+
+from situc import __version__, ast
+from situc.codegen.c.names import ident, macro
+from situc.codegen.c.relate import _binding, _local
+from situc.relation import Refused, path_bindings, paths_in
+from situc.resolve import ResolvedSchema
+
+#: The verdicts, in the order every backend numbers them.
+VERDICTS = ("ok", "replay", "too_old", "expired", "horizon", "full",
+            "no_expiry")
+
+
+def _attr(replay: ast.Replay, name: str) -> ast.Attr | None:
+	return next((attr for attr in replay.attrs if attr.name == name), None)
+
+
+def _number(replay: ast.Replay, name: str) -> int:
+	held = _attr(replay, name)
+	value = getattr(held.value, "value", None) if held is not None else None
+	assert isinstance(value, int), (replay.name, name)
+	return value
+
+
+def _word(replay: ast.Replay, name: str, default: str) -> str:
+	held = _attr(replay, name)
+	value = getattr(held.value, "name", None) if held is not None else None
+	return value if isinstance(value, str) else default
+
+
+def _path(replay: ast.Replay, name: str) -> str:
+	held = _attr(replay, name)
+	assert held is not None and held.value is not None, (replay.name, name)
+	return paths_in(held.value)[0]
+
+
+def refusals(schema: ast.Schema,
+		resolved: ResolvedSchema) -> list[tuple[str, str]]:
+	"""A window whose fields this backend cannot read, by name."""
+	found: list[tuple[str, str]] = []
+	for replay in schema.replays():
+		keys = (("counter",) if _attr(replay, "counter") is not None
+		        else ("nonce", "expires"))
+		for key in keys:
+			try:
+				path_bindings(_path(replay, key), replay.param, resolved)
+			except Refused as why:
+				found.append((replay.name, str(why)))
+				break
+	return found
+
+
+def _reads(replay: ast.Replay, resolved: ResolvedSchema, keys: tuple[str, ...],
+		prefix: str) -> tuple[list[str], dict[str, str]]:
+	"""Statements reading each field into a `uint64_t`, and its local."""
+	lines: list[str] = []
+	names: dict[str, str] = {}
+	first = 0
+	for key in keys:
+		bindings, _ = path_bindings(_path(replay, key), replay.param,
+		                            resolved, first)
+		first += len(bindings)
+		for bind in bindings:
+			lines += _binding(bind, "uint64_t", prefix)
+		names[key] = _local(bindings[-1].target)
+	return lines, names
+
+
+def _counter(replay: ast.Replay, resolved: ResolvedSchema,
+		prefix: str) -> list[str]:
+	name    = ident(prefix, replay.name)
+	upper   = macro(prefix, replay.name)
+	window  = _number(replay, "window")
+	verdict = ident(prefix, "replay", "verdict")
+	reads, local = _reads(replay, resolved, ("counter",), prefix)
+	counter = local["counter"]
+	param   = replay.param.name
+	return [
+		f"/* `{replay.name}`: the last {window} counters of "
+		f"`{_path(replay, 'counter')}` seen, as a",
+		" * bitmap below the highest -- the state of one session, handed over",
+		" * by the caller, which decides what a session is (26.1120). A counter",
+		" * that wrapped reads as older than the window and is refused, never",
+		" * as new. Zero-initialise it before the first message. */",
+		f"#define {upper}_WINDOW {window}u",
+		"typedef struct {",
+		"\tuint64_t top;\t/* the highest counter recorded */",
+		"\tuint64_t seen;\t/* bit d: counter top - d recorded */",
+		"\tuint8_t  any;\t/* whether anything is recorded yet */",
+		f"}} {name}_t;",
+		"",
+		f"/** Whether the message's counter may be accepted. Pure: ask it",
+		" *  BEFORE the tag, so a replay costs no AEAD work. */",
+		f"static inline situ_err_t {name}_check(const {name}_t *state,",
+		f"\t\tsitu_view_t {param}, {verdict} *verdict)",
+		"{",
+		"\tsitu_err_t err = SITU_OK;",
+		"",
+		*reads,
+		"\t(void)err;",
+		f"\t*verdict = {macro(prefix, 'replay', 'ok')};",
+		f"\tif (!state->any || {counter} > state->top) {{",
+		"\t\treturn SITU_OK;",
+		"\t}",
+		f"\tif (state->top - {counter} >= {upper}_WINDOW) {{",
+		f"\t\t*verdict = {macro(prefix, 'replay', 'too_old')};",
+		f"\t}} else if ((state->seen >> (state->top - {counter})) & 1u) {{",
+		f"\t\t*verdict = {macro(prefix, 'replay', 'replay')};",
+		"\t}",
+		"\treturn SITU_OK;",
+		"}",
+		"",
+		f"/** `{name}_check`, and the counter recorded where it says OK. Ask",
+		" *  it AFTER the tag verifies, so a forgery records nothing. */",
+		f"static inline situ_err_t {name}_record({name}_t *state,",
+		f"\t\tsitu_view_t {param}, {verdict} *verdict)",
+		"{",
+		f"\tsitu_err_t err = {name}_check(state, {param}, verdict);",
+		"",
+		f"\tif (err != SITU_OK || *verdict != {macro(prefix, 'replay', 'ok')}) {{",
+		"\t\treturn err;",
+		"\t}",
+		*reads,
+		f"\tif (!state->any) {{",
+		"\t\tstate->any  = 1u;",
+		f"\t\tstate->top  = {counter};",
+		"\t\tstate->seen = 1u;",
+		f"\t}} else if ({counter} > state->top) {{",
+		f"\t\tconst uint64_t up = {counter} - state->top;",
+		"",
+		"\t\tstate->seen = up >= 64u ? 1u : (state->seen << up) | 1u;",
+		f"\t\tstate->top  = {counter};",
+		"\t} else {",
+		f"\t\tstate->seen |= (uint64_t)1u << (state->top - {counter});",
+		"\t}",
+		"\treturn SITU_OK;",
+		"}",
+		"",
+	]
+
+
+def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
+		prefix: str) -> list[str]:
+	name     = ident(prefix, replay.name)
+	upper    = macro(prefix, replay.name)
+	capacity = _number(replay, "capacity")
+	ahead    = _number(replay, "ahead")
+	unit     = _word(replay, "unit", "ms")
+	required = _word(replay, "expiry", "required") == "required"
+	verdict  = ident(prefix, "replay", "verdict")
+	reads, local = _reads(replay, resolved, ("nonce", "expires"), prefix)
+	nonce, expires = local["nonce"], local["expires"]
+	param    = replay.param.name
+	ok       = macro(prefix, "replay", "ok")
+	zero = ([f"\t\t*verdict = {macro(prefix, 'replay', 'no_expiry')};"]
+	        if required else
+	        ["\t\t/* None stated, which this window allows: nothing is",
+	         "\t\t * remembered for it, so there is nothing to bound. */"])
+	return [
+		f"/* `{replay.name}`: each `{_path(replay, 'nonce')}` accepted once"
+		" until its",
+		f" * `{_path(replay, 'expires')}`, in {unit}, which may be no further"
+		f" ahead of `now`",
+		f" * than {ahead} {unit} -- so a frame cannot pin a slot for a century.",
+		f" * {capacity} slots of the caller's memory, zero-initialised. FULL"
+		" refuses and",
+		" * never evicts: evicting re-admits the evicted nonce when it is",
+		" * resent. Size it as capacity >= peak admitted rate x ahead, where",
+		" * admitted means after the tag (fuzznet's rule, 26.1120). */",
+		f"#define {upper}_CAPACITY {capacity}u",
+		f"#define {upper}_AHEAD {ahead}u\t/* {unit} */",
+		"typedef struct {",
+		"\tuint64_t nonce;",
+		"\tuint64_t expires;\t/* 0, or at or before `now`: free */",
+		f"}} {name}_slot_t;",
+		"typedef struct {",
+		f"\t{name}_slot_t slots[{upper}_CAPACITY];",
+		f"}} {name}_t;",
+		"",
+		f"/** Whether the message's nonce may be accepted at `now` ({unit}).",
+		" *  Pure: ask it BEFORE the tag. */",
+		f"static inline situ_err_t {name}_check(const {name}_t *state,",
+		f"\t\tsitu_view_t {param}, uint64_t now, {verdict} *verdict)",
+		"{",
+		"\tsitu_err_t err = SITU_OK;",
+		"\tint        free_slot = 0;",
+		"",
+		*reads,
+		"\t(void)err;",
+		f"\t*verdict = {ok};",
+		f"\tif ({expires} == 0u) {{",
+		*zero,
+		"\t\treturn SITU_OK;",
+		"\t}",
+		f"\tif ({expires} <= now) {{",
+		f"\t\t*verdict = {macro(prefix, 'replay', 'expired')};",
+		"\t\treturn SITU_OK;",
+		"\t}",
+		f"\tif ({expires} - now > {upper}_AHEAD) {{",
+		f"\t\t*verdict = {macro(prefix, 'replay', 'horizon')};",
+		"\t\treturn SITU_OK;",
+		"\t}",
+		f"\tfor (uint32_t i = 0u; i < {upper}_CAPACITY; i++) {{",
+		"\t\tif (state->slots[i].expires <= now) {",
+		"\t\t\tfree_slot = 1;",
+		f"\t\t}} else if (state->slots[i].nonce == {nonce}) {{",
+		f"\t\t\t*verdict = {macro(prefix, 'replay', 'replay')};",
+		"\t\t\treturn SITU_OK;",
+		"\t\t}",
+		"\t}",
+		"\tif (!free_slot) {",
+		f"\t\t*verdict = {macro(prefix, 'replay', 'full')};",
+		"\t}",
+		"\treturn SITU_OK;",
+		"}",
+		"",
+		f"/** `{name}_check`, and the nonce recorded where it says OK and an",
+		" *  expiry is stated. Ask it AFTER the tag verifies. */",
+		f"static inline situ_err_t {name}_record({name}_t *state,",
+		f"\t\tsitu_view_t {param}, uint64_t now, {verdict} *verdict)",
+		"{",
+		f"\tsitu_err_t err = {name}_check(state, {param}, now, verdict);",
+		"",
+		f"\tif (err != SITU_OK || *verdict != {ok}) {{",
+		"\t\treturn err;",
+		"\t}",
+		*reads,
+		f"\tif ({expires} == 0u) {{",
+		"\t\treturn SITU_OK;",
+		"\t}",
+		f"\tfor (uint32_t i = 0u; i < {upper}_CAPACITY; i++) {{",
+		"\t\tif (state->slots[i].expires <= now) {",
+		f"\t\t\tstate->slots[i].nonce   = {nonce};",
+		f"\t\t\tstate->slots[i].expires = {expires};",
+		"\t\t\treturn SITU_OK;",
+		"\t\t}",
+		"\t}",
+		"\treturn SITU_OK;",
+		"}",
+		"",
+	]
+
+
+def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
+		prefix: str = "situ") -> dict[str, str]:
+	"""`<basename>_replay.h`, or nothing where the schema states no window."""
+	replays = schema.replays()
+	refused = {name for name, _ in refusals(schema, resolved)}
+	replays = [one for one in replays if one.name not in refused]
+	if not replays:
+		return {}
+	guard = macro(prefix, basename, "replay", "h")
+	verdict = ident(prefix, "replay", "verdict")
+	lines = [
+		f"/* Generated by situc {__version__} from {basename}.situ -- do not"
+		" edit.",
+		" *",
+		" * Replay windows (26.1120): a pure `_check` asked before the tag, and",
+		" * `_record` after it. The state is the caller's. */",
+		f"#ifndef {guard}",
+		f"#define {guard}",
+		"",
+		f"#include \"{basename}.h\"",
+		"",
+		f"#ifndef {macro(prefix, 'replay', 'verdict', 'defined')}",
+		f"#define {macro(prefix, 'replay', 'verdict', 'defined')}",
+		"typedef enum {",
+		*(f"\t{macro(prefix, 'replay', one)} = {at}," for at, one
+		  in enumerate(VERDICTS)),
+		f"}} {verdict};",
+		"#endif",
+		"",
+	]
+	for replay in replays:
+		if _attr(replay, "counter") is not None:
+			lines += _counter(replay, resolved, prefix)
+		else:
+			lines += _nonce(replay, resolved, prefix)
+	lines += [f"#endif /* {guard} */", ""]
+	return {f"{basename}_replay.h": "\n".join(lines)}

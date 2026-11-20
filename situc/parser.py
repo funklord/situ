@@ -154,7 +154,7 @@ DECLARATION_KEYWORDS = frozenset({
 	"namespace", "register", "register_block", "target", "endian",
 	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
 	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
-	"impl", "require", "assert", "invariant", "when", "relation",
+	"impl", "require", "assert", "invariant", "when", "relation", "replay",
 	"policy", "registry",
 })
 
@@ -179,7 +179,18 @@ class _RegisterDefaults:
 # makes `[` decidable: see disambiguate_bracket and
 # doc/decision/0006-bracket-disambiguation.md. Names for later phases are
 # listed now so the disambiguation does not change meaning as phases land.
+#: A replay window's attributes (26.1120): the counter form's, the nonce
+#: form's, and the clock's unit and the zero-expiry rule they share. Each
+#: takes a value, so none is read as a bare attribute in brackets -- a
+#: member called `capacity` still sizes an array.
+REPLAY_ATTRIBUTES = frozenset({
+	"counter", "window", "nonce", "expires", "capacity", "ahead", "unit",
+	"expiry",
+})
+
 ATTRIBUTE_NAMES = frozenset({
+	# 26.1120: a replay window's form and its state's size
+	*REPLAY_ATTRIBUTES,
 	# section 8.2 - 8.6: layout and representation
 	"allow_straddle", "require_aligned", "encoding", "nul_terminated",
 	"endian", "bit_order", "size",
@@ -265,6 +276,7 @@ ATTRIBUTE_NAMES = frozenset({
 #: from the vocabulary alone. `escape`, `nonce` and the flags are not here: a
 #: lone `[escape]` means something, and so does a lone `[secret]`.
 VALUE_ATTRIBUTES = frozenset({
+	*REPLAY_ATTRIBUTES,
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds", "chars",
@@ -651,6 +663,7 @@ class Parser:
 			"invariant":	self.parse_invariant,
 			"when":		self.parse_when,
 			"relation":	self.parse_relation,
+			"replay":	self.parse_replay,
 			"policy":	self.parse_policy,
 			"registry":	self.parse_registry,
 		}
@@ -3582,6 +3595,20 @@ class Parser:
 
 		return ast.Relation(self.span_from(start), name.text,
 		                    tuple(params), tuple(body), attrs)
+
+	def parse_replay(self) -> ast.Replay:
+		"""`replay name(f: frame) [counter = f.head.seq, window = 64];`
+
+		One parameter, the message whose fields the window reads; the
+		attributes decide the form (26.1120)."""
+		start = self.advance()
+		name  = self.expect_ident("a replay window's name")
+		self.expect_symbol("(", "after the replay window's name")
+		param = self.parse_relation_param()
+		self.expect_symbol(")", "after the replay window's parameter")
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the replay window")
+		return ast.Replay(self.span_from(start), name.text, param, attrs)
 
 	def _check_relation_arity(self, params: list[ast.RelationParam],
 			name: Token, close: Token) -> None:

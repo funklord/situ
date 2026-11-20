@@ -761,7 +761,7 @@ strictness    = "strict" | "lenient" ;
 decl          = namespace_decl | const_decl | enum_decl | tokens_decl
               | struct_decl | endian_marker_decl | codec_decl
               | register_decl | register_block_decl | requirement
-              | invariant | when_decl | relation_decl
+              | invariant | when_decl | relation_decl | replay_decl
               | impl_decl | varint_decl | pipeline_decl
               | policy_decl | registry_decl ;
 
@@ -962,6 +962,10 @@ relation_decl = "relation" ident "(" param "," param ")" [ attrs ]
                 "{" { must } "}" ;
 param         = ident ":" qualified ;
 must          = "must" expr ";" ;
+
+(* Which messages a receiver accepts once (26.1120): a counter window or a
+   nonce set, the attributes deciding which. *)
+replay_decl   = "replay" ident "(" param ")" attrs ";" ;
 
 (* A predicate over ONE message, a severity, an identity and a default
    rendering. Evaluated once, in `validate`, and at no other point -- so no

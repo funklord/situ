@@ -1123,6 +1123,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 		parsed = parse(source)
 		files.update(_converse(parsed, resolved, args))
+		files.update(_replay(parsed, resolved, args, ungenerated))
 		for name, why in _backend_module(
 				"converse", args.target).refusals(parsed, resolved):
 			print(f"situc: no conversation table for `{name}`: {why}",
@@ -1731,6 +1732,29 @@ def _converse(schema: ast.Schema, resolved: ResolvedSchema,
 	if args.target == "python":
 		return conv_py.generate(schema, resolved, args.schema.stem)
 	return conv_c.generate(schema, resolved, args.schema.stem, args.prefix)
+
+
+def _replay(schema: ast.Schema, resolved: ResolvedSchema,
+		args: argparse.Namespace,
+		ungenerated: list[tuple[str, str]]) -> dict[str, str]:
+	"""Rung 5's replay windows (26.1120), for the backends that have them.
+
+	All four backends write them."""
+	from situc.codegen.c import replay as replay_c
+	from situc.codegen.cpp import replay as replay_cpp
+	from situc.codegen.python import replay as replay_py
+	from situc.codegen.rust import replay as replay_rs
+
+	for name, why in replay_c.refusals(schema, resolved):
+		print(f"situc: no replay window for `{name}`: {why}", file=sys.stderr)
+		ungenerated.append((name, "replay window"))
+	if args.target == "python":
+		return replay_py.generate(schema, resolved, args.schema.stem)
+	if args.target == "cpp":
+		return replay_cpp.generate(schema, resolved, args.schema.stem)
+	if args.target == "rust":
+		return replay_rs.generate(schema, resolved, args.schema.stem)
+	return replay_c.generate(schema, resolved, args.schema.stem, args.prefix)
 
 
 def _relate(schema: ast.Schema, resolved: ResolvedSchema,

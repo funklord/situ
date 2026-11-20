@@ -112,6 +112,11 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		        _indent(depth + 1, f"{decl.severity.value} {decl.name}"),
 		        _indent(depth + 1, f"\"{decl.text}\"")]
 
+	if isinstance(decl, ast.Replay):
+		return [_indent(depth, f"replay {decl.name}({decl.param.name}: "
+		                       f"{decl.param.type_name})"),
+		        *_attrs(decl.attrs, depth + 1)]
+
 	if isinstance(decl, ast.Relation):
 		params = ", ".join(f"{param.name}: {param.type_name}"
 		                   for param in decl.params)

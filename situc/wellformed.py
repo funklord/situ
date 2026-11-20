@@ -63,6 +63,7 @@ def check(schema: ast.Schema) -> None:
 	check_variant_exhaustiveness(schema)
 	check_codec_bindings(schema)
 	check_tag_coverage(schema)
+	check_replays(schema)
 	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
 	check_authenticated_regions_hold_something(schema)
@@ -1761,6 +1762,85 @@ def check_invariants(schema: ast.Schema) -> None:
 			)
 
 		_check_invariant_calls(invariant)
+
+
+#: What each form of a replay window states (26.1120), and the rest each
+#: may also say.
+REPLAY_COUNTER = {"counter", "window"}
+REPLAY_NONCE   = {"nonce", "expires", "capacity", "ahead", "unit"}
+REPLAY_UNITS   = {"ns", "us", "ms", "s"}
+
+
+def check_replays(schema: ast.Schema) -> None:
+	"""A replay window states one form whole, and nothing that cannot hold.
+
+	Each refusal is a rule fuzznet's review of the design asked for: the
+	counter form keyed by nothing but the state the caller hands over, a
+	window of 1 to 64 counters (one word of bitmap), a nonce form whose
+	horizon is stated -- `ahead = 0` would make forgetting the field the
+	unbounded case -- and a clock unit both peers can read off the schema.
+	"""
+	structs = {decl.name for decl in schema.structs()}
+	for replay in schema.replays():
+		said  = {attr.name: attr for attr in replay.attrs}
+		where = replay.span
+		if replay.param.type_name not in structs:
+			raise error(f"`{replay.name}` reads a `{replay.param.type_name}`, "
+			            "which is not a struct of this schema", where,
+			            label="here")
+		counter = REPLAY_COUNTER & set(said)
+		nonce   = REPLAY_NONCE & set(said)
+		if counter and nonce or not counter and not nonce:
+			raise error(
+				f"`{replay.name}` must be one form of replay window",
+				where, label="here",
+				notes=["a counter window: `[counter = m.seq, window = 64]`",
+				       "a nonce set: `[nonce = m.nonce, expires = m.exp, "
+				       "capacity = 4096, ahead = 30000, unit = ms]`"])
+		needed = REPLAY_COUNTER if counter else REPLAY_NONCE
+		missing = sorted(needed - set(said))
+		if missing:
+			raise error(f"`{replay.name}` does not state "
+			            f"{', '.join(f'`{one}`' for one in missing)}",
+			            where, label="here")
+		if "expiry" in said and counter:
+			raise error(f"`{replay.name}` is a counter window and has no "
+			            "expiry to rule on", said["expiry"].span,
+			            label="here")
+		for key in ("counter", "nonce", "expires"):
+			if key not in said:
+				continue
+			from situc.relation import paths_in
+			held = said[key].value
+			paths = paths_in(held) if held is not None else []
+			if len(paths) != 1 or paths[0].split(".")[0] != replay.param.name \
+					or "." not in paths[0]:
+				raise error(f"`{key}` names a field of `{replay.param.name}`, "
+				            f"as `{replay.param.name}.field`",
+				            said[key].span, label="here")
+		numbers = {"window": (1, 64), "capacity": (1, 1 << 20),
+		           "ahead": (1, (1 << 63) - 1)}
+		for key, (low, high) in numbers.items():
+			if key not in said:
+				continue
+			value = getattr(said[key].value, "value", None)
+			if not isinstance(value, int) or not low <= value <= high:
+				raise error(f"`{key}` is a number from {low} to {high}",
+				            said[key].span, label="here",
+				            notes=["`ahead = 0` is refused: the horizon is "
+				                   "what keeps a frame from pinning a slot "
+				                   "for a century, and leaving it out must "
+				                   "not be the unbounded case"]
+				            if key == "ahead" else [])
+		for key, allowed in (("unit", REPLAY_UNITS),
+		                     ("expiry", {"required", "optional"})):
+			if key not in said:
+				continue
+			value = getattr(said[key].value, "name", None)
+			if value not in allowed:
+				raise error(f"`{key}` is one of "
+				            f"{', '.join(sorted(allowed))}",
+				            said[key].span, label="here")
 
 
 def check_relations(schema: ast.Schema) -> None:

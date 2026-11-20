@@ -1983,6 +1983,26 @@ class RelationParam(Node):
 
 
 @dataclass(frozen=True)
+class Replay(Decl):
+	"""`replay session_window(f: frame) [counter = f.head.seq, window = 64];`
+
+	Which messages a receiver accepts once (26.1120), in one of two forms
+	the attributes decide: a COUNTER window -- the last `window` counters,
+	DTLS's and IPsec's bitmap -- or a NONCE set with expiries, `capacity`
+	of them, none further ahead than `ahead` in the caller's `unit`. Both
+	peers must agree on either, which is why it is schema. The state is
+	the caller's, handed to a `check` asked before the tag and a `record`
+	asked after it: a replay costs no AEAD work and a forgery records
+	nothing (fuzznet's review of the design).
+	"""
+
+	span: Span
+	name: str
+	param: "RelationParam"
+	attrs: tuple[Attr, ...] = ()
+
+
+@dataclass(frozen=True)
 class Relation(Decl):
 	"""`relation response_to(request: frame, response: frame) { ... }`
 
@@ -2064,6 +2084,9 @@ class Schema(Node):
 
 	def relations(self) -> list[Relation]:
 		return [decl for decl in self.decls if isinstance(decl, Relation)]
+
+	def replays(self) -> list[Replay]:
+		return [decl for decl in self.decls if isinstance(decl, Replay)]
 
 	def requirements(self) -> list[Requirement]:
 		return [decl for decl in self.decls if isinstance(decl, Requirement)]

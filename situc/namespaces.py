@@ -94,7 +94,7 @@ def _declared_names(decls: list[ast.Decl]) -> list[str]:
 		if isinstance(decl, (ast.StructDecl, ast.EnumDecl, ast.TokensDecl,
 		                     ast.VarintDecl,
 		                     ast.EndianMarkerDecl, ast.CodecDecl, ast.ConstDecl,
-		                     ast.Relation)):
+		                     ast.Relation, ast.Replay)):
 			found.append(decl.name)
 	return found
 
@@ -152,6 +152,13 @@ def rewrite(decl: ast.Decl, name_of: Callable[[str], str]) -> ast.Decl:
 		return replace(decl,
 		               derived = name_of(head) + dot + rest,
 		               expr    = expr)
+
+	if isinstance(decl, ast.Replay):
+		# As a relation: the name and the parameter's type are scoped, the
+		# attribute paths are rooted at the parameter and left alone.
+		return replace(decl, name=name_of(decl.name),
+		               param=replace(decl.param,
+		                             type_name=name_of(decl.param.type_name)))
 
 	if isinstance(decl, ast.Relation):
 		# The name and the parameter *types* are namespace-scoped. The body is

@@ -65,6 +65,7 @@ decl		= namespace_decl
 	| invariant
 	| when_decl
 	| relation_decl
+	| replay_decl
 	| impl_decl
 	| varint_decl
 	| pipeline_decl
@@ -301,6 +302,10 @@ relation_decl	= "relation" ident "(" param "," param ")" [ attrs ]
 		  "{" { must } "}" ;
 param		= ident ":" qualified ;
 must		= "must" expr ";" ;
+
+(* Which messages a receiver accepts once (26.1120): a counter window or a
+ * nonce set, the attributes deciding which. *)
+replay_decl	= "replay" ident "(" param ")" attrs ";" ;
 
 (* A predicate over ONE message, a severity, an identity and a default
  * rendering. Evaluated once, in `validate`, and at no other point -- so no

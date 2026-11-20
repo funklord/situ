@@ -412,6 +412,43 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 	return plans
 
 
+def path_bindings(path: str, param: ast.RelationParam,
+		resolved: ResolvedSchema, first: int = 0
+		) -> tuple[list[SubView | Read], Placement]:
+	"""The bindings that read one scalar `path` from a view of `param`, and
+	the placement it ends at -- the walk `plan` makes for each operand,
+	alone, for a construct that reads a field rather than comparing two
+	(a replay window's counter, nonce and expiry, 26.1120). Locals are
+	numbered from `first`."""
+	components = path.split(".")
+	struct = resolved.structs.get(param.type_name)
+	if struct is None:
+		raise Refused(f"`{param.type_name}` has no resolved layout")
+	bindings: list[SubView | Read] = []
+	source, walked, index = param.name, param.name, first
+	for position, component in enumerate(components[1:]):
+		walked = f"{walked}.{component}"
+		placement = _member(struct, component)
+		if placement is None:
+			raise Refused(f"`{struct.name}.{component}` has no placement")
+		target = f"_{index}"
+		index += 1
+		if position == len(components) - 2:
+			if placement.scalar is None or placement.array_count is not None:
+				raise Refused(f"`{path}` is not a scalar field")
+			bindings.append(Read(struct.name, component, source, target,
+			                     path))
+			return bindings, placement
+		nested = resolved.structs.get(placement.type_name or "")
+		if nested is None:
+			raise Refused(f"`{path}` reaches through `{component}`, which "
+			              f"is not a struct")
+		bindings.append(SubView(struct.name, component, nested.name, source,
+		                        target, walked))
+		source, struct = target, nested
+	raise Refused(f"`{path}` names no field")
+
+
 def _shift_amount(expr: ast.Expr,
 		ranges: dict[str, tuple[int, int | None]] | None) -> tuple[int, int | None]:
 	"""What the right-hand side of a shift can evaluate to.
