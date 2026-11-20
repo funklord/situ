@@ -155,6 +155,12 @@ without huge dependencies kept, and the pertinent code shared:
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
 - The holder's earlier question -- vendor qtty for the window? -- is
   settled by that request: yes, beside the curses TUI, not instead of it.
+- The holder's, to discuss first (2026-11-20): a vocabulary for file
+  identification -- extensions, media type, and a detector that is a
+  standard cheap subset of the schema (constant bytes at static offsets in
+  a bounded window) for a multi-file search tool -- and whether
+  fuzzypickles' sticker editor can be the situ editor over fuzznet's
+  `sticker/pack.situ`. Nothing built until the shape is agreed.
 - qtty does not draw a QCompleter's popup list (input to it works): the
   enum cell's search list is invisible on a terminal. Signalled to qtty's
   inbox 20261120T1120Z; add a `--snapshot` check of the list when it lands.
