@@ -342,6 +342,18 @@ int main(int argc, char **argv)
 	std::unique_ptr<Qtty::InputRouter> router;
 #endif
 	if (parser.isSet(keys_option)) {
+#ifdef SITU_QTTY
+		// At the size the snapshot will be taken at, BEFORE the keys: a
+		// list a key opens is placed against the window as it stands, and
+		// a resize after it measured qtty's relayout rather than what a
+		// terminal of that size shows (qtty 8.787).
+		if (tui && parser.isSet(snapshot)) {
+			const QStringList size = parser.value(snapshot)
+			                         .split(QLatin1Char('x'));
+			here->resize(Qtty::GridMetrics::cells(size.value(0).toInt(),
+			                                      size.value(1).toInt()));
+		}
+#endif
 		here->show();
 		here->activateWindow();
 		QCoreApplication::processEvents();
