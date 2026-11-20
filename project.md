@@ -9387,6 +9387,14 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1123 One message reassembled from many datagrams
+
+Moved to `doc/decision/26.1123-datagram-reassembly.md`.
+
+### 26.1122 A reply matched only after its tag verifies
+
+Moved to `doc/decision/26.1122-a-reply-matched-after-its-tag.md`.
+
 ### 26.1121 A message is built around an arm already in its buffer
 
 fuzznet builds each answer twice -- `X_row_build` into one buffer, then
