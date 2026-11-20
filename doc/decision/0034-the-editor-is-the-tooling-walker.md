@@ -213,3 +213,11 @@ input is least trusted.
   members, a number held to the field's range, hex held to a run's length
   -- every constraint from the view and every one pressed with real keys
   through Qt and through qtty.
+
+  **Amended 2026-11-20 (26.1115): the shifting write, first slice.** The
+  "blocked on 26.99" above is stale -- 26.99 is done in every backend and
+  the walk. What was left was 12.3's invalidation model, and a slice of it
+  needs none: a byte run written at a new length, the one scalar ahead of it
+  that sizes it moved by the same number, accepted only when the walk shows
+  exactly that shift, every other member unchanged and a conforming message
+  still conforming. A window inside a larger message is still refused.

@@ -59,6 +59,10 @@ class Row:
 	#: (26.1114). A number field refuses at the key what is outside them.
 	low:  str = ""
 	high: str = ""
+	#: A byte run the schema says may change length (`mutate = Shifting`),
+	#: which `set` writes at a new length when the field sizing it can
+	#: follow (26.1115). A window holds every other run to its length.
+	resizable: bool = False
 
 
 def heading(document: Document) -> list[str]:
@@ -140,6 +144,8 @@ def _row(field: Field) -> Row:
 		opens=field.nested is not None,
 		choices=choices,
 		admits_other=field.choices is None or field.choices[0],
+		resizable=(isinstance(field.value, bytes)
+		           and field.mutate == "Shifting"),
 		low="" if field.bounds is None else str(field.bounds[0]),
 		high="" if field.bounds is None else str(field.bounds[1]))
 
@@ -166,6 +172,8 @@ def prompt(row: Row) -> str:
 		return f"{row.name} ({listed}{more}) = "
 	if row.edit == "number" and row.low:
 		return f"{row.name} ({row.low} to {row.high}) = "
+	if row.edit == "hex" and row.resizable:
+		return f"{row.name} (hex, {row.size} bytes now, any length) = "
 	if row.edit == "hex":
 		return f"{row.name} (hex, {row.size} bytes) = "
 	return f"{row.name} = "

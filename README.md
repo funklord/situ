@@ -374,20 +374,27 @@ through qtty alike.
 What that means
 is decided by the capability vectors and not by the editor: a member the
 schema forbids anyone to write is refused, a value that does not fit its
-width is refused, and **a write that would shift the layout is refused too**
--- udp's `length` is a fixed scalar written in place whose value decides how
-long the payload is, so storing 40 in an eight-byte message would leave it
-claiming a 32-byte payload. That is measured rather than assumed: the write
-goes into a copy, the copy is walked again, and every member's offset and
-size are compared. A shifting write drags in the invalidation model and is
-0034's own next piece of work.
+width is refused, and **a write that would shift the layout on its own is
+refused too** -- udp's `length` is a fixed scalar written in place whose
+value decides how long the payload is, so storing 40 in an eight-byte
+message would leave it claiming a 32-byte payload. That is measured rather
+than assumed: the write goes into a copy, the copy is walked again, and every
+member's offset and size are compared.
 
 **The marker is the field and the refusal is the write.** `payload` shows
 `[moves]` because `mutate = Shifting` says a write to it *may* move what
 follows -- that is the member's character. Whether a particular write does is
 a different question, and the extent comparison answers it: a run written at
 the length it already has moves nothing and is allowed, which is what makes
-the tool useful on a file. Written shorter or longer it is refused by count.
+the tool useful on a file. **Written shorter or longer, the field that sizes
+it follows**: a PNG chunk's `data` grown by nine bytes moves `length` by nine
+and recomputes the CRC; a UDP payload moves `length` and says the checksum is
+stale, since that sum covers a pseudo-header the message does not carry.
+Measured again, as always: only a write whose walk moves exactly what follows
+the run, reads every other member the same, and leaves a conforming message
+conforming is taken -- one that would break an invariant is refused. Inside
+a larger message's window it is refused outright, until the invalidation
+model can find the parent's lengths too.
 
 A write to a covered field happens either way, since refusing would make the
 field uneditable. Where the schema names the codec that computes the

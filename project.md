@@ -161,6 +161,13 @@ without huge dependencies kept, and the pertinent code shared:
   a bounded window) for a multi-file search tool -- and whether
   fuzzypickles' sticker editor can be the situ editor over fuzznet's
   `sticker/pack.situ`. Nothing built until the shape is agreed.
+- The shifting write's first slice (26.1115): a byte run takes a new
+  length, the scalar sizing it follows, a covered CRC is recomputed. Left:
+  a window inside a larger message (needs 12.3's invalidation model to
+  move the parent's lengths), and two fields at once.
+- A struct holding a run of wider elements (`u16 w[n]`) shows EVERY field
+  as "cannot be read" in the editor: the owned decode it reads values with
+  is whole-or-nothing and refuses the message over that one run.
 - qtty does not draw a QCompleter's popup list (input to it works): the
   enum cell's search list is invisible on a terminal. Signalled to qtty's
   inbox 20261120T1120Z; add a `--snapshot` check of the list when it lands.
@@ -9323,6 +9330,10 @@ Moved to `doc/decision/26.1113-one-view-for-every-frontend.md`.
 ### 26.1114 An enum is a choice, and every cell editor is constrained
 
 Moved to `doc/decision/26.1114-an-enum-is-a-choice.md`.
+
+### 26.1115 A run written at a new length moves what sizes it
+
+Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 ### 26.1076 A registry of keyed cells, compiled and walked
 

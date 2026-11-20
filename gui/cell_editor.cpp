@@ -184,10 +184,11 @@ QWidget *cell_editor::createEditor(QWidget *parent,
 	if (edit == QStringLiteral("hex")) {
 		line->setValidator(new QRegularExpressionValidator(
 		    QRegularExpression(QStringLiteral("[0-9a-fA-F]*")), line));
-		// A run is written at the length it has (0034's shifting rule),
-		// so no more digits than it holds can be typed.
+		// A run is written at the length it has, so no more digits than
+		// it holds can be typed -- unless the schema lets it change length
+		// and the core moves what sizes it (26.1115).
 		const int size = row.value(QStringLiteral("size")).toString().toInt();
-		if (size > 0)
+		if (size > 0 && !row.value(QStringLiteral("resizable")).toBool())
 			line->setMaxLength(2 * size);
 	} else if (edit == QStringLiteral("number")) {
 		line->setValidator(new number_validator(

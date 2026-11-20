@@ -34,12 +34,12 @@ endian big;
 
 enum mode : u8 { client = 3, server = 4, broadcast = 5 }
 enum flavour : u8 { plain = 0, salted = 1, default = pass }
-struct pick { mode m; flavour f; u8 other; u8 tag[2]; }
+struct pick { mode m; flavour f; u8 other; u8 tag[2]; u8 n; u8 note[n]; }
 """
 
 #: m = server, f = 7 (no member names it; the enum admits it), other = 1,
-#: tag = aa bb.
-MESSAGE = bytes([4, 7, 1, 0xAA, 0xBB])
+#: tag = aa bb, n = 1, note = cc.
+MESSAGE = bytes([4, 7, 1, 0xAA, 0xBB, 1, 0xCC])
 
 #: (keys, field, what the row reads after, what the editor still holds or
 #: None where Return closed it).
@@ -68,6 +68,9 @@ CASES = [
 	("other=0x1ff{Return}", "other", "31", None),
 	# A run takes hex digits, and no more of them than its two bytes hold.
 	("tag=zz12345{Return}", "tag", "1234", None),
+	# ...unless it may change length (26.1115): `note` is sized by `n`,
+	# which the core moves with it, so three bytes go in where one was.
+	("note=zzccddee{Return}", "note", "ccddee", None),
 ]
 
 DELIVERIES = ["qt", pytest.param("qtty", marks=pytest.mark.skipif(

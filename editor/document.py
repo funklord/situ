@@ -639,6 +639,11 @@ class Document:
 		# catches the case whatever caused it, including the ones nobody
 		# enumerated, and it is the walk itself answering rather than a
 		# second model of what drives what.
+		if isinstance(value, bytes):
+			held = self._extents().get(self.image.name_of(index))
+			if held is not None and held[1] != len(value) * BITS_PER_BYTE:
+				return self._resize(name, index, value, held)
+
 		candidate = Document(self.image, bytearray(self.buffer), self.struct,
 		                     self.at, self.limit)
 		if isinstance(value, bytes):
@@ -660,6 +665,181 @@ class Document:
 		if self.image.capability_of(index, "auth") == "Covered":
 			return self._recompute(name, index)
 		return []
+
+	def _resize(self, name: str, index: int, value: bytes,
+			held: tuple[int, int]) -> list[str]:
+		"""A byte run written at a new length: the first slice of 0034's
+		shifting write (26.1115).
+
+		The run's bytes are spliced in and the scalar that sizes it moves by
+		the same number -- `n` for `u8 name[n]`, `len` for `len - 4` -- and
+		the result is ACCEPTED ONLY BY MEASUREMENT, as `set` accepts a fixed
+		write: the copy is walked again, and everything before the run must
+		sit where it sat, everything after it exactly `delta` bytes on, and
+		every other member read the same value. Which scalar sizes the run
+		is not read out of the size program; every writable scalar ahead of
+		the run is tried, and exactly one must pass -- two that would both
+		give a consistent message are refused as ambiguous rather than one
+		picked.
+
+		Two things this does not do, and refuses rather than gets wrong:
+
+		- **A window inside a larger message.** A parent's length, an outer
+		  frame, an offset table elsewhere in the buffer -- 12.3's
+		  invalidation model is what would find and move them, and it is not
+		  built. So the document must be the whole buffer.
+		- **Two fields at once** -- a run sized by one field inside a
+		  struct framed by another. The walk then disagrees with every
+		  single candidate and the refusal names what moved.
+		"""
+		if self.at != 0 or (self.limit is not None
+		                    and self.limit != len(self.buffer)):
+			raise Refused(
+				f"`{name}`: a run's length can change only in a document "
+				f"over the whole buffer -- a window inside a larger message "
+				f"has a parent whose lengths would go stale (0034, 12.3)")
+
+		start, bits = held
+		at = self.at + start // BITS_PER_BYTE
+		old = bits // BITS_PER_BYTE
+		delta = len(value) - old
+		image = self.image
+		before = self._extents()
+		values = self._values(self.view())
+		here = image.name_of(index)
+		local = here.rpartition(".")[2] or here
+
+		def splice() -> bytearray:
+			return bytearray(self.buffer[:at]) + bytearray(value) \
+				+ bytearray(self.buffer[at + old:])
+
+		# AND THE MESSAGE STILL CONFORMS where it did. Every member reading
+		# its old value is not enough: a field DERIVED from the run's size --
+		# `invariant total == size(payload)` -- keeps its old value and is
+		# now wrong, and it is Immutable, so nothing here may move it. The
+		# verdict is what checks an invariant, so a write that turns `ok`
+		# into anything else is not one this slice may make (the case
+		# `test_no_permitted_write_leaves_an_invariant_stale` pins).
+		was_ok = self.verdict is not None and self.verdict[0] == "ok"
+		broke: list[str] = []		# why a layout that fit did not conform
+
+		def holds(candidate: "Document", moved: str | None) -> bool:
+			"""The walk moved exactly the run's tail by `delta`, the run
+			reads back as written, every other member reads the same, and
+			a message that conformed still does."""
+			try:
+				after = candidate._extents()
+				read = candidate._values(candidate.view())
+				verdict = candidate.verdict
+			except Refused:
+				return False
+			shifted = self._shifted_by(before, after, start, delta, here)
+			if was_ok and (verdict is None or verdict[0] != "ok"):
+				if shifted and verdict is not None:
+					broke.append(verdict[1])
+				return False
+			return self._shifted_by(before, after, start, delta, here) \
+				and read.get(local) == value and all(
+					read.get(key) == held_value
+					for key, held_value in values.items()
+					if key not in (local, moved))
+
+		# A run the FRAME sizes -- `[remaining]` over the whole buffer --
+		# needs nothing else to move, and a field changed for no reason
+		# would be a second edit nobody asked for. So the splice alone is
+		# tried first, and taken alone when it holds.
+		plain = Document(image, splice(), self.struct, self.at, None)
+		if holds(plain, None):
+			self._take(plain.buffer)
+			notes = [f"`{name}` is {len(value)} byte(s) now, and what "
+			         f"follows it moved with it"]
+			if image.capability_of(index, "auth") == "Covered":
+				notes.extend(self._recompute(name, index))
+			return notes
+
+		# What each other member must read as afterwards: the same.
+		passing: list[tuple[str, Document]] = []
+		for other in image.members(image.structs[self.struct]):
+			if other == index:
+				continue
+			where = before.get(image.name_of(other))
+			if where is None or where[0] >= start:
+				continue		# only what comes before the run
+			short = image.name_of(other).rpartition(".")[2]
+			old_value = values.get(short)
+			if not isinstance(old_value, int) or isinstance(old_value, bool):
+				continue
+			if image.capability_of(other, "mutate") in (None, "Immutable"):
+				continue
+			candidate = Document(image, splice(), self.struct, self.at, None)
+			try:
+				write_scalar(candidate.view(), other, old_value + delta)
+			except Refused:
+				continue
+			if holds(candidate, short):
+				passing.append((short, candidate))
+
+		if not passing and broke:
+			raise Refused(
+				f"`{name}`: a shifting write of {len(value)} byte(s) where "
+				f"there are {old} would leave the message not conforming: "
+				f"{broke[0]}")
+		if not passing:
+			raise Refused(
+				f"`{name}`: a shifting write of {len(value)} byte(s) where "
+				f"there are {old} needs the field that sizes the run to "
+				f"move too, and no single writable field ahead of it does "
+				f"that and leaves the rest of the message reading as it did")
+		if len(passing) > 1:
+			raise Refused(
+				f"`{name}`: {' and '.join(f'`{one}`' for one, _ in passing)} "
+				f"could each be what sizes it; set the run at its length and "
+				f"say which by hand")
+
+		sizer, candidate = passing[0]
+		self._take(candidate.buffer)
+		notes = [f"`{name}` is {len(value)} byte(s) now, `{sizer}` moved by "
+		         f"{delta:+d}, and what follows it moved with it"]
+		for touched in (index, self._members().get(sizer)):
+			if touched is not None and \
+					image.capability_of(touched, "auth") == "Covered":
+				notes.extend(self._recompute(
+					image.name_of(touched).rpartition(".")[2], touched))
+		return notes
+
+	def _take(self, grown: bytearray) -> None:
+		"""Adopt a buffer of a new length. A window that was the whole
+		buffer stays the whole buffer: a `limit` left at the old length
+		named bytes that are no longer there (or left new ones out), and
+		the next walk refused the window. Measured: a run shrunk by three
+		with `--length` equal to the file."""
+		self.buffer[:] = grown
+		if self.limit is not None:
+			self.limit = len(self.buffer)
+
+	@staticmethod
+	def _shifted_by(before: dict[str, tuple[int, int] | None],
+			after: dict[str, tuple[int, int] | None], start: int,
+			delta: int, run: str) -> bool:
+		"""Whether the walk moved exactly what a run growing by `delta`
+		bytes at bit `start` should move, and nothing else."""
+		if set(before) != set(after):
+			return False
+		for key, was in before.items():
+			now = after[key]
+			if was is None or now is None:
+				if was is not now:
+					return False
+				continue
+			if key == run:
+				if now != (was[0], was[1] + delta * BITS_PER_BYTE):
+					return False
+			elif was[0] < start or (was[0] == start and was[1] == 0):
+				if now != was:
+					return False
+			elif now != (was[0] + delta * BITS_PER_BYTE, was[1]):
+				return False
+		return True
 
 	def _recompute(self, name: str, index: int) -> list[str]:
 		"""Bring every tag covering `index` up to date, where situ can.

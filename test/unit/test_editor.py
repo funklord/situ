@@ -911,18 +911,19 @@ def test_a_run_written_at_its_own_length_moves_nothing() -> None:
 	assert notes and "stale" in notes[0]
 
 
-def test_a_run_written_at_another_length_is_refused() -> None:
-	"""The length is the whole guard: shorter or longer is a layout change
-	however it is spelled, so it is refused by count."""
-	image, message = udp_with_payload()
-	document = open_document(image, message)
-
-	for value in (bytes.fromhex("cafe"), bytes.fromhex("cafebabecafe")):
-		with pytest.raises(Refused) as why:
-			document.set("payload", value)
-		assert "changing a run's length moves what follows it" in str(why.value)
-
-	assert document.buffer.hex() == "12340035000cabcddeadbeef"
+def test_a_payload_at_another_length_moves_the_length_field() -> None:
+	"""Until 26.1115 this was refused by count: "changing a run's length
+	moves what follows it". The shifting write's first slice builds it --
+	udp's `length` follows the payload by the same number of bytes -- and
+	the checksum is said to be stale rather than recomputed, because it
+	also sums a pseudo-header this message does not carry (14.2a)."""
+	for value, header in ((bytes.fromhex("cafe"), "12340035000a"),
+	                      (bytes.fromhex("cafebabecafe"), "12340035000e")):
+		image, message = udp_with_payload()
+		document = open_document(image, message)
+		notes = document.set("payload", value)
+		assert document.buffer.hex() == header + "abcd" + value.hex()
+		assert any("stale" in note for note in notes), notes
 
 
 def test_the_marker_is_the_field_and_the_refusal_is_the_write() -> None:
@@ -1073,3 +1074,62 @@ def test_an_enum_is_shown_and_put_by_name() -> None:
 	bare = open_document(pack(schema, resolve(schema, solve(schema)),
 	                          metadata=False)[0], bytes([4, 7, 1]), None)
 	assert view.rows(bare)[0].choices == []
+
+
+def test_a_run_changes_length_and_its_sizer_follows() -> None:
+	"""26.1115, the first slice of 0034's shifting write: a run written at
+	a new length moves the field that sizes it by as much, and what follows
+	moves with it -- accepted only because the walk afterwards says so."""
+	document = open_document(image(), bytearray(MESSAGE), "label")
+	notes = document.set("name", b"world!!")
+	assert bytes(document.buffer) == b"\x12\x34\x07world!!\x7f"
+	assert "`n` moved by +2" in " ".join(notes)
+	document.set("name", b"hi")
+	assert bytes(document.buffer) == b"\x12\x34\x02hi\x7f"
+	assert document.verdict is not None and document.verdict[0] == "ok"
+
+
+def test_a_run_the_frame_sizes_moves_nothing_else() -> None:
+	"""`[remaining]` over the whole buffer: the splice is the whole edit,
+	and no field is changed to go with it."""
+	schema = parse_text("target buffer;\nendian big;\n"
+	                    "struct r { u8 a; u8 rest[remaining]; }\n")
+	packed = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	document = open_document(packed, bytearray(b"\x05\xaa\xbb"), "r")
+	document.set("rest", b"\x01\x02\x03")
+	assert bytes(document.buffer) == b"\x05\x01\x02\x03"
+
+
+def test_a_grown_png_chunk_keeps_its_length_and_crc() -> None:
+	"""A tEXt chunk's data grown by nine bytes: `length` follows and the
+	CRC is recomputed -- checked against zlib, not against situ's own
+	codec, since two of situ's answers agreeing is one witness."""
+	import struct
+	import zlib
+
+	data = b"Comment\x00hi"
+	body = b"tEXt" + data
+	chunk = struct.pack(">I", len(data)) + body \
+		+ struct.pack(">I", zlib.crc32(body))
+	schema = parse_text((ROOT / "example" / "png" / "png.situ")
+	                    .read_text(encoding="utf-8"))
+	packed = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	document = open_document(packed, bytearray(chunk), "chunk")
+	document.set("data", b"Comment\x00hello world")
+
+	written = bytes(document.buffer)
+	length = struct.unpack(">I", written[:4])[0]
+	assert length == 19 and len(written) == 12 + length
+	assert struct.unpack(">I", written[8 + length:])[0] == \
+		zlib.crc32(written[4:8 + length])
+
+
+def test_a_window_inside_a_larger_message_does_not_resize() -> None:
+	"""A parent's lengths would go stale, and 12.3's invalidation model,
+	which would find them, is not built -- so the write is refused and the
+	buffer is untouched."""
+	held = bytearray(b"\x00" + MESSAGE + b"\xee")
+	document = open_document(image(), held, "label", 1, len(MESSAGE))
+	with pytest.raises(Refused, match="whole buffer"):
+		document.set("name", b"hi")
+	assert bytes(document.buffer) == bytes(held)

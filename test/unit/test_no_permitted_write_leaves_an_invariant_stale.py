@@ -101,6 +101,21 @@ def test_writing_what_decides_the_size_is_refused(tmp_path: Path) -> None:
 	assert "shifting write is not built" in done.stderr
 
 
+def test_a_payload_at_a_new_length_is_refused_while_total_reads_it(
+		tmp_path: Path) -> None:
+	"""26.1115 made a run writable at a new length when the field sizing it
+	can follow -- here `n` could -- and that is the route this module was
+	written against: `total` is derived and Immutable, so it cannot follow,
+	and a resize would leave it describing three bytes. The shifting write
+	requires a conforming message to stay conforming, and the invariant is
+	what it would break."""
+	out = tmp_path / "grown.bin"
+	done = edit(tmp_path, "--set-bytes", "payload=aabbccdd", "--out", str(out))
+	assert done.returncode == 1, done.stdout
+	assert "payload" in done.stderr
+	assert not out.exists()
+
+
 def test_no_permitted_write_leaves_the_invariant_stale(
 		tmp_path: Path) -> None:
 	"""The property, over every member rather than over the two above.
