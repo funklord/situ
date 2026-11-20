@@ -1135,8 +1135,8 @@ def _compare(before: str, after: str) -> Verdict:
 	a wire non-event, and a field of a different width at the same offset is
 	a break whatever it is called.
 	"""
-	old_structs = _parse_signature(before)
-	new_structs = _parse_signature(after)
+	old_structs = _through_holds(_parse_signature(before))
+	new_structs = _through_holds(_parse_signature(after))
 	findings: list[Finding] = []
 
 	# The version first, because it is context for everything under it: a
@@ -1330,6 +1330,55 @@ def _parse_signature(text: str) -> dict[str, list[str]]:
 		elif not line.startswith("  "):
 			current = None
 	return structs
+
+
+def _through_holds(structs: dict[str, list[str]],
+		depth: int = 0) -> dict[str, list[str]]:
+	"""Each struct with a run that `holds = T` replaced by T's own members,
+	at the run's offset (26.898, 26.1118).
+
+	A run holding a struct is its members on the wire: replacing fourteen
+	fields with a run that holds a struct of exactly those fields moves no
+	byte, and the line-by-line comparison read it as fourteen fields
+	removed -- fuzznet's contract was then rewritten on its vectors' word,
+	the check unable to say so. So both sides are compared through the
+	run. The run's own line goes, since the bytes it names are the held
+	struct's; what the run says about its length stays in the head's size
+	range, which is where a widened bound shows. A held struct holding
+	another is expanded in turn, to a bounded depth."""
+	if depth > 8:
+		return structs
+	changed = False
+	out: dict[str, list[str]] = {}
+	for name, lines in structs.items():
+		expanded = [lines[0]]
+		for line in lines[1:]:
+			held = next((word.partition("=")[2] for word in line.split()
+			             if word.startswith("holds=")), None)
+			inner = structs.get(held or "")
+			if inner is None or held == name:
+				expanded.append(line)
+				continue
+			changed = True
+			# The run's own bound, kept as a line of its own: the bytes are
+			# the held struct's, and how many of them the run admits is the
+			# one thing the run says -- `max` dropped or raised is a wider
+			# message, which an old receiver refuses (26.1118).
+			words = line.split()
+			expanded.append(f"{_name_of(line)} holds: {held} {words[1]}")
+			where = line.split()[0]
+			base = int(where[1:], 16) if where.startswith("@0x") else None
+			for member in inner[1:]:
+				if _is_annotation(member):
+					continue
+				at, _, rest = member.partition(" ")
+				if base is not None and at.startswith("@0x"):
+					at = f"@0x{base + int(at[1:], 16):04x}"
+				else:
+					at = "~"
+				expanded.append(f"{at} {rest}")
+		out[name] = expanded
+	return _through_holds(out, depth + 1) if changed else out
 
 
 def _parse_registries(text: str) -> dict[str, dict[str, set[str]]]:
@@ -1905,6 +1954,8 @@ def _what(key: str) -> str:
 
 
 def _annotation_changed(name: str, key: str, was: str, now: str) -> Finding:
+	if _what(key) == "holds":
+		return _holds_changed(name, key, was, now)
 	if _what(key) == "covers":
 		# Its own category because it is neither a parse break nor a cost:
 		# both sides read the same values and the tag simply fails. A region
@@ -1940,6 +1991,27 @@ def _annotation_changed(name: str, key: str, was: str, now: str) -> Finding:
 		"as something else")
 
 
+def _holds_bound(text: str) -> int | None:
+	"""The upper bound of a `holds` annotation's `lo..hi`, None unbounded."""
+	_, _, hi = text.split()[-1].partition("..")
+	return int(hi) if hi.isdigit() else None
+
+
+def _holds_changed(name: str, key: str, was: str, now: str) -> Finding:
+	old, new = _holds_bound(was), _holds_bound(now)
+	wider = new is None if old is not None else False
+	wider = wider or (old is not None and new is not None and new > old)
+	if wider:
+		return Finding(
+			"backward", name,
+			f"`{key}` {was} -> {now}; a new sender may emit a longer run than "
+			"an old receiver admits")
+	return Finding(
+		"forward", name,
+		f"`{key}` {was} -> {now}; a new receiver refuses a run an old sender "
+		"may still emit at its old length")
+
+
 def _annotation_lost(name: str, key: str, was: str) -> Finding:
 	if _what(key) == "covers":
 		# Coverage that is simply gone. A `coded` region losing its `covers`
@@ -1947,6 +2019,10 @@ def _annotation_lost(name: str, key: str, was: str) -> Finding:
 		return Finding("coverage", name,
 		               f"`{key}` is gone; what it authenticated ({was}) is now "
 		               "unauthenticated")
+	if _what(key) == "holds":
+		return Finding("api", name,
+		               f"`{key}` is gone ({was}): the same members are now "
+		               "the struct's own, and no byte moves")
 
 	return Finding(
 		"breaking", name,
@@ -1963,6 +2039,10 @@ def _annotation_gained(name: str, key: str, now: str) -> Finding:
 		# peers disagreed about which bytes to transform.
 		return Finding("coverage", name,
 		               f"`{key}` now {now}, which nothing covered before")
+	if _what(key) == "holds":
+		return Finding("api", name,
+		               f"`{key}` now {now}: these members are read through a "
+		               "run that holds them, and no byte moves")
 
 	# An arm, a tag or a value rule the old build had no case for. A new
 	# sender may use it; an old receiver refuses or preserves it, on the

@@ -180,7 +180,8 @@ without huge dependencies kept, and the pertinent code shared:
   --check` reads a byte-identical change as BREAKING -- fourteen fields
   replaced by a run that `holds` a struct of exactly those fields, or an
   imported struct replacing an identical local one; the check compares
-  field lists and should see through `holds` to the bytes. (2) No builder
+  field lists and should see through `holds` to the bytes -- done, 26.1118.
+  (2) No builder
   for a struct ending in a `[remaining]` run even with `max`: a builder
   taking the run as bytes and a length, as a nested member is, would do.
   Minor: dropping `max` from such a run widened the message's bound to
@@ -9381,6 +9382,18 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1118 The wire check reads through a run that holds a struct
+
+fuzznet replaced fourteen fields with a run holding a struct of exactly
+those fields -- no byte moved -- and `situc wire --check` reported fourteen
+BREAKING removals, comparing member lines by name. Both signatures are now
+compared with each `holds = T` run expanded into T's member lines at the
+run's offset (`wire._through_holds`), so that change reads as API-only. The
+run's own bound stays as a line, `tail holds: ask 0..489`, so dropping or
+raising `max` -- a wider message -- is named as itself, backward-compatible
+only, rather than lost among fourteen. A held member of another width is
+still a break. `test_the_wire_check_reads_through_holds.py`.
 
 ### 26.1116 A display reads member by member
 
