@@ -186,6 +186,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			       for name, lets in _LETS.items()
 			       if name in resolved.structs for let in lets):
 		lines.extend(U64_HELPER)
+	if any(_let_value(resolved.structs[name], let) is None
+	       and _let_wide(resolved.structs[name], let) is not None
+	       for name, lets in _LETS.items()
+	       if name in resolved.structs for let in lets):
+		lines.extend(LET64_HELPER)
 	# After the varints, which an extent reads: an answer cached before them
 	# would be one that could not read a varint.
 	_TERMS.clear()
@@ -492,6 +497,44 @@ SKIP_HELPER = [
 	"\treturn n",
 	"end",
 	"",
+]
+
+
+#: A named value's arithmetic in Wireshark's `UInt64`, which every
+#: Wireshark's Lua has and which computes modulo 2^64 as the backends do
+#: (26.1112). The guards are `traverse.LetSpelling`'s: `/` and `%` by zero
+#: are 0, a shift by 64 or more is 0, a comparison is 1 or 0. A field read
+#: arrives as a Lua number exact below 2^53 and is widened to its 64-bit
+#: two's complement in two words, each exact as a float.
+LET64_HELPER = [
+	"",
+	"-- A named value's arithmetic, modulo 2^64 as every reader computes it.",
+	"local situ_zero64 = UInt64(0, 0)",
+	"local function situ_w64(v)",
+	"\tlocal low = v % 4294967296",
+	"\tlocal high = ((v - low) / 4294967296) % 4294967296",
+	"\treturn UInt64(low, high)",
+	"end",
+	"local function situ_div64(a, b)",
+	"\tif b == situ_zero64 then return situ_zero64 end",
+	"\treturn a / b",
+	"end",
+	"local function situ_mod64(a, b)",
+	"\tif b == situ_zero64 then return situ_zero64 end",
+	"\treturn a % b",
+	"end",
+	"local function situ_shl64(a, b)",
+	"\tif b >= UInt64(64, 0) then return situ_zero64 end",
+	"\treturn a:lshift(b:tonumber())",
+	"end",
+	"local function situ_shr64(a, b)",
+	"\tif b >= UInt64(64, 0) then return situ_zero64 end",
+	"\treturn a:rshift(b:tonumber())",
+	"end",
+	"local function situ_b64(held)",
+	"\tif held then return UInt64(1, 0) end",
+	"\treturn situ_zero64",
+	"end",
 ]
 
 
@@ -3338,13 +3381,102 @@ def _let_value(struct: ResolvedStruct, let: "ast.Let") -> str | None:
 	                    tree=let.expr)
 
 
+def _let_wide(struct: ResolvedStruct, let: "ast.Let") -> str | None:
+	"""A named value in Wireshark's `UInt64`, held to its width, or None
+	(26.1112).
+
+	Where `_let_value` declines -- a subtraction, a variable shift, a
+	product that wraps -- the value is still computable exactly: `UInt64`
+	is in every Wireshark's Lua, Lua 5.2's included (0021), and does the
+	backends' modulo-2^64 arithmetic. Each field read is a Lua number, so
+	a field wider than 32 bits is declined, and so is a text number or a
+	token, whose reads are their own; everything else spells through
+	`traverse.let_source` with the guards every reader uses.
+
+	The result is held to the value's width as the getters hold it: a
+	`u64` is the `UInt64` itself, a narrower one its masked low word, a
+	signed one sign-extended from its top bit.
+	"""
+	bits, signed = _let_bits(let)
+	reads: dict[str, str] = {}
+	for entry in struct.entries:
+		placement = entry.placement
+		local = placement.path[len(struct.name) + 1:]
+		if placement.scalar is None or "." in local \
+				or placement.radix is not None or placement.size_bits > 32 \
+				or placement.array_count is not None:
+			continue
+		got = _over_fields(struct, local, "0")
+		if got is None:
+			continue
+		# A SIGNED field reads here as its unsigned bytes -- the row shows
+		# it right because its ProtoField is `int`, but the number is 253
+		# for an `i8` holding -3. Sign-extended before it is widened, or
+		# `a - b` came out 248 in tshark where every reader says -8.
+		if placement.scalar.signed:
+			width = placement.size_bits
+			got = (f"(function (n) if n >= {1 << (width - 1)} then"
+			       f" return n - {1 << width} end return n end)({got})")
+		reads[local] = got
+
+	class Declined(Exception):
+		pass
+
+	def read(name: str) -> str:
+		if name not in reads:
+			raise Declined(name)
+		return f"situ_w64({reads[name]})"
+
+	def literal(value: int) -> str:
+		return f"UInt64({value & 0xFFFFFFFF}, {value >> 32})"
+
+	def binary(op: str, left: str, right: str) -> str:
+		spelled = {"+": f"({left} + {right})", "-": f"({left} - {right})",
+		           "*": f"({left} * {right})",
+		           "/": f"situ_div64({left}, {right})",
+		           "%": f"situ_mod64({left}, {right})",
+		           "<<": f"situ_shl64({left}, {right})",
+		           ">>": f"situ_shr64({left}, {right})",
+		           "&": f"({left}):band({right})",
+		           "|": f"({left}):bor({right})",
+		           "^": f"({left}):bxor({right})"}
+		if op not in spelled:
+			raise Declined(op)
+		return spelled[op]
+
+	def compare(op: str, left: str, right: str) -> str:
+		lua = {"==": "==", "!=": "~=", "<": "<", "<=": "<=", ">": ">",
+		       ">=": ">="}[op]
+		return f"situ_b64({left} {lua} {right})"
+
+	spell = traverse.LetSpelling(
+		read = read, literal = literal, binary = binary,
+		negate = lambda inner: f"(situ_zero64 - {inner})",
+		invert = lambda inner: f"({inner}):bnot()",
+		compare = compare)
+	try:
+		value = traverse.let_source(let.expr, spell, dict(_CONSTS))
+	except (Declined, ValueError, AssertionError):
+		return None
+	if bits == 64:
+		return value if not signed \
+			else f"(function (v) return Int64(v:lower(), v:higher()) end)({value})"
+	mask = (1 << bits) - 1
+	held = f"({value}):band(UInt64({mask & 0xFFFFFFFF}, {mask >> 32})):tonumber()"
+	if not signed:
+		return held
+	return (f"(function (n) if n >= {1 << (bits - 1)} then"
+	        f" return n - {1 << bits} end return n end)({held})")
+
+
 def _let_fields(struct: ResolvedStruct) -> list[str]:
 	"""A `ProtoField` for each named value the body can show (26.1060)."""
 	proto = _lua(struct.name)
 	owner = re.sub(r"\W", "_", struct.name)
 	lines: list[str] = []
 	for let in _LETS.get(struct.name, []):
-		if _let_value(struct, let) is None:
+		if _let_value(struct, let) is None \
+				and _let_wide(struct, let) is None:
 			continue
 		bits, signed = _let_bits(let)
 		kind = f"{'int' if signed else 'uint'}{bits}"
@@ -3360,12 +3492,16 @@ def _let_rows(struct: ResolvedStruct) -> list[str]:
 	lines: list[str] = []
 	for let in _LETS.get(struct.name, []):
 		value = _let_value(struct, let)
-		if value is None:
-			lines.append(f"\t-- {struct.name}.{let.name}: not shown, a value"
-			             " this dissector cannot compute exactly")
-			continue
 		bits, _ = _let_bits(let)
-		shown = f"situ_u64({value})" if bits == 64 else value
+		if value is None:
+			# In `UInt64` where the doubles path cannot be exact (26.1112).
+			shown = _let_wide(struct, let)
+			if shown is None:
+				lines.append(f"\t-- {struct.name}.{let.name}: not shown, a"
+				             " value this dissector cannot compute exactly")
+				continue
+		else:
+			shown = f"situ_u64({value})" if bits == 64 else value
 		lines.append(f"\tsubtree:add({proto}.fields.{_lua(let.name)},"
 		             f" {shown}):set_generated()")
 	return lines

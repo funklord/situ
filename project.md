@@ -198,9 +198,9 @@ both walkers and the dissector. What a user cannot yet do is listed under
   the size is known nonzero; 33 `pos` scopes per generated function. Each
   is noise in a consumer build, not behaviour -- taken up again when a
   consumer reports one.
-- The dissector shows a `let` and a `when` reading one without evaluating
-  either: exact 64-bit arithmetic in the emitted Lua (UInt64) would do it.
-  Nobody has asked.
+- The dissector computes a `let` in `UInt64` now (26.1112); a `when`
+  reading one is still not evaluated, nor a `let` over a field wider than
+  32 bits, a text number or a token.
 - `situc map` does not describe a registry; its contract is in `wire`.
 - The holder's: whether `situ-edit-qt` should vendor qtty for a terminal
   mode of the same window. It would not replace the curses TUI, whose
@@ -9271,6 +9271,10 @@ Moved to `doc/decision/26.1107-required-asks-have-nothing-twice.md`.
 ### 26.1108 A terminated run's framing asks for the terminator without wrapping
 
 Moved to `doc/decision/26.1108-a-terminator-guard-that-cannot-wrap.md`.
+
+### 26.1112 The dissector computes every named value, in `UInt64`
+
+Moved to `doc/decision/26.1112-the-dissector-computes-every-named-value.md`.
 
 ### 26.1110 `[remaining]` in a sized arm ends with the variant, whatever follows it
 

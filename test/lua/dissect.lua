@@ -333,20 +333,83 @@ end
 --- a plain number for a `uint64` field -- "userdata expected, got number" --
 --- so the generated code builds one, and this stands in for it with the
 --- integer the two words spell, printed unsigned as Wireshark prints it.
+---
+--- And its arithmetic, which a named value is computed in (26.1112): the
+--- API's operators and methods over Lua 5.4's integers, which wrap modulo
+--- 2^64 as Wireshark's C does. Comparison and division are UNSIGNED, as
+--- Wireshark's are; Lua's own are signed, so they are written out here.
+local u64 = {}
+
+local function wrap(value)
+	return setmetatable({ value = value }, u64)
+end
+
+local function held(x)
+	if getmetatable(x) == u64 then
+		return x.value
+	end
+	return math.tointeger(x)
+end
+
+local function udiv(a, b)
+	-- Unsigned 64-bit division with Lua's signed integers.
+	if b < 0 then
+		return math.ult(a, b) and 0 or 1
+	end
+	if a >= 0 then
+		return a // b
+	end
+	local q = ((a >> 1) // b) << 1
+	local r = a - q * b
+	if not math.ult(r, b) then
+		q = q + 1
+	end
+	return q
+end
+
+u64.__index = {
+	lower    = function (self) return self.value & 0xFFFFFFFF end,
+	higher   = function (self) return (self.value >> 32) & 0xFFFFFFFF end,
+	tonumber = function (self)
+		local v = self.value
+		if v >= 0 then return v + 0.0 end
+		return (v >> 1) * 2.0 + (v & 1)
+	end,
+	band   = function (self, other) return wrap(self.value & held(other)) end,
+	bor    = function (self, other) return wrap(self.value | held(other)) end,
+	bxor   = function (self, other) return wrap(self.value ~ held(other)) end,
+	bnot   = function (self) return wrap(~self.value) end,
+	lshift = function (self, n) return wrap(self.value << math.tointeger(n)) end,
+	rshift = function (self, n) return wrap(self.value >> math.tointeger(n)) end,
+}
+u64.__add = function (a, b) return wrap(held(a) + held(b)) end
+u64.__sub = function (a, b) return wrap(held(a) - held(b)) end
+u64.__mul = function (a, b) return wrap(held(a) * held(b)) end
+u64.__div = function (a, b)
+	assert(held(b) ~= 0, "divide by zero")
+	return wrap(udiv(held(a), held(b)))
+end
+u64.__mod = function (a, b)
+	local x, y = held(a), held(b)
+	assert(y ~= 0, "divide by zero")
+	return wrap(x - udiv(x, y) * y)
+end
+u64.__eq = function (a, b) return held(a) == held(b) end
+u64.__lt = function (a, b) return math.ult(held(a), held(b)) end
+u64.__le = function (a, b) return not math.ult(held(b), held(a)) end
+u64.__tostring = function (self)
+	local value = self.value
+	if value >= 0 then
+		return tostring(value)
+	end
+	-- Unsigned past 2^63: halve, take the tens, and put the last
+	-- digit back, as Lua has no unsigned format of its own.
+	local tens = (value >> 1) // 5
+	return tostring(tens) .. tostring(value - tens * 10)
+end
+
 function UInt64(low, high)
-	local value = math.tointeger(low) + math.tointeger(high or 0) * 4294967296
-	return setmetatable({ value = value }, {
-		__tostring = function (self)
-			local held = self.value
-			if held >= 0 then
-				return tostring(held)
-			end
-			-- Unsigned past 2^63: halve, take the tens, and put the last
-			-- digit back, as Lua has no unsigned format of its own.
-			local tens = (held >> 1) // 5
-			return tostring(tens) .. tostring(held - tens * 10)
-		end,
-	})
+	return wrap(math.tointeger(low) + math.tointeger(high or 0) * 4294967296)
 end
 
 Dissector = {
