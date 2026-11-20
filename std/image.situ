@@ -77,6 +77,7 @@ enum image_section_tag : u16 {
 	lets         = 31,     // a value a struct's fields assemble (26.1059)
 	registry     = 32,     // a registry's cells (0070)
 	registry_words = 33,   // the policy words a registry's cells name (0070)
+	choices      = 34,     // tail: an enum-typed field's members, by name
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -705,6 +706,18 @@ struct image_let {
 	u8   let_pad[2];
 }
 
+// A member an enum-typed field may hold (26.1114): the placement, the
+// member's name and value, and whether the enum admits a value it does not
+// name (`default = pass`). Tail, for an editor offering choices; a walk
+// reads every member exactly as before without it.
+struct image_choice {
+	u32  placement;
+	u32  name;                        // string id
+	i64  value;
+	u8   admits_other [max = 1];
+	u8   choice_pad[7];
+}
+
 // One cell of a registry (0070): its key, the struct its bytes are a message
 // of, what it is worth and its bounds, and what a client shows. The rows are
 // declarative -- nothing in one is a solved offset -- so a program can write
@@ -801,3 +814,4 @@ require size(image_marker) == 16;
 require size(image_index) == 16;
 require size(image_relation) == 24;
 require size(image_relation_must) == 8;
+require size(image_choice) == 24;

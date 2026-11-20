@@ -1036,3 +1036,40 @@ struct first { u2 leap; u3 version; u3 mode; u8 stratum; }
 	          json.loads(as_json(document))["fields"]}
 	assert fields["version"]["bits"] == {"offset": 2, "size": 3}
 	assert fields["stratum"]["bits"] is None
+
+
+ENUMS = """target buffer;
+endian big;
+
+enum mode : u8 { client = 3, server = 4, broadcast = 5 }
+enum flavour : u8 { plain = 0, salted = 1, default = pass }
+struct pick { mode m; flavour f; u8 other; }
+"""
+
+
+def test_an_enum_is_shown_and_put_by_name() -> None:
+	"""26.1114: the image's tail names an enum's members, so the row reads
+	`server (4)`, a member is put by name or as the row shows it, and an
+	open enum says it admits a number it does not name."""
+	from editor import view
+
+	schema = parse_text(ENUMS)
+	packed = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	document = open_document(packed, bytes([4, 7, 1]), "pick")
+	shown = {row.name: row for row in view.rows(document)}
+	assert shown["m"].value == "server (4)"
+	assert shown["m"].choices == ["client (3)", "server (4)", "broadcast (5)"]
+	assert (shown["m"].admits_other, shown["f"].admits_other) == (False, True)
+	assert shown["f"].value == "7"			# no member names it
+	assert (shown["other"].low, shown["other"].high) == ("0", "255")
+	assert view.prompt(shown["m"]) == "m (client, server, broadcast) = "
+	assert view.prompt(shown["other"]) == "other (0 to 255) = "
+
+	view.put(document, "m", "broadcast")
+	view.put(document, "f", "salted (1)")
+	assert bytes(document.buffer[:2]) == bytes([5, 1])
+
+	# Without the tail there are no names to offer, and nothing breaks.
+	bare = open_document(pack(schema, resolve(schema, solve(schema)),
+	                          metadata=False)[0], bytes([4, 7, 1]), None)
+	assert view.rows(bare)[0].choices == []

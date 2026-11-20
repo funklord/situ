@@ -18,12 +18,13 @@ them derives a cell from a field.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as _field
 
 from editor.document import Document, Field
 from walker.walk import Refused
 
-__all__ = ["Row", "heading", "put", "rows", "trailer", "write_marker"]
+__all__ = ["Row", "heading", "prompt", "put", "rows", "trailer",
+           "write_marker"]
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,17 @@ class Row:
 	cost:   str
 	edit:   str | None
 	opens:  bool
+	#: An enum's members as `name (value)`, in declaration order, and
+	#: whether a value it does not name is admitted -- what a window offers
+	#: in a searchable list and a prompt accepts by name (26.1114). Empty
+	#: for a field that is not an enum.
+	choices: list[str] = _field(default_factory=list)
+	admits_other: bool = True
+	#: The lowest and highest number a write may store, as text because a
+	#: 64-bit bound is not a double; empty where the field is not a scalar
+	#: (26.1114). A number field refuses at the key what is outside them.
+	low:  str = ""
+	high: str = ""
 
 
 def heading(document: Document) -> list[str]:
@@ -99,7 +111,7 @@ def _row(field: Field) -> Row:
 	elif field.value is None:
 		value = f"({field.note})"
 	else:
-		value = str(field.value)
+		value = _named(field, field.value)
 	# A NOTE ON A READABLE FIELD (26.583) is its own cell: `report.
 	# failed_check` names the member a schema refuses the message over,
 	# and for `u8 seconds [max = 59]` holding 70 that is a readable value.
@@ -116,13 +128,47 @@ def _row(field: Field) -> Row:
 	else:
 		offset = "--" if field.offset is None else str(field.offset)
 		size   = "--" if field.size is None else str(field.size)
+	choices = ([] if field.choices is None
+	           else [f"{name} ({number})" for name, number in field.choices[1]])
 	return Row(
 		offset=offset, size=size,
 		name=field.name, value=value, marker=write_marker(field),
 		note=note or "", cost=field.write_cost,
 		edit=(None if not can_write
-		      else "hex" if isinstance(field.value, bytes) else "number"),
-		opens=field.nested is not None)
+		      else "hex" if isinstance(field.value, bytes)
+		      else "choice" if choices else "number"),
+		opens=field.nested is not None,
+		choices=choices,
+		admits_other=field.choices is None or field.choices[0],
+		low="" if field.bounds is None else str(field.bounds[0]),
+		high="" if field.bounds is None else str(field.bounds[1]))
+
+
+def _named(held: Field, value: int) -> str:
+	"""A number, and the member it is where an enum names it: `server (4)`,
+	as Wireshark shows one. The number stays, because a reader comparing
+	with a hex dump needs it, and a value no member names is the number
+	alone."""
+	if held.choices is not None:
+		for name, number in held.choices[1]:
+			if number == value:
+				return f"{name} ({value})"
+	return str(value)
+
+
+def prompt(row: Row) -> str:
+	"""What a line-at-a-time frontend asks with: the name, and what it
+	takes where that is a list or a range -- the window's widgets said in
+	words, for the curses TUI."""
+	if row.choices:
+		more = ", or a number" if row.admits_other else ""
+		listed = ", ".join(choice.split(" (", 1)[0] for choice in row.choices)
+		return f"{row.name} ({listed}{more}) = "
+	if row.edit == "number" and row.low:
+		return f"{row.name} ({row.low} to {row.high}) = "
+	if row.edit == "hex":
+		return f"{row.name} (hex, {row.size} bytes) = "
+	return f"{row.name} = "
 
 
 def put(document: Document, name: str, text: str) -> list[str]:
@@ -144,7 +190,19 @@ def put(document: Document, name: str, text: str) -> list[str]:
 		# first only because a name with no field has no kind to read.
 		raise Refused(f"no member named `{name}` in `{document.name}`")
 	held = named[0].value
-	assignment = f"{name}={text.strip()}"
+	typed = text.strip()
+	if named[0].choices is not None:
+		# A member by name, or as the row shows it -- `server` or
+		# `server (4)` -- so a cell edited back to what it said, or a
+		# choice picked from the list, is the member's value. Anything
+		# else goes through as a number, and a closed enum's refusal of a
+		# value it does not name is the core's.
+		bare = typed.split(" (", 1)[0] if typed.endswith(")") else typed
+		for member, number in named[0].choices[1]:
+			if member == bare:
+				typed = str(number)
+				break
+	assignment = f"{name}={typed}"
 	if isinstance(held, bytes):
 		return apply_edits(document, [], [assignment])
 	return apply_edits(document, [assignment], [])

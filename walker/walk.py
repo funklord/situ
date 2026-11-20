@@ -1184,6 +1184,44 @@ def write_scalar(view: View, index: int, value: int) -> None:
 	_write_at(buffer, view, index, start, width, stored)
 
 
+def scalar_range(view: View, index: int) -> tuple[int, int] | None:
+	"""The values `write_scalar` would store in this member, lowest and
+	highest -- the same width, sign and packed-decimal rule, asked before a
+	write rather than learned from a refusal. An editor's number field
+	refuses at the key what the store would refuse after Enter (26.1114).
+	None where the member is not a scalar a write could reach."""
+	placement = view.image.placements[index]
+	try:
+		width = content_bits(view, index)
+	except Refused:
+		return None
+	if width <= 0 or width > 64:
+		return None
+	low, high = _range(width, placement.signed)
+	if placement.text_flags & BCD:
+		# What the digits store, not what the bits hold: `bcd2 [bits = 7]`
+		# reaches 79. The largest number whose nibbles fit under `high`:
+		# keep each nibble of `high` from the top while it is a digit, and
+		# at the first that is not, 9 from there down. Checked against
+		# `_encoded`, which `write_scalar` measures with, and no bound at
+		# all where the two disagree rather than a wrong one.
+		digits = placement.radix_digits or 0
+		top = 0
+		for nibble in f"{high:x}":
+			if int(nibble, 16) > 9:
+				top = int(f"{top}{'9' * (len(f'{high:x}') - len(str(top)))}")
+				break
+			top = top * 10 + int(nibble, 16)
+		if digits:
+			top = min(top, 10 ** digits - 1)
+		try:
+			fits = _encoded(top, placement) <= high
+		except (Refused, ValueError):
+			fits = False
+		return (0, top) if fits else None
+	return low, high
+
+
 def _range(width: int, is_signed: bool) -> tuple[int, int]:
 	if is_signed:
 		return -(1 << (width - 1)), (1 << (width - 1)) - 1

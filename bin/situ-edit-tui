@@ -176,7 +176,7 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 				          f"bytes; q goes back")
 				continue
 			name  = field.name
-			typed = _prompt(screen, f"{name} = ")
+			typed = _prompt(screen, view.prompt(view.rows(document)[owner]))
 			if typed is None or not typed.strip():
 				status = "unchanged"
 				continue

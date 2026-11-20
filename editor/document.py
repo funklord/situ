@@ -42,9 +42,19 @@ from walker.walk import (BITS_PER_BYTE, Bytes, Refused, Unsupplied, View,
                          acquire,
                          chosen_arm, is_run, marker_order, offset_bits,
                          argument, parameters_of, read_bytes, read_scalar,
-                         size_bits, struct_extent, write_bytes, write_scalar)
+                         scalar_range, size_bits, struct_extent, write_bytes,
+                         write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
+
+
+def _choices(image: Image, index: int
+		) -> tuple[bool, tuple[tuple[str, int], ...]] | None:
+	held = image.choices_of(index)
+	if held is None:
+		return None
+	admits, members = held
+	return admits, tuple(members)
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,14 @@ class Field:
 	#: NTP's `leap`, `version` and `mode` all at offset 0, size 0
 	#: (26.1113): three fields, one place, no width.
 	bits: tuple[int, int] | None = None
+	#: An enum-typed field's members, `(admits another value, ((name,
+	#: value), ...))`, from the image's tail (26.1114): what an editor
+	#: offers as choices. None where the field is not an enum or the image
+	#: was packed without its metadata.
+	choices: tuple[bool, tuple[tuple[str, int], ...]] | None = None
+	#: The lowest and highest value a write may store, from the walker's
+	#: own rule (`scalar_range`); None for anything but a scalar (26.1114).
+	bounds: tuple[int, int] | None = None
 
 	@property
 	def withheld(self) -> bool:
@@ -486,7 +504,11 @@ class Document:
 			                  auth    = image.capability_of(index, "auth"),
 			                  secrecy = image.capability_of(index, "secrecy"),
 			                  effect  = image.capability_of(index, "effect"),
-			                  nested  = opens, bits = bits))
+			                  nested  = opens, bits = bits,
+			                  choices = _choices(image, index),
+			                  bounds  = (scalar_range(view, index)
+			                             if isinstance(value, int)
+			                             else None)))
 
 		return rows
 

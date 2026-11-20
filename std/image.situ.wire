@@ -19,7 +19,7 @@ endian little
 target buffer
 
 enum image_section_tag : u16 unknown=pass
-  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 holds=29 orderings=30 lets=31 registry=32 registry_words=33 names=12 vectors=13
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 holds=29 orderings=30 lets=31 registry=32 registry_words=33 choices=34 names=12 vectors=13
 
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
@@ -58,6 +58,13 @@ struct image_arm size=24
   @0x0010   4         u32        discriminant  little
   @0x0014   1         u8         arm_flags
   @0x0015   3         u8         arm_pad  little
+
+struct image_choice size=24
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        name  little
+  @0x0008   8         i64        value  little
+  @0x0010   1         u8         admits_other  max=1
+  @0x0011   7         u8         choice_pad  little
 
 struct image_codec size=4
   @0x0000   4         u32        name  little

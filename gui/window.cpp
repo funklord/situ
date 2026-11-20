@@ -2,6 +2,8 @@
 
 #include "window.h"
 
+#include "cell_editor.h"
+
 #include <QCloseEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -46,6 +48,7 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 	table_->setHorizontalHeaderLabels({tr("Offset"), tr("Size"), tr("Field"),
 	                                   tr("Value"), tr("Write"), tr("Note")});
 	table_->verticalHeader()->hide();
+	table_->setItemDelegateForColumn(value_column, new cell_editor(table_));
 	table_->horizontalHeader()->setStretchLastSection(true);
 	table_->setSelectionBehavior(QAbstractItemView::SelectRows);
 	table_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -77,6 +80,15 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 	});
 	setWindowTitle(QStringLiteral("situ-edit-gui"));
 	resize(820, 560);
+}
+
+edit_window::~edit_window()
+{
+	// An editor still open when the window goes is closed by the table's
+	// destruction, after `session_` is gone -- and closing commits, which
+	// would write through a session that no longer exists. Measured: a
+	// segfault in session::set from QWidget's destructor.
+	filling_ = true;
 }
 
 bool edit_window::open(const open_options &options, const QString &out)
@@ -143,6 +155,8 @@ void edit_window::populate()
 		QTableWidgetItem *value = cell("value");
 		if (!row.value(QStringLiteral("edit")).isNull())
 			value->setFlags(value->flags() | Qt::ItemIsEditable);
+		// The row the editor is chosen and constrained by (cell_editor).
+		value->setData(view_row_role, row.toVariantMap());
 		table_->setItem(at, value_column, value);
 
 		// What a write would do: the marker the table prints, and the

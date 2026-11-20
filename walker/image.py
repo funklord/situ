@@ -33,6 +33,9 @@ LETS                              = 31
 #: A registry's cells and the policy words they name (0070).
 REGISTRY                          = 32
 REGISTRY_WORDS                    = 33
+#: An enum-typed field's members by name, and whether it admits others
+#: (26.1114). Tail.
+CHOICES                           = 34
 SKIPS                             = 22
 WHITESPACE                        = 23
 TLV_RULES                         = 24
@@ -58,7 +61,7 @@ KNOWN_SECTIONS = frozenset({
 	VARINTS, TLVS, INDEXES, NAMES, VECTORS, MARKERS, CONSTRAINTS,
 	ENUM_VALUES, VERSIONS, RELATIONS, RELATION_MUSTS, PINNED_RUNS, DEPTHS,
 	SKIPS, WHITESPACE, TLV_RULES, MESSAGES, TAGS, KERNEL_TABLES, ARGUMENTS,
-	HOLDS, ORDERINGS, LETS, REGISTRY, REGISTRY_WORDS,
+	HOLDS, ORDERINGS, LETS, REGISTRY, REGISTRY_WORDS, CHOICES,
 })
 SECTION_ANCILLARY = 1
 
@@ -421,6 +424,10 @@ class Image:
 	#: existed, which a walker skips rather than failing to load.
 	messages: list[Message]			= field(default_factory=list)
 	lets: list[Let]				= field(default_factory=list)
+	#: placement index -> (admits a value it does not name, [(string id,
+	#: value)]) for an enum-typed field, in declaration order (26.1114).
+	choices: dict[int, tuple[bool, list[tuple[int, int]]]] = \
+		field(default_factory=dict)
 	registry: list[RegistryEntry]		= field(default_factory=list)
 	strings: bytes				= b""
 	#: placement index -> the byte runs it may hold (0052). One for a
@@ -599,6 +606,17 @@ class Image:
 			return self.placement_names[index]
 		return f"placement[{index}]"
 
+	def choices_of(self, index: int) -> tuple[bool, list[tuple[str, int]]] | None:
+		"""An enum-typed placement's members, by name and value, and whether
+		it admits a value it does not name; None where it is not one or the
+		image was packed without its tail (26.1114)."""
+		held = self.choices.get(index)
+		if held is None:
+			return None
+		admits, members = held
+		return admits, [(_string_at(self.strings, name), value)
+		                for name, value in members]
+
 	def struct_name(self, index: int) -> str:
 		if index < len(self.struct_names):
 			return self.struct_names[index]
@@ -710,6 +728,14 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			name, text, owner, code, severity = _struct.unpack_from(
 				"<IIIIB", blob, at + i * stride)
 			image.messages.append(Message(name, text, owner, code, severity))
+
+	if CHOICES in found:
+		at, records, stride = found[CHOICES]
+		for i in range(records):
+			where, name, value, admits = _struct.unpack_from(
+				"<IIqB", blob, at + i * stride)
+			_, held = image.choices.setdefault(where, (bool(admits), []))
+			held.append((name, value))
 
 	if LETS in found:
 		at, records, stride = found[LETS]

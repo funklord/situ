@@ -366,6 +366,11 @@ window runs on a terminal; the curses `situ-edit-tui` stays for a machine
 with Python and nothing else. Every frontend draws the same rows -- what a
 value reads as, what a write costs, which rows can be edited -- because
 `editor/view.py` decides them once and the window reads them from the JSON.
+An enum field reads `server (4)` and is edited by name: in the window with a
+list searched by any part of a name, a closed enum taking only its members;
+a number field takes nothing outside what its field can store, and a byte
+run no more digits than it holds -- refused at the key, on the window and
+through qtty alike.
 What that means
 is decided by the capability vectors and not by the editor: a member the
 schema forbids anyone to write is refused, a value that does not fit its

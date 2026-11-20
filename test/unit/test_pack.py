@@ -597,7 +597,7 @@ def test_the_metadata_tail_is_optional_and_additive(
 
 	bare_at = sections(image_module, bare)
 	full_at = sections(image_module, full)
-	tail = {packer.SECTION_NAMES, packer.SECTION_VECTORS}
+	tail = set(packer.TAIL_SECTIONS)
 	core = set(bare_at) - tail
 
 	assert (packer.SECTION_STRINGS in core) is pooled, \

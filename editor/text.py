@@ -244,6 +244,18 @@ def as_json(document: Document) -> str:
 				"bits":       (None if field.bits is None
 				               else {"offset": field.bits[0],
 				                     "size":   field.bits[1]}),
+				# An enum's members, for an editor's choices (26.1114):
+				# whether it admits a value it does not name, and each
+				# member's name and value in declaration order.
+				# What a write may store, from the walker's own rule.
+				"bounds":     (None if field.bounds is None
+				               else {"low": field.bounds[0],
+				                     "high": field.bounds[1]}),
+				"choices":    (None if field.choices is None
+				               else {"admits_other": field.choices[0],
+				                     "members": [
+				                         {"name": name, "value": value}
+				                         for name, value in field.choices[1]]}),
 				"nested":     (None if field.nested is None
 				               else {"struct": field.nested[0],
 				                     "offset": field.nested[1],

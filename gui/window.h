@@ -37,6 +37,7 @@ public:
 	// nested windows share.
 	explicit edit_window(QWidget *parent = nullptr,
 	                     document_hub *hub = nullptr);
+	~edit_window() override;
 
 	// Opens a message against a schema; false with the reason shown in the
 	// window when `situ-edit` refuses it.

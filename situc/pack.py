@@ -27,7 +27,7 @@ put a second parser in the one component decision 0026 wants checked.
 from __future__ import annotations
 
 import struct as _struct
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 
@@ -178,10 +178,19 @@ SECTION_LETS		= 31
 #: walker that does not know them walks every message as before.
 SECTION_REGISTRY	= 32
 SECTION_REGISTRY_WORDS	= 33
+#: The members an enum-typed field may hold, by name (26.1114):
+#: `image_choice`, one row per (placement, member). Tail: an editor offers
+#: them as choices; a walk never needs them.
+SECTION_CHOICES		= 34
+CHOICE_BYTES		= 24
+#: What `--metadata` adds and a bare image lacks: the tail, named once so a
+#: test holding the core to "unchanged by the tail" cannot list it short.
+TAIL_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_CHOICES})
 #: Read only to print -- names and capability vectors, under `--metadata`.
 #: A walker that cannot print them walks the same.
 ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_LETS,
-                                SECTION_REGISTRY, SECTION_REGISTRY_WORDS})
+                                SECTION_REGISTRY, SECTION_REGISTRY_WORDS,
+                                SECTION_CHOICES})
 #: A tag and what computes it (26.579), and the kernel tables a polynomial
 #: codec needs. Both are additive: a reader that does not know them reads
 #: every other section exactly as before.
@@ -3620,7 +3629,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# the core pool, byte for byte -- so `--metadata` stays additive and a
 	# codec name, a varint encoding name or a relation's name resolves to
 	# the same string with the tail as without it.
-	tail = _metadata(order, rows, resolved, strings) if metadata else []
+	tail = (_metadata(order, rows, resolved, strings, schema_enums)
+	        if metadata else [])
 	if strings.data:
 		sections.append((SECTION_STRINGS, bytes(strings.data), 1))
 	sections.extend(tail)
@@ -3641,7 +3651,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 def _metadata(order: list[tuple[str, ResolvedStruct]],
               rows: list[tuple[str, Placement]],
               resolved: ResolvedSchema,
-              pool: _Pool) -> list[tuple[int, bytes, int]]:
+              pool: _Pool,
+              enums: Mapping[str, ast.EnumDecl]) -> list[tuple[int, bytes, int]]:
 	"""The optional tail, as sections: the names and the capability vectors.
 
 	These are what a walk needs in order to be *read*, not in order to work,
@@ -3689,9 +3700,33 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 			vectors.append(domain.index(shown)
 			               if shown is not None and shown in domain else 0xFF)
 
+	# AN ENUM'S MEMBERS BY NAME, for a field typed by one (26.1114). The
+	# core carries a closed enum's VALUES (`enum_values`), which answer
+	# whether a value is a member and cannot say what it is called; an
+	# open one (`default = pass`) carries nothing at all, since no walk
+	# checks it. An editor offering `server` rather than asking for 4
+	# needs both kinds, so this is the tail's, keyed by placement, with
+	# whether a value outside the list is admitted. A byte-run enum
+	# (`u8[2] { bmp = "BM" }`) is a signature rather than a choice, and is
+	# left out, as is a member whose value is not a number the row holds.
+	choices = bytearray()
+	for index, (_, placement) in enumerate(rows):
+		held = enums.get(placement.type_name or "")
+		if held is None or held.width is not None:
+			continue
+		admits = held.effective_default is ast.EnumDefault.PASS
+		for member in held.members:
+			value = getattr(member.value, "value", None)
+			if not isinstance(value, int) or not fits_q(value):
+				continue
+			choices += _struct.pack("<IIqB7x", index,
+			                        pool.intern(member.name), value,
+			                        int(admits))
+
 	return [
 		(SECTION_NAMES, bytes(names), 4),
 		(SECTION_VECTORS, bytes(vectors), len(list(Axis))),
+		(SECTION_CHOICES, bytes(choices), CHOICE_BYTES),
 	]
 
 

@@ -155,6 +155,12 @@ without huge dependencies kept, and the pertinent code shared:
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
 - The holder's earlier question -- vendor qtty for the window? -- is
   settled by that request: yes, beside the curses TUI, not instead of it.
+- An enum is a choice (26.1114): the image's tail names its members
+  (`choices`, section 34), rows read `server (4)`, `--put` takes a name,
+  and the window's cells are a searchable combo, a range-checked number
+  and a length-capped hex field. Every constraint is pressed with real keys
+  through Qt and through qtty (`--keys`); that found Return not closing a
+  combo editor and a segfault closing a window mid-edit.
 
 **Run 7 (2026-11-20), what landed** -- asked whether situ has an editor
 that opens a schema and a binary:

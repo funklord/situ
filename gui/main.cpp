@@ -17,11 +17,15 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
+#include <QComboBox>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QTableWidget>
 #include <QTimer>
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <unistd.h>
 
 #ifdef SITU_QTTY
@@ -56,6 +60,80 @@ bool asked_for_tui(int argc, char **argv)
 
 // Types `value` into the value cell of the row named `name`, which is
 // exactly what a person does and runs the same handler.
+// `--keys FIELD=SPEC`: open the value cell's editor -- the widget a person
+// gets, validator, completer and all -- and press keys into it. Text is
+// typed a character at a time; `{Return}`, `{Escape}`, `{Down}`, `{Up}` and
+// `{Tab}` are those keys. No Return is added: a spec without one leaves the
+// editor open, which is a case worth testing.
+//
+// Two deliveries, because the terminal's is new and is the one to doubt.
+// Without qtty a key goes where Qt sends a real one -- the active popup (a
+// completer's list) first, else the focused widget. With --tui it goes
+// into qtty's InputRouter, exactly as bytes from a terminal arrive.
+struct key { int code; QString text; };
+
+QList<key> keys_of(const QString &spec)
+{
+	static const QHash<QString, int> named = {
+		{QStringLiteral("Return"), Qt::Key_Return},
+		{QStringLiteral("Escape"), Qt::Key_Escape},
+		{QStringLiteral("Down"), Qt::Key_Down},
+		{QStringLiteral("Up"), Qt::Key_Up},
+		{QStringLiteral("Tab"), Qt::Key_Tab},
+	};
+	QList<key> keys;
+	for (qsizetype at = 0; at < spec.size(); ++at) {
+		if (spec[at] == QLatin1Char('{')) {
+			const qsizetype end = spec.indexOf(QLatin1Char('}'), at);
+			const QString name = spec.mid(at + 1, end - at - 1);
+			if (end > at && named.contains(name)) {
+				keys.append({named.value(name), QString()});
+				at = end;
+				continue;
+			}
+		}
+		const QChar c = spec[at];
+		const int code = c.isLetterOrNumber() ? int(c.toUpper().unicode())
+		                 : c == QLatin1Char(' ') ? int(Qt::Key_Space) : 0;
+		keys.append({code, QString(c)});
+	}
+	return keys;
+}
+
+void press_by_qt(const key &one)
+{
+	QWidget *to = QApplication::activePopupWidget();
+	if (to == nullptr)
+		to = QApplication::focusWidget();
+	if (to == nullptr)
+		return;
+	QKeyEvent down(QEvent::KeyPress, one.code, Qt::NoModifier, one.text);
+	QApplication::sendEvent(to, &down);
+	QKeyEvent up(QEvent::KeyRelease, one.code, Qt::NoModifier, one.text);
+	QApplication::sendEvent(to, &up);
+}
+
+bool open_editor(edit_window &window, const QString &name, QString *why)
+{
+	auto *table = window.findChild<QTableWidget *>();
+	for (int row = 0; table && row < table->rowCount(); ++row) {
+		if (table->item(row, 2)->text() != name)
+			continue;
+		QTableWidgetItem *cell = table->item(row, 3);
+		if (!(cell->flags() & Qt::ItemIsEditable)) {
+			*why = QStringLiteral("`%1` is not writable here").arg(name);
+			return false;
+		}
+		table->setFocus();
+		table->setCurrentCell(row, 3);
+		table->editItem(cell);
+		QCoreApplication::processEvents();
+		return true;
+	}
+	*why = QStringLiteral("no field `%1`").arg(name);
+	return false;
+}
+
 bool type_into(edit_window &window, const QString &name, const QString &value,
                QString *why)
 {
@@ -152,6 +230,11 @@ int main(int argc, char **argv)
 	const QCommandLineOption no_ui(QStringLiteral("no-ui"),
 	    QStringLiteral("apply --set/--set-bytes through the window, print "
 	                   "the table, write --out, and exit"));
+	const QCommandLineOption keys_option(QStringLiteral("keys"),
+	    QStringLiteral("open FIELD's editor and press keys into it, through "
+	                   "qtty's input with --tui: text, and {Return}, "
+	                   "{Escape}, {Down}, {Up}, {Tab}; after --set"),
+	    QStringLiteral("FIELD=SPEC"));
 	const QCommandLineOption tui_option(QStringLiteral("tui"),
 	    QStringLiteral("the same window on this terminal, drawn by qtty"));
 	const QCommandLineOption gui_option(QStringLiteral("gui"),
@@ -161,7 +244,8 @@ int main(int argc, char **argv)
 	                   "it, COLSxROWS, after --open and --set, and exit"),
 	    QStringLiteral("COLSxROWS"));
 	parser.addOptions({structure, offset, length, argument, hex, set,
-	                   set_bytes, out, open_field, no_ui, tui_option,
+	                   set_bytes, out, open_field, no_ui, keys_option,
+	                   tui_option,
 	                   gui_option, snapshot});
 	parser.process(application);
 
@@ -229,6 +313,45 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "situ-edit-gui: %s\n", qPrintable(why));
 		if (parser.isSet(no_ui) || parser.isSet(snapshot))
 			return 1;
+	}
+
+	if (parser.isSet(keys_option)) {
+		here->show();
+		here->activateWindow();
+		QCoreApplication::processEvents();
+#ifdef SITU_QTTY
+		std::unique_ptr<Qtty::InputRouter> router;
+		if (tui)
+			router = std::make_unique<Qtty::InputRouter>(here);
+#endif
+		for (const QString &typed : parser.values(keys_option)) {
+			const qsizetype equals = typed.indexOf(QLatin1Char('='));
+			if (equals < 0 || !open_editor(*here, typed.left(equals), &why)) {
+				std::fprintf(stderr, "situ-edit-gui: %s\n", equals < 0
+				             ? "--keys takes FIELD=SPEC" : qPrintable(why));
+				return 1;
+			}
+			for (const key &one : keys_of(typed.mid(equals + 1))) {
+#ifdef SITU_QTTY
+				if (router) {
+					router->on_key({one.code, one.text, false, false,
+					                false});
+					QCoreApplication::processEvents();
+					continue;
+				}
+#endif
+				press_by_qt(one);
+				QCoreApplication::processEvents();
+			}
+			// What the editor holds when the keys run out, so a test can
+			// tell "refused at the key" from "typed and not committed".
+			QWidget *focused = QApplication::focusWidget();
+			if (auto *line = qobject_cast<QLineEdit *>(focused))
+				std::printf("editor: %s\n", qPrintable(line->text()));
+			else if (auto *box = qobject_cast<QComboBox *>(focused))
+				std::printf("editor: %s\n",
+				            qPrintable(box->currentText()));
+		}
 	}
 
 	if (parser.isSet(snapshot)) {

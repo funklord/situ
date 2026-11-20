@@ -207,3 +207,9 @@ input is least trusted.
   the curses TUI stays, because it needs only Python. Three frontends
   became four ways to look -- CLI, curses, window, window on a terminal --
   over the one core, and none of them words a cell.
+
+  **Amended 2026-11-20 (26.1114): an enum is a choice.** Each cell edits
+  with the widget its field wants -- a searchable combo of an enum's
+  members, a number held to the field's range, hex held to a run's length
+  -- every constraint from the view and every one pressed with real keys
+  through Qt and through qtty.
