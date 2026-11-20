@@ -169,7 +169,13 @@ without huge dependencies kept, and the pertinent code shared:
   output-stem option on `build` (generated `heard.c` meets a hand-written
   one); (b) one call building a message with an arm's fields instead of
   row-then-message; (c) an `embed`/opaque tail naming its schema; (d) the
-  runtime banner still names c24fe412. Not yet taken up.
+  runtime banner still names c24fe412. Not yet taken up, except: (a) is
+  not built -- the stem names the files and the "generated from X.situ"
+  line in some twenty generators, so a correct option threads the schema's
+  name through all of them, and fuzznet renamed its schemas instead (its
+  sec 1313); (d) is fuzznet's own vendoring line in
+  `wire/generated/situ.{c,h}`, not situ's, so it moves when fuzznet next
+  copies the runtime.
 - File identification (holder, 2026-11-20; LOW PRIORITY, other work
   first): an identification declaration INSIDE the schema of a `target
   file` format, made of evidence items that name the format's own members,
