@@ -632,6 +632,15 @@ class Emitter:
 			if held.offset_bits is None \
 					and self._offset_blocker(struct, held) is not None:
 				continue
+			# A tag inside a run's elements (`items[].crc`) is each
+			# element's, and the element struct emits its support over the
+			# element's view; the parent has no one tag to answer for. A
+			# counted run was kept out by the guard above only because its
+			# elements' offsets were unresolved; a `[remaining]` run of
+			# PNG chunks was not, and `png_file` emitted a covered span and
+			# a check for a `chunks_view` nothing defines (26.1124).
+			if "[]" in held.path:
+				continue
 			lines.extend(self._tag_support(struct, entry))
 
 		lines.extend(self._shifting_setters(struct))
