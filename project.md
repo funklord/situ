@@ -171,7 +171,8 @@ without huge dependencies kept, and the pertinent code shared:
   in a Help menu, a dark palette on a dark desktop, a `.desktop` file and
   icon from `install-gui`, bytes and offsets in the fixed font, accessible
   names, and a Debian package for the window (weighed against 0034: a
-  binary package of its own keeps `situc` free of Qt). Taken up in run 8.
+  binary package of its own keeps `situc` free of Qt). Done in run 8
+  (a49df435, 265c3dff): every item, the package as `situ-edit-gui`.
 - qtty does not draw a QCompleter's popup list (input to it works): the
   enum cell's search list is invisible on a terminal. Signalled to qtty's
   inbox 20261120T1120Z; add a `--snapshot` check of the list when it lands.
