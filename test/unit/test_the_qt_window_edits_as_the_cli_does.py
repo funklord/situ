@@ -266,3 +266,50 @@ def test_a_missing_message_is_a_sentence(tmp_path: Path) -> None:
 	assert done.returncode == 1
 	assert done.stderr.strip() == (f"cannot read {tmp_path / 'absent.bin'}: "
 	                               "No such file or directory")
+
+
+def test_the_window_says_who_wrote_it(window_binary: Path) -> None:
+	"""`--version`: the version on the first line, which a script parses,
+	and the copyright line situc prints on a line of its own."""
+	from situc.cli import COPYRIGHT
+
+	done = subprocess.run([str(window_binary), "--version"],
+	                      capture_output=True, text=True, timeout=60)
+	assert done.returncode == 0, done.stderr
+	version = (ROOT / "VERSION").read_text(encoding="ascii").strip()
+	assert done.stdout.splitlines() == [f"situ-edit-gui {version}", COPYRIGHT]
+
+
+@pytest.mark.parametrize("desktop,path,text,want", [
+	("TDE", ".trinity/share/config/kdeglobals",
+	 "[General]\nwindowBackground=36,36,36\nwindowForeground=220,220,220\n",
+	 "dark"),
+	("TDE", ".trinity/share/config/kdeglobals",
+	 "[General]\nwindowBackground=239,239,239\nwindowForeground=0,0,0\n",
+	 "light"),
+	("LXQt", ".config/lxqt/lxqt.conf",
+	 "[Palette]\nwindow_color=#232323\nwindow_text_color=#e0e0e0\n", "dark"),
+])
+def test_the_window_follows_a_dark_desktop(window_binary: Path,
+		tmp_path: Path, desktop: str, path: str, text: str,
+		want: str) -> None:
+	"""harmonization.md's GUI list: a dark palette on a dark desktop. On TDE
+	Qt alone hands a program a light palette, so the desktop's own file is
+	asked before the palette is (desktop_scheme.h); `--scheme` says what
+	the window follows. The files are this machine's measured dialects."""
+	(tmp_path / path).parent.mkdir(parents=True)
+	(tmp_path / path).write_text(text, encoding="ascii")
+	environment = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
+	               "TDEHOME": str(tmp_path / ".trinity"),
+	               "XDG_CONFIG_HOME": str(tmp_path / ".config"),
+	               "XDG_CURRENT_DESKTOP": desktop,
+	               "QT_QPA_PLATFORM": "offscreen", "LANG": "C.UTF-8"}
+	done = subprocess.run([str(window_binary), "--scheme"],
+	                      capture_output=True, text=True, timeout=60,
+	                      env=environment)
+	assert done.stdout.strip() == want, done.stderr
+	environment["SITU_THEME"] = "light" if want == "dark" else "dark"
+	overridden = subprocess.run([str(window_binary), "--scheme"],
+	                            capture_output=True, text=True, timeout=60,
+	                            env=environment)
+	assert overridden.stdout.strip() == environment["SITU_THEME"]

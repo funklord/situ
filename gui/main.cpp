@@ -12,11 +12,13 @@
 // premise. The terminal frontend that needs nothing but Python is
 // `situ-edit-tui`; this one needs Qt, on a terminal as in a window.
 
+#include "desktop_scheme.h"
 #include "window.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
+#include <QIcon>
 #include <QComboBox>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -163,7 +165,9 @@ bool type_into(edit_window &window, const QString &name, const QString &value,
 int main(int argc, char **argv)
 {
 	if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
-		std::printf("situ-edit-gui %s\n", SITU_VERSION);
+		// The first line keeps its shape for whatever parses it; who
+		// wrote it is a line of its own.
+		std::printf("situ-edit-gui %s\n%s\n", SITU_VERSION, SITU_COPYRIGHT);
 		return 0;
 	}
 	const bool tui = asked_for_tui(argc, argv);
@@ -189,7 +193,15 @@ int main(int argc, char **argv)
 		Qtty::set_keyboard_conventions(true);
 	}
 #endif
+	// A dark desktop gets a dark window (desktop_scheme.h). Not on a
+	// terminal: there the terminal's own colours are what qtty draws with.
+	if (!tui)
+		follow_desktop(application);
 	QApplication::setApplicationName(QStringLiteral("situ-edit-gui"));
+	// The launcher and the running window as one entry: X11 matches
+	// WM_CLASS against the .desktop's StartupWMClass, Wayland this name.
+	QGuiApplication::setDesktopFileName(QStringLiteral("situ-edit-gui"));
+	QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("situ-edit-gui")));
 	QApplication::setApplicationVersion(QStringLiteral(SITU_VERSION));
 
 	QCommandLineParser parser;
@@ -243,11 +255,19 @@ int main(int argc, char **argv)
 	    QStringLiteral("with --tui: print the window as the terminal shows "
 	                   "it, COLSxROWS, after --open and --set, and exit"),
 	    QStringLiteral("COLSxROWS"));
+	const QCommandLineOption scheme_option(QStringLiteral("scheme"),
+	    QStringLiteral("print whether the desktop reads as dark, light or "
+	                   "unknown -- what the window follows -- and exit"));
+	parser.addOption(scheme_option);
 	parser.addOptions({structure, offset, length, argument, hex, set,
 	                   set_bytes, out, open_field, no_ui, keys_option,
 	                   tui_option,
 	                   gui_option, snapshot});
 	parser.process(application);
+	if (parser.isSet(scheme_option)) {
+		std::printf("%s\n", qPrintable(scheme_name(current_scheme())));
+		return 0;
+	}
 
 	const QStringList positional = parser.positionalArguments();
 	edit_window window;

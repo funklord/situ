@@ -12,6 +12,10 @@
 
 #include <QMainWindow>
 
+// Who wrote it, as situc says it (situc/cli.py COPYRIGHT): in --version and
+// in the About window.
+#define SITU_COPYRIGHT "Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>"
+
 class QLabel;
 class QTableWidget;
 class QTableWidgetItem;

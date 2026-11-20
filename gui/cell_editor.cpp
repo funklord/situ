@@ -5,6 +5,7 @@
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QCompleter>
+#include <QFontDatabase>
 #include <QLineEdit>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
@@ -139,11 +140,16 @@ QWidget *cell_editor::createEditor(QWidget *parent,
 {
 	const QVariantMap row = index.data(view_row_role).toMap();
 	const QString edit = row.value(QStringLiteral("edit")).toString();
+	const QFont fixed = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	const QString named = tr("Value of %1")
+	                      .arg(row.value(QStringLiteral("name")).toString());
 
 	if (edit == QStringLiteral("choice")) {
 		const QStringList choices =
 		    row.value(QStringLiteral("choices")).toStringList();
 		auto *box = new QComboBox(parent);
+		box->setFont(fixed);
+		box->setAccessibleName(named);
 		box->setEditable(true);
 		box->addItems(choices);
 		// The list is the schema's, so typing never adds to it.
@@ -181,6 +187,8 @@ QWidget *cell_editor::createEditor(QWidget *parent,
 	    QStyledItemDelegate::createEditor(parent, option, index));
 	if (line == nullptr)
 		return QStyledItemDelegate::createEditor(parent, option, index);
+	line->setFont(fixed);
+	line->setAccessibleName(named);
 	if (edit == QStringLiteral("hex")) {
 		line->setValidator(new QRegularExpressionValidator(
 		    QRegularExpression(QStringLiteral("[0-9a-fA-F]*")), line));

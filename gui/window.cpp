@@ -4,9 +4,14 @@
 
 #include "cell_editor.h"
 
+#ifndef SITU_VERSION
+#define SITU_VERSION "unknown"
+#endif
+
 #include <QCloseEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QHeaderView>
 #include <QJsonArray>
 #include <QLabel>
@@ -68,6 +73,28 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 	                this, [this] { save_as(); });
 	file->addSeparator();
 	file->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
+
+	// Help > About, where hydra, beerssh and fuzzypickles keep theirs: who
+	// wrote it and which build this is.
+	QMenu *help = menuBar()->addMenu(tr("&Help"));
+	help->addAction(tr("&About situ-edit-gui"), this, [this] {
+		QMessageBox::about(this, tr("About situ-edit-gui"), tr(
+		    "<p><b>situ-edit-gui</b> %1</p>"
+		    "<p>Reads and edits a message against a situ schema. Every "
+		    "field, every write and every refusal is <tt>situ-edit</tt>'s; "
+		    "this window draws them.</p><p>%2</p>")
+		    .arg(QStringLiteral(SITU_VERSION),
+		         QStringLiteral(SITU_COPYRIGHT).toHtmlEscaped()));
+	});
+
+	// A screen reader says what each part is: the table and the header
+	// carry no visible caption of their own.
+	table_->setAccessibleName(tr("Fields"));
+	table_->setAccessibleDescription(tr(
+	    "One row per field: offset, size, name, value, what a write costs, "
+	    "and a note. Edit a value to write it; double-click a nested "
+	    "struct to open it."));
+	header_->setAccessibleName(tr("Document"));
 
 	connect(table_, &QTableWidget::itemChanged, this, &edit_window::edited);
 	// A double click on a nested struct opens it; on a writable value it
@@ -137,8 +164,15 @@ void edit_window::populate()
 			item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
 			return item;
 		};
-		table_->setItem(at, offset_column, cell("offset"));
-		table_->setItem(at, size_column, cell("size"));
+		// Offsets, sizes and values in the desktop's fixed font: hex
+		// lines up digit under digit, and a 0 is not an O.
+		const QFont fixed = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+		QTableWidgetItem *offset = cell("offset");
+		offset->setFont(fixed);
+		table_->setItem(at, offset_column, offset);
+		QTableWidgetItem *size = cell("size");
+		size->setFont(fixed);
+		table_->setItem(at, size_column, size);
 		QTableWidgetItem *named = cell("name");
 		// The nested struct a double click opens, as the JSON gives it.
 		const QJsonValue nested = fields[at].toObject()
@@ -153,6 +187,7 @@ void edit_window::populate()
 		table_->setItem(at, name_column, named);
 
 		QTableWidgetItem *value = cell("value");
+		value->setFont(fixed);
 		if (!row.value(QStringLiteral("edit")).isNull())
 			value->setFlags(value->flags() | Qt::ItemIsEditable);
 		// The row the editor is chosen and constrained by (cell_editor).

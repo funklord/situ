@@ -50,11 +50,13 @@ DEFINES += SITU_VERSION=\\\"$$cat($$ROOT/VERSION, singleline)\\\"
 
 SOURCES += \
 	cell_editor.cpp \
+	desktop_scheme.cpp \
 	main.cpp \
 	session.cpp \
 	window.cpp
 
 HEADERS += \
 	cell_editor.h \
+	desktop_scheme.h \
 	session.h \
 	window.h
