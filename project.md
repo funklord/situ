@@ -138,10 +138,26 @@ Rules for the implementer:
 
 ## 0a. Where the work stands
 
-**Read this first; section 26 has the history.** Updated 2026-11-19 at the
-end of /go run 6, master `4b766d8b`, level with origin, every batch through
-the full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
+**Read this first; section 26 has the history.** Updated 2026-11-20 at the
+end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
+full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
+
+**Run 7 (2026-11-20), what landed** -- asked whether situ has an editor
+that opens a schema and a binary:
+
+- The editor of 0034 is whole. `situ-edit` (CLI) edited; `situ-edit-tui`
+  now edits too (Enter sets a field, `w` writes `--out`) and opens a
+  nested struct over the same bytes; `situ-edit-qt` (`gui/`, `make gui`,
+  Qt Widgets) is built, driving the CLI's JSON and holding no editing
+  rule, with nested structs opening in windows of their own. Each
+  frontend's writes are held byte for byte to the CLI's.
+- From openmlx4's inbox: a sized variant frames its arm in all six
+  readers (26.1109), `[remaining]` there before a tail (26.1110), `verify`
+  checks tags behind arms, nested structs and chain links (26.1111).
+- `make typecheck` was red since run 6 (44 errors, one a real TypeError
+  in the registry policy check); green again. **Run the gate with
+  typecheck**: run 6's pytest-groups gate left it out.
 
 **Every phase of section 26 is complete, and every aim of section 1 is
 served**: accessors in four languages that agree, the capability map, the
