@@ -208,3 +208,119 @@ def test_file_agrees_with_the_magic(tmp_path: Path) -> None:
 	assert said["good"] == "png", said
 	assert said["good mime"] == "image/png", said
 	assert said["deep"] != "png" and said["idat"] != "png", said
+
+
+#: Four formats over overlapping bytes, so the tiebreak, every level and
+#: every kind of test is reached: little-endian numbers, `!=`, ranges, a
+#: closed enum, a byte-run enum's arm, an extension as proof.
+MIXED = [
+	GATED,
+	HEAD + """
+identify loose(f: head) { sufficient f.signature; }
+""",
+	# The same evidence again: an exact tie, which the earlier format wins
+	# in both matchers. Without it no tie is ever reached, and a C
+	# tiebreak that let the later one win passed this test.
+	HEAD + """
+identify twin(f: head) { sufficient f.signature; }
+""",
+	PREAMBLE.replace("endian big", "endian little") + """
+enum mode : u16 { plain = 1, packed = 2, }
+struct h { u8 magic[2] [must_eq = "MZ"]; u16 pages [min = 1, max = 64];
+           mode how; u32 size; }
+identify mz(f: h) [media = "application/x-dosexec"] {
+	required   f.magic && f.how && f.pages;
+	required   f.size != 0;
+	supporting extension "exe", "com";
+}
+""",
+	HEAD + """
+identify raw(f: head) { sufficient extension "raw"; }
+""",
+]
+
+
+def _mutations() -> list[tuple[bytes, str]]:
+	"""Valid heads and their near misses -- a nearly right file reaches
+	what a random one cannot -- under names that hit and miss."""
+	import random
+	chosen = random.Random(1124)
+	seeds = [_chunk(b"IHDR"), _chunk(b"IDAT"), _chunk(b"IHDR", depth=17),
+	         b"MZ\x02\x00\x01\x00\x10\x00\x00\x00",
+	         b"MZ\x41\x00\x02\x00\x10\x00\x00\x00",
+	         b"MZ\x02\x00\x03\x00\x00\x00\x00\x00", b"", b"MZ"]
+	cases = []
+	for seed in seeds:
+		for name in ("a.png", "A.PNG", "b.exe", "c.raw", "d", "png"):
+			cases.append((seed, name))
+		for _ in range(40):
+			data = bytearray(seed or b"\x00" * 12)
+			for _ in range(chosen.randint(1, 3)):
+				data[chosen.randrange(len(data))] = chosen.choice(
+					[0, 1, 2, 3, 0x40, 0x41, 0xff, chosen.randrange(256)])
+			cases.append((bytes(data[:chosen.randint(0, len(data))])
+			              if chosen.random() < 0.2 else bytes(data),
+			              chosen.choice(["x.png", "x.exe", "x.RAW", "x"])))
+	return cases
+
+
+@pytest.mark.skipif(shutil.which("cc") is None, reason="no C compiler")
+def test_the_c_matcher_agrees_with_the_python_one(tmp_path: Path) -> None:
+	formats: list[identify.Recogniser] = []
+	for source in MIXED:
+		formats += _formats(source)
+	(tmp_path / "id.c").write_text(identify.c_source(formats),
+	                               encoding="ascii")
+	(tmp_path / "drive.c").write_text(r"""#include <stdio.h>
+#include <stdlib.h>
+#include "id.c"
+int main(void)
+{
+	static const char *const names[] = {"no", "possible", "likely", "certain"};
+	char line[512];
+	while (fgets(line, sizeof line, stdin) != NULL) {
+		uint8_t head[64];
+		size_t length = 0;
+		char *name = strchr(line, ' ');
+		const struct situ_id_format *chosen;
+		int level;
+		*name++ = '\0';
+		name[strcspn(name, "\n")] = '\0';
+		for (const char *at = line; at[0] && at[1]; at += 2) {
+			unsigned byte;
+			sscanf(at, "%2x", &byte);
+			head[length++] = (uint8_t)byte;
+		}
+		level = situ_id_judge(head, length, name, &chosen);
+		printf("%s %s\n", chosen ? chosen->name : "-", names[level]);
+	}
+	return 0;
+}
+""", encoding="ascii")
+	built = subprocess.run(
+		["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-o",
+		 str(tmp_path / "drive"), str(tmp_path / "drive.c")],
+		capture_output=True, text=True, timeout=120)
+	assert built.returncode == 0, built.stderr
+	cases = _mutations()
+	ran = subprocess.run(
+		[str(tmp_path / "drive")], capture_output=True, text=True,
+		timeout=60, input="".join(f"{head.hex() or '-'} {name}\n"
+		                          for head, name in cases))
+	assert ran.returncode == 0, ran.stderr
+	expected = []
+	for head, name in cases:
+		chosen, level = identify.best(formats, head, name)
+		expected.append(f"{chosen.name if chosen else '-'} {level}")
+	said = ran.stdout.splitlines()
+	assert len(said) == len(cases)
+	wrong = [(head.hex(), name, mine, theirs) for (head, name), mine, theirs
+	         in zip(cases, expected, said) if mine != theirs]
+	assert not wrong, wrong[:5]
+	# Every level was reached, and every format chosen, or the agreement
+	# says less than it seems -- a sweep in which `twin` never lost a tie
+	# or `mz` was never judged on its little-endian pages proves nothing
+	# about either.
+	assert {line.split()[1] for line in expected} == set(identify.LEVELS)
+	assert {line.split()[0] for line in expected} == {
+		"-", "png", "loose", "mz", "raw"}

@@ -421,6 +421,10 @@ def build_parser() -> argparse.ArgumentParser:
 		"--magic", action="store_true",
 		help="print the `certain` verdicts as magic(5) rules for file(1) "
 		     "instead of judging files")
+	identify_cmd.add_argument(
+		"--c", action="store_true",
+		help="print one C file holding every format's tests and "
+		     "`situ_id_judge`, for a search tool to include")
 	identify_cmd.add_argument("files", nargs="*", type=Path)
 
 	explain_cmd = sub.add_parser(
@@ -688,6 +692,9 @@ def cmd_identify(args: argparse.Namespace) -> int:
 		                                resolve(schema, solve(schema)))
 	if args.magic:
 		sys.stdout.write(identify.magic(formats))
+		return 0
+	if args.c:
+		sys.stdout.write(identify.c_source(formats))
 		return 0
 	if not formats:
 		print("situc: no schema given declares an `identify`",
