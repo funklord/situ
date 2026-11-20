@@ -65,6 +65,7 @@ def _run(tmp_path: Path, text: str, *argv: str) -> tuple[int, str]:
 def test_the_idiom_builds_and_compiles(tmp_path: Path) -> None:
 	rc, said = _run(tmp_path, IDIOM, "build", "--target", "c")
 	assert rc == 0, said
+	assert HOST_CC is not None		# the skip above says so
 	compiled = subprocess.run(
 		[HOST_CC, "-std=c11", "-Wall", "-Wextra", "-Werror",
 		 f"-I{ROOT / 'runtime' / 'c'}", "-c", str(tmp_path / "out" / "unit.c"),

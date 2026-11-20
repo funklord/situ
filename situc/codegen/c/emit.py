@@ -34,7 +34,7 @@ from situc.codegen import reserved_policy as reserved_stated
 from situc.codegen import reserved_want
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
-	check_deferred_collisions,
+	Entity, check_deferred_collisions,
 	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
 	entities, ident, macro)
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
@@ -214,7 +214,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	# Before anything is emitted: two constructs that flatten to one C
 	# identifier would otherwise surface as a redefinition error in generated
 	# code, naming a function nobody wrote.
-	deferred: list = []
+	deferred: list[tuple[Entity, Entity]] = []
 	warnings = check_collisions(resolved, prefix, [
 		*(("struct", decl.name, decl.span) for decl in schema.structs()),
 		*(("enum", decl.name, decl.span) for decl in schema.enums()),
@@ -1029,9 +1029,12 @@ class Emitter:
 		          for let in decl.lets]
 		lines: list[str] = []
 		for name in texts:
-			scalar = fields[name].type_ref.scalar
-			ctype = f"{'int' if scalar.signed else 'uint'}{scalar.bits}_t"
-			widen = "(uint64_t)(int64_t)" if scalar.signed else "(uint64_t)"
+			held = fields[name]
+			assert isinstance(held, ast.Field) \
+				and held.type_ref.scalar is not None	# `read` asserted it
+			digits = held.type_ref.scalar
+			ctype = f"{'int' if digits.signed else 'uint'}{digits.bits}_t"
+			widen = "(uint64_t)(int64_t)" if digits.signed else "(uint64_t)"
 			lines += [
 				"",
 				f"/* {struct.name}.{name} as a named value reads it: its value,",

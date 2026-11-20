@@ -20,7 +20,7 @@ while rendering nothing is the failure mode that has to be impossible.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from walker import vm
 from walker.image import FRAME_CAP, LITTLE, NONE, Image, _string_at
@@ -778,7 +778,7 @@ def _arm_runs(image: Image,
 	a design decision and is really an unchecked guess is the expensive kind,
 	because it reads as settled.
 	"""
-	found = []
+	found: list[tuple[int, int, int | tuple[int, ...], str]] = []
 	for index in image.members(image.structs[struct_index]):
 		if index not in image.arms:
 			continue
@@ -793,8 +793,7 @@ def _arm_runs(image: Image,
 			# four backends about `default: u8 rest[len]` and this skipped
 			# it, so the comparison intersected it away (26.1097's
 			# `deep_switch`). Its `case` is the tuple of values it loses to.
-			if flags & 1:
-				case = claimed
+			asked: int | tuple[int, ...] = claimed if flags & 1 else case
 			arm = image.placements[chosen]
 			if arm.is_tag:
 				continue
@@ -802,13 +801,13 @@ def _arm_runs(image: Image,
 			# delimited arm has neither a count nor a size program, so
 			# asking those first classifies it as a scalar and drops it.
 			if chosen in image.delimiters:
-				found.append((chosen, selects, case, "delimited"))
+				found.append((chosen, selects, asked, "delimited"))
 				continue
 			if arm.element_bits == NONE or arm.element_bits > 64:
 				continue
 			if arm.array_count == NONE and arm.size_code == NONE:
 				continue		# a scalar arm: `_arm_values` has it
-			found.append((chosen, selects, case,
+			found.append((chosen, selects, asked,
 			              "bytes" if arm.element_bits == BITS_PER_BYTE
 			              else "element"))
 	return found
@@ -854,7 +853,7 @@ def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 
 def listing(image: Image, buffer: bytes, args: Sequence[int] = (),
 		prefix: bytes | None = None,
-		argued: "dict[str, Sequence[int]] | None" = None) -> str:
+		argued: "Mapping[str, Sequence[int]] | None" = None) -> str:
 	"""What this schema says about this buffer, one struct at a time.
 
 	`args` are the schema's `parameter` members (0050), positionally. One
@@ -1824,14 +1823,15 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			if len(quarters) != len(CHARS):
 				raise Refused(f"placement {index}: {len(quarters)} of the "
 				              "four [chars] rows")
-			table = b"".join(
+			# `admitted`: `table` is a tuple further up this function.
+			admitted = b"".join(
 				(quarters[check] & (2**64 - 1)).to_bytes(8, "little")
 				for check in CHARS)
 			try:
 				data = _span_bytes(image, view, index)
 			except Refused:
 				return fail(ERR_BOUNDS, index)
-			if any(not (table[b >> 3] >> (b & 7)) & 1 for b in data):
+			if any(not (admitted[b >> 3] >> (b & 7)) & 1 for b in data):
 				return fail(ERR_CONSTRAINT, index, CHARS[0])
 
 		span = [pair for pair in held
@@ -2933,7 +2933,7 @@ def _members(image: Image, view: View, struct_index: int,
 		lines.append(f"{local} ok={1 if chosen else 0}"
 		             f" value={value & 0xFFFFFFFFFFFFFFFF}")
 
-	for arm, selects, case, shape in _arm_runs(image, struct_index):
+	for arm, selects, asks, shape in _arm_runs(image, struct_index):
 		local = _local(image, arm)
 		try:
 			# Reachability has to gate the READ, not merely the answer. The
@@ -2945,8 +2945,8 @@ def _members(image: Image, view: View, struct_index: int,
 			# is absent from an older message, as every backend's accessor
 			# answers VERSION for it (26.424, 26.947).
 			value  = read_scalar(view, selects)
-			chosen = (value not in case if isinstance(case, tuple)
-			          else value == case) \
+			chosen = (value not in asks if isinstance(asks, tuple)
+			          else value == asks) \
 				and not _arm_predates(view, arm)
 			if shape == "delimited":
 				# The same number `_delimited` renders for a plain member:

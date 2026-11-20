@@ -9,6 +9,8 @@ the entry states raises `ConstraintError`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from situc import ast
 from situc.wellformed import _policy_words, cell_value
 
@@ -42,7 +44,7 @@ def policy_constants(schema: ast.Schema) -> list[str]:
 
 
 def registry_class(schema: ast.Schema, decl: ast.RegistryDecl,
-		structs: dict[str, object], py_name: object) -> list[str]:
+		structs: Mapping[str, object], py_name: object) -> list[str]:
 	"""The class for one registry."""
 	name = py_name(decl.name)				# type: ignore[operator]
 	types = list(dict.fromkeys(entry.type_name for entry in decl.entries))

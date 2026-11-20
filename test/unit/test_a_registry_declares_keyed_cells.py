@@ -80,6 +80,9 @@ def test_a_registry_round_trips() -> None:
 	('"" : count;', "is not a key"),
 	('"a b" : count;', "is not a key"),
 	('"a" : count [scope = planet];', "takes words of `policy scope`"),
+	# Not words at all: this reached a comprehension over None and died
+	# on a TypeError rather than the diagnostic above.
+	('"a" : count [scope = 3];', "takes words of `policy scope`"),
 	('"a" : count [colour = 3];', "is not a registry attribute"),
 	('"a" : nope;', "is not a struct"),
 	('"a" : text [max = 3];', "bounds a value `text` has not got"),

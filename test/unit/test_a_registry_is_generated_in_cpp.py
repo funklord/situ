@@ -62,6 +62,7 @@ def test_the_cpp_registry_answers_what_the_c_one_does(tmp_path: Path) -> None:
 	             "--out", str(tmp_path)]) == 0
 	(tmp_path / "probe.cpp").write_text(PROBE, encoding="ascii")
 	binary = tmp_path / "probe"
+	assert HOST_CXX is not None		# the skip above says so
 	built  = subprocess.run(
 		[HOST_CXX, *WARNINGS, f"-I{ROOT / 'runtime' / 'c'}",
 		 f"-I{ROOT / 'runtime' / 'cpp'}", f"-I{tmp_path}",

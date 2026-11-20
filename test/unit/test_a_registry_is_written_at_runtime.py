@@ -31,10 +31,10 @@ from situc.resolve import resolve				# noqa: E402
 from test_a_registry_is_generated_in_c import CASES, SCHEMA	# noqa: E402
 from test_a_registry_is_walked import _ask			# noqa: E402
 from walker import registry					# noqa: E402
-from walker.image import load					# noqa: E402
+from walker.image import Image, load				# noqa: E402
 
 #: The same registry the schema declares, as a program would write it.
-CELLS = [
+CELLS: list[dict[str, object]] = [
 	{"key": "revocation/k", "type": "count", "min": 1, "max": 255,
 	 "safe": "higher", "unit": "root signatures",
 	 "summary": "the estate's k", "words": {"scope": ["estate"]}},
@@ -53,7 +53,7 @@ CELLS = [
 ]
 
 
-def _types_only() -> object:
+def _types_only() -> Image:
 	"""The schema's structs, packed with no registry at all."""
 	text = SCHEMA[:SCHEMA.index("registry node {")]
 	schema = parse(Source("types.situ", text))
@@ -69,9 +69,9 @@ def test_rows_written_at_runtime_answer_as_packed_ones() -> None:
 	said  = [(case, _ask(image, *case[:3])) for case in CASES]
 	assert [got for _, got in said] == [case[-1] for case in CASES], [
 		(case, got) for case, got in said if got != case[-1]]
-	gone = registry.find(image, "archive/gone")	# type: ignore[arg-type]
+	gone = registry.find(image, "archive/gone")
 	assert gone is not None
-	assert registry.words(image, gone, "display") == ["advanced"]	# type: ignore[arg-type]
+	assert registry.words(image, gone, "display") == ["advanced"]
 
 
 def test_the_written_rows_are_the_packed_rows() -> None:

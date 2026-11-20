@@ -2543,6 +2543,11 @@ class Emitter:
 			# A count the message states is held to the frame, as no written
 			# width has to be (26.924).
 			declared = self._length_expression(struct, placement)
+			# A length this cannot render declines, as every other caller
+			# of `_length_expression` does, rather than writing `None` into
+			# the Rust.
+			if declared is None:
+				return []
 			return [
 				"",
 				f"\t/// `{placement.path}`: as many digits as the message says.",

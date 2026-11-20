@@ -3871,7 +3871,7 @@ def _qualify_own_enum_arms(schema: ast.Schema) -> None:
 			         and one.type_ref.scalar is not None
 			         and one.array is None}
 			schema.decls[i] = replace(decl, members = walk(decl.members,
-			                                                names))  # type: ignore[arg-type]
+			                                                names))
 
 
 def _widen_byte_enum_fields(schema: ast.Schema) -> None:

@@ -10,6 +10,8 @@ cell has no value. Everything is `pub` and used, so `-D warnings` holds.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from situc import ast
 from situc.wellformed import _policy_words, cell_value
 
@@ -45,7 +47,7 @@ def policy_constants(schema: ast.Schema) -> list[str]:
 
 
 def registry_items(schema: ast.Schema, decl: ast.RegistryDecl,
-		structs: dict[str, object], pascal: object) -> list[str]:
+		structs: Mapping[str, object], pascal: object) -> list[str]:
 	name     = pascal(decl.name)				# type: ignore[operator]
 	entry_t  = f"{name}Entry"
 	types    = list(dict.fromkeys(one.type_name for one in decl.entries))

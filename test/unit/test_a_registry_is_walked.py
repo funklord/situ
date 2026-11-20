@@ -136,6 +136,7 @@ def test_the_c_walker_answers_what_the_c_registry_answers(
 	(tmp_path / "image.bin").write_bytes(blob)
 	(tmp_path / "probe.c").write_text(C_PROBE, encoding="ascii")
 	binary = tmp_path / "probe"
+	assert COMPILER is not None		# the skip above says so
 	built  = subprocess.run(
 		[COMPILER, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
 		 f"-I{walker}", str(tmp_path / "probe.c"),

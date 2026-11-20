@@ -721,10 +721,10 @@ def _names_hold_in_c(schema: ast.Schema, resolved: ResolvedSchema) -> None:
 	really defined twice -- only that question: a schema the C backend
 	declines for some other reason is build's to report."""
 	from situc.codegen.c import generate
-	from situc.codegen.c.names import check_collisions
+	from situc.codegen.c.names import Entity, check_collisions
 	from situc.diagnostics import SituError
 
-	deferred: list = []
+	deferred: list[tuple[Entity, Entity]] = []
 	check_collisions(resolved, "situ", [
 		*(("struct", decl.name, decl.span) for decl in schema.structs()),
 		*(("enum", decl.name, decl.span) for decl in schema.enums()),

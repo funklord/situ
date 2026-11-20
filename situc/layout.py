@@ -4537,7 +4537,7 @@ def _region_argument(region: ast.Member, name: str) -> str | None:
 
 
 def _leave_the_tail(layout: StructLayout, state: Walk,
-		tokens: set[str] = frozenset()) -> None:
+		tokens: frozenset[str] | set[str] = frozenset()) -> None:
 	"""A `[remaining]` run leaves the fixed members after it their bytes.
 
 	`commitment[32] | ciphertext | tag[16]` is most AEAD frames, and a frame

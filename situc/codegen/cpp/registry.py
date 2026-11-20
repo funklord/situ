@@ -9,6 +9,8 @@ the tests build with `-fno-exceptions`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
@@ -48,7 +50,7 @@ def policy_constants(schema: ast.Schema) -> list[str]:
 
 
 def registry_class(schema: ast.Schema, decl: ast.RegistryDecl,
-		structs: dict[str, object], namespace: str) -> list[str]:
+		structs: Mapping[str, object], namespace: str) -> list[str]:
 	name     = c_name(decl.name)
 	types    = list(dict.fromkeys(entry.type_name for entry in decl.entries))
 	policies = [c_name(policy.name) for policy in schema.policies()]

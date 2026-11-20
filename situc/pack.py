@@ -2080,10 +2080,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# one 64-bit quarter each, so a row's `value` says which bytes it
 			# admits and no section is needed. Ahead of the kinds for the
 			# sized token's reason: a `[remaining]` run classifies as nothing.
-			held = chars.of(placement.attrs)
-			if held is not None \
+			# `admitted`, not `held`: this function binds `held` to an
+			# integer further down, and mypy reads the rebinding as an error.
+			admitted = chars.of(placement.attrs)
+			if admitted is not None \
 					and "." not in placement.path[len(rstruct.name) + 1:]:
-				bits = chars.table(held)
+				bits = chars.table(admitted)
 				for quarter in range(4):
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at, int.from_bytes(
@@ -3694,7 +3696,7 @@ def _metadata(order: list[tuple[str, ResolvedStruct]],
 
 
 def _registry_sections(schema: ast.Schema, strings: "object",
-		shape_of: dict[str, int | None],
+		shape_of: dict[str, int],
 		let_row: dict[tuple[str, str], int],
 		placement_index: dict[str, int]) -> list[tuple[int, bytes, int]]:
 	"""A registry's cells and their policy words, as `std/image.situ`'s

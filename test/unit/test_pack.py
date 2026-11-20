@@ -896,9 +896,11 @@ def test_a_member_whose_program_did_not_encode_disowns_its_struct() -> None:
 	real = packer.Program.compile
 
 	def refuse(self: packer.Program, expr: ast.Expr,
-			resolve_path: object,
+			resolve_path: packer.Resolver,
 			consts: dict[str, int] | None = None,
-			enum_members: dict[str, int] | None = None) -> None:
+			enum_members: dict[str, int] | None = None,
+			spellings: "dict[str, tuple[str, dict[str, bytes], bool]] | None"
+			= None) -> None:
 		raise packer.PackError("injected: no program for this member")
 
 	packer.Program.compile = refuse		# type: ignore[method-assign]

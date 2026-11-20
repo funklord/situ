@@ -6635,12 +6635,14 @@ def _check_let_expr(let: ast.Let, expr: ast.Expr,
 		# A token member is compared, never computed with: its reading is
 		# which arm it spells, and the order the arms were declared in is
 		# not a number a schema means.
-		held = token_of(expr.left) or token_of(expr.right)
+		# `token`, not `held`: `held` is a member further down, and mypy
+		# read the rebinding as an error that made the rest unreachable.
+		token = token_of(expr.left) or token_of(expr.right)
 		armed = arm_of(expr.left) or arm_of(expr.right)
-		if held is not None or armed is not None:
+		if token is not None or armed is not None:
 			if expr.op not in ("==", "!="):
 				raise refuse(f"uses `{expr.op}` on a token", expr.span)
-			if held is None or armed is None or held != armed:
+			if token is None or armed is None or token != armed:
 				raise refuse("compares a token member with something other "
 				             "than one of its own arms", expr.span)
 			return
@@ -7121,9 +7123,13 @@ def _check_registry_attrs(entry: ast.RegistryEntry, struct: ast.StructDecl,
 	value = cell_value(struct)
 	for attr in entry.attrs:
 		if attr.name in policies:
+			# `None` first: a value that is not words -- `[access = 3]` --
+			# reached the comprehension and died on a TypeError rather than
+			# the diagnostic below, which already named the case.
 			words = _policy_words(attr.value)
-			unknown = [word for word in words
-			           if word not in policies[attr.name].words]
+			unknown = ([] if words is None else
+			           [word for word in words
+			            if word not in policies[attr.name].words])
 			if words is None or unknown or not words:
 				raise error(f"`{attr.name}` takes words of `policy "
 				            f"{attr.name}`", attr.span,

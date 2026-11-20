@@ -185,6 +185,7 @@ def test_the_c_registry_finds_checks_reads_and_orders(tmp_path: Path) -> None:
 	(tmp_path / "settings.c").write_text(made.source, encoding="ascii")
 	(tmp_path / "probe.c").write_text(PROBE, encoding="ascii")
 	binary = tmp_path / "probe"
+	assert HOST_CC is not None		# the skip above says so
 	built = subprocess.run(
 		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 str(tmp_path / "probe.c"), str(tmp_path / "settings.c"),
