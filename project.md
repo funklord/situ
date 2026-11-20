@@ -9383,6 +9383,26 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1121 A message is built around an arm already in its buffer
+
+fuzznet builds each answer twice -- `X_row_build` into one buffer, then
+`message_build_X` copying it into a second, about thirty places. A builder
+taking a nested struct or an arm's body as bytes copied them with
+`memcpy`, which the C standard leaves undefined when the bytes are already
+where they go, so building the row at its place in the message was not
+allowed. C's builders now put caller-supplied bytes with `situ_put`
+(emitted once per build header, guarded): `memmove`, and nothing when the
+source is the destination; C++'s the same inline. So: build the row at the
+arm's offset in the message buffer, then the message around it -- one
+buffer, no copy, the same bytes (`test_a_message_is_built_around_its_arm_in_
+place.py`, which pins the result: no sanitizer here reports a `memcpy` onto
+its own address, so the undefined case cannot be shown failing). Rust's
+borrow rules and Python's `bytes` keep the two-buffer form there. The
+caller states the arm's offset; a generated constant for it, where the
+offset is static, is the next step if fuzznet wants one. A builder taking
+the nested struct's own FIELDS -- what was first scoped -- is not needed
+for this and is not built.
+
 ### 26.1120 A replay window, stated in the schema
 
 Moved to `doc/decision/26.1120-a-replay-window.md`.

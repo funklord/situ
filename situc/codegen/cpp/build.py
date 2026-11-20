@@ -279,7 +279,7 @@ def _nested(part: Part, inner: str) -> list[str]:
 		        "\t}",
 		        *_room(f"{local}_len"),
 		        f"\tif ({local}_len != 0u) {{",
-		        f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		        f"\t\tif (situ_out + situ_at != {local}) {{ std::memmove(situ_out + situ_at, {local}, {local}_len); }}",
 		        "\t}",
 		        f"\tsitu_at += {local}_len;"]
 	return [
@@ -318,7 +318,7 @@ def _nested(part: Part, inner: str) -> list[str]:
 		"\t}"]),
 		*_room(f"{local}_len"),
 		f"\tif ({local}_len != 0u) {{",
-		f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		f"\t\tif (situ_out + situ_at != {local}) {{ std::memmove(situ_out + situ_at, {local}, {local}_len); }}",
 		"\t}",
 		f"\tsitu_at += {local}_len;",
 	]
@@ -467,7 +467,7 @@ def _ended(part: Part) -> list[str]:
 		        "\t}",
 		        *_room(f"{local}_len"),
 		        f"\tif ({local}_len != 0u) {{",
-		        f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		        f"\t\tif (situ_out + situ_at != {local}) {{ std::memmove(situ_out + situ_at, {local}, {local}_len); }}",
 		        "\t}",
 		        f"\tsitu_at += {local}_len;",
 		        *_needle(part.delimiter)]
@@ -498,7 +498,7 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		  if part.digits > 0 else []),
 		*_room(f"{local}_len"),
 		f"\tif ({local}_len != 0u) {{",
-		f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		f"\t\tif (situ_out + situ_at != {local}) {{ std::memmove(situ_out + situ_at, {local}, {local}_len); }}",
 		"\t}",
 		f"\tsitu_at += {local}_len;",
 		*(_needle(part.delimiter) if part.delimiter else []),

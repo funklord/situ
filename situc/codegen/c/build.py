@@ -3353,7 +3353,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 					f"\tif ({part.local} == NULL) {{",
 					"\t\treturn SITU_ERR_BOUNDS;",
 					"\t}",
-					f"\tmemcpy({OUT} + {AT}, {part.local}, "
+					f"\tsitu_put({OUT} + {AT}, {part.local}, "
 					f"{part.local}_len);",
 				]
 			lines += [
@@ -3387,7 +3387,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
 				*_room(f"{part.bytes}u"),
-				f"\tmemcpy({OUT} + {AT}, {part.local}, {part.bytes}u);",
+				f"\tsitu_put({OUT} + {AT}, {part.local}, {part.bytes}u);",
 				f"\t{AT} += {part.bytes}u;",
 				"",
 			]
@@ -3708,7 +3708,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t\tif ({part.local} == NULL) {{",
 				"\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t}",
-				f"\t\tmemcpy({OUT} + {AT}, {part.local}, "
+				f"\t\tsitu_put({OUT} + {AT}, {part.local}, "
 				f"{part.local}_len);",
 				"\t}",
 				f"\t{AT} += {part.local}_len;",
@@ -3769,7 +3769,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t\tif ({part.local} == NULL) {{",
 				"\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t}",
-				f"\t\tmemcpy({OUT} + {AT}, {part.local}, "
+				f"\t\tsitu_put({OUT} + {AT}, {part.local}, "
 				f"{part.local}_len);",
 				"\t}",
 				f"\t{AT} += {part.local}_len;",
@@ -3827,7 +3827,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"\t\t}",
 				f"\t\tmemset({OUT} + {AT}, 0, {NEED}_at - {AT});",
 				f"\t\tif ({part.local}_len != 0u) {{",
-				f"\t\t\tmemcpy({OUT} + {NEED}_at, {part.local}, {part.local}_len);",
+				f"\t\t\tsitu_put({OUT} + {NEED}_at, {part.local}, {part.local}_len);",
 				"\t\t}",
 				f"\t\t{AT} = {NEED}_at + {part.local}_len;",
 				"\t}",
@@ -3922,7 +3922,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t\tif ({part.local} == NULL) {{",
 				"\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t}",
-				f"\t\tmemcpy({OUT} + {AT}, {part.local}, "
+				f"\t\tsitu_put({OUT} + {AT}, {part.local}, "
 				f"{part.local}_len);",
 				"\t}",
 				f"\t{AT} += {part.local}_len;",
@@ -3957,7 +3957,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t\tif ({part.local} == NULL) {{",
 				"\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t}",
-				f"\t\tmemcpy({OUT} + {AT}, {part.local}, {held_len});",
+				f"\t\tsitu_put({OUT} + {AT}, {part.local}, {held_len});",
 				"\t}",
 				f"\t{AT} += {held_len};",
 				"",
@@ -4009,6 +4009,23 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 		"#ifdef __cplusplus",
 		"extern \"C\" {",
+		"#endif",
+		"",
+		# Bytes the caller hands over may already be where they go: a
+		# nested struct or an arm's body built straight into this buffer
+		# at its offset, so a message is one buffer and no copy (26.1121).
+		# `memmove`, defined for overlap, and nothing at all when they are
+		# the same bytes. Guarded, since two build headers in one program
+		# each carry it.
+		"#ifndef SITU_PUT_DEFINED",
+		"#define SITU_PUT_DEFINED",
+		"static inline void situ_put(uint8_t *to, const uint8_t *from,"
+		" uint32_t n)",
+		"{",
+		"\tif (to != from && n != 0u) {",
+		"\t\tmemmove(to, from, n);",
+		"\t}",
+		"}",
 		"#endif",
 		"",
 	]
