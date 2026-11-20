@@ -1842,7 +1842,7 @@ def check_replays(schema: ast.Schema) -> None:
 				                   "not be the unbounded case"]
 				            if key == "ahead" else [])
 		for key, allowed in (("unit", REPLAY_UNITS),
-		                     ("expiry", {"required", "optional"})):
+		                     ("expiry", {"required", "optional", "caller"})):
 			if key not in said:
 				continue
 			value = getattr(said[key].value, "name", None)

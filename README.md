@@ -470,8 +470,9 @@ wrote down. Which messages a receiver accepts once is the same kind of
 agreement: `replay window(m: frame) [counter = m.seq, window = 64]` keeps a
 session's last 64 counters, and `[nonce = ..., expires = ..., ahead = T,
 unit = ms]` a set of nonces until they expire, in a table the caller sizes
-(`capacity = N` states the least it may be), with `expiry = required` or
-`optional` saying whether a message may state none. Each generates a pure
+(`capacity = N` states the least it may be), with `expiry = required`,
+`optional` or `caller` saying whether a message may state none -- the last
+asked of the caller per message, where the rule is the consumer's. Each generates a pure
 `check` to ask before the tag -- a replay costs no decryption -- and a
 `record` to ask after it, so a forgery records nothing; the state is the
 caller's.

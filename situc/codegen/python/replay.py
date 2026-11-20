@@ -81,11 +81,16 @@ def _nonce(replay: ast.Replay) -> list[str]:
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
-	required = _word(replay, "expiry", "required") == "required"
+	rule     = _word(replay, "expiry", "required")
+	required = rule == "required"
+	given    = ", expiry_required: bool" if rule == "caller" else ""
+	passed   = ", expiry_required" if rule == "caller" else ""
 	param    = replay.param.name
 	nonce    = _read(_path(replay, "nonce"))
 	expires  = _read(_path(replay, "expires"))
 	zero = ("\t\t\treturn NO_EXPIRY" if required else
+	        "\t\t\treturn NO_EXPIRY if expiry_required else OK"
+	        if rule == "caller" else
 	        "\t\t\treturn OK\t# none stated: allowed, and nothing remembered")
 	return [
 		f"class {_class(replay.name)}:",
@@ -104,7 +109,7 @@ def _nonce(replay: ast.Replay) -> list[str]:
 		'\t\t\traise ValueError(f"a table of {count} is below {self.LEAST}")',
 		"\t\tself.slots = [(0, 0)] * count\t# (nonce, expires)",
 		"",
-		f"\tdef check(self, {param}, now: int) -> int:",
+		f"\tdef check(self, {param}, now: int{given}) -> int:",
 		f'\t\t"""Whether the nonce may be accepted at `now` ({unit}). Pure: ask',
 		'\t\tit BEFORE the tag."""',
 		f"\t\tnonce, expires = int({nonce}), int({expires})",
@@ -122,10 +127,10 @@ def _nonce(replay: ast.Replay) -> list[str]:
 		"\t\t\t\treturn REPLAY",
 		"\t\treturn OK if free else FULL",
 		"",
-		f"\tdef record(self, {param}, now: int) -> int:",
+		f"\tdef record(self, {param}, now: int{given}) -> int:",
 		'\t\t"""`check`, and the nonce recorded where it says OK and an expiry',
 		'\t\tis stated. Ask it AFTER the tag verifies."""',
-		f"\t\tverdict = self.check({param}, now)",
+		f"\t\tverdict = self.check({param}, now{passed})",
 		"\t\tif verdict != OK:",
 		"\t\t\treturn verdict",
 		f"\t\tnonce, expires = int({nonce}), int({expires})",

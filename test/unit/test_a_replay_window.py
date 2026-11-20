@@ -37,10 +37,16 @@ struct f { h head; u8 body[remaining]; }
 replay w(m: f) [counter = m.head.seq, window = 64];
 replay n(m: f) [nonce = m.head.nonce, expires = m.head.exp, capacity = 4,
                 ahead = 1000, unit = ms, expiry = optional];
+replay z(m: f) [nonce = m.head.nonce, expires = m.head.exp, ahead = 1000,
+                unit = ms, expiry = caller];
 """
 
 COUNTER = [0, 1, 0, 0, 0, 2, 0]
 NONCES  = [0, 1, 3, 4, 0, 5, 0]
+#: `expiry = caller` (fuzznet, inbox 20261120T1930Z): a zero expiry is
+#: NO_EXPIRY when the caller says one is required and OK when it does not;
+#: a stated one is OK either way.
+CALLER  = [6, 0, 0]
 
 C_DRIVER = r"""
 #include <stdio.h>
@@ -65,6 +71,8 @@ int main(void)
 	static situ_n_slot_t slots[4];
 	situ_n_t n = {slots, 4};
 	situ_n_t small = {slots, 3};
+	static situ_z_slot_t zslots[1];
+	situ_z_t z = {zslots, 1};
 	printf("w");
 	situ_w_record(&w, at(10, 0, 0), &v); printf(" %d", v);
 	situ_w_record(&w, at(10, 0, 0), &v); printf(" %d", v);
@@ -85,6 +93,11 @@ int main(void)
 	situ_n_record(&n, at(0, 30, 2600), 2000, &v); printf(" %d", v);
 	printf("\nsmall %d\n",
 	       situ_n_check(&small, at(0, 40, 2900), 2000, &v) == SITU_ERR_BOUNDS);
+	printf("z");
+	situ_z_check(&z, at(0, 9, 0), 1000, 1, &v); printf(" %d", v);
+	situ_z_check(&z, at(0, 9, 0), 1000, 0, &v); printf(" %d", v);
+	situ_z_check(&z, at(0, 9, 1500), 1000, 1, &v); printf(" %d", v);
+	printf("\n");
 	return 0;
 }
 """
@@ -117,6 +130,11 @@ int main()
 	k(at(0,8,2001),1000); k(at(0,9,0),1000);
 	for (int i = 0; i < 3; i++) (void)set.record(at(0,20+i,1900),1000,v);
 	s(at(0,30,1900),1000); s(at(0,30,2600),2000);
+	z zz; z::slot zslots[1] = {}; zz.slots = zslots; zz.count = 1;
+	std::printf("\nz");
+	(void)zz.check(at(0,9,0),1000,true,v); std::printf(" %d", int(v));
+	(void)zz.check(at(0,9,0),1000,false,v); std::printf(" %d", int(v));
+	(void)zz.check(at(0,9,1500),1000,true,v); std::printf(" %d", int(v));
 	std::printf("\n");
 }
 """
@@ -142,7 +160,13 @@ fn main() {
 	}
 	for i in 0..3 { let b = bytes(0, 20 + i, 1900); let f = rp::F::new(&b).unwrap(); n.record(&f, 1000).unwrap(); }
 	for (exp, now) in [(1900u64, 1000u64), (2600, 2000)] { let b = bytes(0, 30, exp); let f = rp::F::new(&b).unwrap(); out.push(n.record(&f, now).unwrap() as i32); }
-	println!("n {:?}", out);
+	println!("n {:?}", out); out.clear();
+	let mut zt = [(0u64, 0u64); 1]; let z = Z { slots: &mut zt };
+	for (exp, required) in [(0u64, true), (0, false), (1500, true)] {
+		let b = bytes(0, 9, exp); let f = rp::F::new(&b).unwrap();
+		out.push(z.check(&f, 1000, required).unwrap() as i32);
+	}
+	println!("z {:?}", out);
 }
 """
 
@@ -219,6 +243,10 @@ def test_python(tmp_path: Path) -> None:
 		said += [n.record(at(0, 30, 1900), 1000),
 		         n.record(at(0, 30, 2600), 2000)]
 		assert said == NONCES
+		z = replay.Z(1)
+		assert [z.check(at(0, 9, 0), 1000, True),
+		        z.check(at(0, 9, 0), 1000, False),
+		        z.check(at(0, 9, 1500), 1000, True)] == CALLER
 	finally:
 		del sys.path[:2]
 		for name in ("rp", "rp_replay"):
@@ -237,7 +265,7 @@ def test_c(tmp_path: Path) -> None:
 	assert built.returncode == 0, built.stderr
 	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
 	                     text=True, timeout=60)
-	assert _numbers(ran.stdout) == [COUNTER, NONCES, [1]], ran.stdout
+	assert _numbers(ran.stdout) == [COUNTER, NONCES, [1], CALLER], ran.stdout
 
 
 @pytest.mark.skipif(shutil.which("g++") is None, reason="no C++ compiler")
@@ -253,7 +281,7 @@ def test_cpp(tmp_path: Path) -> None:
 	assert built.returncode == 0, built.stderr
 	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
 	                     text=True, timeout=60)
-	assert _numbers(ran.stdout) == [COUNTER, NONCES], ran.stdout
+	assert _numbers(ran.stdout) == [COUNTER, NONCES, CALLER], ran.stdout
 
 
 @pytest.mark.skipif(shutil.which("rustc") is None, reason="no Rust compiler")
@@ -270,4 +298,4 @@ def test_rust(tmp_path: Path) -> None:
 	                     text=True, timeout=60)
 	lines = [line.replace("[", "").replace("]", "").replace(",", "")
 	         for line in ran.stdout.splitlines()]
-	assert _numbers("\n".join(lines)) == [COUNTER, NONCES], ran.stdout
+	assert _numbers("\n".join(lines)) == [COUNTER, NONCES, CALLER], ran.stdout

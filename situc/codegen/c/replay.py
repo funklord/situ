@@ -164,14 +164,23 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
-	required = _word(replay, "expiry", "required") == "required"
+	rule     = _word(replay, "expiry", "required")
+	required = rule == "required"
+	# `expiry = caller`: the rule is the consumer's, per message, at run
+	# time -- fuzznet's kinds are its consumers' vocabulary, not the
+	# schema's (inbox 20261120T1930Z) -- so the calls take it.
+	given    = ", int expiry_required" if rule == "caller" else ""
+	passed   = ", expiry_required" if rule == "caller" else ""
 	verdict  = ident(prefix, "replay", "verdict")
 	reads, local = _reads(replay, resolved, ("nonce", "expires"), prefix)
 	nonce, expires = local["nonce"], local["expires"]
 	param    = replay.param.name
 	ok       = macro(prefix, "replay", "ok")
-	zero = ([f"\t\t*verdict = {macro(prefix, 'replay', 'no_expiry')};"]
-	        if required else
+	no_expiry = macro(prefix, 'replay', 'no_expiry')
+	zero = ([f"\t\t*verdict = {no_expiry};"] if required else
+	        ["\t\tif (expiry_required) {",
+	         f"\t\t\t*verdict = {no_expiry};",
+	         "\t\t}"] if rule == "caller" else
 	        ["\t\t/* None stated, which this window allows: nothing is",
 	         "\t\t * remembered for it, so there is nothing to bound. */"])
 	return [
@@ -201,7 +210,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		f"/** Whether the message's nonce may be accepted at `now` ({unit}).",
 		" *  Pure: ask it BEFORE the tag. */",
 		f"static inline situ_err_t {name}_check(const {name}_t *state,",
-		f"\t\tsitu_view_t {param}, uint64_t now, {verdict} *verdict)",
+		f"\t\tsitu_view_t {param}, uint64_t now{given}, {verdict} *verdict)",
 		"{",
 		"\tsitu_err_t err = SITU_OK;",
 		"\tint        free_slot = 0;",
@@ -241,9 +250,10 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		f"/** `{name}_check`, and the nonce recorded where it says OK and an",
 		" *  expiry is stated. Ask it AFTER the tag verifies. */",
 		f"static inline situ_err_t {name}_record({name}_t *state,",
-		f"\t\tsitu_view_t {param}, uint64_t now, {verdict} *verdict)",
+		f"\t\tsitu_view_t {param}, uint64_t now{given}, {verdict} *verdict)",
 		"{",
-		f"\tsitu_err_t err = {name}_check(state, {param}, now, verdict);",
+		f"\tsitu_err_t err = {name}_check(state, {param}, now{passed}, "
+		"verdict);",
 		"",
 		f"\tif (err != SITU_OK || *verdict != {ok}) {{",
 		"\t\treturn err;",

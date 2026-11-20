@@ -109,12 +109,17 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
-	required = _word(replay, "expiry", "required") == "required"
+	rule     = _word(replay, "expiry", "required")
+	required = rule == "required"
+	given    = ", bool expiry_required" if rule == "caller" else ""
+	passed   = ", expiry_required" if rule == "caller" else ""
 	param    = replay.param.name
 	view     = f"const ::situ::{replay.param.type_name} &{param}"
 	reads, local = _reads(replay, resolved, ("nonce", "expires"))
 	nonce, expires = local["nonce"], local["expires"]
 	zero = ("\t\t\tout = verdict::no_expiry;" if required else
+	        "\t\t\tif (expiry_required) out = verdict::no_expiry;"
+	        if rule == "caller" else
 	        "\t\t\t// none stated: allowed, and nothing remembered")
 	return [
 		f"/** `{replay.name}`: each `{_path(replay, 'nonce')}` accepted once"
@@ -131,7 +136,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		"",
 		"\t/** Pure: ask it BEFORE the tag. */",
 		f"\t[[nodiscard]] ::situ::rt::err check({view},",
-		"\t\t\tstd::uint64_t now, verdict &out) const noexcept",
+		f"\t\t\tstd::uint64_t now{given}, verdict &out) const noexcept",
 		"\t{",
 		*(f"\t{line}" for line in reads),
 		"\t\tbool free_slot = false;",
@@ -169,9 +174,9 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		"",
 		"\t/** `check`, and the nonce recorded on OK: AFTER the tag. */",
 		f"\t[[nodiscard]] ::situ::rt::err record({view},",
-		"\t\t\tstd::uint64_t now, verdict &out) noexcept",
+		f"\t\t\tstd::uint64_t now{given}, verdict &out) noexcept",
 		"\t{",
-		f"\t\tif (const auto e = check({param}, now, out);"
+		f"\t\tif (const auto e = check({param}, now{passed}, out);"
 		" e != ::situ::rt::err::ok || out != verdict::ok) {",
 		"\t\t\treturn e;",
 		"\t\t}",

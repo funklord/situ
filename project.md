@@ -176,6 +176,12 @@ without huge dependencies kept, and the pertinent code shared:
   sec 1313); (d) is fuzznet's own vendoring line in
   `wire/generated/situ.{c,h}`, not situ's, so it moves when fuzznet next
   copies the runtime.
+- From fuzznet (inbox 20261120T1930Z), answering the zero-expiry
+  question: neither `replay` over an arm nor a rule keyed on a field fits,
+  since its frame kind is a sealed value whose meaning is the consumer's;
+  the rule comes from the consumer at run time. Built as `expiry =
+  caller` (26.1120), the calls taking `expiry_required`. fuzznet
+  regenerates at b4f405c9 for the nonce table and the guard.
 - From fuzznet adopting replay windows (inbox 20261120T1900Z; its sec
   1320): the counter window is adopted -- `replay heard(h: ...) [counter =
   h.counter, window = 64]`, `heard_check` before the AEAD open and

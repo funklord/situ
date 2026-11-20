@@ -110,12 +110,17 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
 	unit     = _word(replay, "unit", "ms")
-	required = _word(replay, "expiry", "required") == "required"
+	rule     = _word(replay, "expiry", "required")
+	required = rule == "required"
+	given    = ", expiry_required: bool" if rule == "caller" else ""
+	passed   = ", expiry_required" if rule == "caller" else ""
 	param    = replay.param.name
 	kind     = _pascal(replay.param.type_name)
 	reads, local = _reads(replay, resolved, ("nonce", "expires"))
 	nonce, expires = local["nonce"], local["expires"]
 	zero = ("\t\t\treturn Ok(Verdict::NoExpiry);" if required else
+	        "\t\t\treturn Ok(if expiry_required { Verdict::NoExpiry } "
+	        "else { Verdict::Ok });" if rule == "caller" else
 	        "\t\t\treturn Ok(Verdict::Ok); // none stated: allowed")
 	name = _pascal(replay.name)
 	return [
@@ -133,7 +138,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		f"\tpub const AHEAD: u64 = {ahead}; // {unit}",
 		"",
 		"\t/// Pure: ask it BEFORE the tag.",
-		f"\tpub fn check(&self, {param}: &{kind}<'_>, now: u64)"
+		f"\tpub fn check(&self, {param}: &{kind}<'_>, now: u64{given})"
 		" -> Result<Verdict> {",
 		"\t\tif self.slots.len() < Self::LEAST {",
 		"\t\t\treturn Err(Error::Bounds);",
@@ -160,9 +165,9 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 		"\t}",
 		"",
 		"\t/// `check`, and the nonce recorded on OK: AFTER the tag.",
-		f"\tpub fn record(&mut self, {param}: &{kind}<'_>, now: u64)"
+		f"\tpub fn record(&mut self, {param}: &{kind}<'_>, now: u64{given})"
 		" -> Result<Verdict> {",
-		f"\t\tlet verdict = self.check({param}, now)?;",
+		f"\t\tlet verdict = self.check({param}, now{passed})?;",
 		"\t\tif verdict != Verdict::Ok {",
 		"\t\t\treturn Ok(verdict);",
 		"\t\t}",
