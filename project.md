@@ -190,6 +190,23 @@ both walkers and the dissector. What a user cannot yet do is listed under
   cargo-fuzz and atheris, not installed here -- the holder's machine.
 - Schema-driven storage for fuzznet (derived rows, 0070's storage notes)
   is fuzznet's to ask for; told via its inbox.
+- From openmlx4 (inbox 20261119T1237Z and T1253Z, against 75d34362).
+  Fixed: a run in a sized arm and a default-only arm (26.1109). Open:
+  (a) a checksum reached through a variant arm is skipped with no note,
+  where one struct down without an arm says "not checked"; (b) `verify`
+  does not descend into a recursive chain to check each link's CRC
+  (FS2's `gph_section.crc`), and wants to; (c) a looping chain reads as
+  DEPTH at `[limit]` before its `when ... refuse backwards` rule is asked,
+  where fs2.c refuses the first backwards link; (d) a checksum whose tag
+  sits in a nested header and covers the header, BOOT2 and each section
+  the chain reaches -- openmlx4 asks whether that is in scope; (e) a
+  failsafe flash's chunk interleave, whose chunk size is read from inside
+  what it permutes -- a scope question, low priority; (f) `[remaining]`
+  in a sized arm with a member after the variant is refused though
+  26.1040 says it ends with the variant. Also told: a schema with an
+  unbounded codec builds Python only at `--layer edit`, and a view-layer
+  gate then reports "no vector to run it on" with the reason only in
+  stderr.
 
 **How the gate was run this session, and the traps met** (memory has the
 long form): `make check` is reaped on this machine, so the gate runs in a
@@ -9232,6 +9249,10 @@ Moved to `doc/decision/26.1107-required-asks-have-nothing-twice.md`.
 ### 26.1108 A terminated run's framing asks for the terminator without wrapping
 
 Moved to `doc/decision/26.1108-a-terminator-guard-that-cannot-wrap.md`.
+
+### 26.1109 A variant that states its size frames its arm
+
+Moved to `doc/decision/26.1109-a-sized-variant-frames-its-arm.md`.
 
 ### 26.1076 A registry of keyed cells, compiled and walked
 

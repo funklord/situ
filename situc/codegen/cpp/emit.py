@@ -7572,6 +7572,25 @@ class Emitter:
 
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
+		"""`_arm_member_lines`, less an `if (false)` block: an
+		always-present arm's refusal can never run, and is left out rather
+		than written."""
+		lines = self._arm_member_lines(struct, variant, arm, placement)
+		kept: list[str] = []
+		closing: str | None = None
+		for line in lines:
+			if closing is not None:
+				if line == closing:
+					closing = None
+				continue
+			if line.strip() == "if (false) {":
+				closing = line[:len(line) - len(line.lstrip())] + "}"
+				continue
+			kept.append(line)
+		return kept
+
+	def _arm_member_lines(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, behind the test that its arm is the one present.
 
 		Reading another arm's bytes stays inside the view -- the extent
@@ -7594,11 +7613,14 @@ class Emitter:
 		held = self._over_fields(struct, variant.discriminant or "",
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
+			# A default with no `case` beside it is ALWAYS present -- how one
+			# struct is framed by a length the message carries -- so it is
+			# never absent, and `_arm_member` drops the refusal (openmlx4,
+			# 2026-11-19: this returned nothing, so no accessor).
 			matched = matched_values(variant)
-			if not matched:
-				return []
-			test = "(" + " || ".join(f"{held} == {one.value}u"
-			                         for one in matched) + ")"
+			test = ("(" + " || ".join(f"{held} == {one.value}u"
+			                          for one in matched) + ")"
+			        if matched else "false")
 		else:
 			test = f"{held} != {arm.value}u"
 
@@ -11241,12 +11263,11 @@ class Emitter:
 		held = self._over_fields(struct, variant.discriminant or "",
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
+			# Present always where no `case` stands beside it.
 			matched = matched_values(variant)
-			if not matched:
-				return None
 			test = "(" + " || ".join(f"{held} == {one.value}u"
 			                        for one in matched) + ")"
-			keep = f"!{test}"
+			keep = f"!{test}" if matched else "true"
 		else:
 			keep = f"{held} == {arm.value}u"
 		newer = self._arm_since(struct, placement, selected=True)
@@ -11839,12 +11860,12 @@ class Emitter:
 			held = self._over_fields(struct, variant.discriminant or "",
 		                         extra=self._region_reads(struct, variant))
 			if arm.value is None:
+				# Present always where no `case` stands beside it; this
+				# returned no checks at all for such an arm.
 				matched = matched_values(variant)
-				if not matched:
-					return []
 				test = "(" + " || ".join(f"{held} == {one.value}u"
 				                         for one in matched) + ")"
-				keep = f"!{test}"
+				keep = f"!{test}" if matched else "true"
 			else:
 				keep = f"{held} == {arm.value}u"
 			newer = self._arm_since(struct, placement, selected=True)
@@ -12054,11 +12075,10 @@ class Emitter:
 		held = self._over_fields(struct, variant.discriminant or "",
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
+			# Present always where no `case` stands beside it.
 			matched = matched_values(variant)
-			if not matched:
-				return []
 			present = " && ".join(f"{held} != {one.value}u"
-			                      for one in matched)
+			                      for one in matched) or "true"
 		else:
 			present = f"{held} == {arm.value}u"
 
@@ -12142,11 +12162,10 @@ class Emitter:
 		held = self._over_fields(struct, variant.discriminant or "",
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
+			# Present always where no `case` stands beside it.
 			matched = matched_values(variant)
-			if not matched:
-				return []
 			present = " && ".join(f"{held} != {one.value}u"
-			                      for one in matched)
+			                      for one in matched) or "true"
 		else:
 			present = f"{held} == {arm.value}u"
 		since = self._arm_since(struct, placement, selected=True)
@@ -12265,7 +12284,17 @@ class Emitter:
 			if member is None or not is_struct_run(self.resolved.structs,
 			                                       member):
 				continue
-			walk = self._element_validation(struct, member, base)
+			# A variant that states its size frames its arm (openmlx4,
+			# 2026-11-19); C's `_arm_run_elements` says why.
+			if placement.size_expr is not None:
+				size = (f"situ_nonneg_u32(static_cast<std::int64_t>("
+				        f"{self._over_fields(struct, placement.size_expr)}))")
+				walk = self._element_validation(
+					struct, member, base,
+					limit=f"situ_advance_u32({base}, {size}, raw_.limit)",
+					overrun=True)
+			else:
+				walk = self._element_validation(struct, member, base)
 			if not any(_REFUSES.match(one) for one in walk):
 				continue
 			if arm.value is not None:
@@ -12354,12 +12383,15 @@ class Emitter:
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,
-			placement: Placement, base: str | None = None) -> list[str]:
+			placement: Placement, base: str | None = None,
+			limit: str = "raw_.limit", overrun: bool = False) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
 
 		C's `_element_validation` says why and what is left out: the run's
 		own walk, each element at the extent that walk gives it, and a
-		refusal naming the run (26.789).
+		refusal naming the run (26.789). `limit` and `overrun` are C's: an
+		arm of a variant that states its size ends where the variant does,
+		and an element past it is BOUNDS (openmlx4, 2026-11-19).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
 		if base is None:
@@ -12378,7 +12410,7 @@ class Emitter:
 		if placement.repeat_while is not None:
 			cap  = ("" if placement.repeat_cap is None
 			        else f" && n < {placement.repeat_cap}u")
-			head = [f"\t\t\twhile (at < raw_.limit{cap}) {{"]
+			head = [f"\t\t\twhile (at < {limit}{cap}) {{"]
 			step = [*step,
 			        f"\t\t\t\tif (!({self._element_cond(element, placement)})) {{",
 			        "\t\t\t\t\tbreak;",
@@ -12392,13 +12424,13 @@ class Emitter:
 				"\t\t\t\t}",
 			]
 		elif placement.sized_by == "remaining":
-			head = ["\t\t\twhile (at < raw_.limit) {"]
+			head = [f"\t\t\twhile (at < {limit}) {{"]
 		else:
 			count = self._count_expression(struct, placement)
 			if count is None:
 				return []
 			head = [f"\t\t\tconst std::uint32_t total = {count};",
-			        "\t\t\twhile (n < total && at < raw_.limit) {"]
+			        f"\t\t\twhile (n < total && at < {limit}) {{"]
 		return [
 			f"\t\t/* {placement.path}: each `{element.name}` the run holds,",
 			"\t\t * through its own validator. A refusal names the run",
@@ -12411,17 +12443,24 @@ class Emitter:
 			*scan,
 			"\t\t\t\tsitu_view_t raw;",
 			"\t\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,"
-			" situ_remaining_u32(raw_.limit, at), &raw) != SITU_OK) {",
+			f" situ_remaining_u32({limit}, at), &raw) != SITU_OK) {{",
 			"\t\t\t\t\tbreak;",
 			"\t\t\t\t}",
 			f"\t\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 			(f"\t\t\t\tconst std::uint32_t size = {inner}::size_bytes;"
 			 if element.layout.is_fixed_size else
 			 "\t\t\t\tconst std::uint32_t size = element.extent();"),
-			"\t\t\t\tif (size == 0u"
-			" || size > situ_remaining_u32(raw_.limit, at)) {",
-			"\t\t\t\t\tbreak;",
-			"\t\t\t\t}",
+			*(["\t\t\t\tif (size == 0u) {",
+			   "\t\t\t\t\tbreak;",
+			   "\t\t\t\t}",
+			   f"\t\t\t\tif (size > situ_remaining_u32({limit}, at)) {{",
+			   "\t\t\t\t\treturn ::situ::rt::err::bounds;",
+			   "\t\t\t\t}"]
+			  if overrun else
+			  ["\t\t\t\tif (size == 0u"
+			   f" || size > situ_remaining_u32({limit}, at)) {{",
+			   "\t\t\t\t\tbreak;",
+			   "\t\t\t\t}"]),
 			"\t\t\t\tsitu_view_t one;",
 			"\t\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, size,"
 			" &one) != SITU_OK) {",

@@ -5695,6 +5695,22 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 
+	/* A VARIANT THAT STATES ITS SIZE frames its arm (26.1040): a run in
+	 * it ends where the variant does, not where the frame does. Walked to
+	 * the frame's end, an element running past the variant read the bytes
+	 * after it as its own and validated clean, where the four backends
+	 * now refuse it (openmlx4's MFA MAP, 2026-11-19). `wide` is the
+	 * variant's own size, read from its program, and everything the walk
+	 * below reads of the struct lies before the variant's end. */
+	{
+		situ_walk_placement variant;
+
+		if (situ_walk_placement_at(image, index, &variant) == SITU_WALK_OK
+		    && variant.size_code != SITU_WALK_NONE) {
+			len = (at + wide + 7u) / 8u;
+		}
+	}
+
 	/* A struct-typed arm carries its own constraints and its own validator
 	 * is what knows them. A SCALAR or byte-run arm has no validator to
 	 * descend into and its own rows are what say whether it holds -- asking

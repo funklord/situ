@@ -3316,8 +3316,12 @@ class Emitter:
 		where Rust says `x == 1`. The negation is unavoidable only for a
 		`default` arm, which is present exactly when nothing else matched.
 
-		None where the variant is one this cannot dispatch on: with no
-		`case` to negate, a `default` arm has no test to write.
+		A `default` arm with no `case` beside it is present ALWAYS, which
+		is how one struct is framed by a length the message carries. This
+		said None for it and the accessor was never written while the C
+		and Python checks called theirs (openmlx4, 2026-11-19); `false` and
+		`true` now, and `_arm_member` drops the block an always-false
+		refusal would guard.
 		"""
 		held = self._rule_text(struct, variant.discriminant or "")
 
@@ -3342,7 +3346,8 @@ class Emitter:
 		if arm.value is None:
 			matched = matched_values(variant)
 			if not matched:
-				return None
+				base = "true" if selected else "false"
+				return f"({base}{older})" if older else base
 			joined = " || ".join(f"{held} == {one.value}" for one in matched)
 			base   = f"!({joined})" if selected else joined
 			return f"({base}{older})" if older else base
@@ -3372,6 +3377,24 @@ class Emitter:
 		return "\n".join([*above, f"\t\tOk({body})"])
 
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""`_arm_member_lines`, less an `if false` block: an always-present
+		arm's refusal can never run, and is left out rather than written."""
+		lines = self._arm_member_lines(struct, variant, arm, placement)
+		kept: list[str] = []
+		closing: str | None = None
+		for line in lines:
+			if closing is not None:
+				if line == closing:
+					closing = None
+				continue
+			if line.strip() == "if false {":
+				closing = line[:len(line) - len(line.lstrip())] + "}"
+				continue
+			kept.append(line)
+		return kept
+
+	def _arm_member_lines(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, as a `Result`: the arm may not be the one there.
 
@@ -8547,7 +8570,18 @@ class Emitter:
 			if member is None or not is_struct_run(self.resolved.structs,
 			                                       member):
 				continue
-			walk = self._element_validation(struct, member, base)
+			# A variant that states its size frames its arm (openmlx4,
+			# 2026-11-19); C's `_arm_run_elements` says why.
+			if placement.size_expr is not None:
+				size = self._over_fields(struct, placement.size_expr, "self",
+				                         cast="i64", bounded=True)
+				walk = self._element_validation(
+					struct, member, base,
+					limit=(f"usize::saturating_add({self._unparen(base)}, "
+					       f"situ_rt::nonneg({size})).min(self.bytes.len())"),
+					overrun=True)
+			else:
+				walk = self._element_validation(struct, member, base)
 			if not any(_REFUSES.match(one) for one in walk):
 				continue
 			if arm.value is not None:
@@ -8633,12 +8667,16 @@ class Emitter:
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,
-			placement: Placement, base: str | None = None) -> list[str]:
+			placement: Placement, base: str | None = None,
+			limit: str = "self.bytes.len()",
+			overrun: bool = False) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
 
 		C's `_element_validation` says why and what is left out: the run's
 		own walk, each element at the extent that walk gives it, and a
-		refusal naming the run (26.789).
+		refusal naming the run (26.789). `limit` and `overrun` are C's: an
+		arm of a variant that states its size ends where the variant does,
+		and an element past it is `Bounds` (openmlx4, 2026-11-19).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
 		if base is None:
@@ -8657,9 +8695,8 @@ class Emitter:
 		if placement.repeat_while is not None:
 			cap  = ("" if placement.repeat_cap is None
 			        else f" && n < {placement.repeat_cap}")
-			cond = self._element_condition(element, placement,
-			                               "self.bytes.len()")
-			head = [f"\t\twhile at < self.bytes.len(){cap} {{"]
+			cond = self._element_condition(element, placement, limit)
+			head = [f"\t\twhile at < {limit}{cap} {{"]
 			step = [*step,
 			        f"\t\t\tif !({cond}) {{",
 			        "\t\t\t\tbreak;",
@@ -8672,13 +8709,13 @@ class Emitter:
 				"\t\t\t}",
 			]
 		elif placement.sized_by == "remaining":
-			head = ["\t\twhile at < self.bytes.len() {"]
+			head = [f"\t\twhile at < {limit} {{"]
 		else:
 			count = self._count_expression(struct, placement)
 			if count is None:
 				return []
 			head = [f"\t\tlet total: usize = {self._unparen(count)};",
-			        "\t\twhile n < total && at < self.bytes.len() {"]
+			        f"\t\twhile n < total && at < {limit} {{"]
 		size = (f"{inner}::SIZE" if element.layout.is_fixed_size
 		        else "element.extent()")
 		body = [
@@ -8692,10 +8729,17 @@ class Emitter:
 			  and placement.repeat_while is None else
 			  [f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};"]),
 			f"\t\t\tlet size    = {size};",
-			"\t\t\tif size == 0"
-			" || size > situ_rt::remaining(self.bytes.len(), at) {",
-			"\t\t\t\tbreak;",
-			"\t\t\t}",
+			*(["\t\t\tif size == 0 {",
+			   "\t\t\t\tbreak;",
+			   "\t\t\t}",
+			   f"\t\t\tif size > situ_rt::remaining({limit}, at) {{",
+			   "\t\t\t\treturn Err(Error::Bounds);",
+			   "\t\t\t}"]
+			  if overrun else
+			  ["\t\t\tif size == 0"
+			   f" || size > situ_rt::remaining({limit}, at) {{",
+			   "\t\t\t\tbreak;",
+			   "\t\t\t}"]),
 			f"\t\t\tif let Err(e) = ({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})"
 			".validate() {",
 			"\t\t\t\treturn Err(e);",

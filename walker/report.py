@@ -2453,6 +2453,16 @@ def _arm_validates(image: Image, view: View, index: int,
 	# type (26.790). A run of fixed-size records is held to the frame by
 	# the variant's size above.
 	run = image.placements[chosen]
+	# A VARIANT THAT STATES ITS SIZE frames its arm (26.1040): the run ends
+	# where the variant does, not where the view does. Walked to the view's
+	# end, an element running past the variant read the bytes after it as
+	# its own and validated clean, where the four backends now refuse it
+	# (openmlx4's MFA MAP, 2026-11-19). The same struct, the same base,
+	# with the limit brought in to the variant's end -- `wide` is the
+	# variant's own size, which `size_bits` reads from its program.
+	if image.placements[index].size_code != NONE:
+		view = View(image, view.buffer, view.struct, view.at,
+		            view.at + (at + wide) // BITS_PER_BYTE, view.args)
 	if run.size_code != NONE or run.array_count != NONE:
 		if run.element_bits == NONE \
 				and not counted_run_fits(view, chosen, start_bits=at):

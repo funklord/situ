@@ -3751,6 +3751,31 @@ class Emitter:
 
 	def _arm_member(self, struct: ResolvedStruct, placement: Placement,
 			test: str, arm: str) -> list[str]:
+		"""`_arm_member_lines`, less an `if (0)` block.
+
+		An always-present arm's absent test is `0` (`_arm_guard`), and the
+		block it guards can never run; dropped here once rather than in
+		each shape below, and left out rather than written so that a
+		consumer's analyser has no constant condition to report.
+		"""
+		lines = self._arm_member_lines(struct, placement, test, arm)
+		if test != "0":
+			return lines
+		kept: list[str] = []
+		closing: str | None = None
+		for line in lines:
+			if closing is not None:
+				if line == closing:
+					closing = None
+				continue
+			if line.strip() == "if (0) {":
+				closing = line[:len(line) - len(line.lstrip())] + "}"
+				continue
+			kept.append(line)
+		return kept
+
+	def _arm_member_lines(self, struct: ResolvedStruct, placement: Placement,
+			test: str, arm: str) -> list[str]:
 		"""One member of one variant arm, behind the test that it is present.
 
 		The check is per access rather than once, and that is what the
@@ -4319,10 +4344,17 @@ class Emitter:
 			older = f" || {reads}(view) < {placement.since}u"
 
 		if arm.value is None:
-			# A `default` arm: present when nothing else matched.
+			# A `default` arm: present when nothing else matched -- and so
+			# ALWAYS, where nothing else is. A default with no `case`
+			# beside it is how a single struct is framed by a length the
+			# message carries; this said None for it, the accessor was
+			# never written, and the check went on calling it, so the
+			# generated C did not compile (openmlx4, 2026-11-19). `0` is
+			# never absent; `_arm_member` drops the block it would guard.
 			matched = matched_values(variant)
 			if not matched:
-				return None
+				return (f"(0{older})" if older else "0",
+				        arm.source or "default")
 			test = " || ".join(f"{held} == {one.value}u" for one in matched)
 			return f"({test}{older})", arm.source or "default"
 		if older:
@@ -15918,7 +15950,18 @@ class Emitter:
 			if member is None or not is_struct_run(self.resolved.structs,
 			                                       member):
 				continue
-			walk = self._element_validation(struct, member, base)
+			# A variant that states its size frames its arm: the walk ends
+			# where the variant does, and an element past it is BOUNDS
+			# (openmlx4, 2026-11-19).
+			if placement.size_expr is not None:
+				size = ("situ_nonneg_u32(" + self._over_fields(
+					struct, placement.size_expr, "view", bounded=True) + ")")
+				walk = self._element_validation(
+					struct, member, base,
+					limit=f"situ_advance_u32({base}, {size}, view.limit)",
+					overrun=True)
+			else:
+				walk = self._element_validation(struct, member, base)
 			if not any(_REFUSES.match(one) for one in walk):
 				continue
 			if arm.value is not None:
@@ -16004,7 +16047,8 @@ class Emitter:
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,
-			placement: Placement, base: str | None = None) -> list[str]:
+			placement: Placement, base: str | None = None,
+			limit: str = "view.limit", overrun: bool = False) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
 
 		This said "a loop on every parse, and a caller who wants it should
@@ -16023,6 +16067,14 @@ class Emitter:
 		Only where the element can refuse something, which keeps a run of
 		plain records from gaining an id that can never be reported. A
 		recursive element and one taking arguments are not walked yet.
+
+		`limit` is where the run's frame ends, the view's by default. An
+		arm of a variant that states its size ends where the variant does
+		(26.1040); walked to the view's end it validated the bytes after the
+		variant as elements and could not see one running past it
+		(openmlx4's MFA MAP, 2026-11-19). `overrun` refuses such an element
+		as BOUNDS rather than ending the walk, which a run with accessors
+		gets from its `_fits` and an arm's run, having none, did not.
 		"""
 		nested  = placement.type_name or ""
 		element = self.resolved.structs.get(nested)
@@ -16074,20 +16126,27 @@ class Emitter:
 				f"\tuint32_t at = {base};",
 				"\tuint32_t n  = 0u;",
 				"",
-				("\twhile (at < view.limit) {" if to_end
-				 else "\twhile (n < total && at < view.limit) {"),
+				(f"\twhile (at < {limit}) {{" if to_end
+				 else f"\twhile (n < total && at < {limit}) {{"),
 				"\t\tsitu_view_t element;",
 				"\t\tuint32_t    size;",
 				"",
-				"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit,"
+				f"\t\tif (situ_view_sub(view, at, situ_remaining_u32({limit},"
 				" at), &element) != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
 				f"\t\tsize = {extent};",
-				"\t\tif (size == 0u || size > situ_remaining_u32(view.limit,"
-				" at)) {",
-				"\t\t\tbreak;",
-				"\t\t}",
+				*(["\t\tif (size == 0u) {",
+				   "\t\t\tbreak;",
+				   "\t\t}",
+				   f"\t\tif (size > situ_remaining_u32({limit}, at)) {{",
+				   "\t\t\treturn SITU_ERR_BOUNDS;",
+				   "\t\t}"]
+				  if overrun else
+				  [f"\t\tif (size == 0u || size > situ_remaining_u32({limit},"
+				   " at)) {",
+				   "\t\t\tbreak;",
+				   "\t\t}"]),
 			]
 		body = [
 			*head,

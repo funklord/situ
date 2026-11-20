@@ -3896,10 +3896,15 @@ class Emitter:
 		to go on agreeing about what a `default` arm is -- which is not a
 		value of its own but the negation of every `case` beside it.
 
-		None where the variant cannot be dispatched on: a `default` arm with
-		no matched value to negate is present always and never at once, and
-		`_arm_member` has declined to emit an accessor for it since it was
-		written.
+		A `default` arm with no `case` beside it is present ALWAYS: there is
+		nothing it is the negation of, so it is selected whatever the
+		discriminant holds. That is the one way to frame a single struct by a
+		length the message carries -- `variant body[len] switch (len) {
+		default: rec r; }` -- and this said None for it, read as "present
+		always and never at once": `_arm_member` wrote no accessor while
+		`validate` went on reading one, so `verify` died on an
+		AttributeError and the C did not compile (openmlx4, 2026-11-19).
+		`False` is the absent test it gets, and the accessor leaves it out.
 		"""
 		held = self._over_fields(struct, variant.discriminant or "", "self",
 		                         extra=self._region_reads(struct, variant))
@@ -3926,7 +3931,7 @@ class Emitter:
 		if arm.value is None:
 			matched = matched_values(variant)
 			if not matched:
-				return None
+				return (f"False{absent}", f"True{present}")
 			no  = " and ".join(f"{held} != {one.value}" for one in matched)
 			yes = " or ".join(f"{held} == {one.value}" for one in matched)
 			return (f"({yes}){absent}" if absent else yes,
@@ -3950,6 +3955,28 @@ class Emitter:
 		        and self._offset_expression(struct, placement) is not None)
 
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""`_arm_member_lines`, less a guard that cannot fire.
+
+		An arm that is always present -- a `default` with no `case` beside
+		it -- gets `False` as its absent test from `_arm_guard`, and an
+		`if False: raise` is a line a reader has to reason away. Dropped
+		here, once, rather than in each of the shapes below.
+		"""
+		lines = self._arm_member_lines(struct, variant, arm, placement)
+		kept: list[str] = []
+		skip = False
+		for line in lines:
+			if skip:
+				skip = False
+				continue
+			if line.strip() == "if False:":
+				skip = True
+				continue
+			kept.append(line)
+		return kept
+
+	def _arm_member_lines(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, raising where the arm is not the one present.
 
@@ -8334,7 +8361,16 @@ class Emitter:
 			if member is None or not is_struct_run(self.resolved.structs,
 			                                       member):
 				continue
-			walk = self._element_validation(struct, member, base)
+			# A variant that states its size frames its arm: the walk
+			# ends where the variant does, and an element past it is
+			# refused (openmlx4, 2026-11-19).
+			if placement.size_expr is not None:
+				size = self._over_fields(struct, placement.size_expr, "self")
+				walk = self._element_validation(
+					struct, member, base, end=f"({base}) + max(0, {size})",
+					overrun=member.path)
+			else:
+				walk = self._element_validation(struct, member, base)
 			if not any(_REFUSES.match(one) or _PROPAGATES.match(one) for one in walk):
 				continue
 			if arm.value is not None:
@@ -8408,7 +8444,9 @@ class Emitter:
 		return memo[element.name]
 
 	def _element_validation(self, struct: ResolvedStruct,
-			placement: Placement, base: str | None = None) -> list[str]:
+			placement: Placement, base: str | None = None,
+			end: str = "self._len",
+			overrun: str | None = None) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
 
 		C's `_element_validation` says why and what is left out: the run's
@@ -8441,8 +8479,8 @@ class Emitter:
 			        else f" and {n} < {placement.repeat_cap}")
 			cond = re.sub(r"\b_element\b", held,
 			              self._element_condition(element, placement, at,
-			                                      "self._len"))
-			head = [f"\t\twhile {at} < self._len{cap}:"]
+			                                      end))
+			head = [f"\t\twhile {at} < {end}{cap}:"]
 			step = [*step, f"\t\t\tif not ({cond}):", "\t\t\t\tbreak"]
 		elif placement.delimiters:
 			delims = tuple(placement.delimiters)
@@ -8453,12 +8491,12 @@ class Emitter:
 				"\t\t\t\tbreak",
 			]
 		elif placement.sized_by == "remaining":
-			head = [f"\t\twhile {at} < self._len:"]
+			head = [f"\t\twhile {at} < {end}:"]
 		else:
 			count = self._count_expression(struct, placement)
 			if count is None:
 				return []
-			head = [f"\t\twhile {n} < ({count}) and {at} < self._len:"]
+			head = [f"\t\twhile {n} < ({count}) and {at} < {end}:"]
 		return [
 			f"\t\t# {placement.path}: each `{element.name}` the run holds,",
 			"\t\t# through its own validator. A refusal names the run",
@@ -8468,10 +8506,15 @@ class Emitter:
 			*head,
 			*scan,
 			f"\t\t\t{held} = {self._made(struct, placement, inner)}(self._msg, self._at + {at},"
-			f" self._len - {at})",
+			f" {end} - {at})",
 			f"\t\t\t_{local}_size = {size}",
-			f"\t\t\tif _{local}_size == 0 or _{local}_size > self._len - {at}:",
-			"\t\t\t\tbreak",
+			*([f"\t\t\tif _{local}_size == 0:", "\t\t\t\tbreak",
+			   f"\t\t\tif _{local}_size > {end} - {at}:",
+			   f'\t\t\t\traise BoundsError("{overrun}: the frame does not'
+			   ' hold every declared element")']
+			  if overrun is not None else
+			  [f"\t\t\tif _{local}_size == 0 or _{local}_size > {end} - {at}:",
+			   "\t\t\t\tbreak"]),
 			f"\t\t\t{held} = {self._made(struct, placement, inner)}(self._msg, self._at + {at},"
 			f" _{local}_size)",
 			f"\t\t\t{held}.validate()",
