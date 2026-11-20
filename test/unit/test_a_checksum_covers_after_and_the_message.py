@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import fourway
+from situc import ast
 from editor.document import open_document
 from situc.diagnostics import SituError
 from situc.layout import solve
@@ -177,3 +178,36 @@ def test_the_editor_brings_both_up_to_date() -> None:
 	stored = struct.unpack(">I", bytes(held[4:8]))[0]
 	held[4:8] = b"\xff" * 4
 	assert stored == zlib.crc32(bytes(held))
+
+
+def test_a_region_named_like_a_span_keeps_its_meaning() -> None:
+	"""`example/icmp` declares `authenticated message { ... }` and covers it
+	with `covers(message)`. 26.1117 read that as the whole-message span and
+	changed what ICMP's checksum sums; a region the struct names wins, and
+	the keyword is the spelling for a struct that has none."""
+	schema = parse_text("""target buffer;
+endian big;
+struct icmp {
+	authenticated message {
+		u8 kind;
+		checksum u8 sum[1] covers(message) [self_as = 0];
+	}
+	authenticated after { u8 more; }
+	checksum u8 tail[1] covers(after);
+}
+""")
+	struct = schema.structs()[0]
+	tags = {tag.name: tag for tag in _tags(struct.members)}
+	assert tags["sum"].covers == ("message",) and not tags["sum"].message
+	assert tags["tail"].covers == ("after",) and not tags["tail"].after
+
+
+def _tags(members: tuple[ast.Member, ...]) -> list[ast.TagField]:
+	found: list[ast.TagField] = []
+	for one in members:
+		if isinstance(one, ast.TagField):
+			found.append(one)
+		inner = getattr(one, "members", None)
+		if isinstance(inner, tuple):
+			found.extend(_tags(inner))
+	return found

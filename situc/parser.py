@@ -16,7 +16,7 @@ import dataclasses
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 from situc import ast, kernels, namespaces, wellformed
 from situc.expr import Env, evaluate
@@ -341,6 +341,51 @@ def _lets_expanded(lets: tuple["ast.Let", ...]) -> tuple["ast.Let", ...]:
 		done.append(dataclasses.replace(let, expr=expr))
 		names[let.name] = expr
 	return tuple(done)
+
+
+def _regions_win(members: tuple["ast.Member", ...]
+		) -> tuple["ast.Member", ...]:
+	"""A region this struct names wins over a span keyword of that name.
+
+	`covers(before)`, `covers(after)` and `covers(message)` name spans of
+	the message (26.1050, 26.1117) -- and `example/icmp` declares
+	`authenticated message { ... }` and covers it with `covers(message)`,
+	which 26.1117 read as the whole message and so changed what ICMP's
+	checksum sums. A word the schema already gave a region keeps meaning
+	that region: the keyword is the spelling for a struct that has none."""
+	names: set[str] = set()
+
+	def collect(held: tuple["ast.Member", ...]) -> None:
+		for one in held:
+			if isinstance(one, (ast.Authenticated, ast.Sealed)):
+				names.add(one.name)
+			inner = getattr(one, "members", None)
+			if isinstance(inner, tuple):
+				collect(inner)
+
+	collect(members)
+	spans = {"before", "after", "message"} & names
+	if not spans:
+		return members
+
+	def rebuild(held: tuple["ast.Member", ...]) -> tuple["ast.Member", ...]:
+		out: list[ast.Member] = []
+		for one in held:
+			if isinstance(one, ast.TagField):
+				said = ("before" if one.before else "after" if one.after
+				        else "message" if one.message else None)
+				if said in spans:
+					one = replace(one, covers=(said,), before=False,
+					              after=False, message=False)
+			inner = getattr(one, "members", None)
+			if isinstance(inner, tuple) and not isinstance(one, ast.TagField):
+				# Every block holding members is a frozen dataclass; the
+				# Member base type does not say so to the checker.
+				one = replace(cast(Any, one), members=rebuild(inner))
+			out.append(one)
+		return tuple(out)
+
+	return rebuild(members)
 
 
 def _expand_lets(members: tuple["ast.Member", ...],
@@ -1885,6 +1930,7 @@ class Parser:
 		self.expect_symbol("}", "to close the struct body")
 		if lets:
 			members = _expand_lets(members, tuple(lets))
+		members = _regions_win(members)
 		return ast.StructDecl(self.span_from(start), name.text, members, attrs,
 		                      lets=_lets_expanded(tuple(lets)))
 
