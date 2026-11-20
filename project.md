@@ -165,6 +165,13 @@ without huge dependencies kept, and the pertinent code shared:
   length, the scalar sizing it follows, a covered CRC is recomputed. Left:
   a window inside a larger message (needs 12.3's invalidation model to
   move the parent's lengths), and two fields at once.
+- From claude-guidelines (inbox 20261120T1219Z, against add80c9a): the
+  window lacks what every GUI here carries (harmonization.md *GUI: Qt
+  Widgets*, c921a5c): a copyright line in `--version` and an About window
+  in a Help menu, a dark palette on a dark desktop, a `.desktop` file and
+  icon from `install-gui`, bytes and offsets in the fixed font, accessible
+  names, and a Debian package for the window (weighed against 0034: a
+  binary package of its own keeps `situc` free of Qt). Taken up in run 8.
 - qtty does not draw a QCompleter's popup list (input to it works): the
   enum cell's search list is invisible on a terminal. Signalled to qtty's
   inbox 20261120T1120Z; add a `--snapshot` check of the list when it lands.
