@@ -8874,7 +8874,13 @@ situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
 	 * fixed size, in bits 8-31 (26.1066). */
 	const uint32_t flags  = image->tag_stride >= 28u ? u32_at(row + 20) : 0u;
 	const int      prefixed = (flags & 1u) != 0u;
-	const int      before = (flags & 2u) != 0u;
+	/* Bits 3 and 4: `covers(after)` and `covers(message)`, `before`'s twins
+	 * (26.1117) -- from the end of this struct, which has a fixed size, to
+	 * the message's end, and the whole message. All three name no members
+	 * and take their span from the message. */
+	const int      after   = (flags & 8u) != 0u;
+	const int      whole   = (flags & 16u) != 0u;
+	const int      before = (flags & 2u) != 0u || after || whole;
 
 	if (codec == SITU_WALK_NONE
 	                || (!before && (first == SITU_WALK_NONE
@@ -8896,7 +8902,7 @@ situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
 	                && family != KERNEL_BYTE_SUM) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-	if (width == 0u || width > 32u || shift < 0 || (flags & 0xF8u) != 0u) {
+	if (width == 0u || width > 32u || shift < 0 || (flags & 0xE0u) != 0u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 	/* A pseudo-header is summed only when handed over, and only where the
@@ -8936,6 +8942,19 @@ situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
 		from     = 0u;
 		end_at   = own;
 		end_bits = 0u;
+		if (after || whole) {
+			/* The message's end is `len`, as its start is 0. */
+			uint32_t extent = 0u;
+			if (after && (err = struct_extent(image, message, len, shape,
+			                                  0u, &extent)) != SITU_WALK_OK) {
+				return err;
+			}
+			if ((uint64_t)extent > len || (uint64_t)len * 8u > UINT32_MAX) {
+				return SITU_WALK_BOUNDS;
+			}
+			from   = after ? extent * 8u : 0u;
+			end_at = len * 8u;
+		}
 	} else if ((err = situ_walk_offset_bits(image, message, len, shape, first, &from))
 	                != SITU_WALK_OK
 	                || (err = situ_walk_offset_bits(image, message, len, shape,

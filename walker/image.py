@@ -288,6 +288,17 @@ class Tag:
 	#: held to it, as every backend holds one to `PREFIX_BYTES`, and a
 	#: prefix of no known size is not summed at all.
 	prefix_bytes: int = NONE
+	#: `covers(after)`: every byte of the message from the end of the
+	#: tag's own struct to the message's end; `covers(message)`: every
+	#: byte of the message, the tag's own read as `fill` (26.1117). Like
+	#: `before`, `first` and `last` are `NONE` and the span is the
+	#: reader's to find from the message it holds.
+	after: bool = False
+	message: bool = False
+
+	@property
+	def spans_message(self) -> bool:
+		return self.before or self.after or self.message
 
 
 @dataclass
@@ -975,10 +986,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 					"<IIII", blob, at + i * stride)
 				fill, prefix, endian = NONE, 0, 0
 			# The flag word: bit 0 a prefix, bit 1 `covers(before)`, bit 2
-			# the prefix's size in bits 8-31 (26.1066).
+			# the prefix's size in bits 8-31 (26.1066), bits 3 and 4
+			# `covers(after)` and `covers(message)` (26.1117).
 			image.tags[where] = Tag(codec, first, last, fill, prefix & 1,
 			                        endian, bool(prefix & 2),
-			                        prefix >> 8 if prefix & 4 else NONE)
+			                        prefix >> 8 if prefix & 4 else NONE,
+			                        bool(prefix & 8), bool(prefix & 16))
 
 	if MARKERS in found:
 		at, records, stride = found[MARKERS]

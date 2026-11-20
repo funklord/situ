@@ -2184,17 +2184,26 @@ class Parser:
 		# `covers(before)`: every byte of the message ahead of the tag
 		# (26.1050). Alone, since what it covers is the message's and not a
 		# region of this struct's, so it cannot share a list with regions.
-		before = "before" in covers
-		if before and len(covers) > 1:
+		# `after` and `message` are its twins (26.1117): every byte of the
+		# message from the end of the tag's own struct, and every byte of
+		# it, the tag's own read as `[self_as]`.
+		spans = [one for one in ("before", "after", "message")
+		         if one in covers]
+		if spans and len(covers) > 1:
+			said = spans[0]
 			raise error(
-				"`before` covers the message ahead of this tag, and cannot be "
-				"listed with regions",
+				f"`{said}` covers bytes of the message rather than regions "
+				f"of this struct, and cannot be listed with regions or "
+				f"with another span",
 				self.span_from(start),
 				label = "here",
-				notes = ["every byte before the tag already includes any "
-				         "region ahead of it; write `covers(before)` alone"],
+				notes = [f"write `covers({said})` alone; it already includes "
+				         f"every region it reaches"],
 			)
-		if before:
+		before  = spans == ["before"]
+		after   = spans == ["after"]
+		message = spans == ["message"]
+		if spans:
 			covers = ()
 		# After `covers`, because it names bytes the algorithm reaches before
 		# this message's and reads as the same question continued (14.2a).
@@ -2205,9 +2214,9 @@ class Parser:
 		attrs  = self.parse_attrs()
 		self.expect_symbol(";", f"after the {start.text} declaration")
 
-		if before and prefix is not None:
+		if spans and prefix is not None:
 			raise error(
-				"`covers(before)` with a `prefix`",
+				f"`covers({spans[0]})` with a `prefix`",
 				self.span_from(start),
 				label = "here",
 				notes = ["a prefix is bytes ahead of the message, and `before` "
@@ -2215,7 +2224,8 @@ class Parser:
 				         "both, so neither is guessed at"],
 			)
 		return ast.TagField(self.span_from(start), name, type_ref, array,
-		                    covers, kind, attrs, prefix, codec, before)
+		                    covers, kind, attrs, prefix, codec, before,
+		                    after, message)
 
 	def parse_checksum_codec(self, keyword: str) -> str | None:
 		"""`is crc32`, naming the codec that computes this checksum (0053).

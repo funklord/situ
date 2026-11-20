@@ -2037,6 +2037,9 @@ class Emitter:
 			if placement.tag_before \
 					and len(placement.path.split(".")) == 2:
 				lines.extend(self._before_tag(struct, placement, name))
+			elif (placement.tag_after or placement.tag_message) \
+					and len(placement.path.split(".")) == 2:
+				lines.extend(self._message_span_tag(struct, placement, name))
 			elif covered_run(struct, placement) is None and bitspan is None:
 				if placement.tag_codec is not None:
 					lines.extend([
@@ -2112,6 +2115,98 @@ class Emitter:
 			"",
 			f"\t/// Whether the stored {placement.tag_codec} matches the"
 			" message ahead of it.",
+			f"\tpub fn {name}_check_in(&self, msg: &[u8]) -> Result<()> {{",
+			f"\t\tlet want = self.{name}_compute_in(msg)?;",
+			f"\t\tlet at = ({start}) as usize;",
+			f"\t\tif at + {width} > self.bytes.len() {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tlet held = u{width * 8}::{read}("
+			f"self.bytes[at..at + {width}].try_into().unwrap());",
+			"\t\tif u32::from(held) == want { Ok(()) } else"
+			" { Err(Error::Checksum) }",
+			"\t}",
+		]
+
+	def _message_span_tag(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""`covers(after)` and `covers(message)`, `before`'s twins
+		(26.1117): as `_before_tag`, each helper takes the message this view
+		was cut from. `after` runs from this struct's end -- its size is
+		fixed, as `resolve` requires -- to the message's end; `message` is
+		all of it, the tag's own bytes read as `self_as`."""
+		start = self._offset_expression(struct, placement) or "0"
+		wide  = ((placement.size_bits or 0) + 7) // 8
+		size  = struct.layout.size_bytes
+		where = [
+			"\t\tlet here = (self.bytes.as_ptr() as usize)"
+			".wrapping_sub(msg.as_ptr() as usize);",
+			"\t\tif here > msg.len() || msg.len() - here < self.bytes.len() {",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+		]
+		if placement.tag_after:
+			body = [
+				f"\t\tlet lo = here + {size};",
+				"\t\tif lo > msg.len() {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				"\t\tOk((lo, msg.len() - lo))",
+			]
+			said = "after this struct"
+		else:
+			body = [
+				f"\t\tif ({start}) as usize + {wide} > self.bytes.len() {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				"\t\tOk((0, msg.len()))",
+			]
+			said = "its own read as `self_as`"
+		lines = [
+			"",
+			f"\t/// The bytes `{placement.name}` covers: every byte of the",
+			f"\t/// MESSAGE {said}, as a range of `msg`, the message this",
+			"\t/// view was cut from (26.1117).",
+			f"\tpub fn {name}_covered_in(&self, msg: &[u8])"
+			" -> Result<(usize, usize)> {",
+			*where,
+			*body,
+			"\t}",
+		]
+		codec = (placement.tag_codec or "").lower()
+		if placement.tag_codec is None \
+				or placement.tag_codec in self._unimplemented_codecs() \
+				or (placement.size_bits or 0) % BITS_PER_BYTE:
+			return lines
+		filler = _self_as(placement.attrs)
+		if placement.tag_message and filler is not None:
+			compute = [
+				f"\t\tlet (hole_at, hole_n) = self.{name}_self_span()?;",
+				"\t\tlet here = (self.bytes.as_ptr() as usize)"
+				".wrapping_sub(msg.as_ptr() as usize);",
+				"\t\tlet hole_at = here + hole_at;",
+				"\t\tif hole_at < at {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tOk(u32::from({codec}_spans(&[], &msg[at..at + n],"
+				f" hole_at - at, hole_n, {filler:#04x})))",
+			]
+		else:
+			compute = [f"\t\tOk(u32::from({codec}(&msg[at..at + n])))"]
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		read  = ("from_le_bytes" if placement.tag_codec_endian
+		         is ast.Endian.LITTLE else "from_be_bytes")
+		return lines + [
+			"",
+			f"\t/// {placement.tag_codec} over the bytes {name}_covered_in()"
+			" names.",
+			f"\tpub fn {name}_compute_in(&self, msg: &[u8]) -> Result<u32> {{",
+			f"\t\tlet (at, n) = self.{name}_covered_in(msg)?;",
+			*compute,
+			"\t}",
+			"",
+			f"\t/// Whether the stored {placement.tag_codec} matches the"
+			" bytes it covers.",
 			f"\tpub fn {name}_check_in(&self, msg: &[u8]) -> Result<()> {{",
 			f"\t\tlet want = self.{name}_compute_in(msg)?;",
 			f"\t\tlet at = ({start}) as usize;",

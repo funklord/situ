@@ -732,9 +732,13 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# Asked of the tag rather than inferred from the layout,
 			# because the whole point is that the four disagreed about
 			# it while agreeing with the layout they were built from.
-			if placement.tag_before:
-				# The message ahead of the tag (26.1050): a range all four
-				# answer, and a sum the two walkers compute (26.1062).
+			if placement.tag_before or placement.tag_after \
+					or placement.tag_message:
+				# The message ahead of the tag (26.1050), or its twins after
+				# this struct and the whole message (26.1117): a range all
+				# four answer from the MESSAGE -- Rust from the bytes it is
+				# handed, which is what `before` asks of a driver -- and a
+				# sum the two walkers compute (26.1062).
 				found.append(Ask(Probe.COVERED_RANGE, local, before=True))
 				if placement.tag_codec in _COMPUTABLE \
 						and not (placement.size_bits or 0) % 8:

@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from walker import vm
-from walker.image import FRAME_CAP, LITTLE, NONE, Image, _string_at
+from walker.image import FRAME_CAP, LITTLE, NONE, Image, Tag, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          says_little,
                          Unsupplied, View, child_args, frame_end,
@@ -443,6 +443,17 @@ def _sum(image: Image, view: View, index: int, local: str,
 		except derived.Uncomputable:
 			return []
 		return [f"{local}.sum {value}"]
+	if held.after or held.message:
+		span = message_span(view, index, held)
+		if span is None:
+			return [f"{local}.sum refused"]
+		lo, hi, hole = span
+		try:
+			value = derived.compute(image, index,
+			                        bytes(view.buffer[lo:hi]), hole)
+		except derived.Uncomputable:
+			return []
+		return [f"{local}.sum {value}"]
 	if held.first == NONE or held.last == NONE:
 		return []
 	try:
@@ -459,6 +470,31 @@ def _sum(image: Image, view: View, index: int, local: str,
 	except derived.Uncomputable:
 		return []
 	return [f"{local}.sum {value}"]
+
+
+def message_span(view: View, index: int, held: Tag
+		) -> tuple[int, int, tuple[int, int] | None] | None:
+	"""The bytes `covers(after)` or `covers(message)` sums, ABSOLUTE in the
+	message, and the tag's own place among them where it is inside --
+	None where they are not all there (26.1117).
+
+	The message is the buffer, as it is for `before`: its first byte is
+	the buffer's, and its last is the buffer's last, so a caller holding
+	bytes past the message frames it by handing over the message. `after`
+	starts where the tag's own struct ends; `message` starts at 0 and
+	holds the tag, whose bytes read as its `[self_as]`."""
+	try:
+		start = offset_bits(view, index) // BITS_PER_BYTE
+		wide  = size_bits(view, index) // BITS_PER_BYTE
+		end   = len(view.buffer)
+		if view.at + start + wide > end:
+			return None
+		if held.message:
+			return 0, end, (view.at + start, wide)
+		lo = view.at + struct_extent(view)
+	except Refused:
+		return None
+	return (lo, end, None) if lo <= end else None
 
 
 def _covered_span(view: View, first: int, last: int,
@@ -516,6 +552,12 @@ def _covered(image: Image, view: View, index: int, local: str) -> list[str]:
 			if view.at + start + wide > view.limit:
 				return [f"{local}.covered refused"]
 			return [f"{local}.covered 0+{view.at + start}"]
+		if held.after or held.message:
+			# Absolute in the message, as `before`'s is (26.1117).
+			span = message_span(view, index, held)
+			if span is None:
+				return [f"{local}.covered refused"]
+			return [f"{local}.covered {span[0]}+{span[1] - span[0]}"]
 		if held.first == NONE or held.last == NONE:
 			return []
 		first, end = _covered_span(view, held.first, held.last, whole=True)

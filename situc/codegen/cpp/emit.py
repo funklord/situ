@@ -9768,6 +9768,45 @@ class Emitter:
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			])
+		# Its twins (26.1117): after this struct, and the whole message --
+		# absolute, through the owner, as `before`'s range is; see C.
+		top = len(placement.path.split(".")) == 2
+		if top and (placement.tag_after or placement.tag_message):
+			where = self._offset_expression(struct, placement) or "0"
+			wide  = ((placement.size_bits or 0) + 7) // 8
+			body  = ([
+				"\t\tconst std::uint32_t lo = static_cast<std::uint32_t>("
+				"raw().base - raw().owner->base)",
+				"\t\t                       + size_bytes;",
+				"\t\tif (lo > raw().owner->size) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"\t\toffset = lo;",
+				"\t\tlen    = raw().owner->size - lo;",
+			] if placement.tag_after else [
+				f"\t\tif (!situ_in_bounds(raw(), {where}, {wide}u)) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"\t\toffset = 0;",
+				"\t\tlen    = raw().owner->size;",
+			])
+			said = ("after this struct" if placement.tag_after
+			        else "its own read as self_as")
+			lines.extend([
+				"",
+				f"\t/* {placement.name} covers every byte of the MESSAGE"
+				f" {said} (26.1117). */",
+				f"\t[[nodiscard]] ::situ::rt::err {name}_covered("
+				"std::uint32_t &offset,",
+				"\t\t\tstd::uint32_t &len) const noexcept",
+				"\t{",
+				"\t\tif (raw().owner == nullptr) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				*body,
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			])
 
 		run = covered_run(struct, placement)
 		if run is not None:
@@ -9864,7 +9903,8 @@ class Emitter:
 		# not emitted where the coverage has no single range -- so the call
 		# was to a member nothing declares (26.367).
 		if covered_run(struct, placement) is None and bitspan is None \
-				and not before:
+				and not before and not (top and (placement.tag_after
+				                                 or placement.tag_message)):
 			if placement.tag_codec is not None:
 				lines.extend([
 					f"\t/* No {placement.tag_codec} helpers for"
@@ -10013,9 +10053,25 @@ class Emitter:
 		if covered_bit_span(struct, placement) is not None:
 			return [f"\t\tout = {codec}_bits(raw().base, at, n);"]
 
-		# `covers(before)`: from the message's start (26.1050).
-		if placement.tag_before:
+		# `covers(before)`: from the message's start (26.1050), and `after`
+		# likewise (26.1117).
+		if placement.tag_before or placement.tag_after:
 			return [f"\t\tout = {codec}(raw().owner->base + at, n);"]
+		# `covers(message)`: its own span counts from this view, moved to
+		# the message's count before the sum (26.1117).
+		if placement.tag_message and filler is not None:
+			own = bare_name(local_name(struct, placement))
+			return [
+				"\t\tstd::uint32_t hole_at = 0, hole_n = 0;",
+				f"\t\tif ({own}_self_span(hole_at, hole_n)"
+				" != ::situ::rt::err::ok) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				"\t\thole_at += static_cast<std::uint32_t>("
+				"raw().base - raw().owner->base);",
+				f"\t\tout = {codec}_spans(nullptr, 0, raw().owner->base + at,"
+				f" n, hole_at - at, hole_n, {filler:#04x});",
+			]
 		if filler is None and before is None:
 			return [f"\t\tout = {codec}(raw().base + at, n);"]
 

@@ -872,12 +872,22 @@ class Emitter:
 			"}",
 		]
 		if len(placement.path.split(".")) > 2:
-			return [f"/* `{placement.name}` covers the message ahead of it;"
+			return [f"/* `{placement.name}` covers bytes of the message;"
 			        " its span and sum are",
 			        " * asked of the struct that declares it. */", *dirty]
 		where = self._base_expression(struct, placement)
 		wide  = ((placement.size_bits or 0) + BITS_PER_BYTE - 1) \
 			// BITS_PER_BYTE
+		if placement.tag_after or placement.tag_message:
+			lines = self._message_span_covered(struct, placement, local,
+			                                   where, wide) + dirty
+			if placement.tag_message:
+				lines += self._self_as_hole(struct, placement)
+			if placement.tag_codec is not None \
+					and placement.tag_codec not in self._underivable_codecs() \
+					and not (placement.size_bits or 0) % BITS_PER_BYTE:
+				lines += self._checksum_codec(struct, placement, local)
+			return lines
 		lines = [
 			f"/* `{placement.name}` covers every byte of the MESSAGE ahead of"
 			" it, so",
@@ -910,6 +920,55 @@ class Emitter:
 				and not (placement.size_bits or 0) % BITS_PER_BYTE:
 			lines += self._checksum_codec(struct, placement, local)
 		return lines
+
+	def _message_span_covered(self, struct: ResolvedStruct,
+			placement: Placement, local: str, where: str, wide: int
+			) -> list[str]:
+		"""`covers(after)` and `covers(message)`, `before`'s twins
+		(26.1117): the span is the message's, reached through the view's
+		owner. `after` runs from the end of this struct -- which has a fixed
+		size, as `layout` requires of it -- to the message's end;
+		`message` is all of it, the tag's own bytes included."""
+		name = ident(self.prefix, struct.name, local, "covered")
+		head = [
+			f"static inline situ_err_t {name}"
+			"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+			"{",
+			"\tif (view.owner == NULL) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
+		if placement.tag_after:
+			size = macro(self.prefix, struct.name, "SIZE_FIXED")
+			return [
+				f"/* `{placement.name}` covers every byte of the MESSAGE after"
+				" this struct, so",
+				" * `offset` is where this struct ends in the message (26.1117). */",
+				*head,
+				"\tconst uint32_t lo = (uint32_t)(situ_base(view)"
+				f" - view.owner->base) + {size};",
+				"",
+				"\tif (lo > view.owner->size) {",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"\t*offset = lo;",
+				"\t*len    = view.owner->size - lo;",
+				"\treturn SITU_OK;",
+				"}",
+			]
+		return [
+			f"/* `{placement.name}` covers every byte of the MESSAGE, its own"
+			" read as",
+			" * its `self_as` (26.1117). */",
+			*head,
+			f"\tif (!situ_in_bounds(view, {where}, {wide}u)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"\t*offset = 0u;",
+			"\t*len    = view.owner->size;",
+			"\treturn SITU_OK;",
+			"}",
+		]
 
 	def _let_setters(self, struct: ResolvedStruct) -> list[str]:
 		"""A setter per named value that splits back into its fields
@@ -1220,7 +1279,8 @@ class Emitter:
 		if nested is not None:
 			return [*lines, *self._nested_tag_support(struct, placement,
 			                                          local, *nested)]
-		if placement.tag_before:
+		if placement.tag_before or placement.tag_after \
+				or placement.tag_message:
 			return [*lines, *self._before_tag_support(struct, placement, local)]
 
 		# A prefix the message does not contain (14.2a). Situ knows its layout
@@ -15603,8 +15663,24 @@ class Emitter:
 
 		# `covers(before)`: the span is the message's, from its start
 		# (26.1050); `covered` refused a view with no owner.
-		if placement.tag_before:
+		if placement.tag_before or placement.tag_after:
 			return [f"\t*out = {codec}(view.owner->base + at, n);"]
+		# `covers(message)`: the whole message, its own bytes read as
+		# `self_as` -- whose span counts from this view, so it is moved to
+		# the message's count before the sum (26.1117).
+		if placement.tag_message and filler is not None:
+			span = ident(self.prefix, struct.name,
+			             c_name(self._local(struct, placement)), "self_span")
+			return [
+				"\tuint32_t hole_at, hole_n;",
+				"",
+				f"\tif ({span}(view, &hole_at, &hole_n) != SITU_OK) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"\thole_at += (uint32_t)(situ_base(view) - view.owner->base);",
+				f"\t*out = {codec}_spans(NULL, 0, view.owner->base + at, n,"
+				f" hole_at - at, hole_n, {filler:#04x}u);",
+			]
 		if filler is None and before is None:
 			return [f"\t*out = {codec}(situ_base(view) + at, n);"]
 

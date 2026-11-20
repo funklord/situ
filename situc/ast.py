@@ -1011,10 +1011,25 @@ class TagField(Member):
 	#: first byte through itself, sum to zero. `covers` is empty beside it,
 	#: since the bytes are the message's and no region of this struct's.
 	before: bool			= False
+	#: `checksum u8 dcrc[4] covers(after) is crc32;` -- every byte of the
+	#: message from the end of the tag's own struct to the message's end
+	#: (26.1117): U-Boot's data CRC, kept in a nested header and covering
+	#: the payload that follows it.
+	after: bool			= False
+	#: `checksum u8 crc[2] covers(message) is fs2_crc [self_as = 0xFFFF];`
+	#: -- every byte of the message, the tag's own read as `[self_as]`
+	#: (26.1117): FS2's image CRC.
+	message: bool			= False
+
+	@property
+	def spans_message(self) -> bool:
+		"""Whether the coverage is bytes of the message rather than regions
+		of this struct: `before`, `after` or `message`."""
+		return self.before or self.after or self.message
 
 	@property
 	def infers_coverage(self) -> bool:
-		return not self.covers and not self.before
+		return not self.covers and not self.spans_message
 
 
 @dataclass(frozen=True)

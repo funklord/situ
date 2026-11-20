@@ -78,6 +78,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	for name, struct_layout in layout.structs.items():
 		decl = structs[name]
 		_check_host_dependence(decl, struct_layout)
+		_check_after_has_a_fixed_struct(decl, struct_layout)
 		_check_required_alignment(decl, struct_layout)
 		_check_secret_is_not_layout_bearing(decl, struct_layout)
 		_check_transform_tag_order(decl, struct_layout)
@@ -367,6 +368,30 @@ def _context(placement: Placement, decl: ast.StructDecl,
 		target            = target,
 		append            = append,
 	)
+
+
+def _check_after_has_a_fixed_struct(decl: ast.StructDecl,
+		layout: StructLayout) -> None:
+	"""`covers(after)` starts where its own struct ends (26.1117), so the
+	struct has to say where that is without being walked: every reader
+	finds the start from the struct's fixed size, as a header -- U-Boot's,
+	FS2's -- has one. A variable struct is refused here rather than summed
+	from a guessed end."""
+	if layout.is_fixed_size:
+		return
+	for placement in layout.placements:
+		if placement.tag_after and len(placement.path.split(".")) == 2:
+			raise error(
+				f"`{placement.name}` covers the message after "
+				f"`{decl.name}`, which has no fixed size",
+				decl.span,
+				label = "a struct whose end is found by walking it",
+				notes = ["`covers(after)` begins where this struct ends, and "
+				         "every reader takes that from the struct's fixed "
+				         "size (26.1117)",
+				         "keep the checksum in a fixed-size header, as U-Boot "
+				         "and FS2 do, or cover named regions instead"],
+			)
 
 
 def _check_host_dependence(decl: ast.StructDecl, layout: StructLayout) -> None:

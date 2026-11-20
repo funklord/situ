@@ -5299,8 +5299,9 @@ def coverage_of(tag: ast.TagField, regions: list[ast.Authenticated | ast.Sealed]
 		) -> tuple[str, ...]:
 	"""Which regions a tag covers, with inference applied (section 14.1).
 
-	None for `covers(before)`, whose bytes are the message's (26.1050)."""
-	if tag.before:
+	None for `covers(before)`, whose bytes are the message's (26.1050), and
+	for its twins `after` and `message` (26.1117)."""
+	if tag.spans_message:
 		return ()
 	if tag.covers:
 		return tag.covers
@@ -5588,6 +5589,10 @@ def _check_tag_is_outside_its_coverage(tag: ast.TagField, covers: tuple[str, ...
 	               and any(held is tag for held in tag_fields(region.members))),
 	              None)
 	filler = _attr(tag.attrs, "self_as")
+	# `covers(message)` is every byte of the message, so the tag is always
+	# inside it (26.1117); `before` and `after` never are.
+	if tag.message:
+		inside = "the message"
 
 	if inside is not None and filler is None:
 		raise error(

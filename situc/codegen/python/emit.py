@@ -2715,6 +2715,37 @@ class Emitter:
 				' this frame")',
 				f"\t\treturn 0, self._at + ({start})",
 			])
+		# Its twins (26.1117): from the end of this struct to the message's
+		# end, and the whole message -- absolute, as `before`'s range is.
+		top = len(placement.path.split(".")) == 2
+		if top and (placement.tag_after or placement.tag_message):
+			start = self._offset_expression(struct, placement) or "0"
+			wide  = ((placement.size_bits or 0) + 7) // 8
+			body  = ([
+				"\t\tlo  = self._at + self._extent",
+				"\t\tend = len(self._msg.buffer)",
+				"\t\tif lo > end:",
+				f'\t\t\traise BoundsError("{placement.name}: this struct'
+				' runs past the message")',
+				"\t\treturn lo, end - lo",
+			] if placement.tag_after else [
+				f"\t\tif ({start}) + {wide} > self._len:",
+				f'\t\t\traise BoundsError("{placement.name} does not fit'
+				' this frame")',
+				"\t\treturn 0, len(self._msg.buffer)",
+			])
+			said = ("every byte of the MESSAGE after this struct"
+			        if placement.tag_after else
+			        "every byte of the MESSAGE, its own read as SELF_AS")
+			lines.extend([
+				"",
+				f"\tdef {name}_covered(self) -> tuple[int, int]:",
+				f'\t\t"""The bytes {placement.name} covers: {said},',
+				"\t\tas a range of the message rather than of this view",
+				'\t\t(26.1117)."""',
+				"\t\tself._check()",
+				*body,
+			])
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run
@@ -2811,7 +2842,8 @@ class Emitter:
 			# is the quietest of the four about it: the call type-checks and
 			# raises `AttributeError` the first time somebody asks (26.367).
 			if covered_run(struct, placement) is None and bitspan is None \
-					and not before:
+					and not before and not (top and (placement.tag_after
+					                                 or placement.tag_message)):
 				if placement.tag_codec is not None:
 					lines.extend([
 						"",
@@ -3028,8 +3060,10 @@ class Emitter:
 		codec  = py_name(placement.tag_codec)
 		span   = ("bytes(self._msg.buffer"
 		          "[self._at + at:self._at + at + n])")
-		# `covers(before)` answers from the message's start (26.1050).
-		if placement.tag_before:
+		# `covers(before)` answers from the message's start (26.1050), and
+		# its twins likewise (26.1117).
+		if placement.tag_before or placement.tag_after \
+				or placement.tag_message:
 			span = "bytes(self._msg.buffer[at:at + n])"
 		filler = _self_as(placement.attrs)
 		before = placement.tag_prefix
@@ -3071,6 +3105,10 @@ class Emitter:
 			head = 'b""' if before is None else "prefix"
 			hole = ("hole_at - at" if before is None
 			        else "len(prefix) + (hole_at - at)")
+			# `_self_span` counts from the view and a message-wide span
+			# from byte 0 of the message (26.1117).
+			if placement.tag_message:
+				hole = "self._at + hole_at - at"
 			if filler is None:
 				call = [f"\t\treturn {codec}_spans({head}, {span}, 0, 0, 0)"]
 			else:

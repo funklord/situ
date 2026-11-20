@@ -3276,7 +3276,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# (26.1050). So the row carries no members and says so in bit 1 of
 		# the flag word, and a reader takes the span from the message it
 		# holds (26.1062).
-		if placement.tag_covers or placement.tag_before:
+		if placement.tag_covers or placement.tag_before \
+				or placement.tag_after or placement.tag_message:
 			# `traverse.covered_members` AND NOT A COPY HERE (26.609).
 			# This was a comprehension over the packer's own row table with
 			# an `in_arm` closure beside it, and rung 2's builder asks the
@@ -3331,6 +3332,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# it does not know and declines.
 				(1 if placement.tag_prefix else 0)
 				| (2 if placement.tag_before else 0)
+				# Bits 3 and 4: `covers(after)` and `covers(message)`,
+				# its twins (26.1117) -- from the end of the tag's own
+				# struct to the message's end, and the whole message.
+				| (8 if placement.tag_after else 0)
+				| (16 if placement.tag_message else 0)
 				| _prefix_size_bits(resolved, placement),
 				# The order the codec's OUTPUT is stored in. Not
 				# `placement.endian`, which is deliberately None on a
@@ -3573,7 +3579,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			flags |= SIGNED
 		if placement.marker is not None:
 			flags |= MARKER_GOVERNED
-		if placement.tag_covers or placement.tag_before:
+		if placement.tag_covers or placement.tag_before \
+				or placement.tag_after or placement.tag_message:
 			flags |= IS_TAG
 		# Bit 3 is packed decimal, and its digit count shares `radix_digits`
 		# with a text number's for the reason `_signed` gives one axis over:

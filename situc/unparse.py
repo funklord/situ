@@ -523,8 +523,10 @@ def member_to_source(member: ast.Member) -> str:
 		# `covers(before)` names no region and stands alone (26.1050), so
 		# the tuple is empty and printing it alone dropped the clause: a
 		# sum over the message ahead reparsed as a tag covering nothing.
-		covers = " covers(before)" if member.before \
-			else _covers_to_source(member.covers)
+		covers = (" covers(before)" if member.before
+		          else " covers(after)" if member.after
+		          else " covers(message)" if member.message
+		          else _covers_to_source(member.covers))
 		return (f"{member.kind.value} {member.type_ref.name}"
 		        f"{_region_name(member.name, member.kind.value)}"
 		        f"{_array_to_source(member.array)}{covers}"

@@ -1209,7 +1209,10 @@ covers bytes the message does not contain names them (`prefix(...)`, which is
 UDP's and TCP's pseudo-header). One that covers every byte of the message ahead
 of it, wherever it falls, says `covers(before)` -- PCI VPD's RV byte, which
 makes the image sum to zero through itself -- and a write anywhere ahead of
-it marks it stale.
+it marks it stale. Kept in a header and covering what its parent places after
+it, a checksum says `covers(after)` -- U-Boot's data CRC over the payload --
+and one over every byte of the image, its own read as a constant, says
+`covers(message)` with its `[self_as]` -- FS2's firmware image CRC.
 
 **The interior of a sealed region does not exist until the tag verifies.**
 That is the doom principle as a typestate: parsing attacker-controlled

@@ -870,7 +870,10 @@ class Document:
 
 		notes: list[str] = []
 		mine = set(self.image.members(self.image.structs[self.view().struct]))
+		notes.extend(self._recompute_spanning(name, index))
 		for tag, held in self.image.tags.items():
+			if held.after or held.message:
+				continue		# `_recompute_spanning`'s (26.1117)
 			# `covers(before)` names no members: it covers whatever this
 			# struct places ahead of it, and its span is the message's
 			# from the first byte (26.1050, 26.1062).
@@ -930,6 +933,63 @@ class Document:
 			notes.append(f"`{label}` recomputed over {span} bytes at {at}")
 		return notes
 
+	def _recompute_spanning(self, name: str, index: int) -> list[str]:
+		"""`covers(after)` and `covers(message)` (26.1117): the sums whose
+		span is the message's, in this struct or in a struct nested in it --
+		U-Boot's data CRC and FS2's image CRC both sit in a header the
+		bytes written are not in. Each is found through a view of the
+		struct that declares it, and the span is the walker's own
+		`message_span`, so the editor and the walker cannot disagree about
+		which bytes a write stales."""
+		from walker import derived
+		from walker.report import message_span
+
+		written = self.at + offset_bits(self.view(), index) // BITS_PER_BYTE
+		views = [self.view()]
+		names = [self.image.struct_name(i)
+		         for i in range(len(self.image.structs))]
+		for field in self.fields():
+			if field.nested is None:
+				continue
+			inner, at = field.nested
+			try:
+				views.append(acquire(self.image, self.buffer,
+				                     names.index(inner), at=at))
+			except (Refused, Unsupplied, ValueError):
+				continue
+		notes: list[str] = []
+		for view in views:
+			for tag in self.image.members(self.image.structs[view.struct]):
+				held = self.image.tags.get(tag)
+				if held is None or not (held.after or held.message):
+					continue
+				span = message_span(view, tag, held)
+				if span is None:
+					continue
+				lo, hi, hole = span
+				if not lo <= written < hi:
+					continue
+				label = self.image.placement_names[tag] \
+					if tag < len(self.image.placement_names) else f"#{tag}"
+				if not derived.computes(self.image, tag):
+					notes.append(
+						f"`{name}` is covered by `{label}`, which is now "
+						f"stale: its schema names no codec situ computes, "
+						f"so recomputing it is the caller's (14.1)")
+					continue
+				try:
+					value = derived.compute(self.image, tag,
+					                        bytes(self.buffer[lo:hi]), hole)
+				except derived.Uncomputable as why:
+					notes.append(
+						f"`{name}` is covered by `{label}`, which is now "
+						f"stale: it could not be recomputed, because {why}")
+					continue
+				self._store_in(view, tag, value)
+				notes.append(f"`{label}` recomputed over {hi - lo} bytes "
+				             f"at {lo}")
+		return notes
+
 	def _hole(self, tag: int, at: int, span: int) -> tuple[int, int] | None:
 		"""Where the tag's own bytes sit inside the span it covers (14.2).
 
@@ -947,7 +1007,11 @@ class Document:
 		return start - at, wide
 
 	def _store(self, tag: int, value: int) -> None:
-		"""Put a computed checksum where the tag's bytes are.
+		self._store_in(self.view(), tag, value)
+
+	def _store_in(self, view: View, tag: int, value: int) -> None:
+		"""Put a computed checksum where the tag's bytes are, through the
+		view of the struct that declares it.
 
 		A scalar goes through `write_scalar`, which knows the placement's
 		byte order. A BYTE RUN -- PNG's `u8 crc[4]` -- has none of its own,
@@ -963,7 +1027,7 @@ class Document:
 		the schema's word for the second.
 		"""
 		if not is_run(self.image, tag):
-			write_scalar(self.view(), tag, value)
+			write_scalar(view, tag, value)
 			return
 
 		held   = self.image.tags[tag]
@@ -971,7 +1035,7 @@ class Document:
 		wide   = (kernel.width + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		order: Literal["little", "big"] = \
 			"little" if held.endian == LITTLE else "big"
-		write_bytes(self.view(), tag, value.to_bytes(wide, order))
+		write_bytes(view, tag, value.to_bytes(wide, order))
 
 	def _arm_row(self, view: View, index: int) -> Field:
 		"""A variant, as the arm the discriminant selected.

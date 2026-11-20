@@ -186,7 +186,11 @@ preamble	= "preamble" "u8" [ array_spec ] "=" string [ attrs ] ";" ;
 (* `[self_as = N]` says what the tag's own bytes read as while the algorithm
  * runs, and is what lets a checksum sit inside the region it covers: RFC 1071
  * defines the Internet checksum over the header including the checksum field,
- * taken as zero. Without it, a tag inside its own coverage is an error. *)
+ * taken as zero. Without it, a tag inside its own coverage is an error.
+ * `covers(before)`, `covers(after)` and `covers(message)` each stand alone in
+ * the list and name bytes of the MESSAGE rather than regions: ahead of the
+ * tag (26.1050), from the end of its own fixed-size struct to the message's
+ * end, and all of it, its own bytes read as `[self_as]` (26.1117). *)
 tag_field	= ( "tag" | "checksum" ) type_ref [ ident ] [ array_spec ]
 		  [ "covers" "(" ref_list ")" ] [ "prefix" "(" ident ")" ]
 		  [ "is" ident ] [ attrs ] ";" ;

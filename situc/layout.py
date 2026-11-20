@@ -392,6 +392,11 @@ class Placement:
 	#: `covers(before)`: every byte of the message ahead of this tag, with
 	#: `tag_covers` empty (26.1050).
 	tag_before: bool		= False
+	#: `covers(after)` and `covers(message)`, its twins (26.1117): every
+	#: byte of the message from the end of the tag's own struct, and every
+	#: byte of it, the tag's own read as `[self_as]`.
+	tag_after: bool			= False
+	tag_message: bool		= False
 	# For a tag or checksum: a struct whose bytes the algorithm runs over
 	# before this message's, and which this message does not contain
 	# (section 14.2a). TCP's and UDP's pseudo-header.
@@ -1807,7 +1812,7 @@ class Solver:
 		# `covers(before)` names no region, so a struct holding one may hold
 		# none and still has its tag resolved (26.1050).
 		own = {tag.name: tag for tag in tag_fields(decl.members)
-		       if regions or tag.before}
+		       if regions or tag.spans_message}
 
 		for index, held in enumerate(layout.placements):
 			if held.kind not in ("tag", "checksum"):
@@ -1821,7 +1826,8 @@ class Solver:
 				continue
 			layout.placements[index] = replace(
 				held, tag_covers=coverage_of(tag, regions),
-				tag_prefix=tag.prefix, tag_before=tag.before)
+				tag_prefix=tag.prefix, tag_before=tag.before,
+				tag_after=tag.after, tag_message=tag.message)
 
 		# (owning struct's path, region name) -> the tags covering it. A
 		# region may appear under more than one tag when coverage nests
@@ -1976,9 +1982,14 @@ class Solver:
 		every member. Ordered last among the tags, since it covers the
 		most and every other tag's bytes are among them.
 		"""
+		# `covers(message)` is staled by every member, wherever it sits;
+		# `covers(after)` by none of this struct's, whose bytes are behind
+		# it -- what it covers is the enclosing struct's (26.1117).
 		ahead = [(position, local[id(held)], held)
 		         for position, held in enumerate(layout.placements)
-		         if held.kind in ("tag", "checksum") and held.tag_before]
+		         if held.kind in ("tag", "checksum")
+		         and (held.tag_before or held.tag_message
+		              or held.tag_after)]
 		if not ahead:
 			return
 		by_path = {held.path: held for held in layout.placements}
@@ -1999,7 +2010,13 @@ class Solver:
 		for index, member in enumerate(layout.placements):
 			names = {name for position, name, held in ahead
 			         if member is not held
-			         and (index < position or repeated(held.path))}
+			         and (held.tag_message
+			              or (held.tag_after
+			                  and _after_its_struct(member.path, held.path,
+			                                        index, position))
+			              or (held.tag_before
+			                  and (index < position
+			                       or repeated(held.path))))}
 			if not names:
 				continue
 			# A nested member arrives carrying its own struct's label for
@@ -4805,3 +4822,13 @@ def _delimiter_byte(member: ast.Field | ast.Reserved, name: str) -> int | None:
 			)
 		return raw[0]
 	return None
+
+
+def _after_its_struct(member: str, tag: str, index: int, position: int) -> bool:
+	"""Whether `member` lies after the struct that declares the `covers(after)`
+	tag at `tag` (26.1117): placed after it, and not inside that struct.
+	A tag declared directly in this layout's struct has nothing after its
+	struct here; one in a nested header has the members its parent places
+	behind the header."""
+	owner = tag.rpartition(".")[0]
+	return index > position and not (member + ".").startswith(owner + ".")
