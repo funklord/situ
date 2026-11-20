@@ -89,6 +89,9 @@ SUBTRACTION = re.compile(r"\blimit\s*-\s*(?!=)|\.len\(\)\s*-\s*(?!=)")
 #: gate stops measuring what it claims to.
 RUST_CENSUS = {
 	"bmp.situ": 3,
+	# Read, 2026-11-20, when `png_file` described the file whole (26.1124):
+	# the nested signature's own bound, `len() - at`, behind `len() < at`.
+	"png.situ": 1,
 	# Read rather than added, on 2026-11-07: every site in both is a nested
 	# member's own bound, and each tests `len() < at` first.
 	"cbor.situ": 3,
