@@ -429,6 +429,10 @@ def build_parser() -> argparse.ArgumentParser:
 		"--mime", action="store_true",
 		help="print a shared-mime-info package for the desktop's own "
 		     "detector")
+	identify_cmd.add_argument(
+		"--json", action="store_true",
+		help="one JSON object per file: the format, its level and media "
+		     "type, and the schema and struct that read it")
 	identify_cmd.add_argument("files", nargs="*", type=Path)
 
 	explain_cmd = sub.add_parser(
@@ -690,10 +694,13 @@ def cmd_identify(args: argparse.Namespace) -> int:
 	from situc import identify
 
 	formats: list[identify.Recogniser] = []
+	source_of: dict[int, Path] = {}
 	for path in args.schema:
 		schema = parse(read_source(path))
-		formats += identify.recognisers(schema,
-		                                resolve(schema, solve(schema)))
+		for one in identify.recognisers(schema,
+		                                resolve(schema, solve(schema))):
+			source_of[id(one)] = path
+			formats.append(one)
 	if args.magic:
 		sys.stdout.write(identify.magic(formats))
 		return 0
@@ -708,6 +715,14 @@ def cmd_identify(args: argparse.Namespace) -> int:
 		      file=sys.stderr)
 		return 2
 	for path, chosen, level in identify.identify_files(formats, args.files):
+		if args.json:
+			print(json.dumps({
+				"file": str(path), "level": level,
+				"format": chosen.name if chosen else None,
+				"media": chosen.media if chosen else None,
+				"schema": str(source_of[id(chosen)]) if chosen else None,
+				"struct": chosen.struct if chosen else None}))
+			continue
 		print(f"{path}: {chosen.name if chosen else '-'} ({level})"
 		      + (f" {chosen.media}" if chosen and chosen.media else ""))
 	return 0

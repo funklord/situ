@@ -411,3 +411,41 @@ def test_the_desktop_agrees_with_the_mime_package(tmp_path: Path) -> None:
 	assert said == {"good": "application/x-situ-probe",
 	                "idat": "application/octet-stream",
 	                "deep": "application/octet-stream"}, said
+
+
+def _edit(*argv: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		[sys.executable, str(ROOT / "bin" / "situ-edit"), *argv],
+		capture_output=True, text=True, timeout=300)
+
+
+def test_the_editor_reads_a_file_as_the_format_it_is(tmp_path: Path) -> None:
+	"""`situ-edit DIR FILE`: the detectors reused to choose the schema, as
+	the holder asked of them -- the file read as the struct its format's
+	`identify` reads, named on stderr with how sure."""
+	schemas = tmp_path / "schemas"
+	schemas.mkdir()
+	(schemas / "head.situ").write_text(GATED, encoding="latin-1")
+	(schemas / "text.situ").write_text(
+		PREAMBLE + "identify csv { required text csv; }\n",
+		encoding="ascii")
+	(schemas / "plain.situ").write_text(HEAD, encoding="latin-1")
+	png = tmp_path / "image.png"
+	png.write_bytes(_chunk(b"IHDR"))
+	ran = _edit(str(schemas), str(png))
+	assert ran.returncode == 0, ran.stderr
+	assert "is png (certain), read as head" in ran.stderr
+	assert ran.stdout.startswith("head "), ran.stdout
+	assert "signature" in ran.stdout and "first" in ran.stdout, ran.stdout
+
+	other = tmp_path / "other.bin"
+	other.write_bytes(b"\x00\x01\x02")
+	ran = _edit(str(schemas), str(other))
+	assert ran.returncode == 1
+	assert "none of the 2 formats" in ran.stderr, ran.stderr
+
+	table = tmp_path / "t.csv"
+	table.write_bytes(b"a,b\n1,2\n")
+	ran = _edit(str(schemas), str(table))
+	assert ran.returncode == 1
+	assert "a text format" in ran.stderr, ran.stderr

@@ -291,6 +291,7 @@ situ-edit-tui  proto.situ capture.bin    # the same, on a terminal (Python only)
 situ-edit-gui  proto.situ capture.bin    # the same, in a window (make gui)
 situ-edit-gui --tui proto.situ capture.bin  # that window, on a terminal
 make gui-example                         # the window on a real NTP reply
+situ-edit      schemas/ unknown.bin      # recognised by the schemas' `identify`
 
 situc pack     proto.situ -o proto.image # the description a walker reads
 situ-walk      proto.image <hex>         # every struct, every member it can read

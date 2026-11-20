@@ -182,6 +182,9 @@ class Recogniser:
 	name: str
 	media: str | None
 	items: tuple[Item, ...]
+	#: The struct the file starts with, which a reader of it opens; None
+	#: for a text format.
+	struct: str | None = None
 
 	@property
 	def head(self) -> int:
@@ -411,7 +414,8 @@ class _Compiler:
 		return Recogniser(
 			self.decl.name,
 			media.value if isinstance(media, ast.StringLiteral) else None,
-			tuple(items))
+			tuple(items),
+			None if self.decl.param is None else self.param.type_name)
 
 
 def recognisers(schema: ast.Schema, resolved: ResolvedSchema
