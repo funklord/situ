@@ -123,12 +123,17 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 	`--out` -- `--set` and `--out`, interactively. Nothing reaches a file
 	without `--out`, as in the CLI: the message opened is never overwritten
 	by a frontend deciding on the caller's behalf.
+
+	Enter on a NESTED struct opens it, over the same buffer -- `--struct`
+	and `--offset`, without leaving -- and `q` goes back out of it. An
+	edit in a nested struct is in the one buffer `w` writes.
 	"""
 	curses.curs_set(0)
 	cursor  = 0
 	top     = 0
-	status  = "read-write where the schema permits; Enter edits"
+	status  = "read-write where the schema permits; Enter edits or opens"
 	unsaved = False
+	opened: list[tuple[Document, int]] = []	# where each level was left
 
 	while True:
 		lines  = render_rows(document)
@@ -151,12 +156,17 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 			               curses.A_REVERSE if chosen else curses.A_NORMAL)
 		screen.addnstr(height - 2, 0, status, width - 1, curses.A_BOLD)
 		screen.addnstr(height - 1, 0,
-		               "  up/down  Enter edit  w write"
+		               "  up/down  Enter edit/open  w write"
 		               + (f" {out}" if out else " (needs --out)")
-		               + "  q quit", width - 1, curses.A_REVERSE)
+		               + "  q back/quit", width - 1, curses.A_REVERSE)
 		screen.refresh()
 
 		key = screen.getch()
+		if key in (ord("q"), ord("Q"), 27) and opened:
+			document, cursor = opened.pop()
+			top    = 0
+			status = f"back in {document.name}"
+			continue
 		if key in (ord("q"), ord("Q"), 27):
 			if unsaved and status != "unsaved; q again to quit":
 				status = "unsaved; q again to quit"
@@ -169,7 +179,19 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 		elif key in (curses.KEY_ENTER, 10, 13, ord("e")) and fields:
 			owner = lines[here][1]
 			assert owner is not None
-			name  = document.fields()[owner].name
+			field = document.fields()[owner]
+			if field.nested is not None:
+				try:
+					inner = document.open_nested(owner)
+				except (Refused, Unsupplied) as why:
+					status = f"cannot open it: {why}"
+					continue
+				opened.append((document, cursor))
+				document, cursor, top = inner, 0, 0
+				status = (f"{inner.name} at {inner.at}, over the same "
+				          f"bytes; q goes back")
+				continue
+			name  = field.name
 			typed = _prompt(screen, f"{name} = ")
 			if typed is None or not typed.strip():
 				status = "unchanged"

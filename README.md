@@ -352,7 +352,7 @@ guessed block size reads the wrong bytes confidently.
 
 All three edit. `--set name=value` writes a number and `--set-bytes
 name=hex` writes a run, where the schema permits it; in the terminal, Enter
-on a field does the same and `w` writes `--out`, and in the window the value
+on a field does the same (or opens a nested struct) and `w` writes `--out`, and in the window the value
 column is editable on exactly the rows the schema lets anybody write, with
 what each write would cost beside it, and a nested struct opens in a
 window of its own on a double click, over the same bytes. The window is Qt

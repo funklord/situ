@@ -14,6 +14,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -341,32 +342,24 @@ def test_the_tui_refuses_what_the_cli_refuses(tmp_path: Path) -> None:
 	assert cli.stderr.split(": ", 1)[1] == tui.stderr.split(": ", 1)[1]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs a pty")
-def test_the_tui_edits_a_field_at_the_prompt(tmp_path: Path) -> None:
-	"""The screen itself, driven through a pseudo-terminal: down to `n`'s
-	neighbour, Enter, a value, `w`, `q`. `--no-ui` cannot see the cursor's
-	mapping from rows to fields or the prompt, which is where an
-	interactive frontend breaks without any other test noticing.
+def _drive_tui(args: list[str], keys: list[bytes]) -> tuple[int, str]:
+	"""Run the TUI under a pseudo-terminal, press `keys`, and wait for it
+	to exit: its exit code and what it drew.
 
-	Bounded: a fixed list of keys, and a `timeout` on the wait, so a screen
-	that never quits fails rather than hangs the suite.
+	Bounded: a fixed list of keys, and twenty seconds for the exit, so a
+	screen that never quits fails rather than hangs the suite.
 	"""
 	import os
 	import pty
 	import select
 	import time
 
-	(tmp_path / "s.img").write_bytes(image())
-	(tmp_path / "m.bin").write_bytes(MESSAGE)
-	out = tmp_path / "out.bin"
-
 	pid, fd = pty.fork()
 	if pid == 0:					# pragma: no cover - the child
 		os.environ.update(TERM="xterm", LINES="24", COLUMNS="80")
 		os.execv(sys.executable,
 		         [sys.executable, str(ROOT / "bin" / "situ-edit-tui"),
-		          "--out", str(out),
-		          str(tmp_path / "s.img"), str(tmp_path / "m.bin")])
+		          *args])
 
 	seen = b""
 
@@ -381,12 +374,7 @@ def test_the_tui_edits_a_field_at_the_prompt(tmp_path: Path) -> None:
 				except OSError:
 					return
 
-	# Two down from `id` is `name`, a middle field, so a cursor that moved
-	# wrongly cannot be rescued by clamping at the last row (the first
-	# version of this test went to `tail` and passed with every step
-	# doubled). `name` is a byte run, so the prompt takes hex -- which a
-	# wrong row, every other being a number, would refuse.
-	for key in (b"j", b"j", b"\r", b"776f726c64\r", b"w", b"q"):
+	for key in keys:
 		pump(0.4)
 		os.write(fd, key)
 	until = time.monotonic() + 20
@@ -400,9 +388,53 @@ def test_the_tui_edits_a_field_at_the_prompt(tmp_path: Path) -> None:
 		os.waitpid(pid, 0)
 		pytest.fail("the TUI did not quit on `q`")
 	os.close(fd)
+	return os.waitstatus_to_exitcode(status), seen.decode("latin1")
 
-	assert os.waitstatus_to_exitcode(status) == 0, seen.decode("latin1")
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pty")
+def test_the_tui_edits_a_field_at_the_prompt(tmp_path: Path) -> None:
+	"""The screen itself, driven through a pseudo-terminal. `--no-ui`
+	cannot see the cursor's mapping from rows to fields or the prompt,
+	which is where an interactive frontend breaks without any other test
+	noticing."""
+	(tmp_path / "s.img").write_bytes(image())
+	(tmp_path / "m.bin").write_bytes(MESSAGE)
+	out = tmp_path / "out.bin"
+
+	# Two down from `id` is `name`, a middle field, so a cursor that moved
+	# wrongly cannot be rescued by clamping at the last row (the first
+	# version of this test went to `tail` and passed with every step
+	# doubled). `name` is a byte run, so the prompt takes hex -- which a
+	# wrong row, every other being a number, would refuse.
+	code, seen = _drive_tui(
+		["--out", str(out), str(tmp_path / "s.img"), str(tmp_path / "m.bin")],
+		[b"j", b"j", b"\r", b"776f726c64\r", b"w", b"q"])
+
+	assert code == 0, seen
 	assert out.read_bytes() == b"\x12\x34\x05world\x7f"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pty")
+def test_the_tui_opens_a_nested_struct_over_the_same_bytes(
+		tmp_path: Path) -> None:
+	"""Enter on a nested struct's row opens it, an edit there lands in the
+	one buffer, `q` comes back out, and `w` writes the whole message."""
+	(tmp_path / "s.situ").write_text(
+		"target buffer;\nendian big;\n"
+		"struct inner { u8 a; u16 b; }\n"
+		"struct outer { u8 tag; inner in; u8 tail; }\n", encoding="ascii")
+	(tmp_path / "m.bin").write_bytes(b"\x01\x02\x00\x03\x04")
+	out = tmp_path / "out.bin"
+
+	# Down to `in`, Enter opens it; down to `b`, Enter edits; back out
+	# with `q`, write, and `q` again to quit.
+	code, seen = _drive_tui(
+		["--struct", "outer", "--out", str(out),
+		 str(tmp_path / "s.situ"), str(tmp_path / "m.bin")],
+		[b"j", b"\r", b"j", b"\r", b"0x1234\r", b"q", b"w", b"q"])
+
+	assert code == 0, seen
+	assert out.read_bytes() == b"\x01\x02\x12\x34\x04"
 
 
 def test_the_json_carries_the_verdict(tmp_path: Path) -> None:
@@ -489,7 +521,8 @@ def test_every_axis_value_but_the_ordinary_one_is_marked() -> None:
 			# capabilities, and saying nothing is right there. Without one
 			# the auth and effect branches are unreachable and this loop
 			# would report them unmarked for the wrong reason.
-			held = {"mutate": ordinary["mutate"]} | {axis: value}
+			held: dict[str, Any] = {"mutate": ordinary["mutate"]} \
+				| {axis: value}
 			marker = _write_marker(Field("x", 0, 1, 0, "", **held))
 			if value == free:
 				assert marker == "", (

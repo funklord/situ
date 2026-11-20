@@ -174,6 +174,31 @@ class Document:
 	def name(self) -> str:
 		return self.image.struct_name(self.struct)
 
+	def open_nested(self, index: int) -> "Document":
+		"""The nested struct in field `index`, as a document of its own over
+		THIS document's buffer.
+
+		What `--struct` and `--offset` do from a command line, without the
+		copy `open_document` makes: an edit in the nested document is in
+		this one's bytes, which is what a frontend opening it on a keypress
+		wants -- one buffer, written out once. Refused where the field is
+		not a nested struct, and where the struct takes arguments, which
+		its parent hands it (0068) and a person would have to supply.
+		"""
+		field = self.fields()[index]
+		if field.nested is None:
+			raise Refused(f"`{field.name}` is not a nested struct")
+		name, at = field.nested
+		names = [self.image.struct_name(i)
+		         for i in range(len(self.image.structs))]
+		chosen = names.index(name)
+		if parameters_of(self.image, chosen):
+			raise Unsupplied(f"`{name}` takes arguments its parent hands it; "
+			                 f"open it with --struct {name} --offset {at} "
+			                 "and --arg")
+		limit = None if field.size is None else at + field.size
+		return Document(self.image, self.buffer, chosen, at, limit)
+
 	@property
 	def verdict(self) -> tuple[str, str] | None:
 		"""What `validate` says about the whole message (26.595).
