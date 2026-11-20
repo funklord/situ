@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from walker.image import LITTLE, NONE, Image, load
-from walker.owned import decode
+from walker.owned import each
 from walker import report
 from walker.report import FIELD, MARKER, REGION, RESERVED, SEALED
 from walker.report import UNVERIFIED_OK
@@ -757,8 +757,13 @@ class Document:
 				notes.extend(self._recompute(name, index))
 			return notes
 
+		element = image.placements[index].element_bits // BITS_PER_BYTE
+		steps = [delta]
+		if element > 1 and delta % element == 0:
+			steps.append(delta // element)
+
 		# What each other member must read as afterwards: the same.
-		passing: list[tuple[str, Document]] = []
+		passing: list[tuple[str, Document, int]] = []
 		for other in image.members(image.structs[self.struct]):
 			if other == index:
 				continue
@@ -771,13 +776,18 @@ class Document:
 				continue
 			if image.capability_of(other, "mutate") in (None, "Immutable"):
 				continue
-			candidate = Document(image, splice(), self.struct, self.at, None)
-			try:
-				write_scalar(candidate.view(), other, old_value + delta)
-			except Refused:
-				continue
-			if holds(candidate, short):
-				passing.append((short, candidate))
+			# By the bytes, or by the ELEMENTS a run of wider ones counts:
+			# `u16 w[n]` grown by four bytes needs `n` to move by two.
+			for step in steps:
+				candidate = Document(image, splice(), self.struct, self.at,
+				                     None)
+				try:
+					write_scalar(candidate.view(), other, old_value + step)
+				except Refused:
+					continue
+				if holds(candidate, short):
+					passing.append((short, candidate, step))
+					break
 
 		if not passing and broke:
 			raise Refused(
@@ -792,14 +802,14 @@ class Document:
 				f"that and leaves the rest of the message reading as it did")
 		if len(passing) > 1:
 			raise Refused(
-				f"`{name}`: {' and '.join(f'`{one}`' for one, _ in passing)} "
+				f"`{name}`: {' and '.join(f'`{one}`' for one, _, _ in passing)} "
 				f"could each be what sizes it; set the run at its length and "
 				f"say which by hand")
 
-		sizer, candidate = passing[0]
+		sizer, candidate, step = passing[0]
 		self._take(candidate.buffer)
 		notes = [f"`{name}` is {len(value)} byte(s) now, `{sizer}` moved by "
-		         f"{delta:+d}, and what follows it moved with it"]
+		         f"{step:+d}, and what follows it moved with it"]
 		for touched in (index, self._members().get(sizer)):
 			if touched is not None and \
 					image.capability_of(touched, "auth") == "Covered":
@@ -1120,17 +1130,15 @@ class Document:
 		return found
 
 	def _values(self, view: View) -> dict[str, int | bytes]:
-		"""What rung 2 can read, or nothing where it refuses the message.
+		"""What rung 2 can read, member by member.
 
 		`decode` is whole-or-nothing, which is right for an owned value and
-		wrong for a display: an editor showing no fields because one of them
-		is unplaceable is less use than one showing the rest and saying so.
-		So a refusal here becomes empty, and every row carries its own note.
+		wrong for a display, and the editor's catch of its refusal turned
+		into nothing at all: one `u16 w[n]` made every row of its struct
+		say "cannot be read" (26.1116). `owned.each` reads what it can and
+		leaves out the rest, and every row carries its own note.
 		"""
-		try:
-			return decode(view)
-		except Refused:
-			return {}
+		return each(view)
 
 
 def open_document(image_bytes: bytes, message: Bytes,

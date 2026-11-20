@@ -1133,3 +1133,20 @@ def test_a_window_inside_a_larger_message_does_not_resize() -> None:
 	with pytest.raises(Refused, match="whole buffer"):
 		document.set("name", b"hi")
 	assert bytes(document.buffer) == bytes(held)
+
+
+def test_a_run_of_wider_elements_reads_and_grows_by_elements() -> None:
+	"""26.1116: one `u16 w[n]` made every field of its struct read "cannot
+	be read", because the owned decode refuses the whole message over a run
+	it does not answer for; the editor now reads member by member and shows
+	the run as its bytes. And growing it from two bytes to four moves `n`
+	by one ELEMENT, not by the two bytes."""
+	schema = parse_text("target buffer;\nendian big;\n"
+	                    "struct w { u8 n; u16 w[n]; u8 t; }\n")
+	packed = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	document = open_document(packed, bytearray(b"\x01\xaa\xbb\x07"), "w")
+	shown = {field.name: field.value for field in document.fields()}
+	assert shown == {"n": 1, "w": b"\xaa\xbb", "t": 7}
+	notes = document.set("w", bytes.fromhex("aabbccdd"))
+	assert bytes(document.buffer) == b"\x02\xaa\xbb\xcc\xdd\x07"
+	assert "`n` moved by +1" in notes[0]

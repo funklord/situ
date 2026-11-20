@@ -57,30 +57,13 @@ def decode(view: View) -> dict[str, Value]:
 		if not _readable(image, index):
 			continue
 
-		placement = image.placements[index]
 		# `name_of` answers `placement[N]` itself where the metadata tail
 		# was omitted, so there is no fallback to write here.
 		name  = image.name_of(index)
 		local = name.rpartition(".")[2] or name
 
 		try:
-			if index in image.delimiters and placement.type_struct == NONE:
-				# Its content, not its span: the span carries the delimiter,
-				# because that is what places the member after it, and an
-				# owned value wants what `_ptr` and `_len` hand back. Before
-				# this it came through `read_scalar` and `"GET "` was the
-				# number 1195725856.
-				out[local] = content_bytes(view, index)
-			elif placement.element_bits == 8 and (placement.array_count != NONE
-			                                      or placement.size_code != NONE):
-				# `bytes`, not whatever slicing the buffer produced. A
-				# bytearray view over a bytearray message is a copy and so
-				# survives, but it is mutable -- and an "owned value" a
-				# caller can edit in place is a different promise from the
-				# one this makes.
-				out[local] = bytes(read_bytes(view, index))
-			else:
-				out[local] = read_scalar(view, index)
+			out[local] = _one(view, index)
 		except Refused as why:
 			# Whole or nothing: a partial value is silent about what it
 			# missed, which reads as a message that lacked the field.
@@ -88,3 +71,56 @@ def decode(view: View) -> dict[str, Value]:
 			              f"value of this message: {why}") from why
 
 	return out
+
+
+def each(view: View) -> dict[str, Value]:
+	"""What `decode` would hand back, member by member, leaving out each one
+	that cannot be read rather than refusing the message over it.
+
+	For a DISPLAY, which is the editor's case: one unreadable member made
+	every row of its struct say "cannot be read", because `decode` is right
+	to refuse an owned value with a hole in it and the editor took that
+	refusal for all of them (26.1116). Each row still carries its own note
+	for what is missing here.
+	"""
+	image = view.image
+	out: dict[str, Value] = {}
+	for index in image.members(view.shape):
+		if not _readable(image, index):
+			continue
+		name = image.name_of(index)
+		local = name.rpartition(".")[2] or name
+		try:
+			out[local] = _one(view, index)
+		except Refused:
+			# A run of wider elements -- `u16 w[n]` -- is no scalar and no
+			# byte run to `decode`, and to a display it is its bytes.
+			placement = image.placements[index]
+			if placement.element_bits % 8 == 0 and placement.element_bits \
+					and (placement.array_count != NONE
+					     or placement.size_code != NONE):
+				try:
+					out[local] = bytes(read_bytes(view, index))
+				except Refused:
+					pass
+	return out
+
+
+def _one(view: View, index: int) -> Value:
+	"""One member's owned value: the rule `decode` and `each` share."""
+	image = view.image
+	placement = image.placements[index]
+	if index in image.delimiters and placement.type_struct == NONE:
+		# Its content, not its span: the span carries the delimiter, because
+		# that is what places the member after it, and an owned value wants
+		# what `_ptr` and `_len` hand back. Before this it came through
+		# `read_scalar` and `"GET "` was the number 1195725856.
+		return content_bytes(view, index)
+	if placement.element_bits == 8 and (placement.array_count != NONE
+	                                    or placement.size_code != NONE):
+		# `bytes`, not whatever slicing the buffer produced. A bytearray
+		# view over a bytearray message is a copy and so survives, but it
+		# is mutable -- and an "owned value" a caller can edit in place is a
+		# different promise from the one this makes.
+		return bytes(read_bytes(view, index))
+	return read_scalar(view, index)
