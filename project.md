@@ -211,9 +211,10 @@ without huge dependencies kept, and the pertinent code shared:
   `qtkit_follow_desktop` as the shared one, vendored as a submodule. Move
   onto it.
 - File identification: the first tier is built (26.1124) -- `identify`,
-  `situc identify`, `--magic`, `--mime` (shared-mime-info), and `--c`,
-  the one-pass matcher. Left: the named text heuristics (UTF-8, CSV,
-  JSON), the deeper tiers. The
+  `situc identify`, `--magic`, `--mime` (shared-mime-info), `--c` (the
+  one-pass matcher), and the named text heuristics `utf8`, `ascii`, `csv`,
+  `json`. Left: the deeper tiers (a walk, a container member), built when
+  a format needs one. The
   holder's shape, as given (2026-11-20; LOW PRIORITY, other work
   first): an identification declaration INSIDE the schema of a `target
   file` format, made of evidence items that name the format's own members,
@@ -994,10 +995,12 @@ replay_decl   = "replay" ident "(" param ")" attrs ";" ;
 
 (* How a file is recognised as this format (26.1124): evidence over a
    struct at the start of the file, each line worth what its role says. *)
-identify_decl = "identify" ident "(" param ")" [ attrs ]
+identify_decl = "identify" ident [ "(" param ")" ] [ attrs ]
                 "{" { evidence } "}" ;
 evidence      = ( "sufficient" | "required" | "supporting" )
-                ( "extension" string { "," string } | expr ) ";" ;
+                ( "extension" string { "," string }
+                | "text" ( "utf8" | "ascii" | "csv" | "json" )
+                | expr ) ";" ;
 
 (* A predicate over ONE message, a severity, an identity and a default
    rendering. Evaluated once, in `validate`, and at no other point -- so no

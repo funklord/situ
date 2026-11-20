@@ -1995,6 +1995,8 @@ class Evidence(Node):
 	role: str
 	expr: Expr | None = None
 	extensions: tuple[str, ...] = ()
+	#: `text csv`: a heuristic named rather than written (26.1124).
+	text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2009,7 +2011,8 @@ class Identify(Decl):
 
 	span: Span
 	name: str
-	param: "RelationParam"
+	#: None for a text format, which has no struct at its start.
+	param: "RelationParam | None"
 	attrs: tuple[Attr, ...] = ()
 	evidence: tuple[Evidence, ...] = ()
 

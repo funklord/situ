@@ -41,6 +41,82 @@ LEVELS = ("no", "possible", "likely", "certain")
 #: A comparison, as the inclusive range it admits of an unsigned field.
 COMPARISONS = ("==", "!=", "<", "<=", ">", ">=")
 
+#: What a text heuristic reads: the first this many bytes, or the file.
+TEXT_WINDOW = 4096
+
+#: The tiebreak inside a level, the more specific heuristic pinning more,
+#: so a JSON file that is also valid UTF-8 is called JSON.
+TEXT_BITS = {"utf8": 1, "ascii": 2, "csv": 4, "json": 8}
+
+
+def _utf8(data: bytes, full: bool) -> bool:
+	"""Strict UTF-8 with no control byte but tab, LF, FF and CR. A
+	sequence cut by the window's end passes only when the window is full,
+	since a shorter file really ended there. Written to be read beside
+	`situ_id_utf8` in the C matcher, which is the same walk."""
+	if not data:
+		return False
+	at = 0
+	while at < len(data):
+		byte = data[at]
+		if byte < 0x80:
+			if (byte < 0x20 and byte not in (9, 10, 12, 13)) or byte == 0x7f:
+				return False
+			at += 1
+			continue
+		if 0xc2 <= byte <= 0xdf:
+			need, low, high = 1, 0x80, 0xbf
+		elif byte == 0xe0:
+			need, low, high = 2, 0xa0, 0xbf
+		elif byte == 0xed:
+			need, low, high = 2, 0x80, 0x9f
+		elif 0xe1 <= byte <= 0xef:
+			need, low, high = 2, 0x80, 0xbf
+		elif byte == 0xf0:
+			need, low, high = 3, 0x90, 0xbf
+		elif 0xf1 <= byte <= 0xf3:
+			need, low, high = 3, 0x80, 0xbf
+		elif byte == 0xf4:
+			need, low, high = 3, 0x80, 0x8f
+		else:
+			return False
+		for step in range(1, need + 1):
+			if at + step >= len(data):
+				return full
+			follow = data[at + step]
+			if step == 1 and not low <= follow <= high:
+				return False
+			if step > 1 and not 0x80 <= follow <= 0xbf:
+				return False
+		at += need + 1
+	return True
+
+
+def _text(name: str, head: bytes) -> bool:
+	data = head[:TEXT_WINDOW]
+	if not _utf8(data, len(data) == TEXT_WINDOW):
+		return False
+	if name == "ascii":
+		return all(byte < 0x80 for byte in data)
+	if name == "json":
+		at = 3 if data.startswith(b"\xef\xbb\xbf") else 0
+		while at < len(data) and data[at] in b" \t\n\r":
+			at += 1
+		return at < len(data) and data[at] in b"{["
+	if name == "csv":
+		counts, commas, quoted = [], 0, False
+		for byte in data:
+			if byte == 0x22:
+				quoted = not quoted
+			elif byte == 0x2c and not quoted:
+				commas += 1
+			elif byte == 0x0a and not quoted:
+				counts.append(commas)
+				commas = 0
+		return (len(counts) >= 2 and counts[0] >= 1
+		        and all(count == counts[0] for count in counts))
+	return True
+
 
 @dataclass(frozen=True)
 class Test:
@@ -55,8 +131,13 @@ class Test:
 	high: int | None = None
 	not_equal: int | None = None
 	big: bool = True
+	#: A named text heuristic over the first TEXT_WINDOW bytes, in place
+	#: of everything above.
+	text: str | None = None
 
 	def holds(self, head: bytes) -> bool:
+		if self.text is not None:
+			return _text(self.text, head)
 		if len(head) < self.offset + self.width:
 			return False
 		here = head[self.offset:self.offset + self.width]
@@ -73,6 +154,8 @@ class Test:
 	def pinned_bits(self) -> int:
 		"""What holding it says, for the tiebreak: every bit of a single
 		run, fewer for a set or a range."""
+		if self.text is not None:
+			return TEXT_BITS[self.text]
 		exact = len(self.runs) == 1 or (self.low is not None
 		                                and self.low == self.high)
 		if exact:
@@ -143,6 +226,9 @@ class _Compiler:
 		self.decl     = decl
 		self.resolved = resolved
 		self.enums    = enums
+		self.entries: dict[str, Placement] = {}
+		if decl.param is None:
+			return
 		struct = resolved.structs.get(decl.param.type_name)
 		if struct is None:
 			raise error(f"`{decl.name}` reads `{decl.param.type_name}`, "
@@ -151,6 +237,11 @@ class _Compiler:
 		self.entries = {entry.placement.path: entry.placement
 		                for entry in struct.entries}
 
+	@property
+	def param(self) -> ast.RelationParam:
+		assert self.decl.param is not None
+		return self.decl.param
+
 	def refuse(self, why: str, where: ast.Node) -> SituError:
 		return error(f"`{self.decl.name}`: {why}", where.span, label="here",
 		             notes=["the first tier reads fixed offsets from the "
@@ -158,15 +249,19 @@ class _Compiler:
 		                    "every format (26.1124)"])
 
 	def placement(self, path: str, where: ast.Node) -> Placement:
+		if self.decl.param is None:
+			raise self.refuse(f"`{path}` names a field, and a format with no "
+			                  "struct at its start has none: its evidence "
+			                  "is `text` or `extension`", where)
 		root, _, rest = path.partition(".")
-		if root != self.decl.param.name:
+		if root != self.param.name:
 			raise self.refuse(f"`{path}` names no field of "
-			                  f"`{self.decl.param.name}`", where)
-		flat = self.decl.param.type_name + (f".{rest}" if rest else "")
+			                  f"`{self.param.name}`", where)
+		flat = self.param.type_name + (f".{rest}" if rest else "")
 		found = self.entries.get(flat)
 		if found is None:
 			raise self.refuse(f"`{path}` names no field of "
-			                  f"`{self.decl.param.type_name}`", where)
+			                  f"`{self.param.type_name}`", where)
 		return found
 
 	def fixed(self, place: Placement, path: str, where: ast.Node
@@ -225,8 +320,8 @@ class _Compiler:
 	def bare(self, path: str, where: ast.Node) -> list[Test]:
 		"""A member's own constraints and those of everything inside it;
 		the parameter alone is every constraint the struct states."""
-		if path == self.decl.param.name:
-			tests, prefix = [], self.decl.param.type_name + "."
+		if self.decl.param is not None and path == self.param.name:
+			tests, prefix = [], self.param.type_name + "."
 		else:
 			place = self.placement(path, where)
 			tests, prefix = self.own(place, path, where), place.path + "."
@@ -297,7 +392,10 @@ class _Compiler:
 	def compile(self) -> Recogniser:
 		items = []
 		for line in self.decl.evidence:
-			if line.extensions:
+			if line.text is not None:
+				items.append(Item(line.role, (Test(0, TEXT_WINDOW,
+				                                   text=line.text),)))
+			elif line.extensions:
 				items.append(Item(line.role, extensions=line.extensions))
 			else:
 				assert line.expr is not None
@@ -400,8 +498,9 @@ def magic(formats: list[Recogniser]) -> str:
 			said = [_magic_conditions(test)
 			        for test in [*item.tests, *required]]
 			if not all(said):
-				lines.append(f"# {one.name}: a set of byte runs has no "
-				             "magic(5) spelling; left out")
+				lines.append(f"# {one.name}: an item with no magic(5) "
+				             "spelling -- a set of runs, a text heuristic -- "
+				             "is left out")
 				continue
 			# Each condition one level deeper, and the name on the last:
 			# magic(5) prints a line's message when that line matches, so
@@ -427,6 +526,10 @@ def _c_bytes(data: bytes) -> str:
 	return "{" + ", ".join(f"0x{byte:02x}" for byte in data) + "}"
 
 
+#: The C matcher's number for each heuristic, 0 being none.
+_TEXT_CODES = {"utf8": 1, "ascii": 2, "csv": 3, "json": 4}
+
+
 def c_source(formats: list[Recogniser], prefix: str = "situ_id") -> str:
 	"""One C file: every format's tests as tables, and `<prefix>_judge`,
 	which answers them all from one read of a file's first
@@ -450,6 +553,7 @@ def c_source(formats: list[Recogniser], prefix: str = "situ_id") -> str:
 		"\tuint32_t offset, width, runs;\t/* runs: how many in `run` */",
 		"\tconst uint8_t *run;",
 		"\tuint8_t has_low, has_high, has_not, big;",
+		"\tuint8_t text;\t/* 0 none; 1 utf8, 2 ascii, 3 csv, 4 json */",
 		"\tuint64_t low, high, not_equal;",
 		"\tuint32_t bits;",
 		"};",
@@ -484,6 +588,7 @@ def c_source(formats: list[Recogniser], prefix: str = "situ_id") -> str:
 					f"{run}, {int(test.low is not None)}, "
 					f"{int(test.high is not None)}, "
 					f"{int(test.not_equal is not None)}, {int(test.big)}, "
+					f"{_TEXT_CODES.get(test.text or '', 0)}, "
 					f"{test.low or 0}u, {test.high or 0}u, "
 					f"{test.not_equal or 0}u, {test.pinned_bits}u}},")
 			tests = "NULL"
@@ -512,11 +617,122 @@ def c_source(formats: list[Recogniser], prefix: str = "situ_id") -> str:
 		"};",
 		f"static const uint32_t {prefix}_format_count = {len(formats)}u;",
 		"",
+		"/* Strict UTF-8 with no control byte but tab, LF, FF and CR; a",
+		" * sequence cut by the window's end passes only when the window is",
+		" * full. The same walk as `_utf8` in situc/identify.py. */",
+		f"static int {prefix}_utf8(const uint8_t *data, size_t length, "
+		"int full)",
+		"{",
+		"\tsize_t at = 0;",
+		"",
+		"\tif (length == 0u) {",
+		"\t\treturn 0;",
+		"\t}",
+		"\twhile (at < length) {",
+		"\t\tconst uint8_t byte = data[at];",
+		"\t\tunsigned need, low = 0x80u, high = 0xbfu;",
+		"",
+		"\t\tif (byte < 0x80u) {",
+		"\t\t\tif ((byte < 0x20u && byte != 9u && byte != 10u && byte != 12u",
+		"\t\t\t     && byte != 13u) || byte == 0x7fu) {",
+		"\t\t\t\treturn 0;",
+		"\t\t\t}",
+		"\t\t\tat++;",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"\t\tif (byte >= 0xc2u && byte <= 0xdfu) {",
+		"\t\t\tneed = 1u;",
+		"\t\t} else if (byte == 0xe0u) {",
+		"\t\t\tneed = 2u; low = 0xa0u;",
+		"\t\t} else if (byte == 0xedu) {",
+		"\t\t\tneed = 2u; high = 0x9fu;",
+		"\t\t} else if (byte >= 0xe1u && byte <= 0xefu) {",
+		"\t\t\tneed = 2u;",
+		"\t\t} else if (byte == 0xf0u) {",
+		"\t\t\tneed = 3u; low = 0x90u;",
+		"\t\t} else if (byte >= 0xf1u && byte <= 0xf3u) {",
+		"\t\t\tneed = 3u;",
+		"\t\t} else if (byte == 0xf4u) {",
+		"\t\t\tneed = 3u; high = 0x8fu;",
+		"\t\t} else {",
+		"\t\t\treturn 0;",
+		"\t\t}",
+		"\t\tfor (unsigned step = 1u; step <= need; step++) {",
+		"\t\t\tuint8_t follow;",
+		"",
+		"\t\t\tif (at + step >= length) {",
+		"\t\t\t\treturn full;",
+		"\t\t\t}",
+		"\t\t\tfollow = data[at + step];",
+		"\t\t\tif (step == 1u ? (follow < low || follow > high)",
+		"\t\t\t                : (follow < 0x80u || follow > 0xbfu)) {",
+		"\t\t\t\treturn 0;",
+		"\t\t\t}",
+		"\t\t}",
+		"\t\tat += need + 1u;",
+		"\t}",
+		"\treturn 1;",
+		"}",
+		"",
+		f"static int {prefix}_text(unsigned which, const uint8_t *head, "
+		"size_t length)",
+		"{",
+		f"\tconst size_t window = length < {TEXT_WINDOW}u ? length : "
+		f"{TEXT_WINDOW}u;",
+		"\tsize_t at = 0, lines = 0, first = 0, commas = 0;",
+		"\tint quoted = 0;",
+		"",
+		f"\tif (!{prefix}_utf8(head, window, window == {TEXT_WINDOW}u)) {{",
+		"\t\treturn 0;",
+		"\t}",
+		"\tswitch (which) {",
+		"\tcase 2u:",
+		"\t\tfor (at = 0; at < window; at++) {",
+		"\t\t\tif (head[at] >= 0x80u) {",
+		"\t\t\t\treturn 0;",
+		"\t\t\t}",
+		"\t\t}",
+		"\t\treturn 1;",
+		"\tcase 4u:",
+		"\t\tif (window >= 3u && head[0] == 0xefu && head[1] == 0xbbu",
+		"\t\t    && head[2] == 0xbfu) {",
+		"\t\t\tat = 3u;",
+		"\t\t}",
+		"\t\twhile (at < window && (head[at] == ' ' || head[at] == '\\t'",
+		"\t\t       || head[at] == '\\n' || head[at] == '\\r')) {",
+		"\t\t\tat++;",
+		"\t\t}",
+		"\t\treturn at < window && (head[at] == '{' || head[at] == '[');",
+		"\tcase 3u:",
+		"\t\tfor (at = 0; at < window; at++) {",
+		"\t\t\tif (head[at] == '\"') {",
+		"\t\t\t\tquoted = !quoted;",
+		"\t\t\t} else if (head[at] == ',' && !quoted) {",
+		"\t\t\t\tcommas++;",
+		"\t\t\t} else if (head[at] == '\\n' && !quoted) {",
+		"\t\t\t\tif (lines == 0u) {",
+		"\t\t\t\t\tfirst = commas;",
+		"\t\t\t\t} else if (commas != first) {",
+		"\t\t\t\t\treturn 0;",
+		"\t\t\t\t}",
+		"\t\t\t\tlines++;",
+		"\t\t\t\tcommas = 0;",
+		"\t\t\t}",
+		"\t\t}",
+		"\t\treturn lines >= 2u && first >= 1u;",
+		"\tdefault:",
+		"\t\treturn 1;",
+		"\t}",
+		"}",
+		"",
 		f"static int {prefix}_test_holds(const struct {prefix}_test *test,",
 		"\t\tconst uint8_t *head, size_t length)",
 		"{",
 		"\tuint64_t value = 0;",
 		"",
+		"\tif (test->text != 0u) {",
+		f"\t\treturn {prefix}_text(test->text, head, length);",
+		"\t}",
 		"\tif (length < (size_t)test->offset + test->width) {",
 		"\t\treturn 0;",
 		"\t}",

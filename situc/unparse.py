@@ -220,8 +220,9 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		        "}"]
 
 	if isinstance(decl, ast.Identify):
-		return [f"identify {decl.name}({decl.param.name}: "
-		        f"{decl.param.type_name}){_attrs_to_source(decl.attrs)} {{",
+		head = ("" if decl.param is None else
+		        f"({decl.param.name}: {decl.param.type_name})")
+		return [f"identify {decl.name}{head}{_attrs_to_source(decl.attrs)} {{",
 		        *[f"\t{evidence_to_source(line)};" for line in decl.evidence],
 		        "}"]
 
@@ -234,6 +235,8 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 
 def evidence_to_source(line: ast.Evidence) -> str:
 	"""One line of an `identify`, without its semicolon (26.1124)."""
+	if line.text is not None:
+		return f"{line.role} text {line.text}"
 	if line.extensions:
 		return (f"{line.role} extension "
 		        + ", ".join(f'"{one}"' for one in line.extensions))

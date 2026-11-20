@@ -129,6 +129,31 @@ def test_the_most_pinned_wins_inside_a_level() -> None:
 	assert (chosen and chosen.name, level) == ("loose", "certain")
 
 
+TEXTS = PREAMBLE + """
+identify text { required text utf8; }
+identify csv { required text csv; }
+identify json { required text json; }
+identify ascii { required text ascii; }
+"""
+
+@pytest.mark.parametrize("head,expected", [
+	(b'a,"b,c",d\n1,2,3\n', "csv"),       # the quoted comma is not one
+	(b"a,b\n1,2,3\n", "ascii"),           # unequal: not CSV
+	(b"a,b\n", "ascii"),                   # one line is not enough
+	(b"\xef\xbb\xbf\n [1]", "json"),       # behind a BOM and whitespace
+	(b"h\xc3\xa9llo", "text"),              # UTF-8, not ASCII
+	(b"x" * 4095 + b"\xe2", "text"),        # cut by a full window
+	(b"x\xe2\x82", "-"),                    # cut by the file's own end
+	(b"\xe0\x80\x80", "-"),                 # overlong
+	(b"\xed\xa0\x80", "-"),                 # a surrogate
+	(b"bell\x07", "-"),                     # a control byte
+	(b"", "-"),
+])
+def test_the_text_heuristics(head: bytes, expected: str) -> None:
+	chosen, _ = identify.best(_formats(TEXTS), head, "x")
+	assert (chosen.name if chosen else "-") == expected
+
+
 def test_head_is_the_bytes_the_evidence_needs() -> None:
 	(one,) = _formats(GATED)
 	assert one.head == 25
@@ -237,7 +262,25 @@ identify mz(f: h) [media = "application/x-dosexec"] {
 	HEAD + """
 identify raw(f: head) { sufficient extension "raw"; }
 """,
+	PREAMBLE + """
+identify text [media = "text/plain"] { required text utf8; }
+identify csv [media = "text/csv"] {
+	required text csv; supporting extension "csv"; }
+identify json [media = "application/json"] { required text json; }
+""",
 ]
+
+#: Text heads: valid and nearly valid UTF-8, CSV with quoted commas, JSON
+#: behind a BOM, and a multi-byte sequence cut by a full window -- which
+#: passes -- and by a short file's end, which does not. The last, lines
+#: alike with no comma, is text and not a CSV of one column: without it a
+#: C matcher that dropped the floor of one comma agreed with this suite.
+TEXT_SEEDS = [b"a,b,c\n1,2,3\n", b'a,"b,c",d\n1,2,3\n', b"a,b\n1,2,3\n",
+              b"\xef\xbb\xbf [1, 2]", b'{"k": "\xc3\xa9"}', b"plain\n",
+              b"h\xc3\xa9llo", b"bad \xc3\x28", b"\xe0\x80\x80",
+              b"\xed\xa0\x80", b"tab\there\x07", b"x" * 4095 + b"\xe2",
+              b"x" * 4094 + b"\xe2\x82", b"x\xe2\x82", b"\xf4\x90\x80\x80",
+              b"   ", b"a,b\n" * 1100, b"one\ntwo\nthree\n"]
 
 
 def _mutations() -> list[tuple[bytes, str]]:
@@ -248,16 +291,18 @@ def _mutations() -> list[tuple[bytes, str]]:
 	seeds = [_chunk(b"IHDR"), _chunk(b"IDAT"), _chunk(b"IHDR", depth=17),
 	         b"MZ\x02\x00\x01\x00\x10\x00\x00\x00",
 	         b"MZ\x41\x00\x02\x00\x10\x00\x00\x00",
-	         b"MZ\x02\x00\x03\x00\x00\x00\x00\x00", b"", b"MZ"]
+	         b"MZ\x02\x00\x03\x00\x00\x00\x00\x00", b"", b"MZ",
+	         *TEXT_SEEDS]
 	cases = []
 	for seed in seeds:
-		for name in ("a.png", "A.PNG", "b.exe", "c.raw", "d", "png"):
+		for name in ("a.png", "A.PNG", "b.exe", "c.raw", "d", "png", "e.csv"):
 			cases.append((seed, name))
 		for _ in range(40):
 			data = bytearray(seed or b"\x00" * 12)
 			for _ in range(chosen.randint(1, 3)):
 				data[chosen.randrange(len(data))] = chosen.choice(
-					[0, 1, 2, 3, 0x40, 0x41, 0xff, chosen.randrange(256)])
+					[0, 1, 2, 3, 0x40, 0x41, 0xff, 0x2c, 0x0a, 0x22, 0x7b,
+					 0xc3, 0x80, chosen.randrange(256)])
 			cases.append((bytes(data[:chosen.randint(0, len(data))])
 			              if chosen.random() < 0.2 else bytes(data),
 			              chosen.choice(["x.png", "x.exe", "x.RAW", "x"])))
@@ -277,9 +322,9 @@ def test_the_c_matcher_agrees_with_the_python_one(tmp_path: Path) -> None:
 int main(void)
 {
 	static const char *const names[] = {"no", "possible", "likely", "certain"};
-	char line[512];
+	static char line[20000];
 	while (fgets(line, sizeof line, stdin) != NULL) {
-		uint8_t head[64];
+		static uint8_t head[8192];
 		size_t length = 0;
 		char *name = strchr(line, ' ');
 		const struct situ_id_format *chosen;
@@ -323,7 +368,7 @@ int main(void)
 	# about either.
 	assert {line.split()[1] for line in expected} == set(identify.LEVELS)
 	assert {line.split()[0] for line in expected} == {
-		"-", "png", "loose", "mz", "raw"}
+		"-", "png", "loose", "mz", "raw", "text", "csv", "json"}
 
 
 @pytest.mark.skipif(shutil.which("update-mime-database") is None

@@ -591,7 +591,9 @@ possible -- never a score. `situc identify -s a.situ -s b.situ FILE...`
 judges every format from one read of each file's first bytes, and
 `--magic` writes the same rules for `file(1)`, `--mime` a shared-mime-info
 package for the desktop, and `--c` one C file that judges them all for a
-search tool. The first tier reads only
+search tool. A text format names a heuristic instead -- `required text
+csv;`, or `utf8`, `ascii`, `json` -- since writing one out would mean
+inventing a programming language. The first tier reads only
 fixed offsets, and refuses an item that would need more.
 
 **Scalars** are spelled by width, and the width need not be a whole byte:

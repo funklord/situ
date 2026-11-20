@@ -113,8 +113,9 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		        _indent(depth + 1, f"\"{decl.text}\"")]
 
 	if isinstance(decl, ast.Identify):
-		return [_indent(depth, f"identify {decl.name}({decl.param.name}: "
-		                       f"{decl.param.type_name})"),
+		head = ("" if decl.param is None else
+		        f"({decl.param.name}: {decl.param.type_name})")
+		return [_indent(depth, f"identify {decl.name}{head}"),
 		        *_attrs(decl.attrs, depth + 1),
 		        *[_indent(depth + 1, evidence_to_source(line))
 		          for line in decl.evidence]]

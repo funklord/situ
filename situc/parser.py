@@ -195,6 +195,11 @@ IDENTIFY_ATTRIBUTES = frozenset({"media"})
 #: What one line of evidence is worth, in an `identify` body (26.1124).
 EVIDENCE_ROLES = ("sufficient", "required", "supporting")
 
+#: The text heuristics an `identify` may name: written once in each
+#: matcher, never in a schema, since describing them would mean inventing
+#: a programming language (the holder, 2026-11-20). Most specific last.
+TEXT_HEURISTICS = ("utf8", "ascii", "csv", "json")
+
 ATTRIBUTE_NAMES = frozenset({
 	# 26.1120: a replay window's form and its state's size
 	*REPLAY_ATTRIBUTES,
@@ -3629,9 +3634,10 @@ class Parser:
 		`extension` and its names (26.1124)."""
 		start = self.advance()
 		name  = self.expect_ident("the format's name")
-		self.expect_symbol("(", "after the format's name")
-		param = self.parse_relation_param()
-		self.expect_symbol(")", "after the struct the file starts with")
+		param = None
+		if self.accept_symbol("("):
+			param = self.parse_relation_param()
+			self.expect_symbol(")", "after the struct the file starts with")
 		attrs = self.parse_attrs()
 		self.expect_symbol("{", "to open what recognises the format")
 		evidence: list[ast.Evidence] = []
@@ -3654,6 +3660,19 @@ class Parser:
 				         "`required`: without it, never; `supporting`: "
 				         "a hint that makes it likely (26.1124)"])
 		self.advance()
+		if self.current.is_ident("text"):
+			self.advance()
+			which = self.expect_ident("a text heuristic")
+			if which.text not in TEXT_HEURISTICS:
+				raise error(
+					f"`{which.text}` is not a text heuristic", which.span,
+					label = "expected one of "
+					        + ", ".join(f"`{one}`" for one in TEXT_HEURISTICS),
+					notes = ["a heuristic is named, never written: each "
+					         "is defined once in each matcher (26.1124)"])
+			self.expect_symbol(";", "after the text heuristic")
+			return ast.Evidence(self.span_from(role), role.text,
+			                    text=which.text)
 		if self.current.is_ident("extension"):
 			self.advance()
 			names = [self._extension_name()]

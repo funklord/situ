@@ -310,10 +310,12 @@ replay_decl	= "replay" ident "(" param ")" attrs ";" ;
 
 (* How a file is recognised as this format (26.1124): evidence over a
  * struct at the start of the file, each line worth what its role says. *)
-identify_decl	= "identify" ident "(" param ")" [ attrs ]
+identify_decl	= "identify" ident [ "(" param ")" ] [ attrs ]
 		  "{" { evidence } "}" ;
 evidence	= ( "sufficient" | "required" | "supporting" )
-		  ( "extension" string { "," string } | expr ) ";" ;
+		  ( "extension" string { "," string }
+		  | "text" ( "utf8" | "ascii" | "csv" | "json" )
+		  | expr ) ";" ;
 
 (* A predicate over ONE message, a severity, an identity and a default
  * rendering. Evaluated once, in `validate`, and at no other point -- so no

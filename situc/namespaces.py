@@ -153,9 +153,13 @@ def rewrite(decl: ast.Decl, name_of: Callable[[str], str]) -> ast.Decl:
 		               derived = name_of(head) + dot + rest,
 		               expr    = expr)
 
+	if isinstance(decl, ast.Identify) and decl.param is None:
+		return replace(decl, name=name_of(decl.name))
+
 	if isinstance(decl, (ast.Replay, ast.Identify)):
 		# As a relation: the name and the parameter's type are scoped, the
 		# attribute paths are rooted at the parameter and left alone.
+		assert decl.param is not None
 		return replace(decl, name=name_of(decl.name),
 		               param=replace(decl.param,
 		                             type_name=name_of(decl.param.type_name)))
