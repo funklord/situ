@@ -155,6 +155,9 @@ without huge dependencies kept, and the pertinent code shared:
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
 - The holder's earlier question -- vendor qtty for the window? -- is
   settled by that request: yes, beside the curses TUI, not instead of it.
+- qtty does not draw a QCompleter's popup list (input to it works): the
+  enum cell's search list is invisible on a terminal. Signalled to qtty's
+  inbox 20261120T1120Z; add a `--snapshot` check of the list when it lands.
 - An enum is a choice (26.1114): the image's tail names its members
   (`choices`, section 34), rows read `server (4)`, `--put` takes a name,
   and the window's cells are a searchable combo, a range-checked number

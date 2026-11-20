@@ -315,12 +315,17 @@ int main(int argc, char **argv)
 			return 1;
 	}
 
+#ifdef SITU_QTTY
+	// qtty's input, for --keys, kept for --snapshot: the screen it composes
+	// is the window AND what is open over it -- a completer's list, the
+	// caret -- which the window alone does not draw.
+	std::unique_ptr<Qtty::InputRouter> router;
+#endif
 	if (parser.isSet(keys_option)) {
 		here->show();
 		here->activateWindow();
 		QCoreApplication::processEvents();
 #ifdef SITU_QTTY
-		std::unique_ptr<Qtty::InputRouter> router;
 		if (tui)
 			router = std::make_unique<Qtty::InputRouter>(here);
 #endif
@@ -368,9 +373,11 @@ int main(int argc, char **argv)
 		// The window the edits landed in, which is the one on top.
 		here->resize(Qtty::GridMetrics::cells(cols, rows));
 		here->show();
-		QTimer::singleShot(0, here, [here, cols, rows] {
-			std::fputs(Qtty::test::snapshot_of(*here, cols, rows)
-			           .toUtf8().constData(), stdout);
+		QTimer::singleShot(0, here, [here, cols, rows, &router] {
+			const QString shown = router
+			    ? Qtty::test::snapshot_of_screen(*here, *router, cols, rows)
+			    : Qtty::test::snapshot_of(*here, cols, rows);
+			std::fputs(shown.toUtf8().constData(), stdout);
 			std::fflush(stdout);
 			QCoreApplication::exit(0);
 		});
