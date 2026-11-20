@@ -1983,6 +1983,38 @@ class RelationParam(Node):
 
 
 @dataclass(frozen=True)
+class Evidence(Node):
+	"""One line of an `identify`: `sufficient f.signature;`,
+	`required f.first.kind == ihdr;`, `supporting extension "png";`.
+
+	`expr` is a bare path -- the member's own constraint holds -- or a
+	comparison over one; `extensions` is set instead for an `extension`
+	item. The role decides what holding is worth (26.1124)."""
+
+	span: Span
+	role: str
+	expr: Expr | None = None
+	extensions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Identify(Decl):
+	"""`identify png(f: png_head) [media = "image/png"] { ... }`
+
+	How a file is recognised as this format (26.1124): evidence over a
+	struct laid at the start of the file, naming the format's own members
+	rather than restating them, each item `sufficient`, `required` or
+	`supporting`, and the verdict a named level -- certain, likely,
+	possible -- never a score."""
+
+	span: Span
+	name: str
+	param: "RelationParam"
+	attrs: tuple[Attr, ...] = ()
+	evidence: tuple[Evidence, ...] = ()
+
+
+@dataclass(frozen=True)
 class Replay(Decl):
 	"""`replay session_window(f: frame) [counter = f.head.seq, window = 64];`
 
@@ -2084,6 +2116,9 @@ class Schema(Node):
 
 	def relations(self) -> list[Relation]:
 		return [decl for decl in self.decls if isinstance(decl, Relation)]
+
+	def identifies(self) -> list[Identify]:
+		return [decl for decl in self.decls if isinstance(decl, Identify)]
 
 	def replays(self) -> list[Replay]:
 		return [decl for decl in self.decls if isinstance(decl, Replay)]

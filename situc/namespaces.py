@@ -94,7 +94,7 @@ def _declared_names(decls: list[ast.Decl]) -> list[str]:
 		if isinstance(decl, (ast.StructDecl, ast.EnumDecl, ast.TokensDecl,
 		                     ast.VarintDecl,
 		                     ast.EndianMarkerDecl, ast.CodecDecl, ast.ConstDecl,
-		                     ast.Relation, ast.Replay)):
+		                     ast.Relation, ast.Replay, ast.Identify)):
 			found.append(decl.name)
 	return found
 
@@ -153,7 +153,7 @@ def rewrite(decl: ast.Decl, name_of: Callable[[str], str]) -> ast.Decl:
 		               derived = name_of(head) + dot + rest,
 		               expr    = expr)
 
-	if isinstance(decl, ast.Replay):
+	if isinstance(decl, (ast.Replay, ast.Identify)):
 		# As a relation: the name and the parameter's type are scoped, the
 		# attribute paths are rooted at the parameter and left alone.
 		return replace(decl, name=name_of(decl.name),

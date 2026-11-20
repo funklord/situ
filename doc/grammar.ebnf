@@ -66,6 +66,7 @@ decl		= namespace_decl
 	| when_decl
 	| relation_decl
 	| replay_decl
+	| identify_decl
 	| impl_decl
 	| varint_decl
 	| pipeline_decl
@@ -306,6 +307,13 @@ must		= "must" expr ";" ;
 (* Which messages a receiver accepts once (26.1120): a counter window or a
  * nonce set, the attributes deciding which. *)
 replay_decl	= "replay" ident "(" param ")" attrs ";" ;
+
+(* How a file is recognised as this format (26.1124): evidence over a
+ * struct at the start of the file, each line worth what its role says. *)
+identify_decl	= "identify" ident "(" param ")" [ attrs ]
+		  "{" { evidence } "}" ;
+evidence	= ( "sufficient" | "required" | "supporting" )
+		  ( "extension" string { "," string } | expr ) ";" ;
 
 (* A predicate over ONE message, a severity, an identity and a default
  * rendering. Evaluated once, in `validate`, and at no other point -- so no

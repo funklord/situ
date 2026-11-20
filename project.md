@@ -204,7 +204,10 @@ without huge dependencies kept, and the pertinent code shared:
   of snurra's; the guidelines (2026-11-20) now name `qtkit`'s
   `qtkit_follow_desktop` as the shared one, vendored as a submodule. Move
   onto it.
-- File identification (holder, 2026-11-20; LOW PRIORITY, other work
+- File identification: the first tier is built (26.1124) -- `identify`,
+  `situc identify`, `--magic`. Left: the generated C one-pass matcher,
+  shared-mime-info, the named text heuristics, the deeper tiers. The
+  holder's shape, as given (2026-11-20; LOW PRIORITY, other work
   first): an identification declaration INSIDE the schema of a `target
   file` format, made of evidence items that name the format's own members,
   preambles and enums rather than restating its layout; each item
@@ -776,6 +779,7 @@ decl          = namespace_decl | const_decl | enum_decl | tokens_decl
               | struct_decl | endian_marker_decl | codec_decl
               | register_decl | register_block_decl | requirement
               | invariant | when_decl | relation_decl | replay_decl
+              | identify_decl
               | impl_decl | varint_decl | pipeline_decl
               | policy_decl | registry_decl ;
 
@@ -980,6 +984,13 @@ must          = "must" expr ";" ;
 (* Which messages a receiver accepts once (26.1120): a counter window or a
    nonce set, the attributes deciding which. *)
 replay_decl   = "replay" ident "(" param ")" attrs ";" ;
+
+(* How a file is recognised as this format (26.1124): evidence over a
+   struct at the start of the file, each line worth what its role says. *)
+identify_decl = "identify" ident "(" param ")" [ attrs ]
+                "{" { evidence } "}" ;
+evidence      = ( "sufficient" | "required" | "supporting" )
+                ( "extension" string { "," string } | expr ) ";" ;
 
 (* A predicate over ONE message, a severity, an identity and a default
    rendering. Evaluated once, in `validate`, and at no other point -- so no
@@ -5600,6 +5611,9 @@ situ/
     wire.py                   the byte-level contract and its comparison; 19.3
     verify.py                 do these bytes conform? the schema used as a
                               specification, generating nothing; 26.67
+    identify.py               how a file is recognised as a format: an
+                              `identify` compiled to fixed-offset tests,
+                              judged in named levels, and magic(5) (26.1124)
     pack.py                   the packed layout image and its expression
                               bytecode, for a walker to read; emits only,
                               never walks; 26.33
@@ -9400,6 +9414,10 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1124 A format says how it is recognised
+
+Moved to `doc/decision/26.1124-a-format-says-how-it-is-recognised.md`.
 
 ### 26.1123 One message reassembled from many datagrams
 

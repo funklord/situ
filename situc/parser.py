@@ -155,6 +155,7 @@ DECLARATION_KEYWORDS = frozenset({
 	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
 	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
 	"impl", "require", "assert", "invariant", "when", "relation", "replay",
+	"identify",
 	"policy", "registry",
 })
 
@@ -188,9 +189,17 @@ REPLAY_ATTRIBUTES = frozenset({
 	"expiry",
 })
 
+#: An `identify`'s attributes (26.1124): the media type it answers with.
+IDENTIFY_ATTRIBUTES = frozenset({"media"})
+
+#: What one line of evidence is worth, in an `identify` body (26.1124).
+EVIDENCE_ROLES = ("sufficient", "required", "supporting")
+
 ATTRIBUTE_NAMES = frozenset({
 	# 26.1120: a replay window's form and its state's size
 	*REPLAY_ATTRIBUTES,
+	# 26.1124: the media type a recognised format answers with
+	*IDENTIFY_ATTRIBUTES,
 	# section 8.2 - 8.6: layout and representation
 	"allow_straddle", "require_aligned", "encoding", "nul_terminated",
 	"endian", "bit_order", "size",
@@ -277,6 +286,7 @@ ATTRIBUTE_NAMES = frozenset({
 #: lone `[escape]` means something, and so does a lone `[secret]`.
 VALUE_ATTRIBUTES = frozenset({
 	*REPLAY_ATTRIBUTES,
+	*IDENTIFY_ATTRIBUTES,
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds", "chars",
@@ -664,6 +674,7 @@ class Parser:
 			"when":		self.parse_when,
 			"relation":	self.parse_relation,
 			"replay":	self.parse_replay,
+			"identify":	self.parse_identify,
 			"policy":	self.parse_policy,
 			"registry":	self.parse_registry,
 		}
@@ -3609,6 +3620,59 @@ class Parser:
 		attrs = self.parse_attrs()
 		self.expect_symbol(";", "after the replay window")
 		return ast.Replay(self.span_from(start), name.text, param, attrs)
+
+	def parse_identify(self) -> ast.Identify:
+		"""`identify png(f: png_head) [media = "image/png"] { ... }`
+
+		One parameter, the struct laid at the start of the file; a body of
+		evidence, each line a role and then a path, a comparison, or
+		`extension` and its names (26.1124)."""
+		start = self.advance()
+		name  = self.expect_ident("the format's name")
+		self.expect_symbol("(", "after the format's name")
+		param = self.parse_relation_param()
+		self.expect_symbol(")", "after the struct the file starts with")
+		attrs = self.parse_attrs()
+		self.expect_symbol("{", "to open what recognises the format")
+		evidence: list[ast.Evidence] = []
+		while not self.current.is_symbol("}"):
+			evidence.append(self.parse_evidence())
+		self.expect_symbol("}", "to close what recognises the format")
+		return ast.Identify(self.span_from(start), name.text, param, attrs,
+		                    tuple(evidence))
+
+	def parse_evidence(self) -> ast.Evidence:
+		"""`sufficient f.signature;`, `required f.v <= 3;`, or
+		`supporting extension "png", "apng";`."""
+		role = self.current
+		if not role.is_ident(*EVIDENCE_ROLES):
+			raise error(
+				f"expected what this evidence is worth, found "
+				f"{role.describe()}", role.span,
+				label = "expected `sufficient`, `required` or `supporting`",
+				notes = ["`sufficient`: holding it alone is certain; "
+				         "`required`: without it, never; `supporting`: "
+				         "a hint that makes it likely (26.1124)"])
+		self.advance()
+		if self.current.is_ident("extension"):
+			self.advance()
+			names = [self._extension_name()]
+			while self.accept_symbol(","):
+				names.append(self._extension_name())
+			self.expect_symbol(";", "after the extensions")
+			return ast.Evidence(self.span_from(role), role.text,
+			                    extensions=tuple(names))
+		expr = self.parse_expr()
+		self.expect_symbol(";", "after the evidence")
+		return ast.Evidence(self.span_from(role), role.text, expr)
+
+	def _extension_name(self) -> str:
+		if self.current.kind is not TokenKind.STRING:
+			raise error(
+				f"expected an extension in quotes, found "
+				f"{self.current.describe()}", self.current.span,
+				label = "expected a string literal here, e.g. \"png\"")
+		return self.advance().text
 
 	def _check_relation_arity(self, params: list[ast.RelationParam],
 			name: Token, close: Token) -> None:

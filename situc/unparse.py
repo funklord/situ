@@ -219,11 +219,26 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		        *[f"\tmust {expr_to_source(must.expr)};" for must in decl.body],
 		        "}"]
 
+	if isinstance(decl, ast.Identify):
+		return [f"identify {decl.name}({decl.param.name}: "
+		        f"{decl.param.type_name}){_attrs_to_source(decl.attrs)} {{",
+		        *[f"\t{evidence_to_source(line)};" for line in decl.evidence],
+		        "}"]
+
 	if isinstance(decl, ast.Replay):
 		return [f"replay {decl.name}({decl.param.name}: "
 		        f"{decl.param.type_name}){_attrs_to_source(decl.attrs)};"]
 
 	raise TypeError(f"cannot unparse {type(decl).__name__}")
+
+
+def evidence_to_source(line: ast.Evidence) -> str:
+	"""One line of an `identify`, without its semicolon (26.1124)."""
+	if line.extensions:
+		return (f"{line.role} extension "
+		        + ", ".join(f'"{one}"' for one in line.extensions))
+	assert line.expr is not None
+	return f"{line.role} {expr_to_source(line.expr)}"
 
 
 def _codec_lines(decl: ast.CodecDecl) -> list[str]:

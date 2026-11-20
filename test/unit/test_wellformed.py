@@ -979,11 +979,14 @@ def test_every_attribute_is_accounted_for() -> None:
 	#                    attributes taken together, one form or the other,
 	#                    and a position table placing each alone could not
 	#                    say "one form whole" (26.1120).
-	from situc.parser import REPLAY_ATTRIBUTES
+	#   media            `identify.recognisers` -- the media type a recognised
+	#                    format answers with, read where the evidence is
+	#                    compiled and nowhere else (26.1124).
+	from situc.parser import IDENTIFY_ATTRIBUTES, REPLAY_ATTRIBUTES
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries", "resend_ms",
 	             "resend_part_ms", "retries_part", "align",
 	             "bits", "since", "require_aligned", "stream", "tag_order",
-	             *REPLAY_ATTRIBUTES}
+	             *REPLAY_ATTRIBUTES, *IDENTIFY_ATTRIBUTES}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
 	         | set(wellformed.UNIMPLEMENTED_ATTRS))
@@ -3706,8 +3709,8 @@ def test_every_ast_node_that_carries_attributes_is_one_the_walk_reaches()\
 	# unknown name on it is still refused by `check_attribute_names`.
 	assert bearing == {
 		"Authenticated", "Coded", "Field", "MarkerField", "Opaque", "Pad",
-		"RegistryEntry", "Relation", "Replay", "Reserved", "Sealed",
-		"StructDecl", "TagField", "Tlv", "Variant",
+		"Identify", "RegistryEntry", "Relation", "Replay", "Reserved",
+		"Sealed", "StructDecl", "TagField", "Tlv", "Variant",
 	}, f"the attribute-bearing nodes have moved: {sorted(bearing)}"
 
 

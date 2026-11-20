@@ -13,7 +13,7 @@ import dataclasses
 import enum
 
 from situc import ast
-from situc.unparse import expr_to_source
+from situc.unparse import evidence_to_source, expr_to_source
 
 
 def dump(schema: ast.Schema) -> str:
@@ -111,6 +111,13 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		return [_indent(depth, f"when {expr_to_source(decl.expr)}"),
 		        _indent(depth + 1, f"{decl.severity.value} {decl.name}"),
 		        _indent(depth + 1, f"\"{decl.text}\"")]
+
+	if isinstance(decl, ast.Identify):
+		return [_indent(depth, f"identify {decl.name}({decl.param.name}: "
+		                       f"{decl.param.type_name})"),
+		        *_attrs(decl.attrs, depth + 1),
+		        *[_indent(depth + 1, evidence_to_source(line))
+		          for line in decl.evidence]]
 
 	if isinstance(decl, ast.Replay):
 		return [_indent(depth, f"replay {decl.name}({decl.param.name}: "

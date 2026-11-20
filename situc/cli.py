@@ -410,6 +410,19 @@ def build_parser() -> argparse.ArgumentParser:
 		     "per-stream fact is")
 	verify_cmd.add_argument("vectors", type=Path)
 
+	identify_cmd = sub.add_parser(
+		"identify", help="which format each file is, from the schemas' "
+		                 "`identify` declarations (26.1124)")
+	identify_cmd.add_argument(
+		"-s", "--schema", action="append", type=Path, required=True,
+		help="a schema whose `identify` declarations are asked; repeat "
+		     "it, and every format is judged from one read per file")
+	identify_cmd.add_argument(
+		"--magic", action="store_true",
+		help="print the `certain` verdicts as magic(5) rules for file(1) "
+		     "instead of judging files")
+	identify_cmd.add_argument("files", nargs="*", type=Path)
+
 	explain_cmd = sub.add_parser(
 		"explain", help="one path's capability vector and its blame chains")
 	explain_cmd.add_argument("schema", type=Path)
@@ -660,6 +673,30 @@ def _arguments(given: list[str] | None) -> dict[str, int]:
 				f"situc: --arg {name.strip()} is not a number: `{value}`"
 			) from None
 	return found
+
+
+def cmd_identify(args: argparse.Namespace) -> int:
+	"""`situc identify -s png.situ -s bmp.situ FILE...` -- each file's
+	format and how sure, from the first tier of every schema at once: one
+	read of the bytes the most demanding format needs (26.1124)."""
+	from situc import identify
+
+	formats: list[identify.Recogniser] = []
+	for path in args.schema:
+		schema = parse(read_source(path))
+		formats += identify.recognisers(schema,
+		                                resolve(schema, solve(schema)))
+	if args.magic:
+		sys.stdout.write(identify.magic(formats))
+		return 0
+	if not formats:
+		print("situc: no schema given declares an `identify`",
+		      file=sys.stderr)
+		return 2
+	for path, chosen, level in identify.identify_files(formats, args.files):
+		print(f"{path}: {chosen.name if chosen else '-'} ({level})"
+		      + (f" {chosen.media}" if chosen and chosen.media else ""))
+	return 0
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -1819,6 +1856,7 @@ def main(argv: list[str] | None = None) -> int:
 		"pack":     cmd_pack,
 		"map":      cmd_map,
 		"verify":   cmd_verify,
+		"identify": cmd_identify,
 		"build":    cmd_build,
 		"gen-fuzz": cmd_gen_fuzz,
 		"gen-checks": cmd_gen_checks,
