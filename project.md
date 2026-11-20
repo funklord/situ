@@ -188,9 +188,6 @@ without huge dependencies kept, and the pertinent code shared:
   names, and a Debian package for the window (weighed against 0034: a
   binary package of its own keeps `situc` free of Qt). Done in run 8
   (a49df435, 265c3dff): every item, the package as `situ-edit-gui`.
-- qtty does not draw a QCompleter's popup list (input to it works): the
-  enum cell's search list is invisible on a terminal. Signalled to qtty's
-  inbox 20261120T1120Z; add a `--snapshot` check of the list when it lands.
 - An enum is a choice (26.1114): the image's tail names its members
   (`choices`, section 34), rows read `server (4)`, `--put` takes a name,
   and the window's cells are a searchable combo, a range-checked number

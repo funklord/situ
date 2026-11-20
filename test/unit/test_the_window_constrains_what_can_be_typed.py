@@ -110,3 +110,23 @@ def test_a_cell_takes_only_what_its_field_can_hold(
 	assert open_with == ([] if held is None else [held]), done.stdout
 	# The message opened is never what the window writes to.
 	assert message.read_bytes() == MESSAGE
+
+
+@pytest.mark.skipif(not QTTY, reason="vendor/qtty is not checked out")
+def test_the_search_list_is_drawn_on_a_terminal(
+		window_binary: Path, files: tuple[Path, Path]) -> None:
+	"""The enum's completer list, open over the window, in the frame qtty
+	composes. Until qtty a901586 it was routed and never drawn -- a person
+	searched blind -- which every case above missed, since they check what
+	the keys do and not what the screen shows. And it is as wide as the
+	member it offers, not as the cell (`broadc...` in a narrow column)."""
+	schema, message = files
+	shown = subprocess.run(
+		[str(window_binary), "--tui", "--keys", "m=cast", "--snapshot",
+		 "90x12", str(schema), str(message)],
+		capture_output=True, text=True, timeout=120, cwd=ROOT,
+		env=dict(os.environ, SITU_BIN=str(ROOT / "bin")),
+		stdin=subprocess.DEVNULL)
+	assert shown.returncode == 0, shown.stderr
+	screen = shown.stdout.split("--- attrs ---")[0]
+	assert "broadcast (5)" in screen, screen

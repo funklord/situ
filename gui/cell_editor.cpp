@@ -159,6 +159,14 @@ QWidget *cell_editor::createEditor(QWidget *parent,
 		finder->setCaseSensitivity(Qt::CaseInsensitive);
 		finder->setCompletionMode(QCompleter::PopupCompletion);
 		box->setCompleter(finder);
+		// As wide as the longest member, not as the cell: Qt sizes the
+		// list to its field, and a narrow column cut `broadcast (5)` to
+		// `broadc...` -- on a terminal most of all, a cell per letter.
+		int widest = 0;
+		for (const QString &choice : choices)
+			widest = qMax(widest, box->fontMetrics().horizontalAdvance(choice));
+		finder->popup()->setMinimumWidth(widest + 4 * box->fontMetrics()
+		                                 .horizontalAdvance(QLatin1Char('M')));
 		box->setValidator(new member_validator(
 		    choices, row.value(QStringLiteral("admits_other")).toBool(),
 		    box));
