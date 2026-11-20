@@ -9383,6 +9383,10 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1120 A replay window, stated in the schema
+
+Moved to `doc/decision/26.1120-a-replay-window.md`.
+
 ### 26.1119 A run to the end with a `max` is built as one without
 
 `u8 ask[remaining] max 489` had no builder anywhere -- "takes whatever is
