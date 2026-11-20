@@ -31,5 +31,10 @@ struct chunk size=12..2147483659
   ~         4         u8         crc  codec=crc32
   crc covers: data kind summed
 
+struct png_file size=8..
+  @0x0000   8         png_signature signature  big
+  @0x0008   0..       chunk      chunks  sized-by=remaining
+  chunks[].crc covers: chunks[].data chunks[].kind chunks[].summed
+
 struct png_signature size=8
   @0x0000   8         u8         <reserved0>  big

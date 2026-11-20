@@ -54,14 +54,6 @@ struct png_signature {
 require size(png_signature) == 8;
 require absolute_static(png_signature);
 
-// How a file is known to be PNG (26.1124): the signature is all it takes,
-// and it is named rather than spelled again -- the eight bytes above are
-// the evidence. The extension only supports it: a `.png` that does not
-// start with the signature is not PNG, whatever its name says.
-identify png(f: png_signature) [media = "image/png"] {
-	sufficient f;
-	supporting extension "png";
-}
 
 // One chunk. The CRC covers the type and the data and *not* the length,
 // which is why the region starts where it does: RFC 2083 section 5.3 puts
@@ -100,3 +92,20 @@ require absolute_static(chunk.length);
 // What is worth pinning instead is that the type is the bytes: no swap, no
 // decode, so a caller may point at it and compare it against a literal.
 require memory_identical(chunk.kind);
+
+// The file whole: the signature, then chunks to the end. What an editor
+// opens when it recognises a PNG, and what `validate` holds a whole file
+// to -- every chunk framed, every CRC where `verify` reads it.
+struct png_file {
+	png_signature signature;
+	chunk         chunks[remaining];
+}
+
+// How a file is known to be PNG (26.1124): the signature is all it takes,
+// and it is named rather than spelled again -- the eight bytes above are
+// the evidence. The extension only supports it: a `.png` that does not
+// start with the signature is not PNG, whatever its name says.
+identify png(f: png_file) [media = "image/png"] {
+	sufficient f.signature;
+	supporting extension "png";
+}

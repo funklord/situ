@@ -22,5 +22,16 @@ struct chunk size=12..2147483659 mutate=Immutable address=Unstable repr=ValueCon
   chunk.data                             offset=AbsoluteStatic(0x08) size=Bounded(0, 2147483647) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(crc) effect=EffectOnWrite
   chunk.crc                              offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable effect=EffectOnWrite
 
+struct png_file size=8.. access=Sequential mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnWrite
+  png_file.signature                     offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=Unstable effect=EffectOnWrite
+  png_file.signature.<reserved0>         offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=Unstable effect=EffectOnWrite
+  png_file.chunks                        offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnWrite
+  png_file.chunks[]                      offset=FrameStatic(0x00) size=Bounded(12, 2147483659) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable canonical=NonCanonical auth=Covered(chunks[].crc) effect=EffectOnWrite
+  png_file.chunks[].length               offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=Unstable effect=EffectOnWrite
+  png_file.chunks[].summed               offset=FrameStatic(0x04) size=Bounded(4, 2147483651) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(chunks[].crc) effect=EffectOnWrite
+  png_file.chunks[].kind                 offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic address=Unstable canonical=NonCanonical auth=Covered(chunks[].crc) effect=EffectOnWrite
+  png_file.chunks[].data                 offset=FrameStatic(0x08) size=Bounded(0, 2147483647) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(chunks[].crc) effect=EffectOnWrite
+  png_file.chunks[].crc                  offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable effect=EffectOnWrite
+
 struct png_signature size=8 address=Unstable atomic=NonAtomic effect=EffectOnWrite
   png_signature.<reserved0>              offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=Unstable effect=EffectOnWrite
