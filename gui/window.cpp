@@ -49,9 +49,15 @@ QString number_or_dash(const QJsonValue &value)
 
 }
 
-edit_window::edit_window(QWidget *parent)
+edit_window::edit_window(QWidget *parent, document_hub *hub)
     : QMainWindow(parent)
+    , hub_(hub ? hub : new document_hub(this))
 {
+	// A nested window is a window of its own, owned by the one it was
+	// opened from so that it closes with it.
+	if (parent != nullptr)
+		setWindowFlag(Qt::Window);
+	connect(hub_, &document_hub::changed, this, &edit_window::reload);
 	auto *centre = new QWidget(this);
 	auto *layout = new QVBoxLayout(centre);
 	header_ = new QLabel(centre);
@@ -82,6 +88,14 @@ edit_window::edit_window(QWidget *parent)
 	file->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
 
 	connect(table_, &QTableWidget::itemChanged, this, &edit_window::edited);
+	// A double click on a nested struct opens it; on a writable value it
+	// edits, which the table does itself.
+	connect(table_, &QTableWidget::cellDoubleClicked, this,
+	        [this](int row, int) {
+		const QTableWidgetItem *name = table_->item(row, name_column);
+		if (name != nullptr && !name->data(Qt::UserRole).isNull())
+			open_field(name->text());
+	});
 	setWindowTitle(QStringLiteral("situ-edit-qt"));
 	resize(820, 560);
 }
@@ -161,8 +175,18 @@ void edit_window::populate()
 		    field.value(QStringLiteral("offset")))));
 		table_->setItem(row, size_column, fixed(number_or_dash(
 		    field.value(QStringLiteral("size")))));
-		table_->setItem(row, name_column, fixed(
-		    field.value(QStringLiteral("name")).toString()));
+		QTableWidgetItem *named = fixed(
+		    field.value(QStringLiteral("name")).toString());
+		// The nested struct a double click opens, as the JSON gives it.
+		const QJsonValue nested = field.value(QStringLiteral("nested"));
+		if (nested.isObject()) {
+			named->setData(Qt::UserRole, nested.toObject().toVariantMap());
+			named->setToolTip(tr("Double-click to open the nested `%1`")
+			                  .arg(nested.toObject()
+			                       .value(QStringLiteral("struct"))
+			                       .toString()));
+		}
+		table_->setItem(row, name_column, named);
 
 		auto *value = new QTableWidgetItem(shown_value(field));
 		Qt::ItemFlags flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
@@ -209,12 +233,67 @@ void edit_window::edited(QTableWidgetItem *item)
 		populate();	// the cell goes back to what the bytes hold
 		return;
 	}
-	populate();
+	const QString said = session_.notes().isEmpty()
+	                     ? tr("%1 set").arg(name)
+	                     : session_.notes().join(QStringLiteral("; "));
+	// Every window over these bytes re-reads them, this one included.
+	emit hub_->changed();
 	table_->setCurrentCell(row, value_column);
-	say(session_.notes().isEmpty()
-	    ? tr("%1 set").arg(name)
-	    : session_.notes().join(QStringLiteral("; ")));
-	setWindowModified(true);
+	say(said);
+}
+
+void edit_window::reload()
+{
+	if (!session_.refresh()) {
+		say(session_.error());
+		return;
+	}
+	populate();
+}
+
+edit_window *edit_window::open_field(const QString &field)
+{
+	for (int row = 0; row < table_->rowCount(); ++row) {
+		const QTableWidgetItem *name = table_->item(row, name_column);
+		if (name->text() != field)
+			continue;
+		const QVariant nested = name->data(Qt::UserRole);
+		if (nested.isNull()) {
+			say(tr("`%1` is not a nested struct").arg(field));
+			return nullptr;
+		}
+		auto *child = new edit_window(this, hub_);
+		child->setAttribute(Qt::WA_DeleteOnClose);
+		if (!child->open_nested(session_,
+		                        QJsonObject::fromVariantMap(nested.toMap()),
+		                        out_)) {
+			say(tr("cannot open `%1`: %2").arg(field, child->error()));
+			delete child;
+			return nullptr;
+		}
+		child->show();
+		return child;
+	}
+	say(tr("no field `%1`").arg(field));
+	return nullptr;
+}
+
+bool edit_window::open_nested(const session &parent, const QJsonObject &nested,
+                              const QString &out)
+{
+	out_ = out;
+	const QString   type   = nested.value(QStringLiteral("struct")).toString();
+	const qint64    offset = nested.value(QStringLiteral("offset")).toInteger();
+	const QJsonValue length = nested.value(QStringLiteral("length"));
+	if (!session_.open_nested(parent, type, offset,
+	                          length.isNull() ? -1 : length.toInteger()))
+		return false;
+	setWindowTitle(QStringLiteral("%1 at %2 -- situ-edit-qt")
+	               .arg(type).arg(offset));
+	populate();
+	say(tr("A nested struct, over the same bytes as the window it was "
+	       "opened from."));
+	return true;
 }
 
 void edit_window::open_dialog()
@@ -263,7 +342,9 @@ bool edit_window::save_as()
 
 void edit_window::closeEvent(QCloseEvent *event)
 {
-	if (!session_.modified()) {
+	// A nested window's edits are its document's, and the document's first
+	// window is the one that asks about them.
+	if (parentWidget() != nullptr || !session_.modified()) {
 		event->accept();
 		return;
 	}

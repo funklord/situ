@@ -188,3 +188,10 @@ input is least trusted.
   that it needs nothing. `test_the_qt_window_edits_as_the_cli_does.py`
   types into the window's cells under the offscreen platform and compares
   its bytes with the CLI's.
+
+  A nested struct's row is opened by a double click into a window of its
+  own over the SAME working bytes (the CLI's `--struct` and `--offset`),
+  and any window's write makes every window over those bytes re-read
+  them. The JSON names the nested struct as data -- `nested: {struct,
+  offset, length}` -- because the note said it only as prose for a person
+  to retype. `--open FIELD` is the double click, for the test.

@@ -341,6 +341,14 @@ def as_json(document: Document) -> str:
 				"withheld":   field.withheld,
 				"effect":     field.effect,
 				"write_cost": field.write_cost,
+				# A nested struct as data: its type and where it starts in
+				# the BUFFER, the `--struct` and `--offset` that open it.
+				# The note says the same for a person; the window opens it
+				# on a double click from these (0034).
+				"nested":     (None if field.nested is None
+				               else {"struct": field.nested[0],
+				                     "offset": field.nested[1],
+				                     "length": field.size}),
 			}
 			for field in document.fields()
 		],

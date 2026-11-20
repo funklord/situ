@@ -16,6 +16,7 @@ failure, not a skip.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -142,3 +143,49 @@ def test_the_window_shows_the_verdict(
 	word = cli.stdout.splitlines()[0].rsplit("[", 1)[1].rstrip("]")
 	assert word != "ok"
 	assert f"[{word}]" in window.stdout.splitlines()[0]
+
+
+NESTED = """target buffer;
+endian big;
+
+struct inner { u8 a; u16 b; }
+struct outer { u8 tag; inner in; u8 tail; }
+"""
+
+
+def test_a_nested_struct_opens_in_its_own_window_over_the_same_bytes(
+		window_binary: Path, tmp_path: Path) -> None:
+	"""`--open in` is the double click on the nested row: a second window
+	over the SAME working bytes, so its edit lands in the whole buffer --
+	what the CLI does with `--struct inner --offset 1`, taken from the
+	JSON's `nested` rather than retyped from the note."""
+	(tmp_path / "s.situ").write_text(NESTED, encoding="ascii")
+	(tmp_path / "m.bin").write_bytes(b"\x01\x02\x00\x03\x04")
+
+	window = _window(window_binary, "--struct", "outer",
+	                 "--open", "in", "--set", "b=0x1234",
+	                 "--out", str(tmp_path / "q.bin"),
+	                 str(tmp_path / "s.situ"), str(tmp_path / "m.bin"))
+	cli = _cli("--struct", "inner", "--offset", "1", "--length", "3",
+	           "--set", "b=0x1234", "--out", str(tmp_path / "c.bin"),
+	           str(tmp_path / "s.situ"), str(tmp_path / "m.bin"))
+
+	assert window.returncode == 0, window.stderr
+	assert cli.returncode == 0, cli.stderr
+	assert window.stdout.splitlines()[0].startswith("inner")
+	assert (tmp_path / "q.bin").read_bytes() == b"\x01\x02\x12\x34\x04"
+	assert (tmp_path / "q.bin").read_bytes() \
+		== (tmp_path / "c.bin").read_bytes()
+
+
+def test_the_json_names_a_nested_struct_as_data(tmp_path: Path) -> None:
+	(tmp_path / "s.situ").write_text(NESTED, encoding="ascii")
+	(tmp_path / "m.bin").write_bytes(b"\x01\x02\x00\x03\x04")
+	done = _cli("--format", "json", "--struct", "outer",
+	            str(tmp_path / "s.situ"),
+	            str(tmp_path / "m.bin"))
+	assert done.returncode == 0, done.stderr
+	fields = {one["name"]: one for one in json.loads(done.stdout)["fields"]}
+	assert fields["in"]["nested"] == {"struct": "inner", "offset": 1,
+	                                  "length": 3}
+	assert fields["tag"]["nested"] is None

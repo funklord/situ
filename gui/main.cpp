@@ -79,11 +79,16 @@ int main(int argc, char **argv)
 	    QStringLiteral("where Save writes; the message opened is never "
 	                   "overwritten unless it is named here"),
 	    QStringLiteral("FILE"));
+	const QCommandLineOption open_field(QStringLiteral("open"),
+	    QStringLiteral("open the nested struct in this field in its own "
+	                   "window, as a double click does; repeat to go deeper, "
+	                   "and --set applies in the last"),
+	    QStringLiteral("FIELD"));
 	const QCommandLineOption no_ui(QStringLiteral("no-ui"),
 	    QStringLiteral("apply --set/--set-bytes through the window, print "
 	                   "the table, write --out, and exit"));
 	parser.addOptions({structure, offset, length, argument, hex, set,
-	                   set_bytes, out, no_ui});
+	                   set_bytes, out, open_field, no_ui});
 	parser.process(application);
 
 	const QStringList positional = parser.positionalArguments();
@@ -114,6 +119,18 @@ int main(int argc, char **argv)
 			return 1;
 	}
 
+	// Down through the nested structs named, as a person would double
+	// click their way there; the edits below land in the last.
+	edit_window *here = &window;
+	for (const QString &field : parser.values(open_field)) {
+		here = here->open_field(field);
+		if (here == nullptr) {
+			std::fprintf(stderr, "situ-edit-qt: cannot open `%s`\n",
+			             qPrintable(field));
+			return 1;
+		}
+	}
+
 	// The CLI applies every --set, then every --set-bytes; so does this.
 	QString why;
 	const auto apply = [&](const QStringList &assignments) {
@@ -124,7 +141,7 @@ int main(int argc, char **argv)
 				      .arg(assignment);
 				return false;
 			}
-			if (!type_into(window, assignment.left(equals).trimmed(),
+			if (!type_into(*here, assignment.left(equals).trimmed(),
 			               assignment.mid(equals + 1), &why))
 				return false;
 		}
@@ -137,8 +154,8 @@ int main(int argc, char **argv)
 	}
 
 	if (parser.isSet(no_ui)) {
-		std::fputs(qPrintable(window.as_text()), stdout);
-		if (parser.isSet(out) && !window.write_out())
+		std::fputs(qPrintable(here->as_text()), stdout);
+		if (parser.isSet(out) && !here->write_out())
 			return 1;
 		return 0;
 	}

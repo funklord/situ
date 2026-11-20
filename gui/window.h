@@ -16,11 +16,27 @@ class QLabel;
 class QTableWidget;
 class QTableWidgetItem;
 
+// One per document: every window over the same working bytes listens, and
+// any of them that writes says so, so a field edited in a nested struct's
+// window shows in its parent's at once and the other way round.
+class document_hub : public QObject {
+	Q_OBJECT
+
+public:
+	using QObject::QObject;
+
+signals:
+	void changed();
+};
+
 class edit_window : public QMainWindow {
 	Q_OBJECT
 
 public:
-	explicit edit_window(QWidget *parent = nullptr);
+	// A window with no `hub` is a document's first, and owns the hub its
+	// nested windows share.
+	explicit edit_window(QWidget *parent = nullptr,
+	                     document_hub *hub = nullptr);
 
 	// Opens a message against a schema; false with the reason shown in the
 	// window when `situ-edit` refuses it.
@@ -39,10 +55,18 @@ public:
 	// Save to `--out` without a dialog. False with the reason in `error()`.
 	bool write_out();
 
+	// Opens the nested struct in the row named `field` in a window of its
+	// own over the same bytes -- what a double click does. Null where that
+	// row is not a nested struct or the CLI refuses to open it.
+	edit_window *open_field(const QString &field);
+
 protected:
 	void closeEvent(QCloseEvent *event) override;
 
 private:
+	bool open_nested(const session &parent, const QJsonObject &nested,
+	                 const QString &out);
+	void reload();
 	void populate();
 	void edited(QTableWidgetItem *item);
 	void open_dialog();
@@ -51,6 +75,7 @@ private:
 	void say(const QString &text);
 
 	session           session_;
+	document_hub     *hub_     = nullptr;
 	QString           out_;
 	QLabel           *header_  = nullptr;
 	QTableWidget     *table_   = nullptr;

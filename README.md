@@ -354,7 +354,9 @@ All three edit. `--set name=value` writes a number and `--set-bytes
 name=hex` writes a run, where the schema permits it; in the terminal, Enter
 on a field does the same and `w` writes `--out`, and in the window the value
 column is editable on exactly the rows the schema lets anybody write, with
-what each write would cost beside it. The window is Qt Widgets and drives
+what each write would cost beside it, and a nested struct opens in a
+window of its own on a double click, over the same bytes. The window is Qt
+Widgets and drives
 `situ-edit --format json` rather than holding a second copy of the rules,
 so it is the one of the three with a dependency beyond Python, built on its
 own by `make gui`. What that means

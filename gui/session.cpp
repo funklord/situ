@@ -42,9 +42,9 @@ QString session::find_tool(const QString &name)
 bool session::open(const open_options &options)
 {
 	options_  = options;
-	modified_ = false;
+	modified_ = std::make_shared<bool>(false);
 	notes_.clear();
-	scratch_ = std::make_unique<QTemporaryDir>();
+	scratch_ = std::make_shared<QTemporaryDir>();
 	if (!scratch_->isValid()) {
 		error_ = QStringLiteral("cannot make a scratch directory: %1")
 		         .arg(scratch_->errorString());
@@ -193,7 +193,7 @@ bool session::set(const QString &field, const QString &text, bool as_bytes)
 		error_ = QStringLiteral("cannot replace the working copy");
 		return false;
 	}
-	modified_ = true;
+	*modified_ = true;
 	if (!refresh())
 		return false;
 	notes_ = cost;
@@ -212,6 +212,26 @@ bool session::save(const QString &path)
 		error_ = QStringLiteral("cannot write %1").arg(path);
 		return false;
 	}
-	modified_ = false;
+	*modified_ = false;
 	return true;
+}
+
+bool session::open_nested(const session &parent, const QString &structure,
+                          qint64 offset, qint64 length)
+{
+	options_           = parent.options_;
+	options_.structure = structure;
+	options_.offset    = offset;
+	options_.length    = length;
+	// Raw bytes already: the parent turned any hex into the working file.
+	options_.hex       = false;
+	// A nested struct's own arguments are the ones its parent hands it,
+	// which the CLI computes; none are passed down from the command line.
+	options_.arguments.clear();
+	scratch_  = parent.scratch_;
+	image_    = parent.image_;
+	work_     = parent.work_;
+	modified_ = parent.modified_;
+	notes_.clear();
+	return refresh();
 }

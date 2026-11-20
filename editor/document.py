@@ -78,6 +78,12 @@ class Field:
 	#: frontend carried this axis in any form -- `Field` had no member for
 	#: it at all, so neither renderer could have shown it (26.586).
 	effect: str | None = None
+	#: A nested struct's type and where it starts in the BUFFER -- what
+	#: `--struct` and `--offset` take to open it as its own document. The
+	#: note says the same in prose for a person; this is it as data, for a
+	#: frontend that opens it on a click rather than asking somebody to
+	#: retype it.
+	nested: tuple[str, int] | None = None
 
 	@property
 	def withheld(self) -> bool:
@@ -278,7 +284,8 @@ class Document:
 		because = refused[1] if isinstance(refused, tuple) else ""
 
 		for index in image.members(image.structs[self.struct]):
-			placement = image.placements[index]
+			placement   = image.placements[index]
+			opens: tuple[str, int] | None = None
 
 			# A VARIANT, WHICH THE EDITOR SHOWED NOTHING OF (26.595). The
 			# filter below keeps FIELD and RESERVED, so a variant was
@@ -420,9 +427,10 @@ class Document:
 				# the command takes. A document opened at 8 reporting a
 				# chunk's `data` at 8 would send the reader to the
 				# signature.
-				nested = (f"a nested "
-				          f"`{image.struct_name(placement.type_struct)}`; "
-				          f"open it with --offset {self.at + at}")
+				opens  = (image.struct_name(placement.type_struct),
+				          self.at + at)
+				nested = (f"a nested `{opens[0]}`; "
+				          f"open it with --offset {opens[1]}")
 				# APPENDED, like every other note on this row. It assigned,
 				# so it dropped `cannot be read` from a nested struct the
 				# frame does not hold -- and, once the other kinds started
@@ -441,7 +449,8 @@ class Document:
 			                  mutate  = image.capability_of(index, "mutate"),
 			                  auth    = image.capability_of(index, "auth"),
 			                  secrecy = image.capability_of(index, "secrecy"),
-			                  effect  = image.capability_of(index, "effect")))
+			                  effect  = image.capability_of(index, "effect"),
+			                  nested  = opens))
 
 		return rows
 

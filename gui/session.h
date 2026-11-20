@@ -53,24 +53,34 @@ public:
 	// Copies the working bytes to `path`.
 	bool save(const QString &path);
 
+	// Opens a struct nested in `parent`'s document -- the CLI's `--struct`
+	// and `--offset` -- over the SAME working bytes, so an edit in either
+	// is in both, and saving either writes the one buffer. `length` is -1
+	// for the rest of the buffer.
+	bool open_nested(const session &parent, const QString &structure,
+	                 qint64 offset, qint64 length);
+
 	const QJsonObject &document() const { return document_; }
 	const QString &error() const { return error_; }
 	const QStringList &notes() const { return notes_; }
-	bool modified() const { return modified_; }
+	bool modified() const { return *modified_; }
 	const open_options &options() const { return options_; }
 
 private:
 	bool run(const QStringList &extra, QByteArray *out);
 	QStringList common_arguments() const;
 
+	// Shared with every session opened nested in this one: the scratch
+	// directory the working bytes live in, and whether they have changed
+	// since they were last written out.
 	open_options                   options_;
-	std::unique_ptr<QTemporaryDir> scratch_;
+	std::shared_ptr<QTemporaryDir> scratch_;
 	QString                        image_;
 	QString                        work_;
 	QJsonObject                    document_;
 	QString                        error_;
 	QStringList                    notes_;
-	bool                           modified_ = false;
+	std::shared_ptr<bool>          modified_ = std::make_shared<bool>(false);
 };
 
 #endif
