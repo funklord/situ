@@ -9310,6 +9310,14 @@ Moved to `doc/decision/26.1111-verify-checks-a-tag-wherever-it-is-reached.md`.
 
 Moved to `doc/decision/26.1109-a-sized-variant-frames-its-arm.md`.
 
+### 26.1113 One view for every frontend, and the window on a terminal
+
+Moved to `doc/decision/26.1113-one-view-for-every-frontend.md`.
+
+### 26.1114 An enum is a choice, and every cell editor is constrained
+
+Moved to `doc/decision/26.1114-an-enum-is-a-choice.md`.
+
 ### 26.1076 A registry of keyed cells, compiled and walked
 
 Raised by the copyright holder 2026-11-18 and recorded as
