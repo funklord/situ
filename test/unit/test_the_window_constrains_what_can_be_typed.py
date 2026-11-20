@@ -130,3 +130,10 @@ def test_the_search_list_is_drawn_on_a_terminal(
 	assert shown.returncode == 0, shown.stderr
 	screen = shown.stdout.split("--- attrs ---")[0]
 	assert "broadcast (5)" in screen, screen
+	# Directly under the field, as a real terminal draws it: qtty 145c790
+	# rounds the field's edges to the nearest row, where it once drew the
+	# list a row low in the composed frame and not in tmux.
+	lines = screen.splitlines()
+	field = next(at for at, line in enumerate(lines) if "[cast" in line)
+	assert "\u250c" in lines[field + 1], screen
+	assert "broadcast (5)" in lines[field + 2], screen
