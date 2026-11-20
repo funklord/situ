@@ -1345,7 +1345,17 @@ def _through_holds(structs: dict[str, list[str]],
 	run. The run's own line goes, since the bytes it names are the held
 	struct's; what the run says about its length stays in the head's size
 	range, which is where a widened bound shows. A held struct holding
-	another is expanded in turn, to a bounded depth."""
+	another is expanded in turn, to a bounded depth.
+
+	Only where the run's bytes ARE the struct's: a run whose extent no
+	other field decides (a `[remaining]` tail), or one exactly the
+	struct's size. A run sized by a field -- `u8 signer[signer_len]
+	[holds = device]` -- keeps its line: its length is the field's, and
+	splicing the struct's members in its place lined them up against the
+	fields after the run, so fuzznet's `sig` read as narrowed 64 -> 32
+	where no byte had moved (inbox 20261120T2010Z). Its `holds` is then a
+	reading of bytes whose extent is unchanged, which the per-line check
+	reports as api-only."""
 	if depth > 8:
 		return structs
 	changed = False
@@ -1356,7 +1366,8 @@ def _through_holds(structs: dict[str, list[str]],
 			held = next((word.partition("=")[2] for word in line.split()
 			             if word.startswith("holds=")), None)
 			inner = structs.get(held or "")
-			if inner is None or held == name:
+			if inner is None or held == name or not _run_is_struct(
+					line, inner[0]):
 				expanded.append(line)
 				continue
 			changed = True
@@ -1379,6 +1390,16 @@ def _through_holds(structs: dict[str, list[str]],
 				expanded.append(f"{at} {rest}")
 		out[name] = expanded
 	return _through_holds(out, depth + 1) if changed else out
+
+
+def _run_is_struct(line: str, header: str) -> bool:
+	"""Whether a run's bytes are exactly a held struct's: its extent is
+	not another field's to decide, or it is the struct's size."""
+	size = next((word.partition("=")[2] for word in header.split()
+	             if word.startswith("size=")), None)
+	sizer = next((word.partition("=")[2] for word in line.split()
+	              if word.startswith("sized-by=")), "remaining")
+	return sizer == "remaining" or line.split()[1] == size
 
 
 def _parse_registries(text: str) -> dict[str, dict[str, set[str]]]:

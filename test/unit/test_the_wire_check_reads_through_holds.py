@@ -58,3 +58,26 @@ def test_a_held_struct_that_differs_still_breaks() -> None:
 	assert any(finding.kind == "breaking"
 	           and finding.subject.startswith("req[")
 	           for finding in verdict.findings), verdict.findings
+
+
+SIZED = """target buffer;
+endian big;
+struct device { u8 id[32]; }
+struct act { u16 kind; u16 signer_len; u8 signer[signer_len]; u8 sig[64]; }
+"""
+
+
+def test_a_run_sized_by_a_field_is_not_spliced() -> None:
+	"""fuzznet (inbox 20261120T2010Z): a run sized by `signer_len` gained
+	`[holds = device]`, a 32-byte struct, and the check spliced the
+	struct's members in the run's place -- so `signer` read as narrowed
+	to 32 and `sig`, after it, as 64 -> 32, where no byte had moved. The
+	run's length is its field's; only the reading of it changed, and that
+	is all the check may say."""
+	held = SIZED.replace("u8 signer[signer_len];",
+	                     "u8 signer[signer_len] [holds = device];")
+	findings = compare(_wire(SIZED), _wire(held)).findings
+	assert not any("width" in finding.detail for finding in findings), \
+		findings
+	assert [finding.subject for finding in findings] == ["act[2]"], findings
+	assert "holds=device" in findings[0].detail

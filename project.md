@@ -188,6 +188,11 @@ without huge dependencies kept, and the pertinent code shared:
   sec 1313); (d) is fuzznet's own vendoring line in
   `wire/generated/situ.{c,h}`, not situ's, so it moves when fuzznet next
   copies the runtime.
+- From fuzznet (inbox 20261120T2010Z): `wire --check` misreported
+  widths after a `[holds]` run sized by a field -- 26.1118's splice lined
+  the held struct's members up against the fields after the run. Fixed:
+  only a run that is exactly the struct is expanded (26.1118). The nonce
+  set there waits on fuzznet's holder choosing the clock's unit.
 - From fuzznet (inbox 20261120T1930Z), answering the zero-expiry
   question: neither `replay` over an arm nor a rule keyed on a field fits,
   since its frame kind is a sealed value whose meaning is the consumer's;
@@ -9502,6 +9507,17 @@ run's own bound stays as a line, `tail holds: ask 0..489`, so dropping or
 raising `max` -- a wider message -- is named as itself, backward-compatible
 only, rather than lost among fourteen. A held member of another width is
 still a break. `test_the_wire_check_reads_through_holds.py`.
+
+**Only where the run IS the struct** (fuzznet, inbox 20261120T2010Z): a
+run sized by a field -- `u8 signer[signer_len] [holds = device]`, a
+32-byte struct in a run of up to 65535 -- was spliced the same way, its
+members lined up against the fields after the run, so `signer` read as
+narrowed to 32 and `sig` as 64 -> 32 where no byte had moved; fuzznet's
+contract, written from `situc map`, disagreed with the check. A run is
+expanded now only where no field decides its extent (a `[remaining]`
+tail) or it is exactly the struct's size; otherwise it keeps its line and
+the gained `holds` is reported as itself, the interpretation change 26.898
+made it.
 
 ### 26.1116 A display reads member by member
 
