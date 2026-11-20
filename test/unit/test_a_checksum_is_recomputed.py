@@ -429,3 +429,32 @@ def test_a_polynomial_agrees_with_long_division(schema: str) -> None:
 		seen += 1
 
 	assert seen, f"no polynomial kernel found in {schema}.situ"
+
+
+@pytest.mark.parametrize("flip", [0, 1])
+def test_an_opened_checksum_that_is_wrong_is_said(flip: int,
+		tmp_path: Path) -> None:
+	"""The editor recomputed a covered tag after a write and said nothing
+	of the one it opened: a PNG chunk whose CRC was a bit off showed its
+	value and `[ok]`, where `verify` refuses the file. Its row now says
+	what is stored and what the codec computes -- and a right one says
+	nothing (26.1124's example found it)."""
+	import struct
+	import subprocess
+	data = b"x" * 11
+	crc  = zlib.crc32(b"IDAT" + data) ^ flip
+	chunk = (struct.pack(">I", len(data)) + b"IDAT" + data
+	         + struct.pack(">I", crc))
+	(tmp_path / "c.bin").write_bytes(chunk)
+	ran = subprocess.run(
+		[sys.executable, str(ROOT / "bin" / "situ-edit"), "--struct",
+		 "chunk", str(ROOT / "example" / "png" / "png.situ"),
+		 str(tmp_path / "c.bin")],
+		capture_output=True, text=True, timeout=120)
+	assert ran.returncode == 0, ran.stderr
+	stale = [line for line in ran.stdout.splitlines() if "stale" in line]
+	if flip:
+		assert stale == [f"{' ' * 14}stale: stored {crc:08x}, its codec "
+		                 f"computes {crc ^ 1:08x}"], ran.stdout
+	else:
+		assert stale == [], ran.stdout

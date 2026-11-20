@@ -444,6 +444,17 @@ class Document:
 			if says is not None:
 				note = f"{note}; {says}" if note else says
 
+			# A CHECKSUM THAT DOES NOT MATCH ITS BYTES. The editor
+			# recomputed a covered tag after a write and said nothing about
+			# the one it OPENED: a PNG chunk whose CRC was a bit off showed
+			# its value and `[ok]`, where `verify` refuses the file. Asked
+			# of the same `derived.compute` the write uses, and encoded the
+			# way `_store_in` writes, so the check and the write cannot
+			# disagree about byte order (26.1124's example found it).
+			stale = self._tag_mismatch(view, index)
+			if stale is not None:
+				note = f"{note}; {stale}" if note else stale
+
 			# A LOCATED MEMBER IN A WINDOW IS READING THE CONTAINER
 			# (26.583). `at expr` is measured from the buffer and not from
 			# the view -- `out->base = msg->base + at` in every generated
@@ -1005,6 +1016,50 @@ class Document:
 		if start < at or start + wide > at + span:
 			return None
 		return start - at, wide
+
+	def _tag_mismatch(self, view: View, tag: int) -> str | None:
+		"""`stored X, computes Y` for a tag of this struct whose codec situ
+		computes and whose stored value disagrees, None otherwise -- for a
+		tag that matches, that is not one, or that cannot be computed here.
+		The spanning forms (`covers(after)`, `covers(message)`) are left to
+		`verify`, which reads them over the message."""
+		from walker import derived
+
+		held = self.image.tags.get(tag)
+		if held is None or held.after or held.message \
+				or not derived.computes(self.image, tag):
+			return None
+		try:
+			if held.before:
+				start = offset_bits(view, tag) // BITS_PER_BYTE
+				value = derived.compute(
+					self.image, tag, bytes(self.buffer[:self.at + start]))
+			else:
+				if held.first == NONE or held.last == NONE:
+					return None
+				at, span = self._covered_span(held)
+				value = derived.compute(
+					self.image, tag,
+					bytes(self.buffer[self.at + at:self.at + at + span]),
+					self._hole(tag, at, span))
+			first = offset_bits(view, tag) // BITS_PER_BYTE
+			wide  = size_bits(view, tag) // BITS_PER_BYTE
+		except (Refused, derived.Uncomputable):
+			return None
+		where  = slice(self.at + first, self.at + first + wide)
+		stored = bytes(self.buffer[where])
+		saved  = self.buffer
+		self.buffer = bytearray(saved)
+		try:
+			self._store_in(self.view(), tag, value)
+			wanted = bytes(self.buffer[where])
+		except Refused:
+			return None
+		finally:
+			self.buffer = saved
+		if wanted == stored:
+			return None
+		return f"stale: stored {stored.hex()}, its codec computes {wanted.hex()}"
 
 	def _store(self, tag: int, value: int) -> None:
 		self._store_in(self.view(), tag, value)
