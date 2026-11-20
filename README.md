@@ -588,8 +588,9 @@ own constraint (a preamble, a `[must_eq]`, a closed enum, a bound) and a
 comparison narrows one. The verdict is a named level -- certain, likely,
 possible -- never a score. `situc identify -s a.situ -s b.situ FILE...`
 judges every format from one read of each file's first bytes, and
-`--magic` writes the same rules for `file(1)`, and `--c` one C file that
-judges them all for a search tool. The first tier reads only
+`--magic` writes the same rules for `file(1)`, `--mime` a shared-mime-info
+package for the desktop, and `--c` one C file that judges them all for a
+search tool. The first tier reads only
 fixed offsets, and refuses an item that would need more.
 
 **Scalars** are spelled by width, and the width need not be a whole byte:

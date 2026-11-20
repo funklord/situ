@@ -425,6 +425,10 @@ def build_parser() -> argparse.ArgumentParser:
 		"--c", action="store_true",
 		help="print one C file holding every format's tests and "
 		     "`situ_id_judge`, for a search tool to include")
+	identify_cmd.add_argument(
+		"--mime", action="store_true",
+		help="print a shared-mime-info package for the desktop's own "
+		     "detector")
 	identify_cmd.add_argument("files", nargs="*", type=Path)
 
 	explain_cmd = sub.add_parser(
@@ -695,6 +699,9 @@ def cmd_identify(args: argparse.Namespace) -> int:
 		return 0
 	if args.c:
 		sys.stdout.write(identify.c_source(formats))
+		return 0
+	if args.mime:
+		sys.stdout.write(identify.mime_info(formats))
 		return 0
 	if not formats:
 		print("situc: no schema given declares an `identify`",

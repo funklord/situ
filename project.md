@@ -205,8 +205,9 @@ without huge dependencies kept, and the pertinent code shared:
   `qtkit_follow_desktop` as the shared one, vendored as a submodule. Move
   onto it.
 - File identification: the first tier is built (26.1124) -- `identify`,
-  `situc identify`, `--magic`, and `--c`, the one-pass matcher. Left:
-  shared-mime-info, the named text heuristics, the deeper tiers. The
+  `situc identify`, `--magic`, `--mime` (shared-mime-info), and `--c`,
+  the one-pass matcher. Left: the named text heuristics (UTF-8, CSV,
+  JSON), the deeper tiers. The
   holder's shape, as given (2026-11-20; LOW PRIORITY, other work
   first): an identification declaration INSIDE the schema of a `target
   file` format, made of evidence items that name the format's own members,

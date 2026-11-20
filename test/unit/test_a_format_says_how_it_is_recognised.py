@@ -324,3 +324,45 @@ int main(void)
 	assert {line.split()[1] for line in expected} == set(identify.LEVELS)
 	assert {line.split()[0] for line in expected} == {
 		"-", "png", "loose", "mz", "raw"}
+
+
+@pytest.mark.skipif(shutil.which("update-mime-database") is None
+                    or shutil.which("gio") is None,
+                    reason="no shared-mime-info tools")
+def test_the_desktop_agrees_with_the_mime_package(tmp_path: Path) -> None:
+	"""The package goes through update-mime-database and gio, the real
+	consumers: its first version opened with a comment holding `--`, which
+	XML forbids, and only the real parser said so. The type is a private
+	one, and the database the only one searched, so the system's own PNG
+	cannot answer for it."""
+	source = GATED.replace('media = "image/png"',
+	                       'media = "application/x-situ-probe"').replace(
+		"f.first.depth <= 16", "f.first.depth == 8")
+	(tmp_path / "t.situ").write_text(source, encoding="latin-1")
+	written = subprocess.run(
+		[sys.executable, str(ROOT / "bin" / "situc"), "identify", "--mime",
+		 "-s", str(tmp_path / "t.situ")],
+		capture_output=True, text=True, timeout=120)
+	assert written.returncode == 0, written.stderr
+	packages = tmp_path / "mime" / "packages"
+	packages.mkdir(parents=True)
+	(packages / "situ.xml").write_text(written.stdout, encoding="utf-8")
+	env = {"PATH": "/usr/bin:/bin", "XDG_DATA_HOME": str(tmp_path),
+	       "XDG_DATA_DIRS": str(tmp_path), "HOME": str(tmp_path)}
+	built = subprocess.run(["update-mime-database", str(tmp_path / "mime")],
+	                       capture_output=True, text=True, timeout=120,
+	                       env=env)
+	assert "Failed to parse" not in built.stderr, built.stderr
+	said = {}
+	for name, data in (("good", _chunk(b"IHDR")),
+	                   ("idat", _chunk(b"IDAT")),
+	                   ("deep", _chunk(b"IHDR", depth=9))):
+		(tmp_path / f"{name}.bin").write_bytes(data)
+		ran = subprocess.run(
+			["gio", "info", "-a", "standard::content-type",
+			 str(tmp_path / f"{name}.bin")],
+			capture_output=True, text=True, timeout=60, env=env)
+		said[name] = ran.stdout.split("standard::content-type:")[-1].strip()
+	assert said == {"good": "application/x-situ-probe",
+	                "idat": "application/octet-stream",
+	                "deep": "application/octet-stream"}, said
