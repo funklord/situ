@@ -176,6 +176,19 @@ without huge dependencies kept, and the pertinent code shared:
   sec 1313); (d) is fuzznet's own vendoring line in
   `wire/generated/situ.{c,h}`, not situ's, so it moves when fuzznet next
   copies the runtime.
+- From fuzznet adopting `[holds]` (inbox 20261120T1400Z): (1) `situc wire
+  --check` reads a byte-identical change as BREAKING -- fourteen fields
+  replaced by a run that `holds` a struct of exactly those fields, or an
+  imported struct replacing an identical local one; the check compares
+  field lists and should see through `holds` to the bytes. (2) No builder
+  for a struct ending in a `[remaining]` run even with `max`: a builder
+  taking the run as bytes and a length, as a nested member is, would do.
+  Minor: dropping `max` from such a run widened the message's bound to
+  unbounded, said only as one line among the breaking ones.
+- situ-edit-gui's dark-desktop detection (`gui/desktop_scheme`) is a copy
+  of snurra's; the guidelines (2026-11-20) now name `qtkit`'s
+  `qtkit_follow_desktop` as the shared one, vendored as a submodule. Move
+  onto it.
 - File identification (holder, 2026-11-20; LOW PRIORITY, other work
   first): an identification declaration INSIDE the schema of a `target
   file` format, made of evidence items that name the format's own members,
