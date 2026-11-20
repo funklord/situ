@@ -183,8 +183,11 @@ def header_guard(prefix: str, basename: str, *rest: str) -> str:
 	(`--prefix fzn_session_frame_wire` for `session_frame_wire.situ`) got
 	`FZN_SESSION_FRAME_WIRE_SESSION_FRAME_WIRE_REPLAY_H` (fuzznet, inbox
 	20261120T1900Z); the stem is said once now. With the default prefix
-	nothing changes."""
-	if prefix == basename or prefix.endswith("_" + basename):
+	nothing changes -- and a prefix EQUAL to the stem keeps both, since
+	`situ.situ` under `situ` would otherwise guard as `SITU_H`, the
+	runtime's own (the collision check refused ten rows of the
+	conditional-argument table when it did)."""
+	if prefix.endswith("_" + basename):
 		return macro(prefix, *rest)
 	return macro(prefix, basename, *rest)
 
