@@ -722,7 +722,10 @@ def _member_refusal(placement: Placement,
 		return "is an index table"
 	if placement.delimiters and placement.radix is None:
 		return _delimited_refusal(placement)
-	if placement.remaining_cap:
+	# A `[remaining] max N` run of BYTES is the plain `[remaining]` span: the
+	# bound is the view's, and the finished message is validated against
+	# the view, so it is held there rather than stated twice (26.1119).
+	if placement.remaining_cap and placement.element_bits != BITS_PER_BYTE:
 		return "takes whatever is left, so its length is the frame's"
 	if placement.size_expr is not None and inverse is None and not stated:
 		# `inverse` says the caller has already run the expression

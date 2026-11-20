@@ -181,7 +181,7 @@ without huge dependencies kept, and the pertinent code shared:
   replaced by a run that `holds` a struct of exactly those fields, or an
   imported struct replacing an identical local one; the check compares
   field lists and should see through `holds` to the bytes -- done, 26.1118.
-  (2) No builder
+  (2) No builder -- done, 26.1119
   for a struct ending in a `[remaining]` run even with `max`: a builder
   taking the run as bytes and a length, as a nested member is, would do.
   Minor: dropping `max` from such a run widened the message's bound to
@@ -9382,6 +9382,21 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1119 A run to the end with a `max` is built as one without
+
+`u8 ask[remaining] max 489` had no builder anywhere -- "takes whatever is
+left, so its length is the frame's" -- while the same run without `max`
+was a plain span, the caller's bytes and a length. fuzznet writes its
+local search ask by hand for it. A capped run of BYTES is now that span: the
+bound is the view's to state, and every builder validates the finished
+message against the view, so a run past `max` is refused there (BOUNDS: the
+message would outrun the struct's largest extent) rather than by a second
+statement of the bound. A capped run of wider elements is still refused,
+as before. All four backends build it (`c` in a two-struct probe: 8 bytes
+written, 9 refused, in C and Python); the corpus's one such struct,
+`edges.situ`'s `content[remaining] max 470`, is now among those the four
+builders are held to agree on.
 
 ### 26.1118 The wire check reads through a run that holds a struct
 

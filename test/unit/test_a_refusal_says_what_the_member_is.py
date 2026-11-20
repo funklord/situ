@@ -93,7 +93,10 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	                       or pl.endian is ast.Endian.NATIVE))),
 	("is located by an expression", lambda pl, res: bool(pl.located)),
 	("is an index table", lambda pl, res: pl.index_table is not None),
-	("takes whatever is left", lambda pl, res: bool(pl.remaining_cap)),
+	# A capped run of BYTES is built as a span since 26.1119; the refusal
+	# is left to runs of wider elements.
+	("takes whatever is left",
+	 lambda pl, res: bool(pl.remaining_cap) and pl.element_bits != 8),
 	("is the stated size of both", lambda pl, res: True),
 	("has no stated length, so nothing says when",
 	 lambda pl, res: not pl.delimiters and pl.array_count is None),
@@ -254,6 +257,10 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		# packed into bits; a whole-byte tag the runtime has no word for --
 		# BLE's CRC-24 -- still reaches it, in 26.1027's test.
 		"-bit tag, and the runtime stores",
+		# A capped run of bytes is built since 26.1119, and the corpus's one
+		# capped run is bytes; a capped run of wider elements still reaches
+		# it, in `test_a_capped_run_to_the_end_is_built`.
+		"takes whatever is left",
 		"is minimal and ends at any of",
 		"is minimal and does not consume its delimiter",
 		"repeats while a condition holds and this schema emits no count",
