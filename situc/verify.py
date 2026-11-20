@@ -439,7 +439,8 @@ def _open(view: object, placement: Placement, local: str,
 		raise
 	if callable(opened) or not hasattr(opened, "validate"):
 		return None
-	return opened
+	view_of: object = opened
+	return view_of
 
 
 def _tags_within(resolved: ResolvedSchema, struct: ResolvedStruct,
