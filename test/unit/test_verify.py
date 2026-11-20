@@ -858,3 +858,41 @@ def test_a_located_member_past_the_vector_is_refused(tmp_path: Path,
 	assert main(["verify", str(schema), str(vectors)]) == 1
 	out = capsys.readouterr().out
 	assert "BoundsError" in out and "points outside the message" in out, out
+
+
+def _png_file(break_crc: bool) -> bytes:
+	import struct
+	import zlib
+
+	def chunk(kind: bytes, data: bytes, bad: bool = False) -> bytes:
+		crc = zlib.crc32(kind + data) ^ (1 if bad else 0)
+		return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+	return (b"\x89PNG\r\n\x1a\n"
+	        + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 1, 8, 2, 0, 0, 0))
+	        + chunk(b"IDAT", zlib.compress(b"\x00" + b"\xff" * 6), break_crc)
+	        + chunk(b"IEND", b""))
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_every_element_of_a_run_has_its_tag_checked(
+		broken: bool, tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""A PNG file is a run of chunks, each with its CRC, and that is where
+	its integrity lives. `verify` named every chunk's CRC "not descended
+	into" and conformed a file whose IDAT CRC was one bit off; it walks the
+	run's elements now (26.1124's PNG example found it)."""
+	data = _png_file(broken)
+	vectors = tmp_path / "png.vectors"
+	vectors.write_text("png_file whole " + " ".join(f"{byte:02x}"
+	                                                 for byte in data) + "\n",
+	                   encoding="ascii")
+	said = main(["verify", str(ROOT / "example" / "png" / "png.situ"),
+	             str(vectors)])
+	out = capsys.readouterr()
+	text = out.out + out.err
+	assert "not checked" not in text, text
+	if broken:
+		assert said == 1, text
+		assert "chunk.crc" in text and "0xa40d7c5f" in text, text
+	else:
+		assert said == 0, text

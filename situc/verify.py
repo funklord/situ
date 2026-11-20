@@ -393,6 +393,18 @@ def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
 		inner = resolved.structs.get(placement.type_name or "")
 		if inner is None:
 			continue
+		elements = _elements(view, local, depth)
+		if elements is not None:
+			# A run of structs, element by element: PNG's chunks each carry
+			# a CRC, which is where a PNG file's integrity lives, and this
+			# named all of them unchecked (26.1124's example found it). A
+			# reason an element's tag is unchecked is the same for every
+			# element, so it is said once.
+			for element in elements:
+				for one in _checked_tags(resolved, inner, element, depth + 1):
+					if one not in unchecked:
+						unchecked.append(one)
+			continue
 		opened = _open(view, placement, local, depth)
 		if opened is None:
 			unchecked.extend(f"{one} (inside `{struct.name}.{local}`, "
@@ -402,6 +414,29 @@ def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
 			unchecked.extend(_checked_tags(resolved, inner, opened,
 			                               depth + 1))
 	return tuple(unchecked)
+
+
+def _elements(view: object, local: str, depth: int) -> list[object] | None:
+	"""Each element of a run of structs, through the reader's own
+	`<run>_count` (a property) and `<run>(index)`, or None where the reader has no
+	such pair or an element is not a struct's view. A count past what the
+	message holds is the reader's refusal, and propagates as one."""
+	name = py_name(local)
+	if not hasattr(type(view), f"{name}_count") or depth >= _TAG_DEPTH:
+		return None
+	count = getattr(view, f"{name}_count")
+	element = getattr(view, name, None)
+	if callable(count):
+		count = count()
+	if not isinstance(count, int) or not callable(element):
+		return None
+	found = []
+	for index in range(count):
+		one = element(index)
+		if not hasattr(one, "validate"):
+			return None
+		found.append(one)
+	return found
 
 
 #: `_open`'s answer for an arm the discriminant does not select.
