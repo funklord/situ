@@ -2418,6 +2418,8 @@ NEEDS_MORE_THAN_A_SCHEMA = {
 	"diff":         "takes two schemas, an old and a new",
 	"import-proto": "takes a `.proto`, which is not a schema",
 	"lsp":          "takes no schema: it serves a protocol on stdin",
+	"identify":     "takes its schemas by `-s`, and the files it judges; "
+	                "test_a_format_says_how_it_is_recognised runs it",
 }
 
 

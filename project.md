@@ -5361,6 +5361,9 @@ situc explain <schema> <path>     one struct or field's capability vector
 situc diff    <old> <new>         capability changes between revisions
 situc wire    <schema>            the byte-level contract [--check] (19.3)
 situc verify  <schema> <vectors>  do real bytes conform? generates nothing
+situc identify -s <schema>... <file>...
+                                  which format each file is, and how sure
+                                  [--magic | --mime | --c] (26.1124)
 situc pack    <schema>            the packed layout image a walker reads
                                   [-o FILE] [--metadata] [--coverage] (26.33)
 situc doc     <schema>            byte-layout diagrams and a field reference

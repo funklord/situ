@@ -89,6 +89,24 @@ the code: see
 .B situ
 project.md 26.67.
 .TP
+.B identify
+Say which format each file is, and how sure: certain, likely or possible,
+from the
+.B identify
+declarations of every schema given with
+.BR \-s ,
+in one read of each file's first bytes. With
+.B \-\-magic
+it writes the same rules for
+.BR file (1),
+with
+.B \-\-mime
+a shared-mime-info package, and with
+.B \-\-c
+one C file that judges them all; see
+.B situ
+project.md 26.1124.
+.TP
 .B pack
 Emit the packed layout image: the placements with their kinds, offsets,
 sizes and endianness, plus a bytecode for the expression language of
