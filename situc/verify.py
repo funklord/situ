@@ -335,20 +335,45 @@ def _is_tag(placement: Placement) -> bool:
 	return placement.kind in ("tag", "checksum") or bool(placement.tag_covers)
 
 
+#: How far `_checked_tags` follows nested structs and arms. A message has
+#: finitely many bytes, so a recursive struct ends on its own; this is the
+#: guard for one whose views a reader could keep opening at one offset.
+#: Past the `[limit]` of every schema met so far -- 64 stopped one link
+#: short of openmlx4's own `sixty_five` chain, which its `[limit = 64]`
+#: accepts -- and two frames a level keeps it inside Python's default
+#: recursion limit.
+_TAG_DEPTH = 256
+
+
 def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
-		view: object) -> tuple[str, ...]:
-	"""Check every tag of this struct a codec computes; name the rest.
+		view: object, depth: int = 0) -> tuple[str, ...]:
+	"""Check every tag a codec computes, here and in what this nests.
 
 	A tag's `_check` raises `ChecksumError` (or `TagError`) where the stored
 	value disagrees with the bytes it covers, which is a verdict on the
 	vector and propagates as one. Where there is no `_check` -- no codec, so
 	nothing to compute it from -- or it takes the pseudo-header its sum
 	covers, which a vector does not carry, the tag is returned unchecked
-	with the reason, and so is every tag inside a nested member, which this
-	does not descend into.
+	with the reason.
+
+	**A nested struct, and the arm a variant selects, are descended into**
+	through their own accessors, and their tags checked over the same
+	message. This stopped at the first level and named what it skipped --
+	except behind a variant, whose arms `own_members` leaves out, so a
+	checksum one arm down was neither checked nor named, and a VPD
+	keyword's RV byte flipped conformed in silence (openmlx4, 2026-11-19).
+	An arm the discriminant does not select is not there to check; a
+	member this cannot open -- a run of structs, one placed by `at`, one
+	with no accessor -- is named, as before, with what it holds.
 	"""
 	unchecked: list[str] = []
+	members: list[Placement] = []
 	for placement in traverse.own_members(struct):
+		members.append(placement)
+		if placement.kind == "variant":
+			members.extend(held for _, held in traverse.arm_members(
+				struct, placement) if held is not None)
+	for placement in members:
 		local = traverse.local_name(struct, placement)
 		if _is_tag(placement):
 			checker = getattr(view, f"{py_name(local)}_check", None)
@@ -359,14 +384,62 @@ def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
 				unchecked.append(f"{struct.name}.{local}: it covers a "
 				                 "prefix the vector does not carry")
 			else:
-				checker()
+				try:
+					checker()
+				except Exception as why:		# noqa: BLE001
+					if type(why).__name__ != "VersionError":
+						raise
 			continue
 		inner = resolved.structs.get(placement.type_name or "")
-		if inner is not None:
+		if inner is None:
+			continue
+		opened = _open(view, placement, local, depth)
+		if opened is None:
 			unchecked.extend(f"{one} (inside `{struct.name}.{local}`, "
 			                 "which this does not descend into)"
 			                 for one in _tags_within(resolved, inner, set()))
+		elif opened is not _ABSENT:
+			unchecked.extend(_checked_tags(resolved, inner, opened,
+			                               depth + 1))
 	return tuple(unchecked)
+
+
+#: `_open`'s answer for an arm the discriminant does not select.
+_ABSENT = object()
+
+
+def _open(view: object, placement: Placement, local: str,
+		depth: int) -> object | None:
+	"""The view a nested struct or a selected arm is read through.
+
+	`_ABSENT` where the arm is not the one present -- the accessor's
+	`VersionError`, which is the generated code saying so. None where this
+	cannot open it: a run (whose accessor hands back one element, or none),
+	a depth past `_TAG_DEPTH`, or an accessor that does not return a
+	struct's view.
+
+	A member placed by `at` is opened through its `_view`, which places it
+	over the same message: a chain's next link is one, and each link's CRC
+	is FS2's section list (openmlx4, 2026-11-19). The bytes accessor beside
+	it hands back a copy, over which a tag covering `before` would sum the
+	wrong bytes.
+	"""
+	if placement.array_count is not None \
+			or placement.sized_by is not None or placement.delimiters \
+			or placement.repeat_while is not None or depth >= _TAG_DEPTH:
+		return None
+	name = py_name(local) + ("_view" if placement.located else "")
+	try:
+		opened = getattr(view, name)
+	except AttributeError:
+		return None
+	except Exception as why:				# noqa: BLE001
+		if type(why).__name__ == "VersionError":
+			return _ABSENT
+		raise
+	if callable(opened) or not hasattr(opened, "validate"):
+		return None
+	return opened
 
 
 def _tags_within(resolved: ResolvedSchema, struct: ResolvedStruct,
@@ -376,7 +449,13 @@ def _tags_within(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return []
 	seen.add(struct.name)
 	found: list[str] = []
+	members: list[Placement] = []
 	for placement in traverse.own_members(struct):
+		members.append(placement)
+		if placement.kind == "variant":
+			members.extend(held for _, held in traverse.arm_members(
+				struct, placement) if held is not None)
+	for placement in members:
 		if _is_tag(placement):
 			found.append(f"{struct.name}.{traverse.local_name(struct, placement)}")
 			continue
