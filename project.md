@@ -176,6 +176,20 @@ without huge dependencies kept, and the pertinent code shared:
   sec 1313); (d) is fuzznet's own vendoring line in
   `wire/generated/situ.{c,h}`, not situ's, so it moves when fuzznet next
   copies the runtime.
+- From fuzznet adopting replay windows (inbox 20261120T1900Z; its sec
+  1320): the counter window is adopted -- `replay heard(h: ...) [counter =
+  h.counter, window = 64]`, `heard_check` before the AEAD open and
+  `heard_record` after, 29 hand lines gone, its suite and fuzzing
+  unchanged. Met: (1) its public session struct holds the window and
+  builds `heard_t` from its own fields, so `top`/`seen`/`any` want saying
+  stable; (2) the nonce form's `capacity` is the consumer's, not the
+  schema's -- a phone and a relay differ by orders -- so the table and its
+  length want handing over, the schema stating the sizing rule; (3) a
+  zero-expiry rule per frame kind (a command must state one, a grant may
+  not), i.e. `replay` over an arm or a rule keyed on a field; (4) the
+  replay header's guard doubles the stem, and `--layer converse` also
+  writes `_frame.h`. The nonce set stays hand-written there until (2) and
+  (3) have a shape.
 - From fuzznet adopting `[holds]` (inbox 20261120T1400Z): (1) `situc wire
   --check` reads a byte-identical change as BREAKING -- fourteen fields
   replaced by a run that `holds` a struct of exactly those fields, or an
