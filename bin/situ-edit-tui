@@ -5,7 +5,8 @@ A frontend and nothing else: every question it asks is `editor.document`'s,
 and it holds no rule about what a field costs or what a write would mean.
 The CLI can do everything this can, which is 0034's rule and what keeps this
 testable -- the parts worth testing are in the core, and the core is what the
-CLI drives.
+CLI drives. It edits: Enter on a field is `--set` (or `--set-bytes` for a
+byte run) and `w` is `--out`, through the CLI's own `apply_edits`.
 
 `curses` is in the standard library, so this keeps the no-dependency
 property. Only the GUI takes a third-party dependency, in its own binary.
@@ -56,7 +57,7 @@ if _root is not None and str(_root) not in sys.path:
 
 try:
 	from editor.document import Document		# noqa: E402
-	from editor.text import open_from, render	# noqa: E402
+	from editor.text import apply_edits, open_from, render, render_rows	# noqa: E402
 	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
 	sys.stderr.write(
@@ -73,27 +74,120 @@ def rows(document: Document) -> list[str]:
 	return render(document)
 
 
-def _draw(screen: "curses._CursesWindow", document: Document) -> None:
-	lines = rows(document)
-	top   = 0
+def edit(document: Document, index: int, text: str) -> list[str]:
+	"""Store `text` into the field at `index`, as the CLI's `--set` would.
+
+	A byte run takes hex and anything else a number, which is the choice the
+	CLI makes by flag (`--set-bytes` against `--set`) made here by what the
+	field already holds -- the person at the prompt is looking at the value,
+	so asking them which flag they meant would be asking the row back. The
+	write itself is `apply_edits`, the CLI's own, so a refusal here is the
+	refusal there word for word.
+	"""
+	field = document.fields()[index]
+	assignment = f"{field.name}={text.strip()}"
+	if isinstance(field.value, bytes):
+		return apply_edits(document, [], [assignment])
+	return apply_edits(document, [assignment], [])
+
+
+def _prompt(screen: "curses._CursesWindow", label: str) -> str | None:
+	"""A line typed on the bottom row, or None for Escape."""
+	height, width = screen.getmaxyx()
+	typed = ""
+	curses.curs_set(1)
+	try:
+		while True:
+			screen.move(height - 1, 0)
+			screen.clrtoeol()
+			screen.addnstr(height - 1, 0, f"{label}{typed}", width - 1)
+			screen.refresh()
+			key = screen.get_wch()
+			if key in ("\n", "\r", curses.KEY_ENTER):
+				return typed
+			if key == "\x1b":
+				return None
+			if key in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+				typed = typed[:-1]
+			elif isinstance(key, str) and key.isprintable():
+				typed += key
+	finally:
+		curses.curs_set(0)
+
+
+def _draw(screen: "curses._CursesWindow", document: Document,
+		out: Path | None) -> None:
+	"""The listing, a cursor on one field, and the two acts the CLI has.
+
+	Enter sets the field under the cursor and `w` writes the buffer to
+	`--out` -- `--set` and `--out`, interactively. Nothing reaches a file
+	without `--out`, as in the CLI: the message opened is never overwritten
+	by a frontend deciding on the caller's behalf.
+	"""
+	curses.curs_set(0)
+	cursor  = 0
+	top     = 0
+	status  = "read-write where the schema permits; Enter edits"
+	unsaved = False
 
 	while True:
+		lines  = render_rows(document)
+		fields = [n for n, (_, owner) in enumerate(lines)
+		          if owner is not None and
+		          (n == 0 or lines[n - 1][1] != owner)]
+		cursor = min(cursor, max(0, len(fields) - 1))
+		here   = fields[cursor] if fields else 0
+
 		screen.erase()
 		height, width = screen.getmaxyx()
-		for row, line in enumerate(lines[top:top + height - 1]):
-			screen.addnstr(row, 0, line, width - 1)
+		body = height - 2
+		if here < top:
+			top = here
+		elif here >= top + body:
+			top = here - body + 1
+		for row, (line, owner) in enumerate(lines[top:top + body]):
+			chosen = fields and owner == lines[here][1]
+			screen.addnstr(row, 0, line, width - 1,
+			               curses.A_REVERSE if chosen else curses.A_NORMAL)
+		screen.addnstr(height - 2, 0, status, width - 1, curses.A_BOLD)
 		screen.addnstr(height - 1, 0,
-		               "  up/down  q quit  --  read-only (decision 0034)",
-		               width - 1, curses.A_REVERSE)
+		               "  up/down  Enter edit  w write"
+		               + (f" {out}" if out else " (needs --out)")
+		               + "  q quit", width - 1, curses.A_REVERSE)
 		screen.refresh()
 
 		key = screen.getch()
 		if key in (ord("q"), ord("Q"), 27):
+			if unsaved and status != "unsaved; q again to quit":
+				status = "unsaved; q again to quit"
+				continue
 			return
 		if key in (curses.KEY_DOWN, ord("j")):
-			top = min(top + 1, max(0, len(lines) - 1))
+			cursor = min(cursor + 1, max(0, len(fields) - 1))
 		elif key in (curses.KEY_UP, ord("k")):
-			top = max(top - 1, 0)
+			cursor = max(cursor - 1, 0)
+		elif key in (curses.KEY_ENTER, 10, 13, ord("e")) and fields:
+			owner = lines[here][1]
+			assert owner is not None
+			name  = document.fields()[owner].name
+			typed = _prompt(screen, f"{name} = ")
+			if typed is None or not typed.strip():
+				status = "unchanged"
+				continue
+			try:
+				notes  = edit(document, owner, typed)
+			except Refused as why:
+				status = f"refused: {why}"
+				continue
+			unsaved = True
+			status  = "; ".join(notes) if notes else f"{name} set"
+		elif key == ord("w"):
+			if out is None:
+				status = "not written; pass --out to keep it"
+				continue
+			out.write_bytes(bytes(document.buffer))
+			unsaved = False
+			status  = f"written to {out}"
 
 
 def main() -> int:
@@ -122,6 +216,20 @@ def main() -> int:
 	                    help="a value for one of the struct's `parameter` "
 	                         "members, in declaration order")
 	parser.add_argument("--hex", action="store_true")
+	# The CLI's three write flags, so that everything a person does at the
+	# prompt can be done here without a terminal and compared with the
+	# CLI's bytes -- 0034's rule that this frontend does not exceed the
+	# reference, made checkable rather than promised.
+	parser.add_argument("--set", action="append", default=[],
+	                    metavar="NAME=VALUE", dest="assignments",
+	                    help="store a value before the screen opens")
+	parser.add_argument("--set-bytes", action="append", default=[],
+	                    metavar="NAME=HEX", dest="byte_assignments",
+	                    help="store a byte run, at the length it has")
+	parser.add_argument("--out", type=Path, default=None,
+	                    help="where `w` writes the edited bytes; the "
+	                         "message opened is never overwritten unless "
+	                         "it is named here")
 	parser.add_argument("--no-ui", action="store_true",
 	                    help="print what would be shown and exit, so this "
 	                         "frontend is testable without a terminal")
@@ -144,11 +252,22 @@ def main() -> int:
 		print(f"situ-edit-tui: {why}", file=sys.stderr)
 		return 1
 
+	try:
+		notes = apply_edits(document, args.assignments,
+		                    args.byte_assignments)
+	except Refused as why:
+		print(f"situ-edit-tui: {why}", file=sys.stderr)
+		return 1
+
 	if args.no_ui:
 		print("\n".join(rows(document)))
+		for note in notes:
+			print(f"situ-edit-tui: {note}", file=sys.stderr)
+		if args.out is not None:
+			args.out.write_bytes(bytes(document.buffer))
 		return 0
 
-	curses.wrapper(_draw, document)
+	curses.wrapper(_draw, document, args.out)
 	return 0
 
 

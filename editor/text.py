@@ -22,9 +22,10 @@ from pathlib import Path
 import json
 
 from editor.document import Document, Field, open_document
+from walker.walk import Refused
 
-__all__ = ["as_json", "image_bytes", "open_from", "read_message",
-           "render"]
+__all__ = ["apply_edits", "as_json", "image_bytes", "open_from",
+           "read_message", "render", "render_rows"]
 
 
 def image_bytes(path: Path, situc: Path) -> bytes:
@@ -71,11 +72,58 @@ def open_from(schema: Path, message: Path, situc: Path,
 	                     args)
 
 
+def apply_edits(document: Document, assignments: list[str],
+		byte_assignments: list[str]) -> list[str]:
+	"""Every `--set` then every `--set-bytes`, returning what each one cost.
+
+	In order, and stopping at the first refusal: a half-applied edit written
+	to a file is worse than none, and a reader of the output has to be able
+	to say which writes happened.
+	"""
+	notes: list[str] = []
+
+	for assignment in assignments:
+		name, sep, text = assignment.partition("=")
+		if not sep:
+			raise Refused(f"`--set {assignment}` is not `name=value`")
+		try:
+			value = int(text, 0)
+		except ValueError:
+			raise Refused(f"`--set {assignment}`: `{text}` is not a number") \
+				from None
+		notes.extend(document.set(name.strip(), value))
+
+	for assignment in byte_assignments:
+		name, sep, text = assignment.partition("=")
+		if not sep:
+			raise Refused(f"`--set-bytes {assignment}` is not `name=hex`")
+		try:
+			raw = bytes.fromhex(text.strip())
+		except ValueError:
+			raise Refused(f"`--set-bytes {assignment}`: `{text}` is not "
+			              f"hex") from None
+		notes.extend(document.set(name.strip(), raw))
+
+	return notes
+
+
 def render(document: Document) -> list[str]:
 	"""The document as lines. Offsets and sizes in bytes, values as they are.
 
 	A field the walk could not read keeps its row and carries its reason. An
 	editor that dropped it would show a message missing something it has.
+	"""
+	return [line for line, _ in render_rows(document)]
+
+
+def render_rows(document: Document) -> list[tuple[str, int | None]]:
+	"""`render`'s lines, each with the index of the field it belongs to.
+
+	None for a line about the whole message -- the header, the verdict, a
+	`when`. The TUI moves its cursor over fields and edits the one under it,
+	and this is how it knows which one that is without re-deriving the
+	layout of these lines: the renderer that decided a note gets a
+	continuation line is the one that says so.
 	"""
 	# The WINDOW's length, not the file's (26.581). A chunk read at an
 	# offset otherwise announced the size of the image it sits in, above a
@@ -107,10 +155,11 @@ def render(document: Document) -> list[str]:
 	# function is how a shadow gets written, and mypy is what said so.
 	said   = document.verdict
 	spoken = "" if said is None else f"  [{said[0]}]"
-	lines  = [f"{document.name}  {how_long}{where_from}{spoken}"]
+	lines: list[tuple[str, int | None]] = [
+		(f"{document.name}  {how_long}{where_from}{spoken}", None)]
 	if said is not None and said[0] != "ok":
-		lines.append(f"{' ' * 14}validate: {said[1]}")
-	for field in document.fields():
+		lines.append((f"{' ' * 14}validate: {said[1]}", None))
+	for index, field in enumerate(document.fields()):
 		where = "--" if field.offset is None else f"{field.offset:>4}"
 		wide  = "--" if field.size is None else f"{field.size:>3}"
 		if field.withheld:
@@ -130,7 +179,8 @@ def render(document: Document) -> list[str]:
 			shown = str(field.value)
 		row    = f"  {where} +{wide}  {field.name:<24} {shown}"
 		marker = _write_marker(field)
-		lines.append(f"{row.ljust(50)}{marker}".rstrip() if marker else row)
+		lines.append((f"{row.ljust(50)}{marker}".rstrip() if marker else row,
+		              index))
 
 		# A NOTE ON A READABLE FIELD WAS DISCARDED (26.583). The branches
 		# above render `field.note` only in place of a MISSING value, so a
@@ -150,7 +200,7 @@ def render(document: Document) -> list[str]:
 		# note is prose and can run past any column that keeps the table
 		# aligned.
 		if field.note and field.value is not None:
-			lines.append(f"{' ' * 14}{field.note}")
+			lines.append((f"{' ' * 14}{field.note}", index))
 
 	# What the schema says about the message as a whole (0051), after the
 	# fields rather than among them: a `when` is a predicate over the struct,
@@ -158,7 +208,7 @@ def render(document: Document) -> list[str]:
 	# because the name is the contract a consumer keys on and the text is a
 	# default rendering it may replace.
 	for severity, name, text in document.messages():
-		lines.append(f"  {severity}: {name} -- {text}")
+		lines.append((f"  {severity}: {name} -- {text}", None))
 	return lines
 
 
@@ -251,6 +301,14 @@ def as_json(document: Document) -> str:
 		# answer (26.582). Both frontends get it: wiring one and not the
 		# other is the mistake 26.581 recorded.
 		"measured": document.measured,
+		# THE VERDICT, which the text header has carried since 26.595 and
+		# this never did -- so the window, which reads only this, could not
+		# say a message was refused over a check that blames no member. The
+		# same two parts as the header: the word, and why where it is not
+		# `ok`. `null` where the walk gave none.
+		"verdict": (None if document.verdict is None
+		            else {"word": document.verdict[0],
+		                  "why":  document.verdict[1]}),
 		"fields": [
 			{
 				"name":   field.name,

@@ -2,7 +2,8 @@
 
 Status: accepted; the read-only half and the in-place write are built for
 the two frontends that
-are Python -- the core, `situ-edit` and `situ-edit-tui`. The GUI is not, and
+are Python -- the core, `situ-edit` and `situ-edit-tui`. The GUI is not (built
+2026-11-20: see the last amendment), and
 the reason recorded here first was wrong: it said no Qt binding was
 installed, from a check that piped a successful import through `head -1` and
 read the silence as a failure. PyQt6 is installed and Qt6's C++ headers are
@@ -157,3 +158,33 @@ input is least trusted.
   computing a checksum with the caller and this tool is not the exception.
 - The metadata tail finally has a consumer, which means `--metadata` stops
   being a flag nothing reads and starts being one something depends on.
+
+  **Amended 2026-11-20: the TUI edits.** The status line above said the
+  in-place write was built for both Python frontends; it was built for the
+  CLI only, and `situ-edit-tui` was a scrolling copy of the listing whose
+  footer said "read-only". It now has a cursor over fields, Enter to set
+  the one under it (a number, or hex for a byte run, chosen by what the
+  field holds), and `w` to write `--out`. `apply_edits` moved from the CLI
+  into `editor/text.py` so the prompt calls the CLI's own write rather than
+  a second one, and `render_rows` says which field each line belongs to so
+  the cursor does not re-derive the layout of the listing. The TUI also
+  takes `--set`, `--set-bytes` and `--out`, which with `--no-ui` is how
+  `test_editor.py` holds its writes to the CLI's byte for byte; a pty test
+  drives the prompt itself.
+
+  **And the GUI is built: `gui/`, `situ-edit-qt`, `make gui`.** Not over
+  the C walker, which this record's status line once said it would need:
+  it drives `situ-edit --format json` and `--set`/`--set-bytes` with
+  `--out` through `QProcess`, so the third frontend has no editing rule of
+  its own any more than the second -- the JSON's own docstring had said
+  that is how "the C++ window" would read a document. The schema is packed
+  once on open; each edit goes into a scratch copy that replaces the
+  working bytes only when the CLI accepted it, and Save writes only to a
+  file somebody named. The JSON gained `verdict`, which the text header
+  had carried since 26.595 and the window could not otherwise show. Stock
+  widgets and non-native dialogs only, so qtty (the holder's project) can
+  put the same window on a terminal; that would not replace the curses
+  TUI, because qtty needs Qt and this TUI's reason for being `curses` is
+  that it needs nothing. `test_the_qt_window_edits_as_the_cli_does.py`
+  types into the window's cells under the offscreen platform and compares
+  its bytes with the CLI's.

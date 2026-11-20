@@ -51,7 +51,7 @@ export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
 	fuzz fuzz-generated fuzz-cpp fuzz-walker test-codec-san \
-	veryclean distclean style style-source style-tool style-docs hooks walk-c \
+	veryclean distclean style style-source style-tool style-docs hooks walk-c gui \
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -70,6 +70,7 @@ help:
 	@echo '  walk       the walker over an image: bin/situ-walk'
 	@echo '  walk-c     build the embedded walker: situ-walk-c (0035)'
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
+	@echo '  gui        build the Qt window: situ-edit-qt (0034; needs Qt6)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  test-codec-san  the codec property suites under ASan + UBSan'
@@ -164,6 +165,17 @@ bench:
 # The embedded walker (0035): the one 0026 was argued from, and the one a
 # device links. Built with the same warnings as the generated code, because
 # a reader that needs a relaxed set is one nobody can put in a build.
+# The Qt window of decision 0034, in its own CMake build because it is the
+# one part of situ with a third-party dependency; nothing else here needs
+# it, so `all` does not build it. Configured once -- CMake re-runs itself
+# when gui/CMakeLists.txt changes -- and built every time, which writes
+# nothing when nothing moved.
+gui: $(BUILD_DIR)/gui/CMakeCache.txt
+	cmake --build '$(BUILD_DIR)/gui'
+
+$(BUILD_DIR)/gui/CMakeCache.txt:
+	cmake -S gui -B '$(BUILD_DIR)/gui'
+
 walk-c: $(BUILD_DIR)/situ-walk-c
 
 $(BUILD_DIR)/situ-walk-c: walker/c/situ_walk.c walker/c/main.c walker/c/situ_walk.h

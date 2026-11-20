@@ -1,0 +1,76 @@
+// session.h -- one message opened against one schema, through `situ-edit`.
+//
+// The GUI of decision 0034 holds no editing rule. Every question it asks --
+// what a field is, whether it may be written, what a write cost -- is put to
+// `situ-edit --format json`, the reference frontend, across a process
+// boundary. This class is that boundary and nothing else: it runs the CLI,
+// reads what it printed, and keeps the working bytes in a file the CLI
+// writes.
+//
+// The schema is packed once on open (`situc pack --metadata`), exactly as
+// `editor.text.image_bytes` does it, so an edit costs one walk rather than a
+// compile.
+
+#ifndef SITU_GUI_SESSION_H
+#define SITU_GUI_SESSION_H
+
+#include <QJsonObject>
+#include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
+
+#include <memory>
+
+struct open_options {
+	QString     schema;
+	QString     message;
+	QString     structure;	// --struct, empty for the schema's first
+	qint64      offset = 0;	// --offset
+	qint64      length = -1;	// --length, -1 for the rest of the file
+	bool        hex = false;	// --hex: the message file holds hex
+	QStringList arguments;	// --arg, in order
+};
+
+class session {
+public:
+	// Where `situ-edit` and `situc` are found: an explicit directory first
+	// (the SITU_BIN environment variable), then beside this program, then
+	// the source tree this was built from, then PATH.
+	static QString find_tool(const QString &name);
+
+	// Packs the schema and copies the message into the working file. False
+	// with `error()` set when either step is refused.
+	bool open(const open_options &options);
+
+	// Re-reads the working bytes. The document is `document()`.
+	bool refresh();
+
+	// Stores `text` into `field`, as `--set` (a number) or `--set-bytes`
+	// (hex) according to `as_bytes`. On success the working bytes carry the
+	// write and `notes()` says what it cost; on refusal nothing changes.
+	bool set(const QString &field, const QString &text, bool as_bytes);
+
+	// Copies the working bytes to `path`.
+	bool save(const QString &path);
+
+	const QJsonObject &document() const { return document_; }
+	const QString &error() const { return error_; }
+	const QStringList &notes() const { return notes_; }
+	bool modified() const { return modified_; }
+	const open_options &options() const { return options_; }
+
+private:
+	bool run(const QStringList &extra, QByteArray *out);
+	QStringList common_arguments() const;
+
+	open_options                   options_;
+	std::unique_ptr<QTemporaryDir> scratch_;
+	QString                        image_;
+	QString                        work_;
+	QJsonObject                    document_;
+	QString                        error_;
+	QStringList                    notes_;
+	bool                           modified_ = false;
+};
+
+#endif

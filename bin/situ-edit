@@ -56,7 +56,7 @@ if _root is not None and str(_root) not in sys.path:
 
 try:
 	from editor.document import Document		# noqa: E402
-	from editor.text import as_json, open_from, render	# noqa: E402
+	from editor.text import apply_edits, as_json, open_from, render	# noqa: E402
 	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
 	sys.stderr.write(
@@ -135,41 +135,6 @@ def build_parser() -> argparse.ArgumentParser:
 	                         "and discarded, which is the safe default for a "
 	                         "tool that edits files in place")
 	return parser
-
-
-def apply_edits(document: object, assignments: list[str],
-		byte_assignments: list[str]) -> list[str]:
-	"""Every `--set` then every `--set-bytes`, returning what each one cost.
-
-	In order, and stopping at the first refusal: a half-applied edit written
-	to a file is worse than none, and a reader of the output has to be able
-	to say which writes happened.
-	"""
-	notes: list[str] = []
-
-	for assignment in assignments:
-		name, sep, text = assignment.partition("=")
-		if not sep:
-			raise Refused(f"`--set {assignment}` is not `name=value`")
-		try:
-			value = int(text, 0)
-		except ValueError:
-			raise Refused(f"`--set {assignment}`: `{text}` is not a number") \
-				from None
-		notes.extend(document.set(name.strip(), value))	# type: ignore[attr-defined]
-
-	for assignment in byte_assignments:
-		name, sep, text = assignment.partition("=")
-		if not sep:
-			raise Refused(f"`--set-bytes {assignment}` is not `name=hex`")
-		try:
-			raw = bytes.fromhex(text.strip())
-		except ValueError:
-			raise Refused(f"`--set-bytes {assignment}`: `{text}` is not "
-			              f"hex") from None
-		notes.extend(document.set(name.strip(), raw))	# type: ignore[attr-defined]
-
-	return notes
 
 
 def _response_struct(document: Document, which: str) -> str | None:

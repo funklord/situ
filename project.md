@@ -5543,6 +5543,12 @@ situ/
                               GUI all drive and none of them duplicates
     text.py                   opening a document and rendering one as lines,
                               shared by the two frontends that want text
+  gui/                        situ-edit-qt, the Qt Widgets frontend of 0034.
+                              Drives `situ-edit --format json` and `--set`
+                              across a process boundary and holds no editing
+                              rule; its own CMake build (`make gui`), because
+                              it is the one part of situ needing more than
+                              Python
   walker/                     the interpreter: a packed image, walked over
                               bytes. A second program, never imported by
                               `situc` -- decision 0026, amended (26.81)

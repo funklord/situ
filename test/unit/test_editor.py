@@ -306,6 +306,124 @@ def test_the_tui_shows_exactly_what_the_cli_shows(tmp_path: Path) -> None:
 	assert cli.stdout == tui.stdout
 
 
+def test_the_tui_writes_exactly_what_the_cli_writes(tmp_path: Path) -> None:
+	"""The TUI edits now, and 0034's rule reaches the write as it reached
+	the listing: the same `--set` and `--set-bytes` give the same bytes, and
+	the same lines, because both are `apply_edits` over one document."""
+	(tmp_path / "s.img").write_bytes(image())
+	(tmp_path / "m.bin").write_bytes(MESSAGE)
+	edits = ("--set", "id=0x4242", "--set-bytes", "name=776f726c64")
+
+	cli = run("situ-edit", *edits, "--out", str(tmp_path / "cli.bin"),
+	          str(tmp_path / "s.img"), str(tmp_path / "m.bin"))
+	tui = run("situ-edit-tui", "--no-ui", *edits,
+	          "--out", str(tmp_path / "tui.bin"),
+	          str(tmp_path / "s.img"), str(tmp_path / "m.bin"))
+
+	assert cli.returncode == 0 and tui.returncode == 0, tui.stderr
+	assert cli.stdout == tui.stdout
+	written = (tmp_path / "tui.bin").read_bytes()
+	assert written == (tmp_path / "cli.bin").read_bytes()
+	assert written == b"\x42\x42\x05world\x7f"
+	assert (tmp_path / "m.bin").read_bytes() == MESSAGE
+
+
+def test_the_tui_refuses_what_the_cli_refuses(tmp_path: Path) -> None:
+	(tmp_path / "s.img").write_bytes(image())
+	(tmp_path / "m.bin").write_bytes(MESSAGE)
+
+	cli = run("situ-edit", "--set", "n=999",
+	          str(tmp_path / "s.img"), str(tmp_path / "m.bin"))
+	tui = run("situ-edit-tui", "--no-ui", "--set", "n=999",
+	          str(tmp_path / "s.img"), str(tmp_path / "m.bin"))
+
+	assert cli.returncode == 1 and tui.returncode == 1
+	assert cli.stderr.split(": ", 1)[1] == tui.stderr.split(": ", 1)[1]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pty")
+def test_the_tui_edits_a_field_at_the_prompt(tmp_path: Path) -> None:
+	"""The screen itself, driven through a pseudo-terminal: down to `n`'s
+	neighbour, Enter, a value, `w`, `q`. `--no-ui` cannot see the cursor's
+	mapping from rows to fields or the prompt, which is where an
+	interactive frontend breaks without any other test noticing.
+
+	Bounded: a fixed list of keys, and a `timeout` on the wait, so a screen
+	that never quits fails rather than hangs the suite.
+	"""
+	import os
+	import pty
+	import select
+	import time
+
+	(tmp_path / "s.img").write_bytes(image())
+	(tmp_path / "m.bin").write_bytes(MESSAGE)
+	out = tmp_path / "out.bin"
+
+	pid, fd = pty.fork()
+	if pid == 0:					# pragma: no cover - the child
+		os.environ.update(TERM="xterm", LINES="24", COLUMNS="80")
+		os.execv(sys.executable,
+		         [sys.executable, str(ROOT / "bin" / "situ-edit-tui"),
+		          "--out", str(out),
+		          str(tmp_path / "s.img"), str(tmp_path / "m.bin")])
+
+	seen = b""
+
+	def pump(seconds: float) -> None:
+		nonlocal seen
+		until = time.monotonic() + seconds
+		while time.monotonic() < until:
+			ready, _, _ = select.select([fd], [], [], 0.05)
+			if ready:
+				try:
+					seen += os.read(fd, 65536)
+				except OSError:
+					return
+
+	# Two down from `id` is `name`, a middle field, so a cursor that moved
+	# wrongly cannot be rescued by clamping at the last row (the first
+	# version of this test went to `tail` and passed with every step
+	# doubled). `name` is a byte run, so the prompt takes hex -- which a
+	# wrong row, every other being a number, would refuse.
+	for key in (b"j", b"j", b"\r", b"776f726c64\r", b"w", b"q"):
+		pump(0.4)
+		os.write(fd, key)
+	until = time.monotonic() + 20
+	while time.monotonic() < until:
+		done, status = os.waitpid(pid, os.WNOHANG)
+		if done:
+			break
+		pump(0.1)
+	else:
+		os.kill(pid, 9)
+		os.waitpid(pid, 0)
+		pytest.fail("the TUI did not quit on `q`")
+	os.close(fd)
+
+	assert os.waitstatus_to_exitcode(status) == 0, seen.decode("latin1")
+	assert out.read_bytes() == b"\x12\x34\x05world\x7f"
+
+
+def test_the_json_carries_the_verdict(tmp_path: Path) -> None:
+	"""The text header has carried the verdict since 26.595 and the JSON
+	did not, so the Qt window -- which reads only the JSON -- could not say
+	a message was refused over a check that blames no member."""
+	(tmp_path / "s.img").write_bytes(image())
+	(tmp_path / "m.bin").write_bytes(MESSAGE)
+	(tmp_path / "short.bin").write_bytes(MESSAGE[:4])
+
+	whole = json.loads(run("situ-edit", "--format", "json",
+	                       str(tmp_path / "s.img"),
+	                       str(tmp_path / "m.bin")).stdout)
+	short = json.loads(run("situ-edit", "--format", "json",
+	                       str(tmp_path / "s.img"),
+	                       str(tmp_path / "short.bin")).stdout)
+
+	assert whole["verdict"]["word"] == "ok"
+	assert short["verdict"]["word"] != "ok" and short["verdict"]["why"]
+
+
 def test_the_cli_takes_hex(tmp_path: Path) -> None:
 	(tmp_path / "s.img").write_bytes(image())
 	(tmp_path / "m.hex").write_text("1234 05 68 65 6c 6c 6f 7f", encoding="ascii")
