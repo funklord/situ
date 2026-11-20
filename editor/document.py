@@ -84,6 +84,12 @@ class Field:
 	#: frontend that opens it on a click rather than asking somebody to
 	#: retype it.
 	nested: tuple[str, int] | None = None
+	#: Where a member that is not whole bytes sits, in BITS from the view's
+	#: start, and how many it takes -- None for a whole-byte member, which
+	#: `offset` and `size` already say exactly. Byte numbers alone put
+	#: NTP's `leap`, `version` and `mode` all at offset 0, size 0
+	#: (26.1113): three fields, one place, no width.
+	bits: tuple[int, int] | None = None
 
 	@property
 	def withheld(self) -> bool:
@@ -348,8 +354,8 @@ class Document:
 			local = name.rpartition(".")[2] or name
 
 			try:
-				at   = offset_bits(view, index) // BITS_PER_BYTE
-				wide = size_bits(view, index) // BITS_PER_BYTE
+				first = offset_bits(view, index)
+				count = size_bits(view, index)
 			except Refused as why:
 				rows.append(Field(local, None, None, None,
 				                  f"cannot be placed: {why}",
@@ -360,6 +366,11 @@ class Document:
 				                  effect  = image.capability_of(index,
 				                                                "effect")))
 				continue
+
+			at   = first // BITS_PER_BYTE
+			wide = count // BITS_PER_BYTE
+			bits = (None if first % BITS_PER_BYTE == 0
+			        and count % BITS_PER_BYTE == 0 else (first, count))
 
 			value = held.get(local)
 			if value is None and placement.parameter:
@@ -475,7 +486,7 @@ class Document:
 			                  auth    = image.capability_of(index, "auth"),
 			                  secrecy = image.capability_of(index, "secrecy"),
 			                  effect  = image.capability_of(index, "effect"),
-			                  nested  = opens))
+			                  nested  = opens, bits = bits))
 
 		return rows
 

@@ -287,8 +287,10 @@ is the point rather than a packaging detail.
 
 ```sh
 situ-edit      proto.situ capture.bin    # the fields these bytes hold
-situ-edit-tui  proto.situ capture.bin    # the same, on a terminal
-situ-edit-qt   proto.situ capture.bin    # the same, in a window (make gui)
+situ-edit-tui  proto.situ capture.bin    # the same, on a terminal (Python only)
+situ-edit-gui  proto.situ capture.bin    # the same, in a window (make gui)
+situ-edit-gui --tui proto.situ capture.bin  # that window, on a terminal
+make gui-example                         # the window on a real NTP reply
 
 situc pack     proto.situ -o proto.image # the description a walker reads
 situ-walk      proto.image <hex>         # every struct, every member it can read
@@ -359,7 +361,12 @@ window of its own on a double click, over the same bytes. The window is Qt
 Widgets and drives
 `situ-edit --format json` rather than holding a second copy of the rules,
 so it is the one of the three with a dependency beyond Python, built on its
-own by `make gui`. What that means
+own by `make gui`. Through qtty (vendored, fetched by `make gui`) the same
+window runs on a terminal; the curses `situ-edit-tui` stays for a machine
+with Python and nothing else. Every frontend draws the same rows -- what a
+value reads as, what a write costs, which rows can be edited -- because
+`editor/view.py` decides them once and the window reads them from the JSON.
+What that means
 is decided by the capability vectors and not by the editor: a member the
 schema forbids anyone to write is refused, a value that does not fit its
 width is refused, and **a write that would shift the layout is refused too**

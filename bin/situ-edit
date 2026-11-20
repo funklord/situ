@@ -56,6 +56,7 @@ if _root is not None and str(_root) not in sys.path:
 
 try:
 	from editor.document import Document		# noqa: E402
+	from editor import view	# noqa: E402
 	from editor.text import apply_edits, as_json, open_from, render	# noqa: E402
 	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
@@ -129,6 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
 	                    help="store a byte run, at the length it already has. "
 	                         "A run written shorter or longer moves what "
 	                         "follows it, which is a shifting write")
+	parser.add_argument("--put", action="append", default=[],
+	                    metavar="NAME=TEXT", dest="puts",
+	                    help="store TEXT read the way the field shows it: "
+	                         "hex for a byte run, a number otherwise -- "
+	                         "what the TUI and the window send for a typed "
+	                         "cell. Applied after --set and --set-bytes")
 	parser.add_argument("--out", type=Path, default=None,
 	                    help="write the edited message here. Without it "
 	                         "nothing is written anywhere: an edit is shown "
@@ -174,6 +181,11 @@ def main() -> int:
 	try:
 		notes = apply_edits(document, args.assignments,
 		                    args.byte_assignments)
+		for typed in args.puts:
+			name, sep, text = typed.partition("=")
+			if not sep:
+				raise Refused(f"`--put {typed}` is not `name=text`")
+			notes.extend(view.put(document, name.strip(), text))
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1

@@ -503,7 +503,7 @@ def test_every_axis_value_but_the_ordinary_one_is_marked() -> None:
 	noise that makes the other four mean less -- and anything else arriving
 	on the axis fails here, addressed to whoever added it.
 	"""
-	from editor.text import _write_marker
+	from editor.view import write_marker as _write_marker
 	from walker.image import DOMAINS
 
 	# Every axis the marker reads, and the one value of each that means
@@ -1008,3 +1008,31 @@ def test_the_json_says_what_a_write_would_cost() -> None:
 	assert rows["source_port"]["writable"] is True
 	assert rows["source_port"]["auth"] == "Covered"
 	assert rows["payload"]["mutate"] == "Shifting"
+
+
+def test_a_bit_field_shows_where_it_is_in_bits() -> None:
+	"""NTP's first byte is `leap:2 version:3 mode:3`, and in bytes all
+	three read offset 0, size 0 -- three fields at one place with no width
+	(26.1113). The view says byte.bit and a width in bits; the JSON carries
+	the bits as data. Positions worked from RFC 5905's figure 8."""
+	from editor import view
+
+	schema = parse_text("""target buffer;
+endian big;
+
+bit_order msb_first;
+
+struct first { u2 leap; u3 version; u3 mode; u8 stratum; }
+""")
+	packed = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	document = open_document(packed, bytes([0b00_100_100, 2]), "first")
+	shown = {row.name: (row.offset, row.size, row.value)
+	         for row in view.rows(document)}
+	assert shown == {"leap": ("0.0", "2b", "0"),
+	                 "version": ("0.2", "3b", "4"),
+	                 "mode": ("0.5", "3b", "4"),
+	                 "stratum": ("1", "1", "2")}
+	fields = {one["name"]: one for one in
+	          json.loads(as_json(document))["fields"]}
+	assert fields["version"]["bits"] == {"offset": 2, "size": 3}
+	assert fields["stratum"]["bits"] is None

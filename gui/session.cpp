@@ -170,7 +170,7 @@ bool session::refresh()
 	return true;
 }
 
-bool session::set(const QString &field, const QString &text, bool as_bytes)
+bool session::set(const QString &field, const QString &text)
 {
 	// Into a second file, renamed over the first only once the CLI has
 	// accepted the write: a refused edit leaves the working bytes exactly
@@ -178,8 +178,9 @@ bool session::set(const QString &field, const QString &text, bool as_bytes)
 	const QString next = scratch_->filePath(QStringLiteral("next.bin"));
 	QFile::remove(next);
 	QStringList arguments = common_arguments();
-	arguments << (as_bytes ? QStringLiteral("--set-bytes")
-	                       : QStringLiteral("--set"))
+	// `--put`: the CLI reads the text the way the field shows it, hex or a
+	// number, so the window does not decide which (26.1113).
+	arguments << QStringLiteral("--put")
 	          << field + QLatin1Char('=') + text.trimmed()
 	          << QStringLiteral("--out") << next << image_ << work_;
 	QByteArray ignored;

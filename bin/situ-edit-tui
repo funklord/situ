@@ -57,6 +57,7 @@ if _root is not None and str(_root) not in sys.path:
 
 try:
 	from editor.document import Document		# noqa: E402
+	from editor import view	# noqa: E402
 	from editor.text import apply_edits, open_from, render, render_rows	# noqa: E402
 	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
@@ -72,23 +73,6 @@ except ImportError as _why:			# pragma: no cover - a layout fault
 def rows(document: Document) -> list[str]:
 	"""The same lines the CLI prints, because they are the same document."""
 	return render(document)
-
-
-def edit(document: Document, index: int, text: str) -> list[str]:
-	"""Store `text` into the field at `index`, as the CLI's `--set` would.
-
-	A byte run takes hex and anything else a number, which is the choice the
-	CLI makes by flag (`--set-bytes` against `--set`) made here by what the
-	field already holds -- the person at the prompt is looking at the value,
-	so asking them which flag they meant would be asking the row back. The
-	write itself is `apply_edits`, the CLI's own, so a refusal here is the
-	refusal there word for word.
-	"""
-	field = document.fields()[index]
-	assignment = f"{field.name}={text.strip()}"
-	if isinstance(field.value, bytes):
-		return apply_edits(document, [], [assignment])
-	return apply_edits(document, [assignment], [])
 
 
 def _prompt(screen: "curses._CursesWindow", label: str) -> str | None:
@@ -197,7 +181,7 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 				status = "unchanged"
 				continue
 			try:
-				notes  = edit(document, owner, typed)
+				notes  = view.put(document, name, typed)
 			except Refused as why:
 				status = f"refused: {why}"
 				continue

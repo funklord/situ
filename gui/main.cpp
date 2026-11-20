@@ -1,20 +1,58 @@
-// situ-edit-qt -- read and edit a message against a situ schema, in a window.
+// situ-edit-gui -- read and edit a message against a situ schema, in a
+// window or, built with qtty, the same window on a terminal (`--tui`).
 //
 // The third frontend of decision 0034. It drives `situ-edit` and holds no
-// editing rule, so the CLI can do everything this can; `--set`, `--set-bytes`
-// and `--out` with `--no-ui` are the CLI's own flags, typed into the
-// window's cells rather than into the CLI, which is how a test holds this
-// frontend to the reference without a display.
+// editing rule, and since 26.1113 no display rule either: every cell is the
+// `view` the CLI's JSON carries, which the text table and the curses TUI
+// draw too. `--set`, `--set-bytes` and `--out` with `--no-ui` are the CLI's
+// own flags, typed into the window's cells rather than into the CLI, which
+// is how a test holds this frontend to the reference without a display.
+//
+// One QWidget codebase for the window and the terminal, which is qtty's
+// premise. The terminal frontend that needs nothing but Python is
+// `situ-edit-tui`; this one needs Qt, on a terminal as in a window.
 
 #include "window.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QFileInfo>
 #include <QTableWidget>
+#include <QTimer>
 
 #include <cstdio>
+#include <cstring>
+#include <unistd.h>
+
+#ifdef SITU_QTTY
+#include <qtty/qtty.h>
+#endif
+
+#ifndef SITU_VERSION
+#define SITU_VERSION "unknown"
+#endif
 
 namespace {
+
+// Whether the terminal was asked for: decided before QApplication exists,
+// since qtty chooses the platform Qt reads.
+bool asked_for_tui(int argc, char **argv)
+{
+	for (int i = 1; i < argc; i++) {
+		if (std::strcmp(argv[i], "--tui") == 0)
+			return true;
+		if (std::strcmp(argv[i], "--gui") == 0)
+			return false;
+	}
+#ifdef SITU_QTTY
+	// No display, on a terminal: the terminal is what there is.
+	return !qEnvironmentVariableIsSet("WAYLAND_DISPLAY") &&
+	       !qEnvironmentVariableIsSet("DISPLAY") && isatty(1) &&
+	       !qEnvironmentVariableIsSet("QT_QPA_PLATFORM");
+#else
+	return false;
+#endif
+}
 
 // Types `value` into the value cell of the row named `name`, which is
 // exactly what a person does and runs the same handler.
@@ -46,8 +84,35 @@ bool type_into(edit_window &window, const QString &name, const QString &value,
 
 int main(int argc, char **argv)
 {
+	if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
+		std::printf("situ-edit-gui %s\n", SITU_VERSION);
+		return 0;
+	}
+	const bool tui = asked_for_tui(argc, argv);
+#ifdef SITU_QTTY
+	if (tui)
+		Qtty::prepare_environment();
+#else
+	if (tui) {
+		std::fprintf(stderr, "situ-edit-gui: this build has no terminal "
+		             "frontend: it is compiled in where qtty is "
+		             "(vendor/qtty, `make gui` fetches it); situ-edit-tui "
+		             "is the terminal frontend that needs only Python\n");
+		return 2;
+	}
+#endif
 	QApplication application(argc, argv);
-	QApplication::setApplicationName(QStringLiteral("situ-edit-qt"));
+#ifdef SITU_QTTY
+	// A terminal's habits: Enter on the focused control, Up and Down
+	// between controls, Alt+letter for the menu. The table binds none of
+	// those itself.
+	if (tui) {
+		Qtty::setup(application);
+		Qtty::set_keyboard_conventions(true);
+	}
+#endif
+	QApplication::setApplicationName(QStringLiteral("situ-edit-gui"));
+	QApplication::setApplicationVersion(QStringLiteral(SITU_VERSION));
 
 	QCommandLineParser parser;
 	parser.setApplicationDescription(
@@ -87,18 +152,31 @@ int main(int argc, char **argv)
 	const QCommandLineOption no_ui(QStringLiteral("no-ui"),
 	    QStringLiteral("apply --set/--set-bytes through the window, print "
 	                   "the table, write --out, and exit"));
+	const QCommandLineOption tui_option(QStringLiteral("tui"),
+	    QStringLiteral("the same window on this terminal, drawn by qtty"));
+	const QCommandLineOption gui_option(QStringLiteral("gui"),
+	    QStringLiteral("a window, even with no display in the environment"));
+	const QCommandLineOption snapshot(QStringLiteral("snapshot"),
+	    QStringLiteral("with --tui: print the window as the terminal shows "
+	                   "it, COLSxROWS, after --open and --set, and exit"),
+	    QStringLiteral("COLSxROWS"));
 	parser.addOptions({structure, offset, length, argument, hex, set,
-	                   set_bytes, out, open_field, no_ui});
+	                   set_bytes, out, open_field, no_ui, tui_option,
+	                   gui_option, snapshot});
 	parser.process(application);
 
 	const QStringList positional = parser.positionalArguments();
 	edit_window window;
 	if (positional.size() != 2) {
 		if (parser.isSet(no_ui) || !positional.isEmpty()) {
-			std::fprintf(stderr, "situ-edit-qt: give a schema and a "
+			std::fprintf(stderr, "situ-edit-gui: give a schema and a "
 			             "message, or neither and use File > Open\n");
 			return 1;
 		}
+#ifdef SITU_QTTY
+		if (tui)
+			return Qtty::exec(application, window);
+#endif
 		window.show();
 		return application.exec();
 	}
@@ -113,9 +191,9 @@ int main(int argc, char **argv)
 	options.hex       = parser.isSet(hex);
 	options.arguments = parser.values(argument);
 	if (!window.open(options, parser.value(out))) {
-		std::fprintf(stderr, "situ-edit-qt: %s\n",
+		std::fprintf(stderr, "situ-edit-gui: %s\n",
 		             qPrintable(window.error()));
-		if (parser.isSet(no_ui))
+		if (parser.isSet(no_ui) || parser.isSet(snapshot))
 			return 1;
 	}
 
@@ -125,7 +203,7 @@ int main(int argc, char **argv)
 	for (const QString &field : parser.values(open_field)) {
 		here = here->open_field(field);
 		if (here == nullptr) {
-			std::fprintf(stderr, "situ-edit-qt: cannot open `%s`\n",
+			std::fprintf(stderr, "situ-edit-gui: cannot open `%s`\n",
 			             qPrintable(field));
 			return 1;
 		}
@@ -148,9 +226,37 @@ int main(int argc, char **argv)
 		return true;
 	};
 	if (!apply(parser.values(set)) || !apply(parser.values(set_bytes))) {
-		std::fprintf(stderr, "situ-edit-qt: %s\n", qPrintable(why));
-		if (parser.isSet(no_ui))
+		std::fprintf(stderr, "situ-edit-gui: %s\n", qPrintable(why));
+		if (parser.isSet(no_ui) || parser.isSet(snapshot))
 			return 1;
+	}
+
+	if (parser.isSet(snapshot)) {
+#ifdef SITU_QTTY
+		const QStringList size = parser.value(snapshot)
+		                         .split(QLatin1Char('x'));
+		const int cols = size.value(0).toInt();
+		const int rows = size.value(1).toInt();
+		if (!tui || cols < 20 || rows < 5) {
+			std::fprintf(stderr, "situ-edit-gui: --snapshot needs --tui "
+			             "and a size such as 100x30\n");
+			return 2;
+		}
+		// The window the edits landed in, which is the one on top.
+		here->resize(Qtty::GridMetrics::cells(cols, rows));
+		here->show();
+		QTimer::singleShot(0, here, [here, cols, rows] {
+			std::fputs(Qtty::test::snapshot_of(*here, cols, rows)
+			           .toUtf8().constData(), stdout);
+			std::fflush(stdout);
+			QCoreApplication::exit(0);
+		});
+		return application.exec();
+#else
+		std::fprintf(stderr, "situ-edit-gui: --snapshot needs a build "
+		             "with qtty\n");
+		return 2;
+#endif
 	}
 
 	if (parser.isSet(no_ui)) {
@@ -159,6 +265,10 @@ int main(int argc, char **argv)
 			return 1;
 		return 0;
 	}
+#ifdef SITU_QTTY
+	if (tui)
+		return Qtty::exec(application, window);
+#endif
 	window.show();
 	return application.exec();
 }

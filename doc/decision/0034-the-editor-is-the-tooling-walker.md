@@ -195,3 +195,15 @@ input is least trusted.
   them. The JSON names the nested struct as data -- `nested: {struct,
   offset, length}` -- because the note said it only as prose for a person
   to retype. `--open FIELD` is the double click, for the test.
+
+  **Amended 2026-11-20 (26.1113): one view, and the window on a terminal.**
+  The rules were shared and the display was not: the window held a C++
+  copy of what a value reads as, which rows edit, hex or number, and the
+  header, and had drifted from the table. `editor/view.py` now decides
+  every cell; the table, the curses TUI and the window (from the JSON's
+  `view`) draw it, and `situ-edit --put` is the typed-value rule both
+  interactive frontends send. The window is `situ-edit-gui`, built by
+  qmake with `vendor/qtty`, so `--tui` puts the same window on a terminal;
+  the curses TUI stays, because it needs only Python. Three frontends
+  became four ways to look -- CLI, curses, window, window on a terminal --
+  over the one core, and none of them words a cell.

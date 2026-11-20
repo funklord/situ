@@ -16,12 +16,14 @@ does not call this.
 from __future__ import annotations
 
 import subprocess
+from dataclasses import asdict
 from collections.abc import Sequence
 from pathlib import Path
 
 import json
 
-from editor.document import Document, Field, open_document
+from editor import view
+from editor.document import Document, open_document
 from walker.walk import Refused
 
 __all__ = ["apply_edits", "as_json", "image_bytes", "open_from",
@@ -38,7 +40,7 @@ def image_bytes(path: Path, situc: Path) -> bytes:
 	and loses only the convenience.
 	"""
 	if path.suffix != ".situ":
-		return path.read_bytes()
+		return _read(path)
 
 	# `--metadata` because this is the reader 26.33 split the tail off for:
 	# an embedded walker wants a small table, a tooling walker wants names
@@ -53,8 +55,21 @@ def image_bytes(path: Path, situc: Path) -> bytes:
 	return built.stdout
 
 
+def _read(path: Path) -> bytes:
+	"""A file's bytes, or the reason it has none in a sentence.
+
+	A message or image that is not there was a Python traceback in all
+	three frontends, the window's status line included -- the one input
+	every user mistypes. `situc` already says it this way for a schema.
+	"""
+	try:
+		return path.read_bytes()
+	except OSError as why:
+		raise SystemExit(f"cannot read {path}: {why.strerror}") from None
+
+
 def read_message(path: Path, as_hex: bool) -> bytes:
-	raw = path.read_bytes()
+	raw = _read(path)
 	if not as_hex:
 		return raw
 	try:
@@ -124,154 +139,32 @@ def render_rows(document: Document) -> list[tuple[str, int | None]]:
 	and this is how it knows which one that is without re-deriving the
 	layout of these lines: the renderer that decided a note gets a
 	continuation line is the one that says so.
-	"""
-	# The WINDOW's length, not the file's (26.581). A chunk read at an
-	# offset otherwise announced the size of the image it sits in, above a
-	# list of offsets that were all about the chunk.
-	#
-	# And what the struct MEASURES where that is less, because the window
-	# is whatever the caller gave and a reader stepping through a run needs
-	# the record's own length (26.582). `M of N` only when they differ, so
-	# a document opened whole or framed exactly reads as it always did --
-	# and a measurement the walk cannot make says so rather than being
-	# left out, since a missing number and an unmeasurable struct are
-	# different findings.
-	where_from = "" if document.at == 0 else f" at {document.at}"
-	held = document.measured
-	if held is None:
-		how_long = f"{document.extent} bytes, extent unknown"
-	elif held < document.extent:
-		how_long = f"{held} of {document.extent} bytes"
-	else:
-		how_long = f"{document.extent} bytes"
-	# THE VERDICT, on the header line, because it qualifies every row under
-	# it (26.595). `validate` is one of `report.SUPPORTED`'s probes and
-	# nothing surfaced it: a refusal reached a row only where it blamed a
-	# member, so a BOUNDS failure -- which blames none -- was invisible
-	# while every field said "cannot be read" and the variant row named an
-	# arm confidently.
-	# `said` and not `held`, which this function already binds to the
-	# measured extent twenty lines up. A short generic name in a long
-	# function is how a shadow gets written, and mypy is what said so.
-	said   = document.verdict
-	spoken = "" if said is None else f"  [{said[0]}]"
-	lines: list[tuple[str, int | None]] = [
-		(f"{document.name}  {how_long}{where_from}{spoken}", None)]
-	if said is not None and said[0] != "ok":
-		lines.append((f"{' ' * 14}validate: {said[1]}", None))
-	for index, field in enumerate(document.fields()):
-		where = "--" if field.offset is None else f"{field.offset:>4}"
-		wide  = "--" if field.size is None else f"{field.size:>3}"
-		if field.withheld:
-			# `[secret]`, so the LENGTH and not the bytes (26.586). A
-			# reader still learns the field is there and how long it is,
-			# which is what the row is for; the schema said the contents
-			# are a key.
-			shown = (f"<withheld: {field.size} secret byte(s)>"
-			         if field.size is not None else "<withheld: secret>")
-		elif isinstance(field.value, bytes):
-			shown = field.value.hex()
-			if len(shown) > 32:
-				shown = shown[:32] + "..."
-		elif field.value is None:
-			shown = f"({field.note})"
-		else:
-			shown = str(field.value)
-		row    = f"  {where} +{wide}  {field.name:<24} {shown}"
-		marker = _write_marker(field)
-		lines.append((f"{row.ljust(50)}{marker}".rstrip() if marker else row,
-		              index))
 
-		# A NOTE ON A READABLE FIELD WAS DISCARDED (26.583). The branches
-		# above render `field.note` only in place of a MISSING value, so a
-		# field that reads fine and carries a note showed the value and
-		# nothing else -- and the note that matters most is exactly that
-		# shape: `report.failed_check` names the member a schema refuses
-		# the message over, which for `u8 seconds [max = 59]` holding 70
-		# is a readable value.
-		#
-		# Measured: this frontend printed `seconds 70` while `--format
-		# json` carried `refused: max` for the same document. So the text
-		# tool -- the default one -- showed a message the schema rejects
-		# as though it were fine, and the channel 0051 built and 26.231
-		# wired had one consumer of two.
-		#
+	Every cell is `view`'s, which the window draws too (26.1113); what is
+	decided here is only the line -- the columns, and a byte run shortened
+	to fit one.
+	"""
+	head = view.heading(document)
+	lines: list[tuple[str, int | None]] = [(head[0], None)]
+	lines += [(f"{' ' * 14}{more}", None) for more in head[1:]]
+	for index, (field, row) in enumerate(zip(document.fields(),
+	                                         view.rows(document))):
+		where = row.offset if field.offset is None else row.offset.rjust(4)
+		wide  = row.size if field.size is None else row.size.rjust(3)
+		shown = row.value
+		if isinstance(field.value, bytes) and not field.withheld \
+				and len(shown) > 32:
+			shown = shown[:32] + "..."
+		line = f"  {where} +{wide}  {row.name:<24} {shown}"
+		lines.append((f"{line.ljust(50)}{row.marker}".rstrip()
+		              if row.marker else line, index))
 		# A continuation line rather than a wider marker column, because a
 		# note is prose and can run past any column that keeps the table
-		# aligned.
-		if field.note and field.value is not None:
-			lines.append((f"{' ' * 14}{field.note}", index))
-
-	# What the schema says about the message as a whole (0051), after the
-	# fields rather than among them: a `when` is a predicate over the struct,
-	# so there is no row it belongs on. The name is printed beside the text
-	# because the name is the contract a consumer keys on and the text is a
-	# default rendering it may replace.
-	for severity, name, text in document.messages():
-		lines.append((f"  {severity}: {name} -- {text}", None))
+		# aligned (26.583).
+		if row.note:
+			lines.append((f"{' ' * 14}{row.note}", index))
+	lines += [(f"  {said}", None) for said in view.trailer(document)]
 	return lines
-
-
-def _write_marker(field: Field) -> str:
-	"""What a write to this field would cost, where it is not simply a store.
-
-	Nothing for the ordinary case, so the marker means something when it is
-	there. An editor of *files* is the case 0047 was raised for, and the one
-	question it has to answer before writing a byte is whether the schema
-	permits it -- which the image has carried since 26.33 and nothing read
-	until 26.177.
-	"""
-	if field.mutate is None:
-		return ""
-
-	# FIVE VALUES ON THIS AXIS AND THIS NAMED THREE (26.584). `mutate` is
-	# `InPlaceFixed > InPlaceSlack > Shifting > RewriteRequired > Immutable`,
-	# and `InPlaceSlack` fell through to the empty marker -- which is
-	# `InPlaceFixed`'s answer and means "an ordinary store". Measured over
-	# the corpus: 9 placements are `InPlaceSlack`, `mqtt.packet.length`
-	# among them, and they showed exactly what the 857 free ones showed.
-	#
-	# The cost it hides depends on the VALUE rather than on the member: a
-	# varint that re-encodes to the same length moves nothing and a longer
-	# one moves everything after it, and a block-granularity codec
-	# re-transforms the containing block. So the marker is weaker than
-	# `moves` on purpose, and `write_cost` carries the sentence for a
-	# reader who wants it.
-	#
-	# `InPlaceFixed` is still unmarked, and deliberately: it is the
-	# ordinary case, and a marker on 857 of 1129 placements would be noise
-	# that makes the other four mean less.
-	held = []
-	if field.mutate == "Immutable":
-		held.append("read-only")
-	elif field.mutate == "InPlaceSlack":
-		held.append("needs slack")
-	elif field.mutate == "Shifting":
-		held.append("moves")
-	elif field.mutate == "RewriteRequired":
-		held.append("rewrites")
-	if field.auth == "Covered":
-		held.append("tag")
-
-	# THE EFFECT AXIS, which no frontend carried in any form (26.586):
-	# `Field` had no member for it, so neither renderer could have shown it.
-	# register.situ's `fifo` is `[ro, on_read = pop]` -- reading pops a
-	# FIFO, which its own comment calls the strongest effect there is -- and
-	# the marker said `[read-only]`, which is the mutate axis answering a
-	# different question.
-	#
-	# The axis value in prose rather than a verb, because the verb is the
-	# schema's and the image does not carry it: `on_read = pop` and
-	# `on_read = clear` reach this as the same `EffectOnRead`. Saying which
-	# would be inventing it.
-	if field.effect == "EffectOnRead":
-		held.append("effect on read")
-	elif field.effect == "EffectOnWrite":
-		held.append("effect on write")
-	elif field.effect == "EffectBoth":
-		held.append("effect on read and write")
-
-	return f"[{', '.join(held)}]" if held else ""
 
 
 def as_json(document: Document) -> str:
@@ -345,6 +238,12 @@ def as_json(document: Document) -> str:
 				# the BUFFER, the `--struct` and `--offset` that open it.
 				# The note says the same for a person; the window opens it
 				# on a double click from these (0034).
+				# A member that is not whole bytes, in bits from the
+				# view's start: `offset` and `size` above are its bytes
+				# rounded down, which for a bit field is 0 wide.
+				"bits":       (None if field.bits is None
+				               else {"offset": field.bits[0],
+				                     "size":   field.bits[1]}),
 				"nested":     (None if field.nested is None
 				               else {"struct": field.nested[0],
 				                     "offset": field.nested[1],
@@ -360,4 +259,13 @@ def as_json(document: Document) -> str:
 			{"severity": severity, "name": name, "text": text}
 			for severity, name, text in document.messages()
 		],
+		# WHAT TO SHOW, as `view` decides it for the text table and the TUI
+		# (26.1113): the heading's lines, one row of cells per field in
+		# `fields`' order, and the trailer. The window draws these and
+		# derives none of them, so it cannot word a cell differently.
+		"view": {
+			"heading": view.heading(document),
+			"rows":    [asdict(row) for row in view.rows(document)],
+			"trailer": view.trailer(document),
+		},
 	}, indent=1)

@@ -51,7 +51,7 @@ export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
 	fuzz fuzz-generated fuzz-cpp fuzz-walker test-codec-san \
-	veryclean distclean style style-source style-tool style-docs hooks walk-c gui \
+	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example FORCE \
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -70,7 +70,8 @@ help:
 	@echo '  walk       the walker over an image: bin/situ-walk'
 	@echo '  walk-c     build the embedded walker: situ-walk-c (0035)'
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
-	@echo '  gui        build the Qt window: situ-edit-qt (0034; needs Qt6)'
+	@echo '  gui        build the Qt window: situ-edit-gui, --tui with vendor/qtty (0034)'
+	@echo '  gui-example  open the window on NTP's example reply (GUI_FLAGS=--tui on a terminal)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  test-codec-san  the codec property suites under ASan + UBSan'
@@ -162,20 +163,84 @@ lint: style-source
 bench:
 	$(PYTHON) tool/bench.py
 
+# situ-edit-gui, the Qt window of decision 0034, and with vendor/qtty the
+# same window on a terminal (`situ-edit-gui --tui`). Its own target, not
+# all's: it is the one part of situ with a third-party dependency, and the
+# terminal frontend that needs only Python is bin/situ-edit-tui. qmake, as
+# hull and netcfgd build theirs, out of the tree.
+#
+# vendor/qtty is fetched for `make gui` where it was never checked out, at
+# the commit the gitlink names and no other. Without it -- no git, no
+# network -- the window is built alone and `make gui` says so, rather than
+# a build that quietly has no --tui.
+QMAKE       ?= qmake6
+QTTY_DIR     = vendor/qtty
+QTTY_LIB     = $(BUILD_DIR)/qtty/lib/libqtty.a
+GUI_BIN      = $(BUILD_DIR)/situ-edit-gui
+GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h)
+
+ifneq ($(filter gui gui-example,$(MAKECMDGOALS)),)
+ifeq ($(wildcard $(QTTY_DIR)/qtty.pri),)
+QTTY_FETCH := $(shell \
+	if ! command -v git >/dev/null 2>&1; then \
+		echo "make: $(QTTY_DIR)/ is empty and git is not installed." >&2; \
+	elif [ -z "$$(git rev-parse --git-common-dir 2>/dev/null)" ]; then \
+		echo "make: $(QTTY_DIR)/ is empty and this is not a git checkout." >&2; \
+	else \
+		echo "make: fetching the $(QTTY_DIR) submodule" >&2; \
+		git submodule update --init $(QTTY_DIR) >&2; \
+	fi)
+endif
+endif
+GUI_QTTY = $(if $(wildcard $(QTTY_DIR)/qtty.pri),$(QTTY_LIB))
+
+gui: $(GUI_BIN)
+	@$(if $(GUI_QTTY),:,echo 'gui: built without qtty ($(QTTY_DIR) is not checked out): no --tui' >&2)
+
+$(BUILD_DIR)/qtty/Makefile: $(QTTY_DIR)/src/src.pro $(QTTY_DIR)/qtty.pri
+	@mkdir -p '$(@D)'
+	cd '$(@D)' && $(QMAKE) '$(CURDIR)/$(QTTY_DIR)/src/src.pro' \
+	    QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib'
+
+# FORCE: only qtty's own make knows whether its sources moved; recursing
+# every time is a no-op sub-make, and the archive's date moves only on a
+# real rebuild.
+$(QTTY_LIB): $(BUILD_DIR)/qtty/Makefile FORCE
+	$(MAKE) -C '$(BUILD_DIR)/qtty'
+
+FORCE:
+
+# Written again only when the project, or whether qtty is there, changes.
+$(BUILD_DIR)/gui/Makefile: gui/gui.pro $(GUI_QTTY)
+	@mkdir -p '$(@D)'
+	cd '$(@D)' && $(QMAKE) '$(CURDIR)/gui/gui.pro' \
+	    SITU_BUILD='$(abspath $(BUILD_DIR))' \
+	    $(if $(GUI_QTTY),QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib')
+
+$(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
+	$(MAKE) -C '$(BUILD_DIR)/gui'
+
+# The window, opened on a message the repository ships: NTP's server reply
+# from example/ntp's golden vectors -- a real protocol, four nested structs
+# to double-click into, and the bytes every backend is held to. Writes only
+# that message's hex into the build directory: Save asks where, and nothing
+# in the tree is the answer unless it is named. GUI_FLAGS=--tui for the
+# same window on this terminal.
+GUI_EXAMPLE = $(BUILD_DIR)/gui-example/ntp-server-reply.hex
+
+$(GUI_EXAMPLE): example/ntp/ntp.vectors
+	@mkdir -p '$(@D)'
+	awk '$$1 == "ntp_packet" && $$2 == "server_reply" { for (i = 3; i <= NF; i++) printf "%s ", $$i; found = 1 } END { exit !found }' $< > '$@.new'
+	@mv '$@.new' '$@'
+
+gui-example: gui $(GUI_EXAMPLE)
+	SITU_BIN='$(CURDIR)/bin' '$(GUI_BIN)' $(GUI_FLAGS) --hex --struct ntp_packet \
+	    example/ntp/ntp.situ '$(GUI_EXAMPLE)'
+
+
 # The embedded walker (0035): the one 0026 was argued from, and the one a
 # device links. Built with the same warnings as the generated code, because
 # a reader that needs a relaxed set is one nobody can put in a build.
-# The Qt window of decision 0034, in its own CMake build because it is the
-# one part of situ with a third-party dependency; nothing else here needs
-# it, so `all` does not build it. Configured once -- CMake re-runs itself
-# when gui/CMakeLists.txt changes -- and built every time, which writes
-# nothing when nothing moved.
-gui: $(BUILD_DIR)/gui/CMakeCache.txt
-	cmake --build '$(BUILD_DIR)/gui'
-
-$(BUILD_DIR)/gui/CMakeCache.txt:
-	cmake -S gui -B '$(BUILD_DIR)/gui'
-
 walk-c: $(BUILD_DIR)/situ-walk-c
 
 $(BUILD_DIR)/situ-walk-c: walker/c/situ_walk.c walker/c/main.c walker/c/situ_walk.h

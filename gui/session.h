@@ -45,10 +45,10 @@ public:
 	// Re-reads the working bytes. The document is `document()`.
 	bool refresh();
 
-	// Stores `text` into `field`, as `--set` (a number) or `--set-bytes`
-	// (hex) according to `as_bytes`. On success the working bytes carry the
+	// Stores `text` into `field` as the CLI's `--put` reads it -- hex for a
+	// byte run, a number otherwise. On success the working bytes carry the
 	// write and `notes()` says what it cost; on refusal nothing changes.
-	bool set(const QString &field, const QString &text, bool as_bytes);
+	bool set(const QString &field, const QString &text);
 
 	// Copies the working bytes to `path`.
 	bool save(const QString &path);

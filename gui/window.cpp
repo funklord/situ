@@ -24,29 +24,6 @@ enum column { offset_column, size_column, name_column, value_column,
 constexpr QFileDialog::Options dialog_options =
     QFileDialog::DontUseNativeDialog;
 
-QString shown_value(const QJsonObject &field)
-{
-	if (field.value(QStringLiteral("withheld")).toBool()) {
-		// `[secret]`: the length and not the bytes, as the CLI's table and
-		// its JSON both do (26.586) -- here the JSON has already withheld
-		// them, and this says why the cell is empty.
-		return QStringLiteral("<withheld: secret>");
-	}
-	const QJsonValue value = field.value(QStringLiteral("value"));
-	if (value.isNull())
-		return QStringLiteral("(%1)").arg(
-		    field.value(QStringLiteral("note")).toString());
-	if (value.isString())
-		return value.toString();
-	return QString::number(value.toInteger());
-}
-
-QString number_or_dash(const QJsonValue &value)
-{
-	return value.isNull() ? QStringLiteral("--")
-	                      : QString::number(value.toInteger());
-}
-
 }
 
 edit_window::edit_window(QWidget *parent, document_hub *hub)
@@ -63,6 +40,8 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 	header_ = new QLabel(centre);
 	header_->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	header_->setWordWrap(true);
+	// The CLI's lines, verbatim: plain, so a `<` in a name is a `<`.
+	header_->setTextFormat(Qt::PlainText);
 	table_ = new QTableWidget(0, column_count, centre);
 	table_->setHorizontalHeaderLabels({tr("Offset"), tr("Size"), tr("Field"),
 	                                   tr("Value"), tr("Write"), tr("Note")});
@@ -96,7 +75,7 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 		if (name != nullptr && !name->data(Qt::UserRole).isNull())
 			open_field(name->text());
 	});
-	setWindowTitle(QStringLiteral("situ-edit-qt"));
+	setWindowTitle(QStringLiteral("situ-edit-gui"));
 	resize(820, 560);
 }
 
@@ -107,7 +86,7 @@ bool edit_window::open(const open_options &options, const QString &out)
 		say(session_.error());
 		return false;
 	}
-	setWindowTitle(QStringLiteral("%1 -- %2 -- situ-edit-qt")
+	setWindowTitle(QStringLiteral("%1 -- %2 -- situ-edit-gui")
 	               .arg(QFileInfo(options.message).fileName(),
 	                    QFileInfo(options.schema).fileName()));
 	populate();
@@ -118,67 +97,40 @@ bool edit_window::open(const open_options &options, const QString &out)
 
 void edit_window::populate()
 {
-	const QJsonObject &document = session_.document();
+	// Every word below is the CLI's: `--format json`'s `view` is what the
+	// text table and the curses TUI draw too (editor/view.py, 26.1113), so
+	// the window derives no cell from a field and cannot word one
+	// differently.
+	const QJsonObject view = session_.document()
+	                         .value(QStringLiteral("view")).toObject();
+	QStringList heading;
+	for (const QJsonValue &line : view.value(QStringLiteral("heading"))
+	                              .toArray())
+		heading << line.toString();
+	for (const QJsonValue &line : view.value(QStringLiteral("trailer"))
+	                              .toArray())
+		heading << line.toString();
+	header_->setText(heading.join(QLatin1Char('\n')));
 
-	// THE HEADER, as the CLI's first line: the struct, how much of the
-	// window it measures, and the verdict, which qualifies every row.
-	QString heading = QStringLiteral("<b>%1</b>  ").arg(
-	    document.value(QStringLiteral("struct")).toString().toHtmlEscaped());
-	const qint64 bytes = document.value(QStringLiteral("bytes")).toInteger();
-	const QJsonValue measured = document.value(QStringLiteral("measured"));
-	if (measured.isNull())
-		heading += tr("%1 bytes, extent unknown").arg(bytes);
-	else if (measured.toInteger() < bytes)
-		heading += tr("%1 of %2 bytes").arg(measured.toInteger()).arg(bytes);
-	else
-		heading += tr("%1 bytes").arg(bytes);
-	const qint64 at = document.value(QStringLiteral("at")).toInteger();
-	if (at != 0)
-		heading += tr(" at %1").arg(at);
-	const QJsonObject verdict =
-	    document.value(QStringLiteral("verdict")).toObject();
-	if (!verdict.isEmpty()) {
-		const QString word = verdict.value(QStringLiteral("word")).toString();
-		heading += QStringLiteral("  [%1]").arg(word.toHtmlEscaped());
-		if (word != QStringLiteral("ok"))
-			heading += QStringLiteral("<br>validate: %1").arg(
-			    verdict.value(QStringLiteral("why")).toString()
-			    .toHtmlEscaped());
-	}
-	for (const QJsonValue &said :
-	     document.value(QStringLiteral("messages")).toArray()) {
-		const QJsonObject message = said.toObject();
-		heading += QStringLiteral("<br>%1: %2 -- %3").arg(
-		    message.value(QStringLiteral("severity")).toString(),
-		    message.value(QStringLiteral("name")).toString(),
-		    message.value(QStringLiteral("text")).toString()
-		    .toHtmlEscaped());
-	}
-	header_->setText(heading);
-
-	const QJsonArray fields = document.value(QStringLiteral("fields")).toArray();
+	const QJsonArray rows = view.value(QStringLiteral("rows")).toArray();
+	const QJsonArray fields = session_.document()
+	                          .value(QStringLiteral("fields")).toArray();
 	filling_ = true;
-	table_->setRowCount(int(fields.size()));
-	for (int row = 0; row < fields.size(); ++row) {
-		const QJsonObject field = fields[row].toObject();
-		const bool can_write =
-		    field.value(QStringLiteral("writable")).toBool() &&
-		    field.value(QStringLiteral("readable")).toBool() &&
-		    !field.value(QStringLiteral("withheld")).toBool();
-
-		auto fixed = [](const QString &text) {
-			auto *item = new QTableWidgetItem(text);
+	table_->setRowCount(int(rows.size()));
+	for (int at = 0; at < rows.size(); ++at) {
+		const QJsonObject row = rows[at].toObject();
+		auto cell = [&row](const char *key) {
+			auto *item = new QTableWidgetItem(
+			    row.value(QLatin1String(key)).toString());
 			item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
 			return item;
 		};
-		table_->setItem(row, offset_column, fixed(number_or_dash(
-		    field.value(QStringLiteral("offset")))));
-		table_->setItem(row, size_column, fixed(number_or_dash(
-		    field.value(QStringLiteral("size")))));
-		QTableWidgetItem *named = fixed(
-		    field.value(QStringLiteral("name")).toString());
+		table_->setItem(at, offset_column, cell("offset"));
+		table_->setItem(at, size_column, cell("size"));
+		QTableWidgetItem *named = cell("name");
 		// The nested struct a double click opens, as the JSON gives it.
-		const QJsonValue nested = field.value(QStringLiteral("nested"));
+		const QJsonValue nested = fields[at].toObject()
+		                          .value(QStringLiteral("nested"));
 		if (nested.isObject()) {
 			named->setData(Qt::UserRole, nested.toObject().toVariantMap());
 			named->setToolTip(tr("Double-click to open the nested `%1`")
@@ -186,36 +138,20 @@ void edit_window::populate()
 			                       .value(QStringLiteral("struct"))
 			                       .toString()));
 		}
-		table_->setItem(row, name_column, named);
+		table_->setItem(at, name_column, named);
 
-		auto *value = new QTableWidgetItem(shown_value(field));
-		Qt::ItemFlags flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
-		if (can_write)
-			flags |= Qt::ItemIsEditable;
-		value->setFlags(flags);
-		// Which flag the CLI is asked with is decided by what the field
-		// holds, as in the TUI: a byte run is hex, anything else a number.
-		value->setData(Qt::UserRole,
-		               field.value(QStringLiteral("kind")).toString() ==
-		               QStringLiteral("bytes"));
-		table_->setItem(row, value_column, value);
+		QTableWidgetItem *value = cell("value");
+		if (!row.value(QStringLiteral("edit")).isNull())
+			value->setFlags(value->flags() | Qt::ItemIsEditable);
+		table_->setItem(at, value_column, value);
 
-		// What a write would do, from the image's capability vector -- the
-		// part no template-driven hex editor can show (0034).
-		const QJsonValue cost = field.value(QStringLiteral("write_cost"));
-		auto *write = fixed(can_write ? cost.toString()
-		                              : tr("not writable"));
-		write->setToolTip(QStringLiteral("mutate: %1\nauth: %2\n"
-		                                 "secrecy: %3\neffect: %4").arg(
-		    field.value(QStringLiteral("mutate")).toString(),
-		    field.value(QStringLiteral("auth")).toString(),
-		    field.value(QStringLiteral("secrecy")).toString(),
-		    field.value(QStringLiteral("effect")).toString()));
-		table_->setItem(row, write_column, write);
-		const QJsonValue note = field.value(QStringLiteral("note"));
-		table_->setItem(row, note_column, fixed(
-		    field.value(QStringLiteral("value")).isNull()
-		    ? QString() : note.toString()));
+		// What a write would do: the marker the table prints, and the
+		// sentence behind it -- the part no template-driven hex editor
+		// can show (0034).
+		QTableWidgetItem *write = cell("marker");
+		write->setToolTip(row.value(QStringLiteral("cost")).toString());
+		table_->setItem(at, write_column, write);
+		table_->setItem(at, note_column, cell("note"));
 	}
 	table_->resizeColumnsToContents();
 	filling_ = false;
@@ -227,8 +163,7 @@ void edit_window::edited(QTableWidgetItem *item)
 		return;
 	const int row = item->row();
 	const QString name = table_->item(row, name_column)->text();
-	const bool as_bytes = item->data(Qt::UserRole).toBool();
-	if (!session_.set(name, item->text(), as_bytes)) {
+	if (!session_.set(name, item->text())) {
 		say(tr("refused: %1").arg(session_.error()));
 		populate();	// the cell goes back to what the bytes hold
 		return;
@@ -288,7 +223,7 @@ bool edit_window::open_nested(const session &parent, const QJsonObject &nested,
 	if (!session_.open_nested(parent, type, offset,
 	                          length.isNull() ? -1 : length.toInteger()))
 		return false;
-	setWindowTitle(QStringLiteral("%1 at %2 -- situ-edit-qt")
+	setWindowTitle(QStringLiteral("%1 at %2 -- situ-edit-gui")
 	               .arg(type).arg(offset));
 	populate();
 	say(tr("A nested struct, over the same bytes as the window it was "
@@ -366,10 +301,7 @@ QString edit_window::status_text() const
 
 QString edit_window::as_text() const
 {
-	QString text = header_->text().replace(QStringLiteral("<br>"),
-	                                       QStringLiteral("\n"))
-	               .remove(QStringLiteral("<b>"))
-	               .remove(QStringLiteral("</b>")) + QLatin1Char('\n');
+	QString text = header_->text() + QLatin1Char('\n');
 	for (int row = 0; row < table_->rowCount(); ++row) {
 		QStringList cells;
 		for (int column = 0; column < column_count; ++column)

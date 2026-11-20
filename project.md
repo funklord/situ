@@ -143,12 +143,25 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
+-- the holder asked for the GUI/TUI "like the other projects", a TUI
+without huge dependencies kept, and the pertinent code shared:
+
+- `editor/view.py` decides every cell; the text table, the curses TUI and
+  the window (through the JSON's `view`) all draw it. `situ-edit --put`
+  is the one typed-value rule both interactive frontends send.
+- `situ-edit-gui` (renamed from `-qt`), qmake, `vendor/qtty` submodule:
+  `--tui` is the same window on a terminal; `make gui-example` opens it on
+  NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
+- The holder's earlier question -- vendor qtty for the window? -- is
+  settled by that request: yes, beside the curses TUI, not instead of it.
+
 **Run 7 (2026-11-20), what landed** -- asked whether situ has an editor
 that opens a schema and a binary:
 
 - The editor of 0034 is whole. `situ-edit` (CLI) edited; `situ-edit-tui`
   now edits too (Enter sets a field, `w` writes `--out`) and opens a
-  nested struct over the same bytes; `situ-edit-qt` (`gui/`, `make gui`,
+  nested struct over the same bytes; `situ-edit-qt` (now `-gui`; `gui/`, `make gui`,
   Qt Widgets) is built, driving the CLI's JSON and holding no editing
   rule, with nested structs opening in windows of their own. Each
   frontend's writes are held byte for byte to the CLI's.
@@ -202,9 +215,6 @@ both walkers and the dissector. What a user cannot yet do is listed under
   reading one is still not evaluated, nor a `let` over a field wider than
   32 bits, a text number or a token.
 - `situc map` does not describe a registry; its contract is in `wire`.
-- The holder's: whether `situ-edit-qt` should vendor qtty for a terminal
-  mode of the same window. It would not replace the curses TUI, whose
-  reason for being curses is needing only Python (0034); qtty needs Qt.
 - Coverage-guided fuzzing of the Rust and Python harnesses needs
   cargo-fuzz and atheris, not installed here -- the holder's machine.
 - Schema-driven storage for fuzznet (derived rows, 0070's storage notes)
@@ -5582,12 +5592,15 @@ situ/
                               GUI all drive and none of them duplicates
     text.py                   opening a document and rendering one as lines,
                               shared by the two frontends that want text
-  gui/                        situ-edit-qt, the Qt Widgets frontend of 0034.
-                              Drives `situ-edit --format json` and `--set`
+  gui/                        situ-edit-gui, the Qt Widgets frontend of 0034
+                              (qmake; --tui through vendor/qtty).
+                              Drives `situ-edit --format json` and `--put`
                               across a process boundary and holds no editing
-                              rule; its own CMake build (`make gui`), because
-                              it is the one part of situ needing more than
-                              Python
+                              or display rule (26.1113); its own build
+                              (`make gui`), because it is the one part of
+                              situ needing more than Python
+  editor/view.py              what every frontend shows: heading, rows,
+                              trailer, and how a typed value is put
   walker/                     the interpreter: a packed image, walked over
                               bytes. A second program, never imported by
                               `situc` -- decision 0026, amended (26.81)

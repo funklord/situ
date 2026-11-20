@@ -90,6 +90,24 @@ def test_a_frame_too_short_is_refused_cleanly(name: str,
 
 
 @pytest.mark.parametrize("name", frontends())
+@pytest.mark.parametrize("which", ["message", "image"])
+def test_a_file_that_is_not_there_is_refused_cleanly(name: str, which: str,
+		tmp_path: Path) -> None:
+	"""The one input every user mistypes, and it was a traceback in every
+	frontend until 26.1113 -- the window's status line included."""
+	absent = tmp_path / "absent.bin"
+	some = tmp_path / "some.bin"
+	some.write_bytes(b"")
+	schema, message = ((str(NO_VIEW_SCHEMA), str(absent))
+	                   if which == "message" else (str(absent), str(some)))
+	done = run(name, schema, message)
+
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "Traceback" not in done.stderr, done.stderr
+	assert f"cannot read {absent}" in done.stderr
+
+
+@pytest.mark.parametrize("name", frontends())
 def test_a_missing_argument_is_refused_cleanly(name: str,
 		tmp_path: Path) -> None:
 	"""`needs-arguments`: the verdict that was a traceback in the TUI.
