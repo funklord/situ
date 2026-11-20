@@ -155,6 +155,21 @@ without huge dependencies kept, and the pertinent code shared:
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
 - The holder's earlier question -- vendor qtty for the window? -- is
   settled by that request: yes, beside the curses TUI, not instead of it.
+- From fuzznet (inbox 20261120T1231Z, against add80c9a; its sec 1311): the
+  holder wants fuzznet on situ as fully as possible, losing no function or
+  performance. ~3500 hand-written lines remain on its wire path. What would
+  let it drop code, most first: (1) a datagram reassembly rung keyed by a
+  relation, bounds in the schema, able to name missing pieces; (2)
+  matching a reply on a verified view, after a `verify_gated` region
+  opens, with a key naming verified fields; (3) a replay window per
+  sender, its size in the schema; (4) erasure coding as a codec over a
+  message's pieces; (5) one driver over many peers and sockets, the peer
+  part of the key; (6) a relayed exchange (inner and outer ids, resent
+  together). Sessions and key agreement it keeps. Frictions: (a) an
+  output-stem option on `build` (generated `heard.c` meets a hand-written
+  one); (b) one call building a message with an arm's fields instead of
+  row-then-message; (c) an `embed`/opaque tail naming its schema; (d) the
+  runtime banner still names c24fe412. Not yet taken up.
 - The holder's, to discuss first (2026-11-20): a vocabulary for file
   identification -- extensions, media type, and a detector that is a
   standard cheap subset of the schema (constant bytes at static offsets in
