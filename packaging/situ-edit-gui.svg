@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- situ-edit-gui: rows of bytes, one field picked out and being set. -->
+  <rect x="4" y="6" width="56" height="52" rx="6" fill="#2b2b2b"/>
+  <g fill="#6a6a6a">
+    <rect x="10" y="14" width="10" height="7" rx="1.5"/>
+    <rect x="22" y="14" width="10" height="7" rx="1.5"/>
+    <rect x="34" y="14" width="10" height="7" rx="1.5"/>
+    <rect x="46" y="14" width="8" height="7" rx="1.5"/>
+    <rect x="10" y="36" width="10" height="7" rx="1.5"/>
+    <rect x="22" y="36" width="10" height="7" rx="1.5"/>
+    <rect x="34" y="36" width="20" height="7" rx="1.5"/>
+    <rect x="10" y="47" width="22" height="5" rx="1.5"/>
+  </g>
+  <rect x="10" y="25" width="44" height="8" rx="1.5" fill="#3d7eb8"/>
+  <rect x="44" y="23" width="3" height="12" fill="#e0e0e0"/>
+</svg>

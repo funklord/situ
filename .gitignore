@@ -13,6 +13,7 @@ debian/files
 debian/tmp/
 debian/situc/
 debian/libsitu-dev/
+debian/situ-edit-gui/
 debian/*.substvars
 debian/*.debhelper.log
 debian/debhelper-build-stamp

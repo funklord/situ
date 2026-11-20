@@ -227,6 +227,11 @@ $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
 # needs Qt; `make install` first, since the window is nothing without them.
 install-gui: gui
 	install -Dm755 '$(GUI_BIN)' '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
+	@# On the desktop's menu, with its icon (harmonization.md, GUI).
+	install -Dm644 packaging/situ-edit-gui.desktop \
+		'$(DESTDIR)$(PREFIX)/share/applications/situ-edit-gui.desktop'
+	install -Dm644 packaging/situ-edit-gui.svg \
+		'$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/situ-edit-gui.svg'
 	@echo 'installed situ-edit-gui; it needs the Qt 6 Widgets libraries$(if $(GUI_QTTY),, (built without qtty: no --tui))'
 
 # The window, opened on a message the repository ships: NTP's server reply
@@ -380,6 +385,8 @@ uninstall:
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/editor'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situ-edit' '$(DESTDIR)$(PREFIX)/bin/situ-edit-tui'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
+	rm -f '$(DESTDIR)$(PREFIX)/share/applications/situ-edit-gui.desktop'
+	rm -f '$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/situ-edit-gui.svg'
 	rm -f '$(DESTDIR)$(PREFIX)/include/situ.h'
 	rm -f '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
 	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
@@ -432,6 +439,8 @@ deb: version-check
 	dpkg-buildpackage -b -us -uc
 	@mkdir -p '$(DEB_DIR)'
 	@for f in ../situc_$(VERSION)_*.deb ../libsitu-dev_$(VERSION)_*.deb \
+	          ../situ-edit-gui_$(VERSION)_*.deb \
+	          ../situ-edit-gui-dbgsym_$(VERSION)_*.deb \
 	          ../situ_$(VERSION)_*.buildinfo ../situ_$(VERSION)_*.changes; do \
 		[ -e "$$f" ] && mv -f "$$f" '$(DEB_DIR)/' || true; \
 	done

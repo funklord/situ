@@ -6,8 +6,15 @@
 %:
 	dh $@
 
+# The window as well (situ-edit-gui, its own binary package): `make gui`
+# builds it and vendor/qtty, and install-gui adds it beside situ-edit.
+override_dh_auto_build:
+	dh_auto_build
+	$(MAKE) gui
+
 override_dh_auto_install:
 	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr
+	$(MAKE) install-gui DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr
 
 override_dh_auto_test:
 	# The suite is `make test`; it wants a build tree the packaging does
