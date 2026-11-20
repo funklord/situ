@@ -51,7 +51,7 @@ export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
 	fuzz fuzz-generated fuzz-cpp fuzz-walker test-codec-san \
-	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example FORCE \
+	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example install-gui FORCE \
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -71,7 +71,8 @@ help:
 	@echo '  walk-c     build the embedded walker: situ-walk-c (0035)'
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
 	@echo '  gui        build the Qt window: situ-edit-gui, --tui with vendor/qtty (0034)'
-	@echo '  gui-example  open the window on NTP's example reply (GUI_FLAGS=--tui on a terminal)'
+	@echo '  gui-example  open the window on an NTP reply (GUI_FLAGS=--tui on a terminal)'
+	@echo '  install-gui  install situ-edit-gui beside situ-edit (after install)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  test-codec-san  the codec property suites under ASan + UBSan'
@@ -179,7 +180,7 @@ QTTY_LIB     = $(BUILD_DIR)/qtty/lib/libqtty.a
 GUI_BIN      = $(BUILD_DIR)/situ-edit-gui
 GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h)
 
-ifneq ($(filter gui gui-example,$(MAKECMDGOALS)),)
+ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(QTTY_DIR)/qtty.pri),)
 QTTY_FETCH := $(shell \
 	if ! command -v git >/dev/null 2>&1; then \
@@ -219,6 +220,14 @@ $(BUILD_DIR)/gui/Makefile: gui/gui.pro $(GUI_QTTY)
 
 $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
 	$(MAKE) -C '$(BUILD_DIR)/gui'
+
+# The window beside the tools it drives: it finds situ-edit and situc next
+# to itself first, so it goes in the same bin/ as `make install` puts them.
+# Its own target, as hull's and netcfgd's are, so installing situ never
+# needs Qt; `make install` first, since the window is nothing without them.
+install-gui: gui
+	install -Dm755 '$(GUI_BIN)' '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
+	@echo 'installed situ-edit-gui; it needs the Qt 6 Widgets libraries$(if $(GUI_QTTY),, (built without qtty: no --tui))'
 
 # The window, opened on a message the repository ships: NTP's server reply
 # from example/ntp's golden vectors -- a real protocol, four nested structs
@@ -365,6 +374,12 @@ uninstall:
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/situc' '$(DESTDIR)$(PREFIX)/share/situc'
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/walker'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situc' '$(DESTDIR)$(PREFIX)/bin/situ-walk'
+	@# The editor, which install has put in place since 0034 and this
+	@# never took away: lib/editor and both frontends outlived every
+	@# uninstall. And the window, where install-gui put it.
+	rm -rf '$(DESTDIR)$(PREFIX)/lib/editor'
+	rm -f '$(DESTDIR)$(PREFIX)/bin/situ-edit' '$(DESTDIR)$(PREFIX)/bin/situ-edit-tui'
+	rm -f '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
 	rm -f '$(DESTDIR)$(PREFIX)/include/situ.h'
 	rm -f '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
 	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
