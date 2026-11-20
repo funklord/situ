@@ -191,7 +191,8 @@ without huge dependencies kept, and the pertinent code shared:
 - From fuzznet (inbox 20261120T2010Z): `wire --check` misreported
   widths after a `[holds]` run sized by a field -- 26.1118's splice lined
   the held struct's members up against the fields after the run. Fixed:
-  only a run that is exactly the struct is expanded (26.1118). The nonce
+  only a run that is exactly the struct is expanded (26.1118). A gained
+  `holds` stays breaking, which fuzznet confirmed (20261120T2050Z). The nonce
   set there waits on fuzznet's holder choosing the clock's unit.
 - From fuzznet (inbox 20261120T1930Z), answering the zero-expiry
   question: neither `replay` over an arm nor a rule keyed on a field fits,
@@ -9517,7 +9518,9 @@ contract, written from `situc map`, disagreed with the check. A run is
 expanded now only where no field decides its extent (a `[remaining]`
 tail) or it is exactly the struct's size; otherwise it keeps its line and
 the gained `holds` is reported as itself, the interpretation change 26.898
-made it.
+made it. fuzznet agreed it is breaking (inbox 20261120T2050Z): once the run
+is held, validate refuses bytes that are not the held struct, which the
+old reader took.
 
 ### 26.1116 A display reads member by member
 
