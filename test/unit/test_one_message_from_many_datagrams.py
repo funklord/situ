@@ -726,3 +726,142 @@ def test_the_fuzz_harness_declines_a_sealed_piece(tmp_path: Path) -> None:
 	assert "No harness for reassembly pieces: its piece is behind a sealed" \
 		in harness
 	assert "fuzz_ra_" not in harness
+
+
+#: The relation without the count in its key: nothing then makes the
+#: pieces of one message agree on how many there are, but the table.
+NO_COUNT = SCHEMA.replace("\tmust later.h.chunks == first.h.chunks;\n", "")
+
+NO_COUNT_C = r"""
+#include <stdio.h>
+#include <string.h>
+#include "r_reassemble.h"
+static situ_pieces_t t;
+static uint8_t buf[64];
+static int add(uint16_t ix, uint16_t n, const char *body, const uint8_t **msg,
+               uint32_t *length)
+{
+	const uint16_t len = (uint16_t)strlen(body);
+	memset(buf, 7, 8);
+	memset(buf + 8, 0, 4);
+	buf[11] = 1;
+	buf[12] = (uint8_t)(ix >> 8); buf[13] = (uint8_t)ix;
+	buf[14] = (uint8_t)(n >> 8); buf[15] = (uint8_t)n;
+	buf[16] = 0; buf[17] = (uint8_t)len;
+	memcpy(buf + 18, body, len);
+	situ_msg_t m;
+	situ_view_t v;
+	situ_msg_init(&m, buf, 18u + len);
+	if (situ_piece_frame_view(&m, 0u, 18u + len, &v) != SITU_OK
+	    || situ_piece_frame_validate(v) != SITU_OK)
+		return -1;
+	return (int)situ_pieces_add(&t, v, 0u, msg, length);
+}
+int main(void)
+{
+	const uint8_t *msg = NULL;
+	uint32_t length = 0u;
+	situ_pieces_init(&t);
+	int a = add(0, 2, "ABCD", &msg, &length);
+	int b = add(1000, 1024, "WXYZ", &msg, &length);
+	int c = add(1, 2, "EF", &msg, &length);
+	printf("%d %d %d %.*s\n", a == SITU_ERR_TRUNCATED, b == SITU_ERR_CONSTRAINT,
+	       c == SITU_OK, (int)length, (const char *)msg);
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_piece_saying_another_count_is_refused(tmp_path: Path) -> None:
+	"""Where the key leaves the count out, a later piece may say a larger
+	one; its index, checked against its own count, put it at `index *
+	stride`, past the slot -- a write half a megabyte beyond the table in
+	C, a panic in Rust, a KeyError in Python. Every piece of a message
+	says its count, and one that does not is malformed."""
+	(tmp_path / "r.situ").write_text(NO_COUNT, encoding="ascii")
+	runtime = ROOT / "runtime"
+	for target in ("c", "python", "rust", "cpp"):
+		done = subprocess.run(
+			[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+			 "--target", target, "--layer", "converse", "--out",
+			 str(tmp_path / target)], cwd=ROOT, capture_output=True, text=True)
+		assert done.returncode == 0, done.stderr
+	(tmp_path / "t.c").write_text(NO_COUNT_C, encoding="ascii")
+	built = subprocess.run(
+		[COMPILER or "cc", "-std=c11", "-g", "-fsanitize=address,undefined",
+		 "-fno-sanitize-recover=all", f"-I{runtime / 'c'}",
+		 f"-I{tmp_path / 'c'}", str(tmp_path / "t.c"),
+		 str(tmp_path / "c" / "r.c"), str(runtime / "c" / "situ.c"), "-o",
+		 str(tmp_path / "t")], capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(tmp_path / "t")], capture_output=True, text=True,
+	                     timeout=60)
+	assert ran.stdout.strip() == "1 1 1 ABCDEF", ran.stdout + ran.stderr
+
+	script = PYTHON.split("t = r_reassemble.pieces_table()")[0] + r'''
+t = r_reassemble.pieces_table()
+assert t.add(frame(7, 1, 0, 2, b"ABCD"), 0) is None
+assert refused(ConstraintError, 7, 1, 1000, 1024, b"WXYZ")
+assert t.add(frame(7, 1, 1, 2, b"EF"), 0) == b"ABCDEF"
+print("python ok")
+'''
+	ran = subprocess.run(
+		[sys.executable, "-c", script.replace(
+			"RUNTIME", repr(str(runtime / "python")))],
+		cwd=tmp_path / "python", capture_output=True, text=True, timeout=60)
+	assert ran.stdout.strip() == "python ok", ran.stderr
+
+	if RUSTC is not None:
+		out = tmp_path / "rust"
+		(out / "situ_rt.rs").write_text(
+			(runtime / "rust" / "situ_rt.rs").read_text(encoding="ascii"),
+			encoding="ascii")
+		main = RUST.split("fn main() {")[0] + r"""fn main() {
+	let mut t = Box::new(PiecesTable::new());
+	assert!(add(&mut t, &frame(7, 1, 0, 2, b"ABCD")).unwrap().is_none());
+	assert!(matches!(add(&mut t, &frame(7, 1, 1000, 1024, b"WXYZ")),
+	                 Err(situ_rt::Error::Constraint)));
+	assert_eq!(add(&mut t, &frame(7, 1, 1, 2, b"EF")).unwrap().unwrap(), b"ABCDEF");
+	let _ = SameMessageTable::key;
+	println!("rust ok");
+}
+"""
+		(out / "main.rs").write_text(main, encoding="ascii")
+		compiled = subprocess.run(
+			[RUSTC, "--edition", "2021", "-o", str(tmp_path / "m"),
+			 str(out / "main.rs")], capture_output=True, text=True)
+		assert compiled.returncode == 0, compiled.stderr
+		ran = subprocess.run([str(tmp_path / "m")], capture_output=True,
+		                     text=True, timeout=60)
+		assert ran.stdout.strip() == "rust ok", ran.stderr
+
+	if CXX is not None:
+		program = CPP.split("int main()")[0] + r"""int main()
+{
+	::situ::rt::const_bytes out;
+	auto *t = new ::situ::pieces_table();
+	auto a = frame(7, 1, 0, 2, text("ABCD"), 4);
+	auto b = frame(7, 1, 1000, 1024, text("WXYZ"), 4);
+	auto c = frame(7, 1, 1, 2, text("EF"), 2);
+	const bool ok = add(*t, a, out) == ::situ::rt::err::truncated
+	    && add(*t, b, out) == ::situ::rt::err::constraint
+	    && add(*t, c, out) == ::situ::rt::err::ok && out.size() == 6u
+	    && std::memcmp(out.data(), "ABCDEF", 6) == 0;
+	delete t;
+	std::printf("%s\n", ok ? "cpp ok" : "cpp wrong");
+	return 0;
+}
+"""
+		(tmp_path / "t.cpp").write_text(
+			program.replace('#include "r_converse.hpp"\n', ""), encoding="ascii")
+		compiled = subprocess.run(
+			[CXX, "-std=c++17", "-g", "-fsanitize=address,undefined",
+			 f"-I{runtime / 'c'}", f"-I{runtime / 'cpp'}",
+			 f"-I{tmp_path / 'cpp'}", str(tmp_path / "t.cpp"),
+			 str(runtime / "c" / "situ.c"), "-o", str(tmp_path / "tc")],
+			capture_output=True, text=True)
+		assert compiled.returncode == 0, compiled.stderr
+		ran = subprocess.run([str(tmp_path / "tc")], capture_output=True,
+		                     text=True, timeout=60)
+		assert ran.stdout.strip() == "cpp ok", ran.stdout + ran.stderr

@@ -294,6 +294,14 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t}",
 		"\t}",
 		f"\t{name}_slot_t *m = &t->slot[s];",
+		# Every piece of one message says the same count. A relation whose
+		# key leaves the count out lets a later piece say a larger one, and
+		# its index, checked only against its own count, then placed it at
+		# `index * stride`, past the slot: a write half a megabyte beyond
+		# the table, found under ASan.
+		f"\tif ({count} != m->count) {{",
+		"\t\treturn SITU_ERR_CONSTRAINT;\t/* not its message's count */",
+		"\t}",
 		f"\tif ({name}_marked(t, s, {index})) {{",
 		"\t\treturn SITU_ERR_TRUNCATED;\t/* held already: a resend */",
 		"\t}",
