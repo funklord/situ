@@ -199,6 +199,31 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   (2) A gained `holds` was reported BREAKING, "a peer misreads"; it is a
   tightening and now says so (26.1118 amended).
 
+- 20261121T0600Z (its sec 1341), adopting 26.1122: (1) NEEDED -- a
+  track by the key's values, without a request view: its asks table also
+  awaits exchanges whose request somebody else sealed and sent (a relay's
+  forwarded question), holding only `msg` and its own sender, and
+  `_track_by_id_with` holds no key so the driver never matches them. (2) A
+  reply in pieces: it peeks per piece and matches only the completing one
+  -- its own. (3) The gate points into the receive buffer; a line in
+  `_on_message_from`'s comment should say its bytes must live until the
+  call returns.
+- 20261121T0700Z (its sec 1342): the setting reads through `switch
+  (remaining)`, every malformed shape probed refused. (1) No builder for a
+  struct ending in that variant, and no "no builder for X" line saying why
+  -- `ntp_datagram` has none either. (2) `wire --check` calls moving the
+  last two members into the 65-byte arm BREAKING ("everything after them
+  shifts"); a ranked setting's bytes are identical. (3) The enum/field
+  macro-collision warning saved it a quiet collision.
+- 20261121T0800Z (its sec 1344): OPEN, performance. Its signed record
+  opened through the generated view and `check` costs 21-24 ns against
+  7.5 ns by hand at -Os (20.8 against 5.9 at -O2), 20 million opens: 49%
+  in the caller (inline `_view`, `_signature_offset`), 36% in `_check`.
+  Its guess: offsets recomputed per field with bounds folding on every
+  step, `check` and the accessors each re-deriving the variable member's
+  position. Accepted there (a verify follows every open); the number that
+  matters on a store scan or a router.
+
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
 without huge dependencies kept, and the pertinent code shared:
