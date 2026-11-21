@@ -256,8 +256,11 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   peeked discriminant past the buffer (C and C++; 2 bytes, `A1 00`, read
   a third), and the nesting probe went on after a "too deep" answer,
   exponential in nesting (all four; 40 maps a second in C, 159 s in
-  Python). Fixed in 87bba626: the guard covers the struct's own peeks,
-  and the probe returns at the first too-deep answer.
+  Python). Fixed in 87bba626, the probe returning at the first too-deep
+  answer; the over-read finally in 33f63fdc, which reads a missing peek
+  as zero, as Rust and Python do -- guarding the whole extent with 0
+  (gate 13) and then with the struct's floor (gate 14) each split the
+  readers on a zero-byte view.
 
 - 20261121T1000Z: fuzznet answered 26.1123's three review points (its
   record's last section): a stride, not a total, set by the first non-last

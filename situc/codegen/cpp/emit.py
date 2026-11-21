@@ -764,7 +764,7 @@ class Emitter:
 		lines.extend(self._lets(struct))
 		lines.extend(self._let_setters(struct))
 		lines.extend(self._walked(struct))
-		lines.extend(self._extent_method(struct))
+		lines.extend(self._peek_guarded(struct, self._extent_method(struct)))
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
@@ -4056,7 +4056,11 @@ class Emitter:
 			# The struct's own minimum, not zero: a sentinel meaning "no
 			# element" cannot also be a length, which is the correction 26.322
 			# records. `view_sub` refuses it exactly as before.
-			floor = self._floor(struct, terms, blank=True)
+			floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {terms[0]}u)) {{",
+			          f"\t\t\treturn {terms[0]}u;",
+			          "\t\t}",
+			          ""]
+			         if len(terms) > 1 and terms[0] != "0" else [])
 			return [*head,
 			        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
 			        "\t{",
@@ -4090,7 +4094,10 @@ class Emitter:
 		# The plain form's floor, for its reason: a walk hands this whatever
 		# remains of the frame, and `validate` reached past a one-byte
 		# message through `all_fits` here (26.901).
-		floor = self._floor(struct, sums)
+		floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {sums[0]}u)) {{",
+		          f"\t\t\treturn {sums[0]}u;",
+		          "\t\t}"]
+		         if len(sums) > 1 and sums[0] != "0" else [])
 		return [*head,
 		        "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t depth)"
 		        " const noexcept",
@@ -4107,37 +4114,25 @@ class Emitter:
 		        "\t\treturn extent_at(0);",
 		        "\t}"]
 
-	def _read_floor(self, struct: ResolvedStruct, constant: int) -> int:
-		"""The bytes an extent reads before it knows any length: the constant
-		prefix and the struct's own peeks, which consume nothing and so are
-		not in it. C's `_read_floor`, for its reason: `peek u3 major` left
-		CBOR's `item` with no guard, and a value starting where its pair's
-		bytes ended read its major type past the buffer."""
+	def _peek_guarded(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""An extent's lines with each read of this struct's own peeks
+		guarded: the field where its bytes are here, zero where they are
+		not, as the Rust and Python getters answer. C's `_peek_guarded`
+		says why the whole extent is not guarded instead."""
 		own = f"{struct.name}."
-		reach = [-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
-		         for held in (entry.placement for entry in struct.entries)
-		         if held.peek and held.offset_bits is not None
-		         and held.size_bits is not None
-		         and held.path.startswith(own)
-		         and "." not in held.path[len(own):]]
-		return max([constant, *reach])
-
-	def _floor(self, struct: ResolvedStruct, terms: list[str],
-			blank: bool = False) -> list[str]:
-		"""The guard ahead of an extent's terms: the bytes they read must be
-		here, or the extent is those bytes -- the struct's least, never
-		zero, which a walk reads as no element (26.322). Its constant
-		prefix alone said zero for CBOR's `item`, and a zero-byte view of
-		a struct that cannot be under a byte was accepted."""
-		constant = terms[0] if terms and terms[0].isdigit() else "0"
-		variable = terms[1:] if terms and terms[0].isdigit() else terms
-		need = self._read_floor(struct, int(constant))
-		if not variable or not need:
-			return []
-		return [f"\t\tif (!situ_in_bounds(raw_, 0u, {need}u)) {{",
-		        f"\t\t\treturn {need}u;",
-		        "\t\t}",
-		        *([""] if blank else [])]
+		for held in (entry.placement for entry in struct.entries):
+			if not (held.peek and held.offset_bits is not None
+			        and held.size_bits is not None
+			        and held.path.startswith(own)
+			        and "." not in held.path[len(own):]):
+				continue
+			reach  = -(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
+			getter = f"this->{c_name(held.name)}()"
+			safe   = (f"(situ_in_bounds(raw_, 0u, {reach}u) ? {getter}"
+			          " : 0u)")
+			lines  = [line.replace(getter, safe) for line in lines]
+		return lines
 
 	def _extent_by_cursor(self, struct: ResolvedStruct,
 			steps: list[CursorStep], limit: int,
@@ -4159,10 +4154,9 @@ class Emitter:
 		body.extend([f"\t\tif (depth >= {limit}u) {{",
 		             "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
 		             "\t\t}"])
-		need = self._read_floor(struct, parts[0])
-		if need and parts[1]:
-			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {need}u)) {{",
-			             f"\t\t\treturn {need}u;",
+		if parts[0] and parts[1]:
+			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {parts[0]}u)) {{",
+			             f"\t\t\treturn {parts[0]}u;",
 			             "\t\t}"])
 		body.extend([f"\t\tstd::uint32_t extent = {parts[0]}u;",
 		             "\t\tstd::uint32_t at = 0u;"])

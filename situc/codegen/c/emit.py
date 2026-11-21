@@ -5885,7 +5885,8 @@ class Emitter:
 
 		self._in_extent.add(struct.name)
 		try:
-			return self._extent_body(struct, constant, variable)
+			return self._peek_guarded(
+				struct, self._extent_body(struct, constant, variable))
 		finally:
 			self._in_extent.discard(struct.name)
 
@@ -5942,28 +5943,39 @@ class Emitter:
 			              f"{indent}\t}}"])
 		return [*lines, f"{indent}}}"]
 
-	def _read_floor(self, struct: ResolvedStruct, constant: int) -> int:
-		"""The bytes an extent's terms read before they know any length: the
-		constant prefix, and this struct's own peeks, which consume nothing
-		and so are not in it.
+	def _peek_guarded(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""An extent's lines with each read of this struct's own peeks
+		guarded: the field where its bytes are here, zero where they are
+		not -- what the Rust and Python getters answer, and so what the
+		four agree on.
 
-		A `peek u3 major` switching a variant made `constant` zero, so no
-		guard was emitted and CBOR's `item` read its major type out of a
-		zero-length view -- a value starting where its pair's bytes ended.
-		A heap read past the buffer under ASan, from `_check` on 243 bytes
-		libFuzzer found; on master too. Counted as the layout counts the
-		struct's minimum (hull's findings 14 and 16): own peeks only, each
-		to a whole byte. And the guard answers this floor, not the
-		constant: zero there accepted a zero-byte view of a struct that
-		cannot be under a byte, where Rust and Python refuse it."""
+		A peek consumes nothing, so the constant-prefix guard does not
+		cover it: `peek u3 major` left CBOR's `item` reading its major type
+		out of a zero-length view, past the buffer, under ASan from
+		`validate` on two bytes. Guarding the whole extent instead was
+		tried twice and each split the readers: answering the constant
+		(0) accepted a zero-byte `tree` that Rust and Python refuse,
+		answering the floor (1) refused a zero-byte CBOR value they
+		accept. Rust reads the missing discriminant as zero and measures
+		that arm -- `tree`'s default arm is a byte, `item`'s arm 0 none --
+		and so does this. Own peeks only, each to a whole byte, as the
+		layout counts the struct's minimum (hull's findings 14, 16)."""
 		own = f"{struct.name}."
-		reach = [-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
-		         for held in (entry.placement for entry in struct.entries)
-		         if held.peek and held.offset_bits is not None
-		         and held.size_bits is not None
-		         and held.path.startswith(own)
-		         and "." not in held.path[len(own):]]
-		return max([constant, *reach])
+		for held in (entry.placement for entry in struct.entries):
+			if not (held.peek and held.offset_bits is not None
+			        and held.size_bits is not None
+			        and held.path.startswith(own)
+			        and "." not in held.path[len(own):]):
+				continue
+			reach  = -(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
+			getter = (ident(self.prefix, struct.name,
+			                c_name(self._local(struct, held)), "get")
+			          + "(view)")
+			safe   = (f"(situ_in_bounds(view, 0u, {reach}u) ? {getter}"
+			          " : 0u)")
+			lines  = [line.replace(getter, safe) for line in lines]
+		return lines
 
 	def _extent_body(self, struct: ResolvedStruct, constant: int,
 			variable: list[Placement]) -> list[str]:
@@ -6022,11 +6034,10 @@ class Emitter:
 			# need a second return channel in eleven callers to say what a
 			# short tail already means.
 			body: list[str] = []
-			floor = self._read_floor(struct, constant)
-			if floor and terms:
+			if constant and terms:
 				body.extend([
-					f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
-					f"\t\treturn {floor}u;\t/* the lengths below are not"
+					f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+					f"\t\treturn {constant}u;\t/* the lengths below are not"
 					" here to read */",
 					"\t}",
 					"",
@@ -6113,11 +6124,10 @@ class Emitter:
 		# this whatever remains of the frame, one byte of it included, and
 		# the lengths are read out of the fixed prefix. `validate` reached
 		# past a one-byte message through `all_fits` here (26.901).
-		floor = self._read_floor(struct, constant)
-		if floor and deep:
+		if constant and deep:
 			lines.extend([
-				f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
-				f"\t\treturn {floor}u;\t/* the lengths below are not"
+				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+				f"\t\treturn {constant}u;\t/* the lengths below are not"
 				" here to read */",
 				"\t}"])
 		lines.extend(f"\textent = extent + ({term});" for term in deep)
@@ -6159,11 +6169,10 @@ class Emitter:
 			f"\tif (depth >= {limit}u) {{",
 			"\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
 			"\t}"])
-		floor = self._read_floor(struct, constant)
-		if floor and variable:
+		if constant and variable:
 			body.extend([
-				f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
-				f"\t\treturn {floor}u;\t/* the lengths below are not"
+				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+				f"\t\treturn {constant}u;\t/* the lengths below are not"
 				" here to read */",
 				"\t}"])
 		for step in steps:
