@@ -81,3 +81,18 @@ def test_a_run_sized_by_a_field_is_not_spliced() -> None:
 		findings
 	assert [finding.subject for finding in findings] == ["act[2]"], findings
 	assert "holds=device" in findings[0].detail
+
+
+def test_a_gained_holds_is_a_tightening() -> None:
+	"""fuzznet (inbox 20261121T0400Z): `holds` added to a byte run was
+	reported BREAKING, "a deployed peer misreads these bytes". No peer
+	misreads: the bytes are what they were, and the held struct decides
+	which of them `validate` accepts -- a narrowing, as a tightened `max`
+	is. Dropped, it is the loosening."""
+	held = SIZED.replace("u8 signer[signer_len];",
+	                     "u8 signer[signer_len] [holds = device];")
+	gained = compare(_wire(SIZED), _wire(held)).findings
+	assert [finding.kind for finding in gained] == ["backward"], gained
+	assert "misread" not in gained[0].detail
+	dropped = compare(_wire(held), _wire(SIZED)).findings
+	assert [finding.kind for finding in dropped] == ["forward"], dropped

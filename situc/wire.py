@@ -1730,6 +1730,12 @@ def _compare_member(struct: str, index: int, was: str | None,
 
 #: Facts that say what the bytes *are*, rather than which of them are allowed.
 #:
+#: `holds=` is not one. The run's bytes are read as they were; the held
+#: struct decides which of them `validate` accepts, so a gained `holds` is
+#: a tightening and a dropped one a loosening -- as a `max` is. It sat here
+#: until fuzznet (inbox 20261121T0400Z) asked what a peer misreads, and the
+#: answer was nothing (26.898, 26.1118).
+#:
 #: The distinction decides everything. A changed `max` narrows the set of
 #: messages both sides agree is valid, so old and new still read the same
 #: number and one of them may refuse it. A changed byte order means the same
@@ -1738,7 +1744,7 @@ def _compare_member(struct: str, index: int, was: str | None,
 INTERPRETATION = (
 	"big", "little", "native", "msb_first", "lsb_first",
 	"radix=", "scaled", "peek", "sized-by=", "varint=", "codec=", "encoding=",
-	"nonce=", "key=", "pad-to=", "holds=",
+	"nonce=", "key=", "pad-to=",
 	"endian-from=", "quote=", "escape=", "trim=", "fold-case",
 	"nul_terminated",
 	# Where the bytes are, where the run stops, and what the checksum field

@@ -177,6 +177,17 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   refused past what its field holds, as Python and Rust did
   (`test/unit/test_a_builder_counts_each_run_apart.py`). Also met: no
   builder for a struct whose tag names no codec, as designed.
+- 20261121T0400Z (its secs 1338, 1339): the counter fix moved its routing
+  manifest and every counted-run builder onto generated code. Two more:
+  (1) OPEN -- an import re-emits the imported unit's code. Its contact
+  request imports the contact card for `[holds = fzn_contact_card]`, and
+  under the importer's prefix the unit carries the card's whole checker
+  again (4412 bytes of text beside the card's own 4420, a 5500-line
+  header); about 30 layouts remain, several importing the contact device.
+  Wanted: an importing unit that calls the imported unit's generated
+  functions, its prefix named at the import, instead of emitting them.
+  (2) A gained `holds` was reported BREAKING, "a peer misreads"; it is a
+  tightening and now says so (26.1118 amended).
 
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
@@ -227,7 +238,8 @@ without huge dependencies kept, and the pertinent code shared:
   widths after a `[holds]` run sized by a field -- 26.1118's splice lined
   the held struct's members up against the fields after the run. Fixed:
   only a run that is exactly the struct is expanded (26.1118). A gained
-  `holds` stays breaking, which fuzznet confirmed (20261120T2050Z). The nonce
+  `holds` is a tightening, backward-compatible only (20261121T0400Z
+  overturned 20261120T2050Z's "breaking"). The nonce
   set there waits on fuzznet's holder choosing the clock's unit.
 - From fuzznet (inbox 20261120T1930Z), answering the zero-expiry
   question: neither `replay` over an arm nor a rule keyed on a field fits,
@@ -9570,10 +9582,11 @@ narrowed to 32 and `sig` as 64 -> 32 where no byte had moved; fuzznet's
 contract, written from `situc map`, disagreed with the check. A run is
 expanded now only where no field decides its extent (a `[remaining]`
 tail) or it is exactly the struct's size; otherwise it keeps its line and
-the gained `holds` is reported as itself, the interpretation change 26.898
-made it. fuzznet agreed it is breaking (inbox 20261120T2050Z): once the run
-is held, validate refuses bytes that are not the held struct, which the
-old reader took.
+the gained `holds` is reported as itself. ~~fuzznet agreed it is breaking
+(inbox 20261120T2050Z)~~ -- its reason, that validate now refuses bytes the
+old reader took, is a tightening, and that is what it is reported as since
+fuzznet asked what a peer misreads (inbox 20261121T0400Z): backward-only
+gained, forward-only dropped, as a `max`.
 
 ### 26.1116 A display reads member by member
 
