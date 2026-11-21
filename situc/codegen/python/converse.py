@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
-                            SubView, after_region, key_layout)
+from situc.relation import (Read, KeyLayout, KeyStep, ReadBytes, Refused,
+                            Side, SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -89,6 +89,44 @@ def _key_bytes(sides: Side, view: str, gated: bool = False,
 	return lines
 
 
+def _part_name(chain: list[KeyStep]) -> str:
+	"""A request key part's parameter: its path below the request,
+	flattened, as C's `_key` names it (26.1122)."""
+	return py_name(chain[-1].path.split(".", 1)[1].replace(".", "_"))
+
+
+def key_function(request: Side, layout: KeyLayout) -> list[str]:
+	"""`key(...)`: the key a request with these values would have, packed
+	as `record` packs one it reads -- for an exchange awaited with no
+	request in hand (fuzznet, inbox 20261121T0600Z). C's `_key`."""
+	if layout.packed:
+		params = ", ".join(f"{_part_name(chain)}: int" for chain, _ in request)
+		body = ["\t\traw = 0"]
+		for chain, width in request:
+			body.append(f"\t\traw = (raw << {width}) | "
+			            f"({_part_name(chain)} & {hex((1 << width) - 1)})")
+		return ["\t@staticmethod",
+		        f"\tdef key({params}) -> int:",
+		        '\t\t"""The key a request with these values would have."""',
+		        *body, "\t\treturn raw", ""]
+	params = ", ".join(
+		f"{_part_name(chain)}: {'bytes' if isinstance(chain[-1], ReadBytes) else 'int'}"
+		for chain, _ in request)
+	body = ["\t\tparts = []"]
+	for chain, width in request:
+		name = _part_name(chain)
+		if isinstance(chain[-1], ReadBytes):
+			body.append(f"\t\tparts.append(bytes({name})[:{width // 8}])")
+		else:
+			count = (width + 7) // 8
+			body.append(f"\t\tparts.append(({name} & {hex((1 << (8 * count)) - 1)})"
+			            f".to_bytes({count}, \"big\"))")
+	return ["\t@staticmethod",
+	        f"\tdef key({params}) -> bytes:",
+	        '\t\t"""The key a request with these values would have."""',
+	        *body, '\t\treturn b"".join(parts)', ""]
+
+
 def reply_type(relation: ast.Relation) -> str:
 	"""What the reply side takes: its view, or with `[after]` the gate of
 	that sealed region, which only a verified open hands out (26.1122)."""
@@ -154,6 +192,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			(f"\t\tself._live: dict[tuple[int, "
 			 f"{'int' if layout.packed else 'bytes'}], int] = {{}}"),
 			"",
+			*key_function(request, layout),
 			f"\tdef record(self, {first.name}: "
 			f"{py_name(first.type_name)}, id: int, *, peer: int = 0) -> None:",
 			f'\t\t"""Remember `{first.name}`. Raises BoundsError when full.',
@@ -162,8 +201,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tverifies the reply -- and only a reply taken with the same",
 			'\t\tone answers it (26.1122)."""',
 			*asked,
-			"\t\tkey = (peer, raw)",
+			"\t\tself.record_key(raw, id, peer=peer)",
 			"",
+			(f"\tdef record_key(self, raw: {'int' if layout.packed else 'bytes'},"
+			 " id: int, *, peer: int = 0) -> None:"),
+			'\t\t"""`record` by a key from `key(...)`, with no request in hand."""',
+			"\t\tkey = (peer, raw)",
 			"\t\tif key not in self._live and len(self._live) >= self._cap:",
 			"\t\t\traise BoundsError(",
 			f"\t\t\t\t\"{relation.name}: {{}} exchanges already pending\""

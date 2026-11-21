@@ -11,8 +11,8 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
-from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
-                            SubView, after_region, key_layout)
+from situc.relation import (Read, KeyLayout, KeyStep, ReadBytes, Refused,
+                            Side, SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -130,6 +130,45 @@ def _key_equal(total: int) -> str:
 	        "return true; }()")
 
 
+def key_function(request: Side, layout: KeyLayout) -> list[str]:
+	"""`key(...)`: the key a request with these values would have, packed
+	as `record_from` packs one it reads (fuzznet, inbox 20261121T0600Z).
+	C's `_key`; a part is named by its path below the request. An
+	exact-bytes key is written to `out`, `total_bytes` long."""
+	def part(chain: list[KeyStep]) -> str:
+		return c_name(chain[-1].path.split(".", 1)[1])
+	if layout.packed:
+		joined = ", ".join(f"std::uint64_t {part(chain)}" for chain, _ in request)
+		body = ["\t\tstd::uint64_t key = 0u;"]
+		for chain, width in request:
+			cut = (part(chain) if width >= 64
+			       else f"({part(chain)} & UINT64_C({hex((1 << width) - 1)}))")
+			body.append(f"\t\tkey = (key << {width}u) | {cut};")
+		return ["\t/** The key a request with these values would have. */",
+		        f"\t[[nodiscard]] static std::uint64_t key({joined}) noexcept",
+		        "\t{", *body, "\t\treturn key;", "\t}", ""]
+	params = []
+	body = ["\t\tstd::uint32_t at = 0u;"]
+	for chain, width in request:
+		if isinstance(chain[-1], ReadBytes):
+			params.append(f"const std::uint8_t *{part(chain)}")
+			body += [f"\t\tfor (std::uint32_t b = 0u; b < {width // 8}u; b++) {{",
+			         f"\t\t\tout[at + b] = {part(chain)}[b];", "\t\t}",
+			         f"\t\tat += {width // 8}u;"]
+		else:
+			count = (width + 7) // 8
+			params.append(f"std::uint64_t {part(chain)}")
+			body += [f"\t\tfor (std::uint32_t b = 0u; b < {count}u; b++) {{",
+			         f"\t\t\tout[at + b] = static_cast<std::uint8_t>("
+			         f"{part(chain)} >> (8u * ({count}u - 1u - b)));",
+			         "\t\t}", f"\t\tat += {count}u;"]
+	params.append("std::uint8_t *out")
+	return ["\t/** The key a request with these values would have, written",
+	        f"\t *  to `out`, {layout.total_bytes} bytes. */",
+	        f"\tstatic void key({', '.join(params)}) noexcept",
+	        "\t{", *body, "\t\t(void)at;", "\t}", ""]
+
+
 def reply_type(relation: ast.Relation, resolved: ResolvedSchema) -> str:
 	"""What the reply side takes, under `::situ::`: its view, or with
 	`[after]` that sealed region's gate, which only a verified open hands
@@ -224,13 +263,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t}",
 			"\t}",
 			"",
-			f"\t[[nodiscard]] ::situ::rt::err record_from(const ::situ::{req} "
-			f"&{first.name},",
-			"\t                                          std::uint32_t peer,",
-			"\t                                          std::uint32_t id) noexcept",
+			*key_function(request, layout),
+			"\t/** `record_from` by a key from `key(...)`, no request in hand. */",
+			("\t[[nodiscard]] ::situ::rt::err record_key_from(std::uint64_t key,"
+			 if layout.packed else
+			 "\t[[nodiscard]] ::situ::rt::err record_key_from("
+			 "const std::uint8_t *key,"),
+			"\t                                              std::uint32_t peer,",
+			"\t                                              std::uint32_t id)"
+			" noexcept",
 			"\t{",
-			*asked,
-			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			"\t\t\tif (!slots_[i].live) {",
 			*(["\t\t\t\tslots_[i] = slot{key, id, true, peer};"] if layout.packed else [
@@ -244,6 +286,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\t}",
 			"\t\t}",
 			"\t\treturn ::situ::rt::err::bounds;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err record_from(const ::situ::{req} "
+			f"&{first.name},",
+			"\t                                          std::uint32_t peer,",
+			"\t                                          std::uint32_t id) noexcept",
+			"\t{",
+			*asked,
+			"\t\treturn record_key_from(key, peer, id);",
 			"\t}",
 			"",
 			f"\t[[nodiscard]] ::situ::rt::err record(const ::situ::{req} "

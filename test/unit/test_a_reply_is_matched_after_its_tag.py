@@ -375,6 +375,10 @@ d = g_drive.reply_to_driver(sent.append, 2)
 d.send(frame(7, 9, 0), b"x", 5, 0, peer=2)
 assert no(lambda: d.on_message(frame(7, 0, 9).open_sealed(True)))
 assert d.on_message(frame(7, 0, 9).open_sealed(True), peer=2) == 5
+t.record_key(t.key(7, 9), 12, peer=4)
+assert t.take(frame(7, 0, 9).open_sealed(True), peer=4) == 12
+d.track_key(d.key(7, 9), b"", 6, 0, peer=4, retries=0)
+assert d.on_message(frame(7, 0, 9).open_sealed(True), peer=4) == 6
 print("ok")
 """
 
@@ -445,6 +449,14 @@ int main()
 	(void)v9.with_sealed(true, [&](::situ::frame::sealed_gate g) {
 		CHECK(d.on_message(g, id) == ::situ::rt::err::constraint);
 		CHECK(d.on_message_from(g, 2u, id) == ::situ::rt::err::ok && id == 5u);
+	});
+	CHECK(t.record_key_from(::situ::reply_to_table::key(7u, 9u), 4u, 12u)
+	      == ::situ::rt::err::ok);
+	CHECK(d.track_key_from(::situ::reply_to_driver::key(7u, 9u), 4u, nullptr,
+	                       0u, 6u, 0u) == ::situ::rt::err::ok);
+	(void)v9.with_sealed(true, [&](::situ::frame::sealed_gate g) {
+		CHECK(t.take_from(g, 4u, id) == ::situ::rt::err::ok && id == 12u);
+		CHECK(d.on_message_from(g, 4u, id) == ::situ::rt::err::ok && id == 6u);
 	});
 	if (!fail) std::printf("ALL PASS\n");
 	return fail;
@@ -518,6 +530,10 @@ fn main() {
 	d.send_from(&rq, 2, &req, 5, 0, None).unwrap();
 	assert!(matches!(d.on_message(&o9), Err(Error::Constraint)));
 	assert_eq!(d.on_message_from(&o9, 2).unwrap(), 5);
+	t.record_key_from(ReplyToTable::key(7, 9), 4, 12).unwrap();
+	assert_eq!(t.take_from(&o9, 4).unwrap(), 12);
+	d.track_key_from(ReplyToDriver::<Sink>::key(7, 9), 4, &[], 6, 0, None).unwrap();
+	assert_eq!(d.on_message_from(&o9, 4).unwrap(), 6);
 	println!("ok");
 }
 """

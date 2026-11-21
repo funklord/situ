@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
-from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
-                            SubView, after_region, key_layout)
+from situc.relation import (Read, KeyLayout, KeyStep, ReadBytes, Refused,
+                            Side, SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -126,6 +126,41 @@ def _key_bytes(sides: Side, view: str, total: int,
 	return lines
 
 
+def key_function(request: Side, layout: KeyLayout) -> list[str]:
+	"""`key(...)`: the key a request with these values would have, packed
+	as `record_from` packs one it reads (fuzznet, inbox 20261121T0600Z).
+	C's `_key`; a part is named by its path below the request."""
+	def part(chain: list[KeyStep]) -> str:
+		return _ident(chain[-1].path.split(".", 1)[1].replace(".", "_"))
+	if layout.packed:
+		lines = ["\t\tlet mut key: u64 = 0;"]
+		for chain, width in request:
+			cut = (part(chain) if width >= 64
+			       else f"({part(chain)} & {hex((1 << width) - 1)})")
+			lines.append(f"\t\tkey = (key << {width}) | {cut};")
+		joined = ", ".join(f"{part(chain)}: u64" for chain, _ in request)
+		return ["\t/// The key a request with these values would have.",
+		        f"\tpub fn key({joined}) -> u64 {{", *lines, "\t\tkey",
+		        "\t}", ""]
+	lines = [f"\t\tlet mut key = [0u8; {layout.total_bytes}];",
+	         "\t\tlet mut at = 0usize;"]
+	params = []
+	for chain, width in request:
+		if isinstance(chain[-1], ReadBytes):
+			params.append(f"{part(chain)}: &[u8; {width // 8}]")
+			lines += [f"\t\tkey[at..at + {width // 8}].copy_from_slice({part(chain)});",
+			          f"\t\tat += {width // 8};"]
+		else:
+			count = (width + 7) // 8
+			params.append(f"{part(chain)}: u64")
+			lines += [f"\t\tfor b in 0..{count} {{",
+			          f"\t\t\tkey[at + b] = ({part(chain)} >> (8 * ({count} - 1 - b))) as u8;",
+			          "\t\t}", f"\t\tat += {count};"]
+	return ["\t/// The key a request with these values would have.",
+	        f"\tpub fn key({', '.join(params)}) -> [u8; {layout.total_bytes}] {{",
+	        *lines, "\t\tlet _ = at;", "\t\tkey", "\t}", ""]
+
+
 def reply_type(relation: ast.Relation) -> str:
 	"""What the reply side takes: its view, or with `[after]` the gate of
 	that sealed region, which only a verified open hands out (26.1122)."""
@@ -204,10 +239,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t}",
 			"",
 			f"\t/// Remember `{first.name}` under its key and `peer`.",
-			f"\tpub fn record_from(&mut self, {first.name}: &"
-			f"{_pascal(first.type_name)}, peer: u32, id: u32) -> Result<()> {{",
-			*asked,
-			"",
+			*key_function(request, layout),
+			"\t/// `record_from` by a key from `key(...)`, no request in hand.",
+			("\tpub fn record_key_from(&mut self, key: u64, peer: u32, id: u32)"
+			 " -> Result<()> {" if layout.packed else
+			 f"\tpub fn record_key_from(&mut self, key: [u8; {layout.total_bytes}],"
+			 " peer: u32, id: u32) -> Result<()> {"),
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
 			"\t\t\t\t*slot = Self::held(key, id, peer);",
@@ -215,6 +252,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\t}",
 			"\t\t}",
 			"\t\tErr(Error::Bounds)",
+			"\t}",
+			"",
+			f"\tpub fn record_from(&mut self, {first.name}: &"
+			f"{_pascal(first.type_name)}, peer: u32, id: u32) -> Result<()> {{",
+			*asked,
+			"\t\tself.record_key_from(key, peer, id)",
 			"\t}",
 			"",
 			f"\t/// Remember `{first.name}` under its key.",

@@ -24,7 +24,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
-from situc.codegen.rust.converse import _key, _key_bytes, reply_type
+from situc.codegen.rust.converse import (_key, _key_bytes, key_function,
+                                        reply_type)
 from situc.relation import KeyLayout, Refused, after_region, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
@@ -209,6 +210,19 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// (26.1055). `own` overrides the driver's numbers.",
 			"\t/// `_from` holds it against `peer`: only `on_message_from` with",
 			"\t/// the same one ends it (26.1122).",
+			*key_function(request, layout),
+			"\t/// `track_from` by a key from `key(...)`: an exchange awaited",
+			"\t/// with no request in hand -- sent by somebody else, or",
+			"\t/// forwarded (fuzznet, inbox 20261121T0600Z).",
+			("\tpub fn track_key_from(&mut self, key: u64, peer: u32,"
+			 if layout.packed else
+			 f"\tpub fn track_key_from(&mut self, key: [u8; {layout.total_bytes}],"
+			 " peer: u32,"),
+			"\t                      bytes: &'a [u8], id: u32, now_ms: u32,",
+			f"\t                      own: Option<&{held}Policy>) -> Result<()> {{",
+			"\t\tself.hold(key, true, peer, bytes, id, now_ms, own)",
+			"\t}",
+			"",
 			f"\tpub fn track_from(&mut self, {first.name}: &{req}, peer: u32,",
 			"\t                  bytes: &'a [u8], id: u32, now_ms: u32,",
 			f"\t                  own: Option<&{held}Policy>) -> Result<()> {{",

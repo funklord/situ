@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.codegen.python.converse import _key, _key_bytes, reply_type
+from situc.codegen.python.converse import (_key, _key_bytes, key_function,
+                                          reply_type)
 from situc.relation import KeyLayout, Refused, after_region, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
@@ -181,6 +182,32 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*(["\t\tself._part_interval = resend_part_ms",
 			   "\t\tself._part_retries  = retries_part"] if part else []),
 			"\t\tself._live: dict[_key, _exchange] = {}",
+			"",
+			*key_function(request, layout),
+			(f"\tdef track_key(self, raw: {'int' if layout.packed else 'bytes'},"
+			 " data: bytes, id: int,"),
+			"\t              now_ms: int, *, peer: int = 0,",
+			"\t              timeout_ms: int | None = None,",
+			("\t              retries: int | None = None,"
+			 "\n\t              resend_ms: int | None = None,"
+			 "\n\t              resend_part_ms: int | None = None,"
+			 "\n\t              retries_part: int | None = None) -> None:"
+			 if part else
+			 "\t              retries: int | None = None,"
+			 "\n\t              resend_ms: int | None = None) -> None:"
+			 if resend else
+			 "\t              retries: int | None = None) -> None:"),
+			'\t\t"""`track` by a key from `key(...)`: an exchange awaited with',
+			"",
+			"\t\tno request in hand -- sent by somebody else, or forwarded",
+			'\t\t(fuzznet, inbox 20261121T0600Z)."""',
+			"\t\tself._hold((peer, raw), data, id, now_ms, timeout_ms=timeout_ms,",
+			("\t\t           retries=retries, resend_ms=resend_ms,"
+			 "\n\t\t           resend_part_ms=resend_part_ms,"
+			 " retries_part=retries_part)" if part else
+			 "\t\t           retries=retries, resend_ms=resend_ms)"
+			 if resend else
+			 "\t\t           retries=retries)"),
 			"",
 			f"\tdef track(self, {first.name}: {py_name(first.type_name)},",
 			"\t          data: bytes, id: int, now_ms: int, *,",

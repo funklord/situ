@@ -14,7 +14,7 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
-from situc.codegen.cpp.converse import _opened, reply_type
+from situc.codegen.cpp.converse import _opened, key_function, reply_type
 from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
                             SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
@@ -321,7 +321,27 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t{",
 			*(_key(request, first.name, resolved) if layout.packed else
 			  _key_bytes(request, first.name, resolved, layout.total_bytes)),
-			"\t\tconst std::uint32_t i = hold(bytes, len, id, now_ms, own);",
+			"\t\treturn track_key_from(key, peer, bytes, len, id, now_ms, own);",
+			"\t}",
+			"",
+			*key_function(request, layout),
+			"\t/** `track_from` by a key from `key(...)`: an exchange awaited",
+			"\t *  with no request in hand -- sent by somebody else, or",
+			"\t *  forwarded (fuzznet, inbox 20261121T0600Z). */",
+			("\t[[nodiscard]] ::situ::rt::err track_key_from(std::uint64_t key,"
+			 if layout.packed else
+			 "\t[[nodiscard]] ::situ::rt::err track_key_from("
+			 "const std::uint8_t *key,"),
+			"\t                                             std::uint32_t peer,",
+			"\t                                             const std::uint8_t"
+			" *bytes,",
+			"\t                                             std::uint32_t len,",
+			"\t                                             std::uint32_t id,",
+			"\t                                             std::uint32_t now_ms,",
+			"\t                                             const policy *own ="
+			" nullptr) noexcept",
+			"\t{",
+			"\t\tconst std::uint32_t i = hold(bytes, len, id, now_ms, own);"
 			"\t\tif (i == cap_) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
