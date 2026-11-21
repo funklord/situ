@@ -5501,6 +5501,23 @@ class Emitter:
 				"\t\t}",
 				"\t}",
 			])
+		# Past the cap the answer is "too deep" whatever the rest holds, and
+		# every such answer is the same number, `cap + 1`. So stop there
+		# rather than probing the siblings: each sibling is stepped over by
+		# an extent measured from depth 0, and a run of CBOR maps behind a
+		# few levels of other items probed one level's bytes again per
+		# level -- 160 bytes took 2.4 billion instructions in `_check`, a
+		# run of 40 maps a second at -O1, about 1.6 times per map added.
+		stopped: list[str] = []
+		for line in lines:
+			stopped.append(line)
+			if line.strip() == "deepest = found;":
+				indent = line[:len(line) - len(line.lstrip())]
+				stopped.extend([f"{indent}if (deepest > {cap}u) {{",
+				                f"{indent}\treturn deepest;\t/* too deep:"
+				                " nothing further changes that */",
+				                f"{indent}}}"])
+		lines = stopped
 		walked = lines[lines.index("{") + 1:]
 		if not re.search(r"\bview\b", "\n".join(walked)):
 			lines.append("\t(void)view;")
@@ -5925,6 +5942,27 @@ class Emitter:
 			              f"{indent}\t}}"])
 		return [*lines, f"{indent}}}"]
 
+	def _read_floor(self, struct: ResolvedStruct, constant: int) -> int:
+		"""The bytes an extent's terms read before they know any length: the
+		constant prefix, and this struct's own peeks, which consume nothing
+		and so are not in it.
+
+		A `peek u3 major` switching a variant made `constant` zero, so no
+		guard was emitted and CBOR's `item` read its major type out of a
+		zero-length view -- a value starting where its pair's bytes ended.
+		A heap read past the buffer under ASan, from `_check` on 243 bytes
+		libFuzzer found; on master too. Counted as the layout counts the
+		struct's minimum (hull's findings 14 and 16): own peeks only, each
+		to a whole byte."""
+		own = f"{struct.name}."
+		reach = [-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
+		         for held in (entry.placement for entry in struct.entries)
+		         if held.peek and held.offset_bits is not None
+		         and held.size_bits is not None
+		         and held.path.startswith(own)
+		         and "." not in held.path[len(own):]]
+		return max([constant, *reach])
+
 	def _extent_body(self, struct: ResolvedStruct, constant: int,
 			variable: list[Placement]) -> list[str]:
 		"""The extent function itself, with `_in_extent` held by the caller.
@@ -5982,9 +6020,10 @@ class Emitter:
 			# need a second return channel in eleven callers to say what a
 			# short tail already means.
 			body: list[str] = []
-			if constant and terms:
+			floor = self._read_floor(struct, constant)
+			if floor and terms:
 				body.extend([
-					f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+					f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
 					f"\t\treturn {constant}u;\t/* the lengths below are not"
 					" here to read */",
 					"\t}",
@@ -6072,9 +6111,10 @@ class Emitter:
 		# this whatever remains of the frame, one byte of it included, and
 		# the lengths are read out of the fixed prefix. `validate` reached
 		# past a one-byte message through `all_fits` here (26.901).
-		if constant and deep:
+		floor = self._read_floor(struct, constant)
+		if floor and deep:
 			lines.extend([
-				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+				f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
 				f"\t\treturn {constant}u;\t/* the lengths below are not"
 				" here to read */",
 				"\t}"])
@@ -6117,9 +6157,10 @@ class Emitter:
 			f"\tif (depth >= {limit}u) {{",
 			"\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
 			"\t}"])
-		if constant and variable:
+		floor = self._read_floor(struct, constant)
+		if floor and variable:
 			body.extend([
-				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+				f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
 				f"\t\treturn {constant}u;\t/* the lengths below are not"
 				" here to read */",
 				"\t}"])

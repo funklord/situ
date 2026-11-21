@@ -4056,11 +4056,7 @@ class Emitter:
 			# The struct's own minimum, not zero: a sentinel meaning "no
 			# element" cannot also be a length, which is the correction 26.322
 			# records. `view_sub` refuses it exactly as before.
-			floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {terms[0]}u)) {{",
-			          f"\t\t\treturn {terms[0]}u;",
-			          "\t\t}",
-			          ""]
-			         if len(terms) > 1 and terms[0] != "0" else [])
+			floor = self._floor(struct, terms, blank=True)
 			return [*head,
 			        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
 			        "\t{",
@@ -4094,10 +4090,7 @@ class Emitter:
 		# The plain form's floor, for its reason: a walk hands this whatever
 		# remains of the frame, and `validate` reached past a one-byte
 		# message through `all_fits` here (26.901).
-		floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {sums[0]}u)) {{",
-		          f"\t\t\treturn {sums[0]}u;",
-		          "\t\t}"]
-		         if len(sums) > 1 and sums[0] != "0" else [])
+		floor = self._floor(struct, sums)
 		return [*head,
 		        "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t depth)"
 		        " const noexcept",
@@ -4113,6 +4106,35 @@ class Emitter:
 		        "\t{",
 		        "\t\treturn extent_at(0);",
 		        "\t}"]
+
+	def _read_floor(self, struct: ResolvedStruct, constant: int) -> int:
+		"""The bytes an extent reads before it knows any length: the constant
+		prefix and the struct's own peeks, which consume nothing and so are
+		not in it. C's `_read_floor`, for its reason: `peek u3 major` left
+		CBOR's `item` with no guard, and a value starting where its pair's
+		bytes ended read its major type past the buffer."""
+		own = f"{struct.name}."
+		reach = [-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
+		         for held in (entry.placement for entry in struct.entries)
+		         if held.peek and held.offset_bits is not None
+		         and held.size_bits is not None
+		         and held.path.startswith(own)
+		         and "." not in held.path[len(own):]]
+		return max([constant, *reach])
+
+	def _floor(self, struct: ResolvedStruct, terms: list[str],
+			blank: bool = False) -> list[str]:
+		"""The guard ahead of an extent's terms: the bytes they read must be
+		here, or the extent is its constant prefix and no more."""
+		constant = terms[0] if terms and terms[0].isdigit() else "0"
+		variable = terms[1:] if terms and terms[0].isdigit() else terms
+		need = self._read_floor(struct, int(constant))
+		if not variable or not need:
+			return []
+		return [f"\t\tif (!situ_in_bounds(raw_, 0u, {need}u)) {{",
+		        f"\t\t\treturn {constant}u;",
+		        "\t\t}",
+		        *([""] if blank else [])]
 
 	def _extent_by_cursor(self, struct: ResolvedStruct,
 			steps: list[CursorStep], limit: int,
@@ -4134,8 +4156,9 @@ class Emitter:
 		body.extend([f"\t\tif (depth >= {limit}u) {{",
 		             "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
 		             "\t\t}"])
-		if parts[0] and parts[1]:
-			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {parts[0]}u)) {{",
+		need = self._read_floor(struct, parts[0])
+		if need and parts[1]:
+			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {need}u)) {{",
 			             f"\t\t\treturn {parts[0]}u;",
 			             "\t\t}"])
 		body.extend([f"\t\tstd::uint32_t extent = {parts[0]}u;",
@@ -10956,6 +10979,19 @@ class Emitter:
 				"\t\t\t}",
 				"\t\t}",
 			])
+		# Stop at the first "too deep": every such answer is `cap + 1`, and
+		# probing the siblings after it re-measured one level's bytes per
+		# level -- see the C backend's `_nesting_probe`; a run of CBOR maps took
+		# Python 159 s for 40 maps.
+		stopped: list[str] = []
+		for line in lines:
+			stopped.append(line)
+			if line.strip() == "deepest = found;":
+				indent = line[:len(line) - len(line.lstrip())]
+				stopped.extend([f"{indent}if (deepest > {cap}u) {{",
+				                f"{indent}\treturn deepest;\t/* too deep: nothing further changes that */",
+				                f"{indent}}}"])
+		lines = stopped
 		lines.extend(["\t\treturn deepest;", "\t}",
 		              "",
 		              "\t[[nodiscard]] std::uint32_t nesting() const noexcept",

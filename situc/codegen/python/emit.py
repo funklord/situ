@@ -8060,6 +8060,18 @@ class Emitter:
 				"\t\t\t\tbreak",
 				"\t\t\tat += size",
 			])
+		# Stop at the first "too deep": every such answer is `cap + 1`, and
+		# probing the siblings after it re-measured one level's bytes per
+		# level -- see the C backend's `_nesting_probe`; a run of CBOR maps took
+		# Python 159 s for 40 maps.
+		stopped: list[str] = []
+		for line in lines:
+			stopped.append(line)
+			if line.strip() == "deepest = found":
+				indent = line[:len(line) - len(line.lstrip())]
+				stopped.extend([f"{indent}if deepest > {cap}:",
+				                f"{indent}\treturn deepest  # too deep: nothing further changes that"])
+		lines = stopped
 		lines.extend(["\t\treturn deepest",
 		              "",
 		              "\t@property",
