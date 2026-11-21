@@ -119,6 +119,25 @@ def refusals(resolved: ResolvedSchema) -> list[tuple[str, str]]:
 	return found
 
 
+def _length_member(struct: ResolvedStruct, local: str) -> str:
+	"""The owned copy's member holding run `local`'s length: `<run>_len`,
+	or `<run>_span` where a member of the struct already has that name,
+	and the first of `<run>_run_len`, `<run>_len2` ... free after that.
+	`u8 card_len; u8 card[card_len]` is the commonest way to write a
+	length, and the copy declared `card_len` twice -- the field and the
+	run's length -- so the header did not compile (found in fuzznet's
+	contact request, 2026-11-21)."""
+	taken = {local_name(struct, entry.placement) for entry in struct.entries
+	         if is_own_member(struct, entry.placement)}
+	for suffix in ("len", "span", "run_len"):
+		if f"{local}_{suffix}" not in taken:
+			return f"{local}_{suffix}"
+	count = 2
+	while f"{local}_len{count}" in taken:
+		count += 1
+	return f"{local}_len{count}"
+
+
 def _fields(struct: ResolvedStruct, runs: list[Placement],
 		prefix: str) -> list[str]:
 	lines = []
@@ -137,7 +156,7 @@ def _fields(struct: ResolvedStruct, runs: list[Placement],
 		if placement in runs:
 			lines += [
 				f"\tconst uint8_t *{local};\t/* into your backing */",
-				f"\tuint32_t {local}_len;",
+				f"\tuint32_t {_length_member(struct, local)};",
 			]
 		elif placement.scalar is not None and placement.array_count is None:
 			width = max(8, placement.scalar.bits)
@@ -247,13 +266,14 @@ def _one(struct: ResolvedStruct, prefix: str, emitter: Emitter) -> list[str]:
 			reach  = emitter._member_args(struct, placement)
 			length = f"{ident(prefix, struct.name, local, 'len')}(view{reach})"
 			source = f"{ident(prefix, struct.name, local, 'ptr')}(view{reach})"
+			held = _length_member(struct, local)
 			lines += [
-				f"\tout->{local}_len = {length};",
+				f"\tout->{held} = {length};",
 				f"\tout->{local}     = backing + at;",
-				f"\tfor (uint32_t i = 0u; i < out->{local}_len; i++) {{",
+				f"\tfor (uint32_t i = 0u; i < out->{held}; i++) {{",
 				f"\t\tbacking[at + i] = {source}[i];",
 				"\t}",
-				f"\tat += out->{local}_len;",
+				f"\tat += out->{held};",
 			]
 		elif placement.parameter:
 			# THE ARGUMENT IS THE VALUE, so the owned copy takes it from the
