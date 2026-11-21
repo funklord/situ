@@ -452,7 +452,12 @@ both walkers and the dissector. What a user cannot yet do is listed under
   asked, where fs2.c refuses the first backwards link -- every reader
   validates a struct's arms before its own `refuse` rules, so moving the
   rules ahead of a descent through `at` is a change of verdict order in
-  six readers, not yet made; (d) a checksum whose tag sits in a nested
+  six readers, not yet made. Weighed 2026-11-21 and left: 0051 puts a
+  struct's `refuse` rules after its member checks on purpose (a wrong
+  member is the more specific answer), the gain is the refusal's reason
+  alone -- the loop is refused either way, and openmlx4 pins it as
+  DepthError -- and a narrower order (rules before an `at` descent only)
+  would be a second ordering rule in six readers; (d) a checksum whose tag sits in a nested
   header and covers the header, BOOT2 and each section the chain reaches
   -- in scope (holder, 2026-11-20), gated part by part in 26.1117: its own
   bytes as 0xFFFF already exist (`[self_as]`); a tag covering bytes outside

@@ -198,7 +198,11 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f" The clock is yours, in {unit}:",
 		f" * a message whose pieces stop is dropped `{upper}_TIMEOUT` after "
 		"its first.",
-		" * Zero-initialise it, or call `_init`. */",
+		" * It holds every slot's buffer itself, more than"
+		f" {_number(held, 'bytes')} bytes: give it static",
+		" * storage or the heap rather than a stack frame. Zero-initialise"
+		" it, or",
+		" * call `_init`. */",
 		f"#define {upper}_MESSAGES {messages}u",
 		f"#define {upper}_CAPACITY {capacity}u",
 		f"#define {upper}_TIMEOUT  {timeout}u",
