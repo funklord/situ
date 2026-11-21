@@ -19,7 +19,7 @@ import difflib
 import re
 
 from situc import ast
-from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
+from situc.diagnostics import Diagnostic, Label, Severity, SituError, Span, error
 from situc.expr import build_env, evaluate
 from situc.invariant import BUILTINS, paths_in
 from situc.traverse import ARGUMENT_PREFIX
@@ -4458,7 +4458,7 @@ def check_when_runs(schema: ast.Schema) -> None:
 		        and scalar is not None and not scalar.signed
 		        and scalar.bits == 8 and length(member) is not None)
 
-	def refuse(path: str, at: ast.Span, why: str) -> NoReturn:
+	def refuse(path: str, at: Span, why: str) -> NoReturn:
 		raise error(
 			f"`{path}` is a run, and a `when` reads numbers",
 			at,
