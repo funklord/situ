@@ -116,3 +116,70 @@ def test_four_backends_and_the_walker_read_one_datagram_alike(
 	assert verdicts[:3] == ["validate 0"] * 3, verdicts
 	assert len(set(verdicts[3:])) == 1 and verdicts[3] != "validate 0", \
 		verdicts
+
+
+BUILD = r"""#include <stdio.h>
+#include <string.h>
+#include "ntp_build.h"
+int main(void)
+{
+	uint8_t packet[48], md5[20], sha1[24], out[80];
+	uint32_t wrote = 0;
+	situ_msg_t m;
+	situ_view_t v, arm;
+	memset(packet, 0, sizeof packet);
+	packet[0] = 0x24;
+	memset(md5, 0x11, sizeof md5);
+	memset(sha1, 0x22, sizeof sha1);
+	if (situ_ntp_datagram_build_md5(out, sizeof out, packet, 48u, md5, 20u,
+	                                &wrote) != SITU_OK || wrote != 68u) {
+		return 1;
+	}
+	situ_msg_init(&m, out, wrote);
+	if (situ_ntp_datagram_view(&m, 0u, wrote, &v) != SITU_OK
+	    || situ_ntp_datagram_authenticator_md5_view(v, &arm) != SITU_OK
+	    || situ_ntp_datagram_authenticator_sha1_view(v, &arm) == SITU_OK) {
+		return 2;
+	}
+	if (situ_ntp_datagram_build_sha1(out, sizeof out, packet, 48u, sha1, 24u,
+	                                 &wrote) != SITU_OK || wrote != 72u) {
+		return 3;
+	}
+	if (situ_ntp_datagram_build_none(out, sizeof out, packet, 48u, NULL, 0u,
+	                                 &wrote) != SITU_OK || wrote != 48u) {
+		return 4;
+	}
+	puts("built");
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(not COMPLETE, reason="a backend is missing")
+def test_each_arms_builder_writes_its_length(tmp_path: Path) -> None:
+	"""A struct ending in a length-selected variant has a builder per arm,
+	`<struct>_build_<arm>`, writing no discriminant: the arm's length is
+	what a reader selects it by (fuzznet looked for `<struct>_build`,
+	inbox 20261121T0700Z)."""
+	import shutil
+	import subprocess
+	import sys
+	compiler = shutil.which("cc") or shutil.which("gcc")
+	assert compiler is not None
+	out = tmp_path / "c"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(NTP), "--target", "c",
+		 "--layer", "edit", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	(tmp_path / "b.c").write_text(BUILD, encoding="ascii")
+	runtime = ROOT / "runtime" / "c"
+	compiled = subprocess.run(
+		[compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", f"-I{runtime}",
+		 f"-I{out}", str(tmp_path / "b.c"), str(out / "ntp.c"),
+		 str(runtime / "situ.c"), "-o", str(tmp_path / "b")],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+	ran = subprocess.run([str(tmp_path / "b")], capture_output=True,
+	                     text=True, timeout=30)
+	assert ran.returncode == 0 and ran.stdout.strip() == "built", ran.returncode

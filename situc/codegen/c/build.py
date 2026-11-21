@@ -767,6 +767,13 @@ def _value_part(role: str, placement: Placement, local: str,
 	            digits=most)
 
 
+def _by_length(struct: ResolvedStruct) -> bool:
+	"""Whether a variant of `struct` is switched on `remaining` (26.1125)."""
+	return any(entry.placement.kind == "variant"
+	           and entry.placement.discriminant == "remaining"
+	           for entry in struct.entries)
+
+
 def ident_view(inner: str) -> str:
 	"""`<inner>_view`, where `inner` is already prefixed."""
 	return f"{inner}_view"
@@ -2948,7 +2955,16 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		   f" *  This one writes the `{arm_name(arm)}` arm. Which arm is",
 		   " *  said by which builder you call, so the discriminant is",
 		   " *  this function's to write and cannot disagree with the",
-		   " *  body."] if isinstance(arm, Arm) else []),
+		   " *  body."] if isinstance(arm, Arm) and not _by_length(struct)
+		  else []),
+		# `switch (remaining)` (26.1125): no field to write -- the arm's
+		# length is what a reader takes the arm from. fuzznet looked for
+		# `<struct>_build` and found only the arms' own structs' builders.
+		*([f" *",
+		   f" *  This one writes the `{arm_name(arm)}` arm. The frame's",
+		   " *  length selects the arm, so nothing is written for it: the",
+		   " *  arm's own length is what a reader takes it from."]
+		  if isinstance(arm, Arm) and _by_length(struct) else []),
 		*([" *",
 		   " *  Each variant's arm is a value, made by that arm's",
 		   " *  constructor, so the discriminant comes from the arm and",
