@@ -5953,7 +5953,9 @@ class Emitter:
 		A heap read past the buffer under ASan, from `_check` on 243 bytes
 		libFuzzer found; on master too. Counted as the layout counts the
 		struct's minimum (hull's findings 14 and 16): own peeks only, each
-		to a whole byte."""
+		to a whole byte. And the guard answers this floor, not the
+		constant: zero there accepted a zero-byte view of a struct that
+		cannot be under a byte, where Rust and Python refuse it."""
 		own = f"{struct.name}."
 		reach = [-(-(held.offset_bits + held.size_bits) // BITS_PER_BYTE)
 		         for held in (entry.placement for entry in struct.entries)
@@ -6024,7 +6026,7 @@ class Emitter:
 			if floor and terms:
 				body.extend([
 					f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
-					f"\t\treturn {constant}u;\t/* the lengths below are not"
+					f"\t\treturn {floor}u;\t/* the lengths below are not"
 					" here to read */",
 					"\t}",
 					"",
@@ -6115,7 +6117,7 @@ class Emitter:
 		if floor and deep:
 			lines.extend([
 				f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
-				f"\t\treturn {constant}u;\t/* the lengths below are not"
+				f"\t\treturn {floor}u;\t/* the lengths below are not"
 				" here to read */",
 				"\t}"])
 		lines.extend(f"\textent = extent + ({term});" for term in deep)
@@ -6161,7 +6163,7 @@ class Emitter:
 		if floor and variable:
 			body.extend([
 				f"\tif (!situ_in_bounds(view, 0u, {floor}u)) {{",
-				f"\t\treturn {constant}u;\t/* the lengths below are not"
+				f"\t\treturn {floor}u;\t/* the lengths below are not"
 				" here to read */",
 				"\t}"])
 		for step in steps:

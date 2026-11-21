@@ -4125,14 +4125,17 @@ class Emitter:
 	def _floor(self, struct: ResolvedStruct, terms: list[str],
 			blank: bool = False) -> list[str]:
 		"""The guard ahead of an extent's terms: the bytes they read must be
-		here, or the extent is its constant prefix and no more."""
+		here, or the extent is those bytes -- the struct's least, never
+		zero, which a walk reads as no element (26.322). Its constant
+		prefix alone said zero for CBOR's `item`, and a zero-byte view of
+		a struct that cannot be under a byte was accepted."""
 		constant = terms[0] if terms and terms[0].isdigit() else "0"
 		variable = terms[1:] if terms and terms[0].isdigit() else terms
 		need = self._read_floor(struct, int(constant))
 		if not variable or not need:
 			return []
 		return [f"\t\tif (!situ_in_bounds(raw_, 0u, {need}u)) {{",
-		        f"\t\t\treturn {constant}u;",
+		        f"\t\t\treturn {need}u;",
 		        "\t\t}",
 		        *([""] if blank else [])]
 
@@ -4159,7 +4162,7 @@ class Emitter:
 		need = self._read_floor(struct, parts[0])
 		if need and parts[1]:
 			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {need}u)) {{",
-			             f"\t\t\treturn {parts[0]}u;",
+			             f"\t\t\treturn {need}u;",
 			             "\t\t}"])
 		body.extend([f"\t\tstd::uint32_t extent = {parts[0]}u;",
 		             "\t\tstd::uint32_t at = 0u;"])

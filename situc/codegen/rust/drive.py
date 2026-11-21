@@ -94,6 +94,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		part   = part_of(relation) if resend else None
 		request, response = layout.request, layout.response
 		held = _pascal(relation.name)
+		key_type = ("u64" if layout.packed
+		            else f"[u8; {layout.total_bytes}]")
 		first, second = relation.params
 		req  = _pascal(first.type_name)
 		resp = reply_type(relation)
@@ -230,7 +232,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// either key ends both, as do expiry and `end`. `Constraint`",
 			"\t/// where no exchange `id` is live; `Bounds` where no slot is",
 			"\t/// free -- each key takes one.",
-			f"\tpub fn track_also_key_from(&mut self, key: {("u64" if layout.packed else f"[u8; {layout.total_bytes}]")},"
+			f"\tpub fn track_also_key_from(&mut self, key: {key_type},"
 			" peer: u32,",
 			"\t                           id: u32) -> Result<()> {",
 			"\t\tself.hold_also(key, peer, id)",
@@ -242,7 +244,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tself.hold_also(key, peer, id)",
 			"\t}",
 			"",
-			f"\tfn hold_also(&mut self, key: {("u64" if layout.packed else f"[u8; {layout.total_bytes}]")}, peer: u32, id: u32)"
+			f"\tfn hold_also(&mut self, key: {key_type}, peer: u32, id: u32)"
 			" -> Result<()> {",
 			"\t\tif !self.slots.iter().any(|s| s.live && !s.also && s.id == id) {",
 			"\t\t\treturn Err(Error::Constraint);",
