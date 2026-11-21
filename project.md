@@ -143,6 +143,34 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 9 (2026-11-21), from fuzznet's inbox:**
+
+- 20261120T2130Z, its review of 26.1122 (its sec 1325): behind the gate by
+  the region's name; `head.msg` from the gated view (fuzznet's head is the
+  AEAD's associated data, so as verified as the interior); a received
+  request is a second relation, not a flag; a caller-assigned `uint32_t
+  peer` is enough provided the peer is the VERIFYING CONTEXT (fuzznet's
+  `fzn_caller_t` session), not the network peer -- message numbers are per
+  session and two sessions can talk to one peer. Reuse of a handle is safe
+  once nothing can verify under the old session's key. No per-peer
+  `submit`. Unblocks building 26.1122.
+- 20261120T2230Z (its sec 1327): a trailing member present when the bytes
+  allow -- its setting record gained `rank` (u8) before `signature[64]`,
+  and journals hold records one byte shorter. Asks for `[optional]` by the
+  frame's length, a builder taking it or not, a view saying whether it is
+  there.
+- 20261120T2330Z (its sec 1330): all 48 of fuzznet's settings declared as
+  a registry and held to its hand table by test, every row agreeing. Gap:
+  a delimited run states no least length -- `u8 host[] until " "` lets
+  the host be empty; asks for `until ... min N` or `[min_size]`. Its
+  `[minimal]` versus leading zeros difference is its own, kept open there.
+- 20261121T0130Z (its sec 1335): the C builder counted two counted struct
+  runs into one `situ_count`, so `hop_count` was written as entries plus
+  hops and the builder's own validate refused it. Fixed, with the count
+  refused past what its field holds, as Python and Rust did
+  (`test/unit/test_a_builder_counts_each_run_apart.py`). Also met: no
+  builder for a struct whose tag names no codec, as designed.
+
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
 without huge dependencies kept, and the pertinent code shared:

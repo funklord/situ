@@ -2448,6 +2448,13 @@ def _walk(part: Part, local: str, count: bool,
 		"\t{",
 		f"\t\tuint32_t {SCAN} = 0u;",
 		"",
+		# Each walk counts its own run. One counter serves the function,
+		# and fuzznet's routing manifest -- `entries[entry_count]` and
+		# then `hops[hop_count]` -- was written with hop_count as entries
+		# plus hops, so one entry and no hops wrote 1 and the builder's
+		# own validate refused what it had just built (inbox
+		# 20261121T0130Z). Python and Rust declared a counter per run.
+		*([f"\t\t{COUNT} = 0u;", ""] if count else []),
 		# One message over the caller's bytes, and a view per element out
 		# of it. Hoisted, because re-initialising it per element would
 		# advance the generation counter for no reason.
@@ -3222,6 +3229,13 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				*_walk(tally, traverse.local_name(struct, part.sizes),
 				       True, structs),
 				f"\t/* {local}: how many the walk found. */",
+				# Refused past what the field holds, as a length is: a
+				# 256th element under a u8 count was written as 0, and
+				# the bytes then read as another message. Python and
+				# Rust refused it already.
+				*([f"\tif ({COUNT} > {(1 << held.scalar.bits) - 1}u) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if held.scalar.bits < 32 else []),
 				*_value(part, COUNT, local),
 				"",
 			]
