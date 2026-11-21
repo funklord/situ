@@ -1119,12 +1119,94 @@ def _format_version(signature: str) -> int:
 def compare(before: str, after: str) -> Verdict:
 	"""Classify what changed between two committed signatures, with each
 	side's enum arms in reach of the constraint comparison (26.1095)."""
-	global _ARMS
+	global _ARMS, _ENUM_LINES, _STRUCT_LINES
 	_ARMS = (_enum_arms(before), _enum_arms(after))
+	_ENUM_LINES = (_enum_lines(before), _enum_lines(after))
+	_STRUCT_LINES = (_parse_signature(before), _parse_signature(after))
 	try:
 		return _compare(before, after)
 	finally:
 		_ARMS = ({}, {})
+		_ENUM_LINES = ({}, {})
+		_STRUCT_LINES = ({}, {})
+
+
+#: Each side's structs as `_parse_signature` reads them, so a member whose
+#: type changed can ask what the two types are (26.1129).
+_STRUCT_LINES: tuple[dict[str, list[str]], dict[str, list[str]]] = ({}, {})
+
+
+def _retyped_struct(old: str, new: str) -> str | None:
+	"""How a member's struct type changed where its bytes stay (26.1129).
+
+	`same`: one layout under two names. `refined`: the old type was its
+	bytes and nothing else -- one `u8` run as wide as the struct -- and the
+	new one reads those bytes as members, which is what fuzznet's roster
+	bundle did with its 179-byte hop: a tightening, as a gained `holds` is.
+	`coarsened` the reverse. None where neither holds.
+	"""
+	was = _STRUCT_LINES[0].get(old)
+	now = _STRUCT_LINES[1].get(new)
+	if was is None or now is None:
+		return None
+
+	def size(lines: list[str]) -> str | None:
+		held = next((word.partition("=")[2] for word in lines[0].split()
+		             if word.startswith("size=")), None)
+		return held if held is not None and held.isdigit() else None
+
+	def opaque(lines: list[str]) -> bool:
+		members = [line.split() for line in lines[1:]
+		           if not _is_annotation(line)]
+		return (len(members) == 1 and members[0][2] == "u8"
+		        and members[0][1] == size(lines)
+		        and len(lines) == 2)
+
+	if lines_without_name(was) == lines_without_name(now):
+		return "same"
+	if size(was) is None or size(was) != size(now):
+		return None
+	if opaque(was) and not opaque(now):
+		return "refined"
+	if opaque(now) and not opaque(was):
+		return "coarsened"
+	return None
+
+
+def lines_without_name(lines: list[str]) -> list[str]:
+	"""A struct's signature lines with its own name taken out."""
+	head = lines[0].split()
+	return [" ".join(head[2:]), *lines[1:]]
+
+
+#: Each side's enums as their signature lines with the name taken out, so
+#: two enums can be asked whether they differ in anything but it (26.1129).
+_ENUM_LINES: tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]] \
+	= ({}, {})
+
+
+def _enum_lines(text: str) -> dict[str, tuple[str, ...]]:
+	found: dict[str, list[str]] = {}
+	current: list[str] | None = None
+	for line in text.splitlines():
+		if line.startswith("enum "):
+			parts   = line.split()
+			current = found.setdefault(parts[1], [" ".join(parts[2:])])
+			continue
+		if current is not None and line.startswith("  "):
+			current.append(line.strip())
+			continue
+		current = None
+	return {name: tuple(lines) for name, lines in found.items()}
+
+
+def _renamed_enum(old: str, new: str) -> bool:
+	"""Whether `new` is `old` under another name: the same width, policy,
+	arms and values. fuzznet renamed `fzn_revocation_object` to clear a
+	macro collision, 129 and 133 unchanged, and was told the same bytes now
+	meant something else (26.1129)."""
+	was = _ENUM_LINES[0].get(old)
+	return was is not None and was == _ENUM_LINES[1].get(new)
 
 
 def _compare(before: str, after: str) -> Verdict:
@@ -1135,8 +1217,10 @@ def _compare(before: str, after: str) -> Verdict:
 	a wire non-event, and a field of a different width at the same offset is
 	a break whatever it is called.
 	"""
-	old_structs = _through_holds(_parse_signature(before))
-	new_structs = _through_holds(_parse_signature(after))
+	old_parsed  = _parse_signature(before)
+	new_parsed  = _parse_signature(after)
+	old_structs = _through_holds(old_parsed, new_parsed)
+	new_structs = _through_holds(new_parsed, old_parsed)
 	findings: list[Finding] = []
 
 	# The version first, because it is context for everything under it: a
@@ -1166,6 +1250,21 @@ def _compare(before: str, after: str) -> Verdict:
 			                        "new struct; no old sender emits one"))
 			continue
 		if new is None:
+			# Read only inside other structs, its bytes are judged where
+			# those members are; reported here too, it was a second BREAKING
+			# for one renamed hop (26.1129).
+			inside = sorted({parent for parent, lines in old_parsed.items()
+			                 if parent != name and any(
+			                     len(line.split()) > 2
+			                     and line.split()[2] == name
+			                     for line in lines[1:])})
+			if inside:
+				findings.append(Finding(
+					"api", name,
+					f"struct removed; it was read only inside "
+					f"{', '.join(inside)}, and what an old peer sends there "
+					"is judged at those members"))
+				continue
 			findings.append(Finding("breaking", name,
 			                        "struct removed; an old peer still sends it"))
 			continue
@@ -1405,6 +1504,7 @@ def _parse_signature(text: str) -> dict[str, list[str]]:
 
 
 def _through_holds(structs: dict[str, list[str]],
+		other: dict[str, list[str]] | None = None,
 		depth: int = 0) -> dict[str, list[str]]:
 	"""Each struct with a run that `holds = T` replaced by T's own members,
 	at the run's offset (26.898, 26.1118).
@@ -1427,9 +1527,24 @@ def _through_holds(structs: dict[str, list[str]],
 	fields after the run, so fuzznet's `sig` read as narrowed 64 -> 32
 	where no byte had moved (inbox 20261120T2010Z). Its `holds` is then a
 	reading of bytes whose extent is unchanged, which the per-line check
-	reports as api-only."""
+	reports as api-only.
+
+	And only where the OTHER side does not hold the same run as plain
+	bytes. fuzznet's roster bundle gained `[holds = fzn_roster]` on the
+	`record` it already had, and expanded on one side alone the run read as
+	removed and the held struct's ten members as inserted -- fourteen
+	BREAKING findings over a run whose bytes had not moved (26.1129).
+	Compared line to line, the run gains a `holds`, which is a tightening."""
 	if depth > 8:
 		return structs
+	other = other or {}
+
+	def plain_there(struct: str, run: str) -> bool:
+		"""Whether the other side has `run` in `struct`, holding nothing."""
+		return any(_name_of(line) == run and not any(
+		               word.startswith("holds=") for word in line.split())
+		           for line in other.get(struct, [])[1:]
+		           if not _is_annotation(line))
 	changed = False
 	out: dict[str, list[str]] = {}
 	for name, lines in structs.items():
@@ -1439,7 +1554,7 @@ def _through_holds(structs: dict[str, list[str]],
 			             if word.startswith("holds=")), None)
 			inner = structs.get(held or "")
 			if inner is None or held == name or not _run_is_struct(
-					line, inner[0]):
+					line, inner[0]) or plain_there(name, _name_of(line)):
 				expanded.append(line)
 				continue
 			changed = True
@@ -1461,7 +1576,7 @@ def _through_holds(structs: dict[str, list[str]],
 					at = "~"
 				expanded.append(f"{at} {rest}")
 		out[name] = expanded
-	return _through_holds(out, depth + 1) if changed else out
+	return _through_holds(out, other, depth + 1) if changed else out
 
 
 def _run_is_struct(line: str, header: str) -> bool:
@@ -1611,9 +1726,10 @@ def _compare_aligned(struct: str, old: list[str], new: list[str]
 	for tag, i1, i2, j1, j2 in matcher.get_opcodes():
 		if tag == "equal":
 			for offset in range(i2 - i1):
-				findings.extend(_compare_member(struct, j1 + offset,
-				                                old[i1 + offset],
-				                                new[j1 + offset]))
+				findings.extend(_compare_member(
+				    struct, j1 + offset, old[i1 + offset], new[j1 + offset],
+				    last = (i1 + offset == len(old) - 1
+				            and j1 + offset == len(new) - 1)))
 			continue
 		if tag == "replace" and i2 - i1 == j2 - j1:
 			# Renames in place, or a member swapped for another at its
@@ -1722,8 +1838,53 @@ def _reordering(struct: str, old: list[str], new: list[str]) -> Finding | None:
 		"was, so an old receiver reads each of them under the other's name")
 
 
+def _byte_range(width: str) -> tuple[int, int | None] | None:
+	"""A width as (fewest, most) bytes, most None for no bound; None for a
+	width in bits or one a delimiter ends."""
+	low, dots, high = width.partition("..")
+	if not low.isdigit() or (dots and high and not high.isdigit()):
+		return None
+	if not dots:
+		return int(low), int(low)
+	return int(low), int(high) if high else None
+
+
+def _within(inner: tuple[int, int | None],
+		outer: tuple[int, int | None]) -> bool:
+	return inner[0] >= outer[0] and (outer[1] is None or (
+		inner[1] is not None and inner[1] <= outer[1]))
+
+
+def _last_width(where: str, name: str, was: str, now: str
+		) -> Finding | None:
+	"""A struct's LAST member changing width moves no byte (26.1129).
+
+	"every later field shifts" was said of members with none after them:
+	fuzznet's trailing `content[remaining]` gaining `max 470` and `hops`
+	behind a count gaining `[min = 1, max = 8]` were each BREAKING. What
+	changed is which lengths are accepted, so it is judged as a `max` is: a
+	narrower range is a demand a new receiver makes of an old sender, a
+	wider one a promise an old receiver never made. A range that does both
+	stays BREAKING, as does a width with no range to compare.
+	"""
+	old_range, new_range = _byte_range(was), _byte_range(now)
+	if old_range is None or new_range is None:
+		return None
+	if _within(new_range, old_range):
+		return Finding("backward", where,
+		               f"{name} narrows {was} -> {now}; nothing follows it, "
+		               "so no byte moves, and a new receiver may refuse a "
+		               "length an old sender legitimately produces")
+	if _within(old_range, new_range):
+		return Finding("forward", where,
+		               f"{name} widens {was} -> {now}; nothing follows it, "
+		               "so no byte moves, and an old receiver may refuse a "
+		               "length a new sender legitimately produces")
+	return None
+
+
 def _compare_member(struct: str, index: int, was: str | None,
-		now: str | None) -> list[Finding]:
+		now: str | None, last: bool = False) -> list[Finding]:
 	if was == now:
 		return []
 
@@ -1777,27 +1938,78 @@ def _compare_member(struct: str, index: int, was: str | None,
 		return [Finding("breaking", where,
 		                f"{_name_of(was)} moves {old_bits[0]} -> {new_bits[0]}; "
 		                "an old receiver reads whatever now sits there")]
-	if old_bits[1] != new_bits[1]:
-		return [Finding("breaking", where,
-		                f"{_name_of(was)} changes width "
-		                f"{old_bits[1]} -> {new_bits[1]}; every later field "
-		                "shifts for an old receiver")]
-
 	findings: list[Finding] = []
+	if old_bits[1] != new_bits[1]:
+		judged = (_last_width(where, _name_of(was), old_bits[1], new_bits[1])
+		          if last else None)
+		if judged is None:
+			return [Finding("breaking", where,
+			                f"{_name_of(was)} changes width "
+			                f"{old_bits[1]} -> {new_bits[1]}; every later "
+			                "field shifts for an old receiver")]
+		findings.append(judged)
 	# A type change at one position and width is an interpretation change, in
 	# the sense `INTERPRETATION` means: the bytes are where they were and are
 	# a different value. Reported alongside the facts rather than instead of
 	# them, because unlike a move or a widening it shifts nothing after it, so
 	# the rest of the line is still worth reading.
-	if old_bits[2] != new_bits[2]:
+	retyped = (_retyped_struct(old_bits[2], new_bits[2])
+	           if old_bits[2] != new_bits[2] else None)
+	if old_bits[2] != new_bits[2] and (retyped == "same" or _renamed_enum(
+			old_bits[2], new_bits[2])):
+		findings.append(Finding(
+			"api", where,
+			f"{_name_of(now)} is {old_bits[2]} -> {new_bits[2]}, one "
+			"layout under two names; the bytes are identical"))
+	elif retyped == "refined":
+		findings.append(Finding(
+			"backward", where,
+			f"{_name_of(now)} reads its bytes as {new_bits[2]}, where "
+			f"{old_bits[2]} held them unread; no byte moves, and a new "
+			"receiver may refuse a message an old sender legitimately "
+			"produces"))
+	elif retyped == "coarsened":
+		findings.append(Finding(
+			"forward", where,
+			f"{_name_of(now)} holds its bytes unread as {new_bits[2]}, "
+			f"where {old_bits[2]} read them; no byte moves, and an old "
+			"receiver may refuse a message a new sender legitimately "
+			"produces"))
+	elif old_bits[2] != new_bits[2]:
 		findings.append(Finding(
 			"breaking", where,
 			f"{_name_of(now)} is {old_bits[2]} -> {new_bits[2]}; the same "
 			"bytes now mean something else"))
 
 	return findings + _compare_facts(where, _name_of(was),
-	                                 _facts_of(was), _facts_of(now),
+	                                 *_order_shown(old_bits[1], new_bits[1],
+	                                               _facts_of(was),
+	                                               _facts_of(now)),
 	                                 (old_bits[2], new_bits[2]))
+
+
+#: The byte orders `_constraints` names, and only where a member's FEWEST
+#: bytes are more than one.
+BYTE_ORDERS = ("big", "little", "native")
+
+
+def _order_shown(old_width: str, new_width: str, was: set[str],
+		now: set[str]) -> tuple[set[str], set[str]]:
+	"""Both fact sets, the byte order left out where only the width hid it.
+
+	`_constraints` names a byte order where the member's lower bound is
+	past a byte, so `hops` behind a count gaining `[min = 1]` went from `0..`
+	to `179..` and gained `big` -- "nothing -> big; the same bytes now mean
+	something else" of bytes read exactly as before (26.1129). Where one side
+	could not have shown it, its absence there says nothing.
+	"""
+	def shown(width: str) -> bool:
+		held = _byte_range(width)
+		return held is None or held[0] > 1
+	if shown(old_width) == shown(new_width):
+		return was, now
+	return ({fact for fact in was if fact not in BYTE_ORDERS},
+	        {fact for fact in now if fact not in BYTE_ORDERS})
 
 
 #: Facts that say what the bytes *are*, rather than which of them are allowed.
@@ -2130,6 +2342,15 @@ def _annotation_lost(name: str, key: str, was: str) -> Finding:
 
 
 def _annotation_gained(name: str, key: str, now: str) -> Finding:
+	if _what(key) == "covers" and "." in key.split()[0]:
+		# A tag reached through a member, gained because the member now
+		# reads its bytes as a struct with one (26.1129): the member's own
+		# finding says so, and the tag is one more thing a new receiver
+		# checks of bytes that have not moved.
+		return Finding("backward", name,
+		               f"`{key}` now {now}, through a member that reads it "
+		               "now; a new receiver verifies what an old one passed "
+		               "unread")
 	if _what(key) == "covers":
 		# Absent while only tags reached this function, because a new tag
 		# brings a new field and the member comparison already reports one. A

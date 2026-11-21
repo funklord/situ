@@ -9628,6 +9628,44 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1129 `wire --check` calls BREAKING only what moves a byte or its meaning
+
+Reported by fuzznet (inbox 20261121T2000Z), four contracts it took over a
+check that said breaking where no byte moved. Each is now judged as the
+narrowing or widening it is; `test/unit/test_the_wire_check_judges_what_moves.py`
+holds the six (each fails on the old `wire.py`) and six that must still
+break.
+
+- **A struct's last member changing width.** "every later field shifts"
+  was said of a member with none after it: `content[remaining]` gaining
+  `max 470`, `hops[hop_count]` behind a count gaining `[min = 1, max = 8]`.
+  A last member whose new range lies inside the old is `backward` (a new
+  receiver may refuse a length an old sender sent), outside it `forward`;
+  ranges that move both ways, and widths with no range, stay BREAKING.
+- **A byte order the renderer hid.** `_constraints` names `big` only where
+  a member's FEWEST bytes pass one, so `hops` going `0..` -> `179..` gained
+  `big` -- "nothing -> big; the same bytes now mean something else". Where
+  only one side's lower bound could show it, the comparison leaves byte
+  order out. The renderer is unchanged: changing it would churn every
+  committed contract with a variable member that can be empty.
+- **An enum or struct renamed, its lines otherwise identical**, is one
+  layout under two names: api-only.
+- **A run gaining `[holds = T]` where the other side has the same run as
+  plain bytes** is compared line to line -- the run gains `holds`, a
+  tightening -- rather than expanded into T's members on one side alone,
+  which read as the run removed and T's ten members inserted. Expansion
+  through the run (26.1118) still applies where the other side has the
+  members inline or holds the run too. **A member whose struct was one
+  opaque `u8` run as wide as the struct, now a struct of that width with
+  members**, is `backward` (the reverse `forward`), and a `covers` gained
+  through such a member is one more thing a new receiver verifies. **A
+  struct removed that the old signature only read inside other structs** is
+  api-only: what an old peer sends there is judged at those members. One
+  read on its own and removed still breaks.
+
+fuzznet's roster bundle, checked against its committed contract from
+before ef165855: 14 breaking -> 0 breaking, 5 compatible.
+
 ### 26.1128 A `when` compares two byte runs, and refuses a run as a number
 
 Reported by fuzznet (inbox 20261121T1640Z): `when s.old == s.successor
