@@ -1014,6 +1014,13 @@ def _walk_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
 		"\t\tfor (uint32_t i = 0u; i < n; i++) {",
 		f"\t\t\tif ({at}(view, i, &element) == SITU_OK) {{",
 		"\t\t\t\tsitu_fuzz_sink((uint64_t)element.limit);",
+		"\t\t\t} else {",
+		# The count is what the bytes CLAIM -- up to 2^32 on random
+		# input -- and `_at` walks from the start each call, failing
+		# only where the walk cannot reach `i`, so every later index
+		# fails too. Asking them all re-walked the run up to 2^32
+		# times: a CBOR map hung the smoke test for 30 minutes.
+		"\t\t\t\tbreak;",
 		"\t\t\t}",
 		"\t\t}",
 		"\t}",
@@ -1115,6 +1122,13 @@ def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
 			"\t\tfor (uint32_t i = 0u; i < n; i++) {",
 			f"\t\t\tif ({at}(view, i, &one) == SITU_OK) {{",
 			"\t\t\t\tsitu_fuzz_sink((uint64_t)one);",
+			"\t\t\t} else {",
+			# The count is what the bytes CLAIM -- up to 2^32 on random
+			# input -- and `_at` walks from the start each call, failing
+			# only where the walk cannot reach `i`, so every later index
+			# fails too. Asking them all re-walked the run up to 2^32
+			# times: a CBOR map hung the smoke test for 30 minutes.
+			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			"\t\t}",
 			"\t}",
@@ -1141,6 +1155,13 @@ def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
 			"\t\tfor (uint32_t i = 0u; i < n; i++) {",
 			f"\t\t\tif ({at}(view, i, &element) == SITU_OK) {{",
 			"\t\t\t\tsitu_fuzz_sink((uint64_t)element.limit);",
+			"\t\t\t} else {",
+			# The count is what the bytes CLAIM -- up to 2^32 on random
+			# input -- and `_at` walks from the start each call, failing
+			# only where the walk cannot reach `i`, so every later index
+			# fails too. Asking them all re-walked the run up to 2^32
+			# times: a CBOR map hung the smoke test for 30 minutes.
+			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			"\t\t}",
 			"\t}",
