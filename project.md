@@ -229,7 +229,17 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   Its guess: offsets recomputed per field with bounds folding on every
   step, `check` and the accessors each re-deriving the variable member's
   position. Accepted there (a verify follows every open); the number that
-  matters on a store scan or a router.
+  matters on a store scan or a router. Measured here on its schema, 20
+  million opens of view + `check` + `_signature_offset`: 17.9 ns against
+  8.9 by hand at -Os, but with `-flto` and NO change to the generated code
+  3.4 against 9.0 (2.3 against 7.7 at -O2) -- faster than the hand version.
+  With `situ_view_at` and `check` copied inline into the caller, the same.
+  So the gap is two calls across units and a 32-byte view passed by value
+  into `check`, not the offset arithmetic: the generated checks fold to
+  fewer instructions than the hand ones once the compiler sees them. The
+  answer for a store scan is LTO (or inlining `check`), not a new shape;
+  left at that, since an always-inline `check` trades the size the
+  build rules ask for.
 
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
