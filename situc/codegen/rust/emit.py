@@ -5910,8 +5910,13 @@ class Emitter:
 				raw = self._raw_load(held_at, held_at.scalar,
 				                     at and self._unparen(at))
 				# Written for this struct, and a `while` asks it of the
-				# element: `self` in `required` is no value at all.
-				if at is not None and held != "self":
+				# element: `self` in `required` is no value at all. At a
+				# fixed offset too: gated on a dynamic one, an enum `next` at
+				# offset 0 was read from the RUN's first byte, so IPv6's
+				# extension chain never stopped at the header saying `tcp`
+				# and Rust alone refused it -- found by replaying the atheris
+				# corpus through the four-way differential (26.1131).
+				if held != "self":
 					raw = re.sub(r"\bself\.", f"{held}.", raw)
 				return leaf(f"{self._unparen(raw)}",
 				            held_at.scalar is not None and held_at.scalar.signed)

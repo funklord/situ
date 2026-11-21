@@ -9642,6 +9642,22 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1131 A `while` run asks its condition of the element it read
+
+Found by replaying the new atheris corpus for `example/ipv6ext` through
+the four-way differential: Rust refused 9 of 25 inputs that C, C++ and
+Python accepted. Rust's `_over_fields` read an ENUM field at a fixed
+offset from `self.bytes` and swapped in the element's view only where the
+offset was dynamic, so the `while` condition of `ext_header chain[] while
+(next == 0 || ...)` read the run's first byte for every element: a chain
+opening with a destination header never stopped at the header saying
+`tcp`, walked to the frame's end and was refused as cut short. The
+substitution now applies wherever the read is not of `self`; the comment
+beside it already said that was its purpose. Of the 60 corpus schemas only
+ipv6ext's Rust output moves. Held by
+`test/unit/test_a_while_run_asks_the_element_it_read.py`, which fails on
+the old code with Rust's `validate 2`.
+
 ### 26.1130 A `--linked` struct nested by extent keeps its builder
 
 Reported by fuzznet (inbox 20261121T1820Z): its cause envelope nests two
