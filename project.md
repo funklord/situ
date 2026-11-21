@@ -240,6 +240,13 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   answer for a store scan is LTO (or inlining `check`), not a new shape;
   left at that, since an always-inline `check` trades the size the
   build rules ask for.
+- fuzznet's network list, where it stands: (1) reassembly, (2) matching
+  after the tag and (3) the replay window are built in all four backends;
+  (4) erasure coding it declined; (5) many peers is 26.1122's `peer`. (6)
+  a relayed exchange is designed and put to fuzznet for review, not built
+  (26.1126): one exchange id awaited under a second (peer, key), every
+  key ending with it. Friction (b), a builder taking an arm's fields, was
+  answered by 26.1121's in-place build and is not built.
 
 - 20261121T1000Z: fuzznet answered 26.1123's three review points (its
   record's last section): a stride, not a total, set by the first non-last
