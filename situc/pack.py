@@ -46,6 +46,11 @@ from situc.wellformed import _encoding_source
 MAGIC		= b"SITU"
 FORMAT_VERSION	= 10
 
+#: An arm row's `selects` where no field selects the arm: `switch
+#: (remaining)`, whose value is the bytes from the variant to the frame's
+#: end (26.1125). Beside `NONE`, which is 0xFFFFFFFF.
+REMAINING_SELECTS = 0xFFFFFFFE
+
 #: A directory entry's kind is a `u16` tag and a `u16` of flags, in that
 #: order -- one little-endian `u32`, so a tag below 65536 reads the same
 #: either way. Bit 0 of the flags marks a section ANCILLARY: a walker that
@@ -3202,8 +3207,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# is the answer it already gives for a discriminant it cannot read
 		# (26.184).
 		chose  = resolve_path(placement.discriminant, owner) \
-			if placement.discriminant else None
+			if placement.discriminant and placement.discriminant != "remaining" \
+			else None
 		selects = chose[0] if chose is not None and not chose[1] else None
+		if placement.discriminant == "remaining":
+			# `switch (remaining)` (26.1125): no field selects the arm, the
+			# bytes from the variant to the frame's end do.
+			selects = REMAINING_SELECTS
 		for arm in placement.arm_cases:
 			value, chosen, arm_kind = _arm_fields(arm)
 			# A `u64` discriminant may name a case above the slot: the

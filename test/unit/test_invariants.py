@@ -217,7 +217,7 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: (26.1105): the class is new, the arms are the ordinary shape.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                90,
-	("no-scalar", "struct", "fixed"):            123,
+	("no-scalar", "struct", "fixed"):            126,
 	("no-scalar", "struct", "unmeasurable"):     86,
 	("no-scalar", "not-struct", ""):              1,
 }
@@ -233,6 +233,9 @@ ARM_SHAPES = {
 #: `example/radiotap` added 76: sixteen scalar arms, 26 pads of its twelve
 #: `[align]` variants and their absent arms counted with them, 33 fixed struct
 #: arms, most of them `nothing`, and `more_words`, whose run the data sizes.
+#:
+#: `example/ntp` added three fixed struct arms, its authenticator's -- none,
+#: MD5 and SHA-1 -- which the datagram's length selects (26.1125).
 #:
 #: `example/pes` added thirteen: twelve fixed struct arms, six of them `nothing`
 #: and the rest its optional groups, and `trick_present`, a scalar.

@@ -4294,7 +4294,10 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# Both declines below go through `_uncomputable`, which stops the
 	# cursor: a bare comment left `at` where the variant began, and every
 	# member after it was placed there (26.803).
-	held = _over_fields(struct, placement.discriminant or "", "0")
+	# `switch (remaining)` (26.1125): the bytes from the variant, where the
+	# seek below leaves `at`, to the end of the frame.
+	held = _over_fields(struct, placement.discriminant or "", "0",
+	                    extra=RUN_EXTRA)
 	if held is None:
 		return _uncomputable(placement.path,
 		                     _unreadable(struct, placement.discriminant))

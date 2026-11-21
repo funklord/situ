@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from walker import vm
-from walker.image import (BIG, LITTLE, NATIVE, NONE, PEEK, Image, Placement,
+from walker.image import (BIG, LITTLE, NATIVE, NONE, PEEK, REMAINING, Image, Placement,
                           Struct)
 
 #: What a walk may be handed. Read-only either way -- nothing here writes
@@ -630,6 +630,13 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 	return placement.size_bits
 
 
+def remaining_at(view: View, index: int) -> int:
+	"""`switch (remaining)`'s value (26.1125): the bytes from variant
+	`index` to the end of the view, as a size reads `remaining` (26.986)."""
+	return max(0, view.limit - view.at
+	           - offset_bits(view, index) // BITS_PER_BYTE)
+
+
 def chosen_arm(view: View, index: int) -> int | None:
 	"""Which arm this variant's discriminant selects, or None for no arm.
 
@@ -650,14 +657,18 @@ def chosen_arm(view: View, index: int) -> int | None:
 	if selects == NONE:
 		raise Refused(f"variant {index} has no discriminant in this image")
 
-	# A discriminant the frame does not reach reads as ZERO, which is what
-	# the four backends do rather than a choice made here.
-	start = offset_bits(view, selects)
-	width = content_bits(view, selects)
-	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
-		value = 0
+	if selects == REMAINING:
+		value = remaining_at(view, index)
 	else:
-		value = read_scalar(view, selects)
+		# A discriminant the frame does not reach reads as ZERO, which is
+		# what the four backends do rather than a choice made here.
+		start = offset_bits(view, selects)
+		width = content_bits(view, selects)
+		if view.at * BITS_PER_BYTE + start + width \
+				> view.limit * BITS_PER_BYTE:
+			value = 0
+		else:
+			value = read_scalar(view, selects)
 
 	fallback = None
 	for case, arm, flags in arms:

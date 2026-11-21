@@ -615,7 +615,7 @@ struct cannot describe:
 |---|---|
 | `struct name { ... }` | members in declaration order |
 | `positional { ... }` | a group whose offsets are asserted rather than accumulated |
-| `variant v switch (e) { case 1: ... default: error }` | one of several layouts, chosen by a field already read |
+| `variant v switch (e) { case 1: ... default: error }` | one of several layouts, chosen by a field already read, or by the frame's length with `switch (remaining)` |
 | `peek u8 kind;` | a discriminant read at the cursor and not spent, so the arm it selects owns the byte |
 | `parameter u8 block_size;` | an argument the *caller* supplies: zero bytes wide, read by every expression a field is read by |
 | `let u64 offset = (high << 32) \| low;` | a value the struct's fields assemble, named: zero bytes wide, a getter in every reader, and usable by any expression after it -- computed modulo 2^64 and held to its width, so the four agree. It reads integer fields and text numbers (0 where the digits are not one), a comparison is 1 or 0, and a token member is compared with one of its arms: `count * ((unit == time_unit.d) * 86400 + ...)` |
@@ -748,6 +748,22 @@ variant body switch (type) {
 
 `default:` takes `error`, `opaque` or a member -- three different positions
 on an unknown discriminant, stated rather than implied.
+
+**Or the frame's length chooses.** Some formats say which shape follows only
+by how long they are: NTP appends no authenticator, an MD5 one or a SHA-1 one,
+and the datagram's length is the only witness. `switch (remaining)` reads the
+bytes from the variant to the frame's end, and each `case N` arm is held to
+being N bytes:
+
+```situ
+// example/ntp/ntp.situ, verbatim.
+variant authenticator switch (remaining) {
+	case 0:  no_authenticator   none;
+	case 20: md5_authenticator  md5;
+	case 24: sha1_authenticator sha1;
+	default: error;
+}
+```
 
 **A discriminant may be read without being spent.** A `variant` switches on
 a field, and a field occupies its bytes -- so an arm normally begins after

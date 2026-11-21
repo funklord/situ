@@ -435,7 +435,7 @@ class Emitter:
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
 				continue
-			disc = self._over_fields(struct, placement.discriminant)
+			disc = self._disc(struct, placement)
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue
@@ -2025,7 +2025,7 @@ class Emitter:
 		arms = arm_alignments(struct, other)
 		if arms is None or other.discriminant is None:
 			return None
-		held  = self._over_fields(struct, other.discriminant)
+		held  = self._disc(struct, other)
 		chain = "1u"
 		for arm, unit in reversed(arms):
 			# Not an arm that answers what the chain already does: C's
@@ -3646,7 +3646,7 @@ class Emitter:
 		if not any(call for _, call, _, _ in plan):
 			return None
 
-		disc  = self._over_fields(struct, placement.discriminant)
+		disc  = self._disc(struct, placement)
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
@@ -4429,6 +4429,22 @@ class Emitter:
 		        f"({start}), {count}, {width}u, {big}, "
 		        f"situ_remaining_u32(raw_.limit, {start}))))")
 
+	def _disc(self, struct: ResolvedStruct, variant: Placement,
+			bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
+		"""A variant's discriminant, as C++. `switch (remaining)` (26.1125)
+		reads the bytes from the variant's start to the end of the view, as
+		a size does (26.986); C's copy says more."""
+		source = variant.discriminant or ""
+		if "remaining" in source:
+			at = next(one for one in struct.layout.placements
+			          if one.path == variant.path)
+			start = self._offset_expression(struct, at)
+			assert start is not None, variant.path
+			extra = {**(extra or {}), "remaining":
+			         f"situ_remaining_u32(raw_.limit, {start})"}
+		return self._over_fields(struct, source, bounded, extra)
+
 	def _remaining_from(self, struct: ResolvedStruct,
 			placement: Placement) -> dict[str, str] | None:
 		"""`remaining` in a member's size: the bytes from where the member
@@ -4824,7 +4840,7 @@ class Emitter:
 		has no closed-form length, so `check` said nothing about any arm
 		and a record overrunning the message validated clean (26.689).
 		"""
-		disc  = self._over_fields(struct, placement.discriminant or "")
+		disc  = self._disc(struct, placement)
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		# What follows the variant is placed by nothing, so it is held to
@@ -5285,7 +5301,7 @@ class Emitter:
 		if not values or placement.discriminant is None:
 			return []
 
-		held = self._over_fields(struct, placement.discriminant)
+		held = self._disc(struct, placement)
 		test = " && ".join(f"{held} != {arm.value}u" for arm in values)
 		named = ", ".join(arm.source or str(arm.value) for arm in values)
 		return [
@@ -5318,7 +5334,7 @@ class Emitter:
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
-		held  = self._over_fields(struct, placement.discriminant)
+		held  = self._disc(struct, placement)
 		chain = "0u"
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
@@ -7624,7 +7640,7 @@ class Emitter:
 			        " and a pad is a run", "\t * the message sizes, so"
 			        " there is no value to hand back. */"]
 
-		held = self._over_fields(struct, variant.discriminant or "",
+		held = self._disc(struct, variant,
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
 			# A default with no `case` beside it is ALWAYS present -- how one
@@ -11330,7 +11346,7 @@ class Emitter:
 		if found is None:
 			return None
 		variant, arm = found
-		held = self._over_fields(struct, variant.discriminant or "",
+		held = self._disc(struct, variant,
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
 			# Present always where no `case` stands beside it.
@@ -11927,7 +11943,7 @@ class Emitter:
 			if found is None:
 				return []
 			variant, arm = found
-			held = self._over_fields(struct, variant.discriminant or "",
+			held = self._disc(struct, variant,
 		                         extra=self._region_reads(struct, variant))
 			if arm.value is None:
 				# Present always where no `case` stands beside it; this
@@ -12142,7 +12158,7 @@ class Emitter:
 			return []
 		variant, arm = found
 
-		held = self._over_fields(struct, variant.discriminant or "",
+		held = self._disc(struct, variant,
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
 			# Present always where no `case` stands beside it.
@@ -12229,7 +12245,7 @@ class Emitter:
 			return []
 		variant, arm = found
 
-		held = self._over_fields(struct, variant.discriminant or "",
+		held = self._disc(struct, variant,
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
 			# Present always where no `case` stands beside it.
@@ -12346,7 +12362,7 @@ class Emitter:
 		base = self._offset_expression(struct, placement)
 		if base is None:
 			return []
-		disc  = self._over_fields(struct, placement.discriminant or "")
+		disc  = self._disc(struct, placement)
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		lines: list[str] = []

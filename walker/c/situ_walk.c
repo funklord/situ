@@ -2444,6 +2444,24 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 	                      out);
 }
 
+/* `switch (remaining)`'s value (26.1125): the bytes from variant `index` to
+ * the end of the shape's bytes, as a size reads `remaining` (26.986). The
+ * Python walker's `remaining_at`. */
+static situ_walk_err remaining_at(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t depth, uint64_t *out)
+{
+	uint32_t      bits = 0u;
+	situ_walk_err err  = offset_bits_deep(image, message, len, shape, index,
+	                                      depth, &bits);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	*out = len > bits / 8u ? (uint64_t)(len - bits / 8u) : 0u;
+	return SITU_WALK_OK;
+}
+
 /* Which arm this variant's discriminant selects, SITU_WALK_NONE for an arm
  * with nothing in it and for no arm at all: both measure zero. `walk.chosen_arm`,
  * and one loop for its reason: two would be two answers to which arm a message
@@ -2491,8 +2509,13 @@ static situ_walk_err variant_arm(const situ_walk_image *image,
 	 * backends answer `ok=1 extent=0`. Only `SITU_WALK_BOUNDS` is absorbed
 	 * -- every other code from here is a real refusal. */
 	uint64_t value = 0u;
-	situ_walk_err err = read_deep(image, message, len, shape, selects,
-	                              depth + 1u, &value);
+	situ_walk_err err;
+	if (selects == SITU_WALK_REMAINING) {
+		err = remaining_at(image, message, len, shape, index, depth, &value);
+	} else {
+		err = read_deep(image, message, len, shape, selects, depth + 1u,
+		                &value);
+	}
 	if (err == SITU_WALK_BOUNDS) {
 		value = 0u;
 	} else if (err != SITU_WALK_OK) {
@@ -5897,8 +5920,12 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
 	 * backends do; here the question is whether the message is well
 	 * formed, and a discriminant the frame does not reach is a short
 	 * frame. `report._arm_selects` answers BOUNDS for the same read. */
-	err = read_deep(image, message, len, shape, selects, depth + 1u,
-	                &value);
+	if (selects == SITU_WALK_REMAINING) {
+		err = remaining_at(image, message, len, shape, index, depth, &value);
+	} else {
+		err = read_deep(image, message, len, shape, selects, depth + 1u,
+		                &value);
+	}
 	if (err == SITU_WALK_UNSUPPORTED) {
 		return err;
 	}

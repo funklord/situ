@@ -3944,7 +3944,7 @@ class Emitter:
 		AttributeError and the C did not compile (openmlx4, 2026-11-19).
 		`False` is the absent test it gets, and the accessor leaves it out.
 		"""
-		held = self._over_fields(struct, variant.discriminant or "", "self",
+		held = self._disc(struct, variant, "self",
 		                         extra=self._region_reads(struct, variant))
 
 		# `[since]` ON THE ARM, in both sentences (26.424). An arm the
@@ -6257,6 +6257,23 @@ class Emitter:
 		return (f"sum_run(self._msg.buffer[self._at + ({start}):], {count},"
 		        f" {width}, {big}, self._len - ({start}))")
 
+	def _disc(self, struct: ResolvedStruct, variant: Placement, held: str,
+			bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
+		"""A variant's discriminant over `held`. `switch (remaining)`
+		(26.1125) reads the bytes from the variant's start to the end of
+		the view, as a size does (26.986); C's copy says more."""
+		source = variant.discriminant or ""
+		if "remaining" in source:
+			at = next(one for one in struct.layout.placements
+			          if one.path == variant.path)
+			start = self._offset_expression(struct, at)
+			assert start is not None, variant.path
+			start = start.replace("self.", f"{held}.")
+			extra = {**(extra or {}),
+			         "remaining": f"max(0, {held}._len - ({start}))"}
+		return self._over_fields(struct, source, held, bounded, extra)
+
 	def _remaining_from(self, struct: ResolvedStruct,
 			placement: Placement) -> dict[str, str] | None:
 		"""`remaining` in a member's size: the bytes from where the member
@@ -7275,7 +7292,7 @@ class Emitter:
 		if not any(call for _, call, _, _ in plan):
 			return None
 
-		disc  = self._over_fields(struct, placement.discriminant, "probe")
+		disc  = self._disc(struct, placement, "probe")
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
@@ -8062,7 +8079,7 @@ class Emitter:
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
 				continue
-			disc = self._over_fields(struct, placement.discriminant, "self")
+			disc = self._disc(struct, placement, "self")
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue
@@ -8138,7 +8155,7 @@ class Emitter:
 		arms = arm_alignments(struct, other)
 		if arms is None or other.discriminant is None:
 			return None
-		held  = self._over_fields(struct, other.discriminant, "self")
+		held  = self._disc(struct, other, "self")
 		chain = "1"
 		for arm, unit in reversed(arms):
 			chain = (str(unit) if arm.value is None
@@ -8316,7 +8333,7 @@ class Emitter:
 		has no closed-form length, so `check` said nothing about any arm
 		and a record overrunning the message validated clean (26.689).
 		"""
-		disc  = self._over_fields(struct, placement.discriminant or "", "self")
+		disc  = self._disc(struct, placement, "self")
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		# What follows the variant is placed by nothing, so it is held to
@@ -8391,7 +8408,7 @@ class Emitter:
 		base = self._offset_expression(struct, placement)
 		if base is None:
 			return []
-		disc  = self._over_fields(struct, placement.discriminant or "", "self")
+		disc  = self._disc(struct, placement, "self")
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		lines: list[str] = []
@@ -8954,7 +8971,7 @@ class Emitter:
 		if not values or placement.discriminant is None:
 			return []
 
-		held = self._over_fields(struct, placement.discriminant, "self")
+		held = self._disc(struct, placement, "self")
 		test = " and ".join(f"{held} != {arm.value}" for arm in values)
 		named = ", ".join(arm.source or str(arm.value) for arm in values)
 		return [
@@ -8986,7 +9003,7 @@ class Emitter:
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
-		held  = self._over_fields(struct, placement.discriminant, "self")
+		held  = self._disc(struct, placement, "self")
 		chain = "0"
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:

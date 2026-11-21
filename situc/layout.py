@@ -2501,6 +2501,9 @@ class Solver:
 			state.cause = (variant.name, variant.span, _render_extent(total))
 
 		_refuse_a_pad_beside_bytes(variant, cursor, dict(arm_sizes))
+		if isinstance(variant.discriminant, ast.Remaining):
+			_check_length_decided(variant, dict(arm_sizes), arm_cases,
+			                      last_in_frame)
 		state.cursor = cursor.advance(total)
 
 	def arm_extent(self, decl: ast.StructDecl, arm: ast.VariantArm, scope: Scope,
@@ -2571,6 +2574,8 @@ class Solver:
 		self.check_not_behind_codec(variant.discriminant, state)
 
 		path = path_text(variant.discriminant)
+		if path is None and isinstance(variant.discriminant, ast.Remaining):
+			return
 		if path is None:
 			raise error(
 				f"variant `{variant.name}` needs a field as its discriminant",
@@ -4832,3 +4837,57 @@ def _after_its_struct(member: str, tag: str, index: int, position: int) -> bool:
 	behind the header."""
 	owner = tag.rpartition(".")[0]
 	return index > position and not (member + ".").startswith(owner + ".")
+
+
+def _check_length_decided(variant: ast.Variant, sizes: dict[str, int | None],
+		cases: list[Arm], last_in_frame: bool) -> None:
+	"""`switch (remaining)`: the frame's length decides the shape (26.1125).
+
+	Each `case N` arm is read when N bytes remain, so it has to be exactly
+	N bytes -- otherwise it is never read as itself -- and the variant has
+	to end the frame, or what follows it would count. A default arm the
+	size of some case would be read as that case, so it cannot be one.
+	"""
+	if not last_in_frame:
+		raise error(
+			f"variant `{variant.name}` switches on `remaining` and is not the "
+			f"frame's last member",
+			variant.span,
+			label = "something follows it",
+			notes = ["`remaining` here is the bytes from the variant to the "
+			         "frame's end, so a member after it would be counted as "
+			         "the arm's"],
+		)
+	taken: set[int] = set()
+	for arm in cases:
+		if arm.value is None:
+			continue
+		name = (arm.member or "").rsplit(".", 1)[-1]
+		bits = sizes.get(name)
+		if bits is None or bits != arm.value * BITS_PER_BYTE:
+			said = ("has no fixed size" if bits is None
+			        else f"is {bits // BITS_PER_BYTE} bytes")
+			raise error(
+				f"arm `{name}` of `{variant.name}` is read when "
+				f"{arm.value} bytes remain, and {said}",
+				variant.span,
+				label = "never read as itself",
+				notes = ["with `switch (remaining)`, a `case N` arm is the "
+				         "shape N bytes take, so it is exactly N bytes"],
+			)
+		taken.add(arm.value)
+	for arm in cases:
+		if arm.value is not None:
+			continue
+		name = (arm.member or "").rsplit(".", 1)[-1]
+		bits = sizes.get(name)
+		if bits is not None and bits // BITS_PER_BYTE in taken:
+			raise error(
+				f"default arm `{name}` of `{variant.name}` is "
+				f"{bits // BITS_PER_BYTE} bytes, which a `case` claims",
+				variant.span,
+				label = "read as that case instead",
+				notes = ["a default arm of a length-decided variant takes "
+				         "the lengths no `case` names"],
+			)
+

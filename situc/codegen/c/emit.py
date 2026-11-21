@@ -4392,9 +4392,8 @@ class Emitter:
 			            and held.array_count is None
 			            and held.sized_by is None
 			            and held.radix is None and held.varint is None}
-		held = self._over_fields(struct, variant.discriminant or "",
-		                         "gate.view" if gated else "view",
-		                         extra=interior)
+		held = self._disc(struct, variant, "gate.view" if gated else "view",
+		                  extra=interior)
 
 		# `[since]` ON THE ARM, folded into the same condition (26.424).
 		# Every arm accessor asks `_arm_guard` whether this arm is absent
@@ -4981,6 +4980,25 @@ class Emitter:
 		return next((held for held in order[here + 1:]
 		             if held.path in top), None)
 
+	def _disc(self, struct: ResolvedStruct, variant: Placement,
+			held: str, bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
+		"""A variant's discriminant, as C over the view `held`.
+
+		`switch (remaining)` (26.1125) is a shape the frame's length
+		decides: the bytes from where the variant starts to the end of the
+		view, which is what `remaining` means in a size (26.986)."""
+		source = variant.discriminant or ""
+		if "remaining" in source:
+			at = next(one for one in struct.layout.placements
+			          if one.path == variant.path)
+			start = self._base_expression(struct, at)
+			if held != "view":
+				start = start.replace("(view)", f"({held})")
+			extra = {**(extra or {}), "remaining":
+			         f"situ_remaining_u32({held}.limit, {start})"}
+		return self._over_fields(struct, source, held, bounded, extra)
+
 	def _remaining_from(self, struct: ResolvedStruct, placement: Placement,
 			held: str) -> dict[str, str] | None:
 		"""`remaining` in a member's size: the bytes from where the member
@@ -5511,7 +5529,7 @@ class Emitter:
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
 				continue
-			disc = self._over_fields(struct, placement.discriminant, "view")
+			disc = self._disc(struct, placement, "view")
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue
@@ -7076,7 +7094,7 @@ class Emitter:
 		if not any(call for _, call, _, _ in plan):
 			return None	# every arm fixed: the extent cannot shrink
 
-		disc  = self._over_fields(struct, placement.discriminant, "view")
+		disc  = self._disc(struct, placement, "view")
 		# The discriminant read BOUNDS-CHECKED, zero where it has not
 		# arrived (26.753). A getter at a static offset trusts the view to
 		# have been acquired with the struct's minimum, and `required`'s
@@ -10196,7 +10214,7 @@ class Emitter:
 		top-level one, and every arm that does have a length gets
 		`_variant_fits`'s test under its own discriminant value.
 		"""
-		disc  = self._over_fields(struct, placement.discriminant or "", "view")
+		disc  = self._disc(struct, placement, "view")
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		# What follows the variant is placed by nothing, so it is held to
@@ -10698,7 +10716,7 @@ class Emitter:
 		if not values or placement.discriminant is None:
 			return []
 
-		held = self._over_fields(struct, placement.discriminant, "view")
+		held = self._disc(struct, placement, "view")
 		test = " && ".join(f"{held} != {arm.value}u" for arm in values)
 		named = ", ".join(arm.source or str(arm.value) for arm in values)
 		return [
@@ -10718,7 +10736,7 @@ class Emitter:
 		arms = arm_alignments(struct, other)
 		if arms is None or other.discriminant is None:
 			return None
-		held  = self._over_fields(struct, other.discriminant, "view")
+		held  = self._disc(struct, other, "view")
 		chain = "1u"
 		for arm, unit in reversed(arms):
 			# An arm that answers what the chain already does adds a branch
@@ -10755,7 +10773,7 @@ class Emitter:
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
-		held_disc = self._over_fields(struct, placement.discriminant, held)
+		held_disc = self._disc(struct, placement, held)
 
 		chain = "0u"		# no arm matched
 		for arm, member in reversed(arm_members(struct, placement)):
@@ -15409,8 +15427,7 @@ class Emitter:
 		# (26.904).
 		found = arm_of(struct, placement)
 		if found is not None and found[0].discriminant:
-			texts.append(self._over_fields(struct, found[0].discriminant,
-			                               "view"))
+			texts.append(self._disc(struct, found[0], "view"))
 		if self._has_length(struct, placement):
 			length = self._length_expression(struct, placement)
 			if length is not None:
@@ -16029,7 +16046,7 @@ class Emitter:
 		if placement.kind != "variant" or "." in placement.path[
 				len(struct.name) + 1:]:
 			return []
-		disc  = self._over_fields(struct, placement.discriminant or "", "view")
+		disc  = self._disc(struct, placement, "view")
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		base  = self._base_expression(struct, placement)

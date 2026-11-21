@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 MAGIC		= b"SITU"
 FORMAT_VERSION	= 10
 NONE		= 0xFFFFFFFF
+#: `switch (remaining)`'s `selects` (26.1125), pack's REMAINING_SELECTS.
+REMAINING	= 0xFFFFFFFE
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
 

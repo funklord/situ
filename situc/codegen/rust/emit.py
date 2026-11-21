@@ -3423,7 +3423,7 @@ class Emitter:
 		`true` now, and `_arm_member` drops the block an always-false
 		refusal would guard.
 		"""
-		held = self._rule_text(struct, variant.discriminant or "")
+		held = self._disc(struct, variant)
 
 		# `[since]` ON THE ARM, in the same sentence (26.424). An arm the
 		# message's own version predates is ABSENT, which is what this test
@@ -5145,7 +5145,7 @@ class Emitter:
 			return ["", f"\t// {placement.path}: an arm of this shape has no",
 			        "\t// gated accessor in this backend."]
 		if variant is not None and arm is not None:
-			held = self._rule_text(struct, variant.discriminant or "", reads)
+			held = self._disc(struct, variant, reads)
 			if arm.value is None:
 				matched = matched_values(variant)
 				if not matched:
@@ -5683,6 +5683,21 @@ class Emitter:
 		big    = "true" if member.endian is ast.Endian.BIG else "false"
 		return (f"situ_rt::sum_run(&self.bytes[core::cmp::min({start},"
 		        f" self.bytes.len())..], {count}, {width}, {big})")
+
+	def _disc(self, struct: ResolvedStruct, variant: Placement,
+			extra: dict[str, str] | None = None) -> str:
+		"""A variant's discriminant, as a Rust condition. `switch
+		(remaining)` (26.1125) reads the bytes from the variant's start to
+		the end of the view, as a size does (26.986); C's copy says more."""
+		source = variant.discriminant or ""
+		if "remaining" in source:
+			at = next(one for one in struct.layout.placements
+			          if one.path == variant.path)
+			start = self._offset_expression(struct, at)
+			assert start is not None, variant.path
+			extra = {**(extra or {}), "remaining":
+			         f"situ_rt::remaining(self.bytes.len(), {start})"}
+		return self._rule_text(struct, source, extra)
 
 	def _rule_text(self, struct: ResolvedStruct, local: str,
 			extra: dict[str, str] | None = None) -> str:
@@ -7209,7 +7224,7 @@ class Emitter:
 		if not any(call for _, call, _, _ in plan):
 			return None
 
-		disc = self._rule_text(struct, placement.discriminant)
+		disc = self._disc(struct, placement)
 		disc = self._unparen(disc).replace("self.", "probe.")
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
@@ -7977,7 +7992,7 @@ class Emitter:
 		arms = arm_alignments(struct, other)
 		if arms is None or other.discriminant is None:
 			return None
-		held  = self._rule_text(struct, other.discriminant)
+		held  = self._disc(struct, other)
 		chain = "1"
 		for arm, unit in reversed(arms):
 			chain = (str(unit) if arm.value is None
@@ -8599,7 +8614,7 @@ class Emitter:
 		has no closed-form length, so `check` said nothing about any arm
 		and a record overrunning the message validated clean (26.689).
 		"""
-		disc  = self._rule_text(struct, placement.discriminant or "")
+		disc  = self._disc(struct, placement)
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		# What follows the variant is placed by nothing, so it is held to
@@ -8676,7 +8691,7 @@ class Emitter:
 		base = self._offset_expression(struct, placement)
 		if base is None:
 			return []
-		disc  = self._rule_text(struct, placement.discriminant or "")
+		disc  = self._disc(struct, placement)
 		arms  = arm_members(struct, placement)
 		named = [arm.value for arm, _ in arms if arm.value is not None]
 		lines: list[str] = []
@@ -9248,7 +9263,7 @@ class Emitter:
 		if not values or placement.discriminant is None:
 			return []
 
-		held = self._rule_text(struct, placement.discriminant)
+		held = self._disc(struct, placement)
 		test = " && ".join(f"{held} != {arm.value}" for arm in values)
 		named = ", ".join(arm.source or str(arm.value) for arm in values)
 		return [
@@ -9429,7 +9444,7 @@ class Emitter:
 		if not placement.arm_cases or placement.discriminant is None:
 			return None
 
-		held  = self._rule_text(struct, placement.discriminant)
+		held  = self._disc(struct, placement)
 		chain = "0"
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
@@ -11708,7 +11723,7 @@ class Emitter:
 				continue
 			if placement.kind != "variant" or placement.discriminant is None:
 				continue
-			disc = self._rule_text(struct, placement.discriminant)
+			disc = self._disc(struct, placement)
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue

@@ -11,6 +11,44 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
+struct md5_authenticator size=20 repr=ValueConverted atomic=NonAtomic
+  md5_authenticator.key_id               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  md5_authenticator.digest               offset=AbsoluteStatic(0x04) size=Fixed(16) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+
+struct no_authenticator size=0
+
+struct ntp_datagram size=48..72 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet                    offset=AbsoluteStatic(0x00) size=Fixed(48) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.leap               offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.version            offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.mode               offset=AbsoluteStatic(0x00:5) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.stratum            offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ntp_datagram.packet.poll               offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  ntp_datagram.packet.precision          offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  ntp_datagram.packet.root_delay         offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.root_dispersion    offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.reference_id       offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.reference          offset=AbsoluteStatic(0x10) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.reference.seconds  offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.reference.fraction offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.origin             offset=AbsoluteStatic(0x18) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.origin.seconds     offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.origin.fraction    offset=AbsoluteStatic(0x1C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.receive            offset=AbsoluteStatic(0x20) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.receive.seconds    offset=AbsoluteStatic(0x20) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.receive.fraction   offset=AbsoluteStatic(0x24) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.transmit           offset=AbsoluteStatic(0x28) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.packet.transmit.seconds   offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.packet.transmit.fraction  offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.authenticator             offset=AbsoluteStatic(0x30) size=Bounded(0, 24) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  ntp_datagram.authenticator.none        offset=AbsoluteStatic(0x30) size=Fixed(0) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  ntp_datagram.authenticator.md5         offset=AbsoluteStatic(0x30) size=Fixed(20) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.authenticator.md5.key_id  offset=AbsoluteStatic(0x30) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.authenticator.md5.digest  offset=AbsoluteStatic(0x34) size=Fixed(16) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  ntp_datagram.authenticator.sha1        offset=AbsoluteStatic(0x30) size=Fixed(24) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  ntp_datagram.authenticator.sha1.key_id offset=AbsoluteStatic(0x30) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  ntp_datagram.authenticator.sha1.digest offset=AbsoluteStatic(0x34) size=Fixed(20) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+
 struct ntp_packet size=48 repr=ValueConverted atomic=NonAtomic
   ntp_packet.leap                        offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
   ntp_packet.version                     offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
@@ -33,6 +71,10 @@ struct ntp_packet size=48 repr=ValueConverted atomic=NonAtomic
   ntp_packet.transmit                    offset=AbsoluteStatic(0x28) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
   ntp_packet.transmit.seconds            offset=AbsoluteStatic(0x28) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   ntp_packet.transmit.fraction           offset=AbsoluteStatic(0x2C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct sha1_authenticator size=24 repr=ValueConverted atomic=NonAtomic
+  sha1_authenticator.key_id              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  sha1_authenticator.digest              offset=AbsoluteStatic(0x04) size=Fixed(20) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
 
 struct timestamp size=8 repr=ValueConverted
   timestamp.seconds                      offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

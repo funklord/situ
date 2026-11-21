@@ -146,7 +146,9 @@ RUST_CENSUS = {
 	"modbus.situ": 22,
 	"mqtt.situ": 10,
 	"netlink.situ": 4,
-	"ntp.situ": 4,
+	# Read, 2026-11-21: `ntp_datagram`'s packet and its three authenticator
+	# arms (26.1125), each its own bound behind `len() < at`.
+	"ntp.situ": 8,
 	"packet.situ": 1,
 	"pes.situ": 14,
 	"radiotap.situ": 33,

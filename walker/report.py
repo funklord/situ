@@ -23,7 +23,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from walker import vm
-from walker.image import FRAME_CAP, LITTLE, NONE, Image, Tag, _string_at
+from walker.image import (FRAME_CAP, LITTLE, NONE, REMAINING, Image, Tag,
+                          _string_at)
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          says_little,
                          Unsupplied, View, child_args, frame_end,
@@ -36,7 +37,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          element_lead, offset_bits, record_run_count,
                          record_run_ended,
                          TERMINATED_ROW,
-                         chosen_arm, scan, size_bits, sized_run_count,
+                         chosen_arm, remaining_at, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
                          tlv_count, tlv_whole, varint, varint_run_at,
                          varint_run_count, while_holds,
@@ -825,7 +826,7 @@ def _arm_runs(image: Image,
 		if index not in image.arms:
 			continue
 		selects, arms = image.arms[index]
-		if selects == NONE:
+		if selects in (NONE, REMAINING):
 			continue
 		claimed = tuple(case for case, _, flags in arms if not flags & 1)
 		for case, chosen, flags in arms:
@@ -869,7 +870,7 @@ def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 		if index not in image.arms:
 			continue
 		selects, arms = image.arms[index]
-		if selects == NONE:
+		if selects in (NONE, REMAINING):
 			continue
 		for case, chosen, flags in arms:
 			if flags or chosen == NONE:
@@ -2149,7 +2150,8 @@ def _arm_selects(image: Image, view: View, index: int,
 	if selects == NONE:
 		return OK
 	try:
-		value = read_scalar(view, selects)
+		value = (remaining_at(view, index) if selects == REMAINING
+		         else read_scalar(view, selects))
 	except Refused:
 		return ERR_BOUNDS
 	fallback = next((chosen for case, chosen, flags in arms if flags & 1),

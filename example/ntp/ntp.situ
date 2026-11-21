@@ -74,3 +74,33 @@ require aligned(ntp_packet.root_delay, 4);
 // Big endian on a little-endian host means these are ValueConverted: the value
 // is not the memory. Getters return by value, never by pointer.
 require in_place(ntp_packet.transmit.seconds);
+
+// The datagram: the packet and, after it, the symmetric-key authenticator
+// RFC 5905 section 7.3 appends -- a key identifier and a digest. Nothing in
+// the packet says whether one is there or which digest it carries; the
+// datagram's length does: 48 bytes is none, 68 an MD5 digest, 72 a SHA-1.
+// So the variant switches on `remaining`, the bytes after the packet
+// (26.1125). The extension fields of RFC 7822, which sit between the two,
+// are not described here.
+struct no_authenticator {
+}
+
+struct md5_authenticator {
+	u32  key_id;
+	u8   digest[16];
+}
+
+struct sha1_authenticator {
+	u32  key_id;
+	u8   digest[20];
+}
+
+struct ntp_datagram {
+	ntp_packet  packet;
+	variant authenticator switch (remaining) {
+		case 0:  no_authenticator   none;
+		case 20: md5_authenticator  md5;
+		case 24: sha1_authenticator sha1;
+		default: error;
+	}
+}

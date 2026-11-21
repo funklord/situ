@@ -65,6 +65,9 @@ typedef enum {
 
 /* `none`, as `std/image.situ` spells it. */
 #define SITU_WALK_NONE 0xffffffffu
+/* An arm row's `selects` where the frame's length decides the arm: `switch
+ * (remaining)` (26.1125). */
+#define SITU_WALK_REMAINING 0xfffffffeu
 
 typedef struct {
 	const uint8_t *image;

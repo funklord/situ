@@ -160,12 +160,17 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   allow -- its setting record gained `rank` (u8) before `signature[64]`,
   and journals hold records one byte shorter. Asks for `[optional]` by the
   frame's length, a builder taking it or not, a view saying whether it is
-  there.
+  there. Built as `variant tail switch (remaining)` (26.1125): a case per
+  shape, each held to its length; NTP's authenticator is the corpus's.
 - 20261120T2330Z (its sec 1330): all 48 of fuzznet's settings declared as
   a registry and held to its hand table by test, every row agreeing. Gap:
   a delimited run states no least length -- `u8 host[] until " "` lets
   the host be empty; asks for `until ... min N` or `[min_size]`. Its
   `[minimal]` versus leading zeros difference is its own, kept open there.
+  Answered without new syntax: a `when` rule says it already, `when
+  size(address.host) < 2 refuse empty_host "..."` -- the span counts the
+  delimiter -- and C and Python refuse " 2947" and accept "h 2947" with it.
+  A floor on the scan would be a second way to state one rule.
 - 20261121T0130Z (its sec 1335): the C builder counted two counted struct
   runs into one `situ_count`, so `hop_count` was written as entries plus
   hops and the builder's own validate refused it. Fixed, with the count
@@ -2339,6 +2344,15 @@ Each arm is read within those bytes, so a `remaining` inside one ends where
 the variant does, and a message can be framed by the length alone. An arm
 shorter than the size leaves the rest unread, as `[holds]` does (26.898). See
 `doc/decision/26.1040-a-variant-states-its-size.md`.
+
+**Or the frame's length selects the arm**: `variant tail switch
+(remaining)` reads the bytes from the variant to the frame's end, for a
+format whose length is the only thing that says which shape follows --
+NTP's authenticator (none, MD5 or SHA-1 by the datagram's length), a
+record one member longer since a later version. A `case N` arm is exactly
+N bytes, a default arm is no case's size, and the variant ends the frame;
+each is refused otherwise. See
+`doc/decision/26.1125-the-frames-length-selects-an-arm.md`.
 
 Dynamic is not unknown. The size of the selected arm is a switch on the
 discriminant, and generated code evaluates it (11.6), so a variant can sit
@@ -9475,6 +9489,12 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1125 The frame's length selects an arm
+
+`variant tail switch (remaining)`, for fuzznet's record one member longer
+since a later version (inbox 20261120T2230Z) and NTP's authenticator.
+Moved to `doc/decision/26.1125-the-frames-length-selects-an-arm.md`.
 
 ### 26.1124 A format says how it is recognised
 
