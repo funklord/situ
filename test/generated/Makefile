@@ -566,13 +566,24 @@ $(FUZZ_DIR)/situ_fuzz.o: $(RUNTIME_INC)/situ.c
 	$(FUZZ_CC) -g -O1 -fsanitize=fuzzer-no-link,address \
 		-fno-omit-frame-pointer -I'$(RUNTIME_INC)' -c $< -o $@
 
+# The derived codecs too: the header declares a checksum's kernels with C
+# linkage and C defines them, as the differential links them (26.1058).
+# Without this object every schema with a checksum failed to link -- the
+# Internet checksum's `_spans` in ICMP, IPv4, TCP and UDP -- and `fuzz-cpp`
+# stopped at the first, building nothing it could run.
+$(FUZZ_DIR)/derived_%.o: $(GEN_DIR)/%_derived.c
+	@mkdir -p '$(@D)'
+	$(FUZZ_CC) -g -O1 -fsanitize=fuzzer-no-link,address,undefined \
+		-fno-sanitize-recover=undefined -fno-omit-frame-pointer \
+		-I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
+
 $(FUZZ_DIR)/cpp_%: $(GEN_DIR)/%_cpp_fuzz.cpp $(GEN_DIR)/%.hpp \
-		$(FUZZ_DIR)/situ_fuzz.o
+		$(FUZZ_DIR)/situ_fuzz.o $(FUZZ_DIR)/derived_%.o
 	@mkdir -p '$(@D)' '$(FUZZ_DIR)/hpp_$*'
 	cp '$(GEN_DIR)/$*.hpp' '$(FUZZ_DIR)/hpp_$*/unit.hpp'
 	$(FUZZ_CXX) $(FUZZ_CXXFLAGS) -DSITU_FUZZ -I'$(RUNTIME_INC)' \
 		-I'$(REPO_ROOT)/runtime/cpp' -I'$(FUZZ_DIR)/hpp_$*' \
-		$< $(FUZZ_DIR)/situ_fuzz.o -o $@
+		$< $(FUZZ_DIR)/situ_fuzz.o $(FUZZ_DIR)/derived_$*.o -o $@
 
 # The walker harness: `-I$(GEN_DIR)` is how `walk_image.h` resolves, and the
 # per-schema image is renamed into place so one source can include a fixed
