@@ -9628,6 +9628,35 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1130 A `--linked` struct nested by extent keeps its builder
+
+Reported by fuzznet (inbox 20261121T1820Z): its cause envelope nests two
+`fzn_entry_name_record`s, variable, imported from a unit built under
+`fzn_entry_record`. Unlinked, the envelope had a builder; with `--linked
+entry_record.situ=fzn_entry_record` it had none -- "whose own bytes do not
+state its extent -- situ emits no `_required`" -- though the linked unit
+emits exactly that `_required`. fuzznet built the envelope unlinked,
+carrying a second copy of the name's checker.
+
+`ident` names a linked type under its unit's prefix only where that unit
+declares the whole identifier (so a unit that emits no `_extent` leaves the
+importer to emit its own), and the builder asked `frames_itself` of
+`ident(prefix, type)` with `_required` appended after -- an identifier no
+unit declares, so it fell back to this unit's prefix. `build.struct_ident`
+names the nested struct through its `_required`; its `_view` and
+`_validate`, which every unit emits for each struct, follow from the same
+name. And the CLI's list of refusals read this unit's header alone while
+`generate` read it with the linked headers after it, so the two disagreed
+about one struct: both read `build.with_linked(header)` now.
+
+Unlinked output is unchanged: with nothing linked, `struct_ident` is
+`ident`. Held by
+`test/unit/test_an_import_can_be_linked_rather_than_emitted.py`, whose
+earlier assertion -- no `pr_card_` in the linked build header -- held as
+well for a header with no builder in it; the new test builds a request
+through the linked builder, calling `pc_card_required`, and fails on the
+old code with fuzznet's message.
+
 ### 26.1129 `wire --check` calls BREAKING only what moves a byte or its meaning
 
 Reported by fuzznet (inbox 20261121T2000Z), four contracts it took over a

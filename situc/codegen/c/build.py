@@ -449,6 +449,33 @@ def ends_before_a_byte_it_does_not_own(struct: "ResolvedStruct") -> bool:
 	return bool(last.delimiters) and not last.delimiter_consumed
 
 
+def with_linked(header: str) -> str:
+	"""This unit's header and every `--linked` unit's after it.
+
+	A linked unit's header says which of its structs have a `_required` as
+	this unit's says of its own, and its structs are built by its own
+	builders, not again here. `generate` and the CLI's list of refusals
+	both read it: the list read this unit's alone, and said "no builder
+	for `envelope`" of a build header that held one (26.1130).
+	"""
+	return "".join([header, *(text for _, text in UNITS)])
+
+
+def struct_ident(prefix: str, name: str) -> str:
+	"""A nested struct's name as the unit that frames it spells it (26.1130).
+
+	`ident` takes a linked type's name from its unit only where that unit
+	declares the whole identifier, and `ident(prefix, name)` alone is no
+	identifier anything declares -- so a builder asked `frames_itself` of a
+	struct from a `--linked` unit looked for `_required` under this unit's
+	prefix, found none, and refused a member the linked unit frames:
+	fuzznet's cause envelope, two linked name records. The struct is named
+	through its `_required`, then, and its `_view` and `_validate`, which
+	every unit emits for each of its structs, follow from the same name.
+	"""
+	return ident(prefix, name, "required").removesuffix("_required")
+
+
 def frames_itself(header: str, name: str) -> bool:
 	"""Whether the emitted header declares `<name>_required`.
 
@@ -915,7 +942,7 @@ def hands_over(header: str, name: str, prefix: str,
 	header: it must have a `_required`, and it must not end `before` a
 	byte it does not own.
 	"""
-	if not frames_itself(header, ident(prefix, name)):
+	if not frames_itself(header, struct_ident(prefix, name)):
 		return False
 	inner = structs.get(name) if structs is not None else None
 	return inner is None or not ends_before_a_byte_it_does_not_own(inner)
@@ -1000,7 +1027,7 @@ def _arm_refusal(placement: Placement, header: str, prefix: str,
 		# ends `before` a byte it does not own, and both are in hand here.
 		# Measured over the corpus when this was written: fifteen were the
 		# first and two the second, and the message named neither.
-		if not frames_itself(header, ident(prefix, placement.type_name)):
+		if not frames_itself(header, struct_ident(prefix, placement.type_name)):
 			return f"holds a `{placement.type_name}`, whose own bytes do " \
 			       "not state its extent -- situ emits no `_required` for " \
 			       "it -- so the writer cannot tell one from a longer blob"
@@ -1111,7 +1138,7 @@ def _ends_the_message(struct: ResolvedStruct, inner: Placement,
 	# A struct the data sizes: a fixed one's extent is its own, and one
 	# with no `_required` for some other reason keeps the refusal it had.
 	if held is None or held.layout.is_fixed_size \
-			or frames_itself(shape.header, ident(shape.prefix, held.name)):
+			or frames_itself(shape.header, struct_ident(shape.prefix, held.name)):
 		return False
 	if ends_before_a_byte_it_does_not_own(held):
 		return False
@@ -1834,7 +1861,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				if held is members[-1] and held.size_ast is not None \
 						and traverse.reserved_policy(held.attrs) \
 						in (None, "must_be_zero", "ignore") \
-						and frames_itself(header, ident(prefix, struct.name)):
+						and frames_itself(header, struct_ident(prefix, struct.name)):
 					# `align_up(nla_len, 4) - nla_len`: no field to solve
 					# for, and none needed. Every byte before it is down
 					# when the writer reaches it, so the struct's own
@@ -1950,7 +1977,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				# functions a varint type does not have. Its count is the
 				# one the caller passed, which the branch below uses
 				# (26.683).
-				part.inner = ident(prefix, run.type_name)
+				part.inner = struct_ident(prefix, run.type_name)
 			part.solved = solved.get(held.name)
 			parts.append(part)
 			continue
@@ -2046,7 +2073,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					header, held.type_name, prefix, structs)):
 				if not repeats:
 					parts.append(Part(NESTED, held, local,
-					                  inner=ident(prefix, held.type_name)))
+					                  inner=struct_ident(prefix, held.type_name)))
 					continue
 				# Every struct run reduces to one walk: a fixed count, a
 				# count field, the rest of the frame, or a delimiter.
@@ -2067,7 +2094,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					           f"a run of `{held.type_name}` whose end " \
 					           "this writer cannot state"
 				parts.append(Part(REPEAT, held, local,
-				                  inner=ident(prefix, held.type_name),
+				                  inner=struct_ident(prefix, held.type_name),
 				                  delimiter=(held.delimiters[0]
 				                             if held.delimiters else b""),
 				                  digits=held.array_count or 0,
@@ -2078,7 +2105,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				continue
 			if not repeats and held.type_name:
 				if not frames_itself(header,
-				                     ident(prefix, held.type_name)):
+				                     struct_ident(prefix, held.type_name)):
 					return [], f"`{traverse.local_name(struct, held)}` " \
 					           f"is a nested `{held.type_name}`, whose " \
 					           "own bytes do not state its extent -- situ " \
@@ -4015,10 +4042,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	guessed at, so a caller who does not pass it gets less rather than
 	something wrong.
 	"""
-	# `--linked`: a linked unit's header says which of its structs have a
-	# `_required` as this unit's says of its own, and its structs are built
-	# by its own builders, not again here.
-	header  = "".join([header, *(text for _, text in UNITS)])
+	header  = with_linked(header)
 	shape   = Shape(header, prefix, resolved.structs,
 	                {decl.name: decl for decl in schema.varints()},
 	                derived_codecs(schema),

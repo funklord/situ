@@ -146,3 +146,56 @@ def test_linked_takes_file_equals_prefix(tmp_path: Path) -> None:
 	_units(tmp_path)
 	done = _build(tmp_path, "req.situ", "pr", "x", "--linked", "card.situ")
 	assert done.returncode != 0 and "FILE=PREFIX" in done.stderr
+
+
+BUILDER = r"""#include <stdio.h>
+#include "req_build.h"
+int main(void)
+{
+	/* A person "a" since 7, held and inline; then the inline one a byte
+	 * longer than the card it is, which the writer asks the card about. */
+	const uint8_t card[]   = { 1, 1, 'a', 0, 0, 0, 7 };
+	const uint8_t longer[] = { 1, 1, 'a', 0, 0, 0, 7, 0 };
+	uint8_t  out[64];
+	uint32_t wrote = 0u;
+	int      fail  = 0;
+	if (pr_request_build(out, sizeof out, 5u, card, sizeof card, card,
+	                     sizeof card, &wrote) != SITU_OK || wrote != 17u)
+		fail |= 1;
+	if (pr_request_build(out, sizeof out, 5u, card, sizeof card, longer,
+	                     sizeof longer, &wrote) == SITU_OK)
+		fail |= 2;
+	printf("fail=%d\n", fail);
+	return fail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
+def test_a_linked_struct_nested_by_extent_keeps_its_builder(
+		tmp_path: Path) -> None:
+	"""fuzznet (inbox 20261121T1820Z, 26.1130): `card inline_card` is framed
+	by the card's own `_required`, which the linked unit emits under its
+	prefix. The builder looked for it under this unit's, found none, and
+	`request` had a builder plain and none linked -- with a notice saying
+	so while `generate`, reading the linked header, disagreed."""
+	_units(tmp_path)
+	linked = _build(tmp_path, "req.situ", "pr", "linked2", "--linked",
+	                "card.situ=pc")
+	assert "no builder for `request`" not in linked.stderr, linked.stderr
+	header = (tmp_path / "linked2" / "req_build.h").read_text(encoding="ascii")
+	assert "pr_request_build(" in header
+	assert "pc_card_required(" in header and "pr_card_required(" not in header
+	(tmp_path / "b.c").write_text(BUILDER, encoding="ascii")
+	compiled = subprocess.run(
+		[COMPILER or "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+		 "-Wconversion", "-Wsign-conversion", f"-I{RUNTIME}",
+		 f"-I{tmp_path / 'linked2'}", f"-I{tmp_path / 'card'}",
+		 str(tmp_path / "b.c"), str(tmp_path / "linked2" / "req.c"),
+		 str(tmp_path / "card" / "card.c"), str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "b")],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+	ran = subprocess.run([str(tmp_path / "b")], capture_output=True,
+	                     text=True, timeout=30)
+	assert ran.stdout.strip() == "fail=0", ran.stdout

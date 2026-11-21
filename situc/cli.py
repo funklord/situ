@@ -1206,7 +1206,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
 			ordinary = files.get(f"{args.schema.stem}.h", "")
 			files.update(build.generate(parsed, resolved, args.schema.stem,
 			                            args.prefix, ordinary))
-			shape = build.Shape(ordinary, args.prefix, resolved.structs,
+			shape = build.Shape(build.with_linked(ordinary), args.prefix,
+			                    resolved.structs,
 			                    {d.name: d for d in parsed.varints()},
 			                    build.derived_codecs(parsed),
 			                    {d.name: d for d in parsed.markers()})
