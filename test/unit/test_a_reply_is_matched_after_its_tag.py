@@ -296,6 +296,25 @@ int main(void)
 		                                          &id) == SITU_ERR_CONSTRAINT);
 		CHECK(situ_drive_reply_to_on_message_from(&kd, opened(rep, &rm), 6u,
 		                                          &id) == SITU_OK && id == 21u);
+
+		/* And matched by the key's values too: a reply verified and
+		 * reassembled before it is matched leaves no frame to hand over
+		 * (fuzznet, inbox 20261121T1530Z). */
+		CHECK(situ_drive_reply_to_track_key_from(&kd,
+		          situ_conv_reply_to_key(7u, 9u), 6u, NULL, 0u, 22u, 0u,
+		          NULL) == SITU_OK);
+		CHECK(situ_drive_reply_to_on_key_from(&kd,
+		          situ_conv_reply_to_key(7u, 9u), 5u, &id) == SITU_ERR_CONSTRAINT);
+		CHECK(situ_drive_reply_to_on_key_from(&kd,
+		          situ_conv_reply_to_key(7u, 9u), 6u, &id) == SITU_OK && id == 22u);
+		CHECK(situ_drive_reply_to_on_key_from(&kd,
+		          situ_conv_reply_to_key(7u, 9u), 6u, &id) == SITU_ERR_CONSTRAINT);
+		CHECK(situ_conv_reply_to_record_key_from(&table,
+		          situ_conv_reply_to_key(7u, 9u), 4u, 13u) == SITU_OK);
+		CHECK(situ_conv_reply_to_match_key_from(&table,
+		          situ_conv_reply_to_key(7u, 9u), 4u, &id) == SITU_OK && id == 13u);
+		CHECK(situ_conv_reply_to_match_key_from(&table,
+		          situ_conv_reply_to_key(7u, 9u), 4u, &id) == SITU_ERR_CONSTRAINT);
 	}
 
 	/* The driver: a verified reply ends the exchange; a forged one,
@@ -379,6 +398,13 @@ t.record_key(t.key(7, 9), 12, peer=4)
 assert t.take(frame(7, 0, 9).open_sealed(True), peer=4) == 12
 d.track_key(d.key(7, 9), b"", 6, 0, peer=4, retries=0)
 assert d.on_message(frame(7, 0, 9).open_sealed(True), peer=4) == 6
+t.record_key(t.key(7, 9), 13, peer=4)
+assert t.take_key(t.key(7, 9), peer=4) == 13
+assert no(lambda: t.take_key(t.key(7, 9), peer=4))
+d.track_key(d.key(7, 9), b"", 7, 0, peer=4, retries=0)
+assert no(lambda: d.on_key(d.key(7, 9), peer=5))
+assert d.on_key(d.key(7, 9), peer=4) == 7
+assert no(lambda: d.on_key(d.key(7, 9), peer=4))
 print("ok")
 """
 
@@ -458,6 +484,18 @@ int main()
 		CHECK(t.take_from(g, 4u, id) == ::situ::rt::err::ok && id == 12u);
 		CHECK(d.on_message_from(g, 4u, id) == ::situ::rt::err::ok && id == 6u);
 	});
+	CHECK(t.record_key_from(::situ::reply_to_table::key(7u, 9u), 4u, 13u)
+	      == ::situ::rt::err::ok);
+	CHECK(t.take_key_from(::situ::reply_to_table::key(7u, 9u), 4u, id)
+	      == ::situ::rt::err::ok && id == 13u);
+	CHECK(d.track_key_from(::situ::reply_to_driver::key(7u, 9u), 4u, nullptr,
+	                       0u, 7u, 0u) == ::situ::rt::err::ok);
+	CHECK(d.on_key_from(::situ::reply_to_driver::key(7u, 9u), 5u, id)
+	      == ::situ::rt::err::constraint);
+	CHECK(d.on_key_from(::situ::reply_to_driver::key(7u, 9u), 4u, id)
+	      == ::situ::rt::err::ok && id == 7u);
+	CHECK(d.on_key_from(::situ::reply_to_driver::key(7u, 9u), 4u, id)
+	      == ::situ::rt::err::constraint);
 	if (!fail) std::printf("ALL PASS\n");
 	return fail;
 }
@@ -534,6 +572,13 @@ fn main() {
 	assert_eq!(t.take_from(&o9, 4).unwrap(), 12);
 	d.track_key_from(ReplyToDriver::<Sink>::key(7, 9), 4, &[], 6, 0, None).unwrap();
 	assert_eq!(d.on_message_from(&o9, 4).unwrap(), 6);
+	t.record_key_from(ReplyToTable::key(7, 9), 4, 13).unwrap();
+	assert_eq!(t.take_key_from(ReplyToTable::key(7, 9), 4).unwrap(), 13);
+	assert!(matches!(t.take_key_from(ReplyToTable::key(7, 9), 4), Err(Error::Constraint)));
+	d.track_key_from(ReplyToDriver::<Sink>::key(7, 9), 4, &[], 7, 0, None).unwrap();
+	assert!(matches!(d.on_key_from(ReplyToDriver::<Sink>::key(7, 9), 5), Err(Error::Constraint)));
+	assert_eq!(d.on_key_from(ReplyToDriver::<Sink>::key(7, 9), 4).unwrap(), 7);
+	assert!(matches!(d.on_key_from(ReplyToDriver::<Sink>::key(7, 9), 4), Err(Error::Constraint)));
 	println!("ok");
 }
 """

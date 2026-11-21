@@ -316,7 +316,21 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t                                        std::uint32_t &id) noexcept",
 			"\t{",
 			*heard,
+			"\t\treturn take_key_from(key, peer, id);",
+			"\t}",
 			"",
+			"\t/** `take_from` by a key from `key(...)`: for a reply verified",
+			"\t *  and reassembled before it is matched, whose key's values the",
+			"\t *  caller holds by then rather than the frame (fuzznet, inbox",
+			"\t *  20261121T1530Z). */",
+			("\t[[nodiscard]] ::situ::rt::err take_key_from(std::uint64_t key,"
+			 if layout.packed else
+			 "\t[[nodiscard]] ::situ::rt::err take_key_from("
+			 "const std::uint8_t *key,"),
+			"\t                                            std::uint32_t peer,",
+			"\t                                            std::uint32_t &id)"
+			" noexcept",
+			"\t{",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			f"\t\t\tif (slots_[i].live && slots_[i].peer == peer && {same}) {{",
 			"\t\t\t\tid = slots_[i].id;",

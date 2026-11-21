@@ -391,7 +391,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\tpub fn on_message_from(&mut self, {second.name}: &{resp},"
 			" peer: u32) -> Result<u32> {",
 			*heard,
+			"\t\tself.on_key_from(key, peer)",
+			"\t}",
 			"",
+			"\t/// `on_message_from` by a key from `key(...)`, the twin of",
+			"\t/// `track_key_from`: for a reply verified and reassembled before",
+			"\t/// it is matched (fuzznet, inbox 20261121T1530Z). `[after]` stays",
+			"\t/// the rule for a caller matching a frame as it opens it.",
+			("\tpub fn on_key_from(&mut self, key: u64, peer: u32)"
+			 " -> Result<u32> {" if layout.packed else
+			 f"\tpub fn on_key_from(&mut self, key: [u8; {layout.total_bytes}],"
+			 " peer: u32) -> Result<u32> {"),
 			"\t\tlet found = self.slots.iter()",
 			"\t\t\t.find(|s| s.live && s.keyed && s.peer == peer && s.key == key)",
 			"\t\t\t.map(|s| s.id);",

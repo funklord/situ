@@ -277,7 +277,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\tpub fn take_from(&mut self, {second.name}: &{reply}, "
 			"peer: u32) -> Result<u32> {",
 			*heard,
+			"\t\tself.take_key_from(key, peer)",
+			"\t}",
 			"",
+			"\t/// `take_from` by a key from `key(...)`: for a reply verified and",
+			"\t/// reassembled before it is matched, whose key's values the caller",
+			"\t/// holds by then rather than the frame (fuzznet, inbox",
+			"\t/// 20261121T1530Z).",
+			("\tpub fn take_key_from(&mut self, key: u64, peer: u32)"
+			 " -> Result<u32> {" if layout.packed else
+			 f"\tpub fn take_key_from(&mut self, key: [u8; {layout.total_bytes}],"
+			 " peer: u32) -> Result<u32> {"),
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif slot.live && slot.peer == peer && slot.key == key {",
 			"\t\t\t\tslot.live = false;",

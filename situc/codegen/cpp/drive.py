@@ -494,7 +494,21 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			" noexcept",
 			"\t{",
 			*heard,
+			"\t\treturn on_key_from(key, peer, id);",
+			"\t}",
 			"",
+			"\t/** `on_message_from` by a key from `key(...)`, the twin of",
+			"\t *  `track_key_from`: for a reply verified and reassembled before",
+			"\t *  it is matched (fuzznet, inbox 20261121T1530Z). `[after]`",
+			"\t *  stays the rule for a caller matching a frame as it opens it. */",
+			("\t[[nodiscard]] ::situ::rt::err on_key_from(std::uint64_t key,"
+			 if layout.packed else
+			 "\t[[nodiscard]] ::situ::rt::err on_key_from("
+			 "const std::uint8_t *key,"),
+			"\t                                          std::uint32_t peer,",
+			"\t                                          std::uint32_t &id)"
+			" noexcept",
+			"\t{",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			("\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].peer == peer"
 			 " && slots_[i].key == key) {"

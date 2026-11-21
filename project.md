@@ -280,6 +280,20 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   so it was not made a target. Its one trap: the C driver is a `main` that
   never frees, so LeakSanitizer must be off (`ASAN_OPTIONS`, not only
   `-detect_leaks=0`).
+- 20261121T1530Z: fuzznet matches a reply only once it has verified and
+  REASSEMBLED it, when the frame it came in is gone and it holds the key's
+  values and the verifying session. Built in all four, the twin of
+  `_track_key_from`: C `<table>_match_key_from` and `<drive>_on_key_from`,
+  Python `take_key` and `on_key`, Rust and C++ `take_key_from` and
+  `on_key_from`; `_match_from` and `_on_message_from` are now those after
+  reading the key (26.1122's last section).
+- 20261121T1640Z: `==` between two byte runs in a `when` wrote C that did
+  not compile -- 26.1128.
+- 20261121T1820Z: `--linked` lost the builder for a struct nesting a
+  linked one by extent -- 26.1130.
+- 20261121T2000Z: `wire --check` called four of fuzznet's contracts
+  breaking where no byte moved, its roster bundle fourteen times --
+  26.1129.
 
 - 20261121T1000Z: fuzznet answered 26.1123's three review points (its
   record's last section): a stride, not a total, set by the first non-last
