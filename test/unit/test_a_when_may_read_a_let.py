@@ -8,6 +8,8 @@ through a `LET` op naming its row in the lets section.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -85,3 +87,34 @@ def test_both_walkers_read_the_let(tmp_path: Path) -> None:
 		if drive is not None:
 			assert c_verdict(tmp_path, blob, raw, shape, drive) == want, \
 				("c walker", struct, raw.hex())
+
+
+@pytest.mark.skipif(shutil.which("tshark") is None
+                    or shutil.which("text2pcap") is None,
+                    reason="needs tshark and text2pcap")
+def test_tshark_reads_the_let_in_a_when(tmp_path: Path) -> None:
+	"""The dissector wrote each rule out as a comment (26.1133): it reads
+	every let below 64 bits as a number now, the same cases as above."""
+	source = tmp_path / "lets.situ"
+	source.write_text(SCHEMA, encoding="ascii")
+	subprocess.run([sys.executable, "-m", "situc", "gen-dissector", "--out",
+	                str(tmp_path), str(source)],
+	               check=True, capture_output=True, cwd=ROOT)
+	names = {"wide": "wide_too_big", "narrow": "narrow_too_big",
+	         "signed_let": "backwards"}
+	for struct, raw, want in CASES:
+		script = tmp_path / f"{struct}.lua"
+		script.write_text((tmp_path / "lets.lua").read_text("ascii")
+		                  + 'DissectorTable.get("wtap_encap")'
+		                  f":add(wtap.USER0, {struct})\n", encoding="ascii")
+		dump = tmp_path / "one.hex"
+		dump.write_text(f"0000 {raw.hex(' ')}\n", encoding="ascii")
+		capture = tmp_path / "one.pcap"
+		subprocess.run(["text2pcap", "-q", "-l", "147", str(dump),
+		                str(capture)], check=True, capture_output=True)
+		shown = subprocess.run(["tshark", "-r", str(capture), "-X",
+		                        f"lua_script:{script}", "-V"],
+		                       capture_output=True, text=True, timeout=120)
+		assert "Lua: Error" not in shown.stderr, shown.stderr
+		said = names[struct] in shown.stdout or "may not" in shown.stdout
+		assert said == (want == "2"), (struct, raw.hex(), shown.stdout)

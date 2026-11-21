@@ -482,9 +482,9 @@ both walkers and the dissector. What a user cannot yet do is listed under
   the size is known nonzero; 33 `pos` scopes per generated function. Each
   is noise in a consumer build, not behaviour -- taken up again when a
   consumer reports one.
-- The dissector computes a `let` in `UInt64` now (26.1112); a `when`
-  reading one is still not evaluated, nor a `let` over a field wider than
-  32 bits, a text number or a token.
+- The dissector computes a `let` in `UInt64` (26.1112) and a `when` reads
+  one below 64 bits (26.1133); a rule reading a 64-bit let is declined, as
+  is a `let` over a field wider than 32 bits, a text number or a token.
 - `situc map` does not describe a registry; its contract is in `wire`.
 - Coverage-guided fuzzing of the Rust and Python harnesses: built
   (26.1132), `make fuzz-python` and `make fuzz-rust`; atheris and
@@ -9642,6 +9642,21 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1133 The dissector evaluates a `when` that reads a `let`
+
+The four backends and both walkers have read a `let` in a `when` since
+26.1102; the dissector wrote such a rule out as a comment, with the wrong
+reason ("its discriminant is not one this dissector can read") -- in the
+corpus, `edges`' `let_rule_too_big`. It now hands the rule each let below
+64 bits as the Lua number its row already shows: `_let_value`'s exact
+arithmetic, or `_let_wide`'s `UInt64` held to the width and turned back by
+`tonumber`, exact below 2^53 and sign-extended. A 64-bit let stays a
+`UInt64` or `Int64`, which in Lua never equals or orders against a plain
+number, so a rule over one is still declined. Of the 60 corpus
+dissectors only `edges` moves. Held by tshark in
+`test/unit/test_a_when_may_read_a_let.py`, the same eight cases as the
+readers, which fails on the old code.
 
 ### 26.1132 The Python and Rust harnesses, fuzzed coverage-guided
 

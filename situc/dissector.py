@@ -2367,7 +2367,8 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		expr, same = traverse.run_equalities(when.expr, struct)
 		source = expr_to_source(expr, explicit=True)
 		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
-		extra  = {"remaining": "tvb:len()", **_same_reads(same)}
+		extra  = {"remaining": "tvb:len()", **_same_reads(same),
+		          **_let_reads(struct)}
 		if not lost:
 			local = re.sub(rf"\bsize\(\s*{re.escape(struct.name)}\s*\)",
 			               "situ_struct_extent", local)
@@ -2387,6 +2388,28 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		             f"{proto}_e.{_lua(when.name)})")
 		lines.append("\tend")
 	return lines
+
+
+def _let_reads(struct: ResolvedStruct) -> dict[str, str]:
+	"""Each `let` a `when` may read, as the Lua number the row shows (26.1133).
+
+	A let narrower than 64 bits is a Lua number either way -- `_let_value`'s
+	exact arithmetic, or `_let_wide`'s `UInt64` held to the width and handed
+	back by `tonumber`, exact below 2^53 and sign-extended. A 64-bit let
+	stays a `UInt64` or `Int64`, and in Lua neither equals or orders against
+	a plain number, so a rule reading one is still declined. The backends
+	and both walkers have read a let in a `when` since 26.1102; this one
+	wrote the rule out as a comment, unevaluated.
+	"""
+	reads = {}
+	for let in _LETS.get(struct.name, []):
+		bits, _ = _let_bits(let)
+		value = _let_value(struct, let)
+		if value is None and bits < 64:
+			value = _let_wide(struct, let)
+		if value is not None:
+			reads[let.name] = f"({value})"
+	return reads
 
 
 def _same_reads(same: dict[str, traverse.RunEquality]) -> dict[str, str]:
