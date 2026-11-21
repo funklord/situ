@@ -34,6 +34,7 @@ from situc import ast
 from situc.codegen.c.drive import driven
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
+from situc.relation import after_region
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -121,6 +122,7 @@ def _pump(relation: ast.Relation, resolved: ResolvedSchema) -> list[str]:
 	                "static_cast<std::uint32_t>(got), reply)")
 
 	hooks = f"qt_{c_name(relation.name)}_hooks"
+	region = after_region(relation)
 	return [
 		f"/** What the `{relation.name}` pump tells you: the hooks every situ",
 		" * driver calls, by the same names (26.775), each optional. `reply`",
@@ -137,7 +139,13 @@ def _pump(relation: ast.Relation, resolved: ResolvedSchema) -> list[str]:
 		" *   on_error      the exchange is ending on a failure, with `errno`",
 		" *                 where the system said why (zero where not).",
 		" *   on_done       the exchange is over, with its result: exactly once,",
-		" *                 on every path out, `stop()` included. */",
+		" *                 on every path out, `stop()` included.",
+		*([" *   verify        true where the reply's tag verifies, the key being",
+		   f" *                 yours. Only then is `{region}` opened and the reply",
+		   " *                 matched; without it, or on false, the reply goes",
+		   " *                 to `on_unmatched` with `err::tag` (26.1122)."]
+		  if region else []),
+		" */",
 		f"struct {hooks} {{",
 		f"\tstd::function<void(std::uint32_t id, const ::situ::{view} &reply)>",
 		"\t\ton_reply;",
@@ -149,6 +157,8 @@ def _pump(relation: ast.Relation, resolved: ResolvedSchema) -> list[str]:
 		"\tstd::function<void(std::uint32_t count)> on_expired;",
 		"\tstd::function<void(::situ::rt::err rc, int sys_errno)> on_error;",
 		"\tstd::function<void(::situ::rt::err rc)> on_done;",
+		*([f"\tstd::function<bool(const ::situ::{view} &reply)> verify;"]
+		  if region else []),
 		"};",
 		"",
 		f"/** Drives `{relation.name}` inside the caller's event loop.",
@@ -303,7 +313,14 @@ def _pump(relation: ast.Relation, resolved: ResolvedSchema) -> list[str]:
 		"\t\t\treturn;",
 		"\t\t}",
 		"\t\tstd::uint32_t id = 0u;",
-		"\t\tconst ::situ::rt::err matched = drive_.on_message(reply, id);",
+		*(["\t\t::situ::rt::err matched = ::situ::rt::err::tag;",
+		   "\t\tif (hooks_.verify && hooks_.verify(reply)) {",
+		   f"\t\t\t(void)reply.with_{c_name(region)}(true,",
+		   f"\t\t\t\t[&](const ::situ::{view}::{c_name(region)}_gate &gate) {{",
+		   "\t\t\t\t\tmatched = drive_.on_message(gate, id);",
+		   "\t\t\t\t});",
+		   "\t\t}"] if region else
+		  ["\t\tconst ::situ::rt::err matched = drive_.on_message(reply, id);"]),
 		"\t\tif (matched == ::situ::rt::err::ok) {",
 		"\t\t\tif (hooks_.on_reply) {",
 		"\t\t\t\thooks_.on_reply(id, reply);",

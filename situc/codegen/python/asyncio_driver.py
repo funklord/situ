@@ -35,6 +35,7 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.drive import driven
 from situc.codegen.python.emit import py_name
+from situc.relation import after_region
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -80,6 +81,7 @@ def _run(relation: ast.Relation) -> list[str]:
 	"""The hooks class and the coroutine for one driven relation."""
 	name  = py_name(relation.name)
 	reply = py_name(relation.params[1].type_name)
+	region = after_region(relation)
 
 	# Continuations align under the opening paren, which moves with the
 	# relation's name: alignment is spaces after the indent, and the column
@@ -106,6 +108,13 @@ def _run(relation: ast.Relation) -> list[str]:
 		"\t  on_done(error)             the exchange is over: exactly once, on",
 		"\t                             every path out, with the exception",
 		"\t                             ending it or None.",
+		*([f"\t  verify(reply)              True where the reply's tag verifies,",
+		   "\t                             the key being yours. Only then is",
+		   f"\t                             `{region}` opened and the reply",
+		   "\t                             matched; otherwise it goes to",
+		   "\t                             `on_unmatched` with TagError, as",
+		   "\t                             it does by default (26.1122)."]
+		  if region else []),
 		"",
 		"\tSet `stop` true -- from a hook, say -- and the coroutine returns at",
 		"\tthe top of its next turn, leaving what is still in flight in the",
@@ -131,6 +140,9 @@ def _run(relation: ast.Relation) -> list[str]:
 		"\tdef on_done(self, error: BaseException | None) -> None:",
 		"\t\tpass",
 		"",
+		*([f"\tdef verify(self, reply: {reply}) -> bool:",
+		   "\t\treturn False",
+		   ""] if region else []),
 		"",
 		f"async def run_{name}(sock: _socket.socket, "
 		f"drive: {name}_driver,",
@@ -205,8 +217,13 @@ def _run(relation: ast.Relation) -> list[str]:
 		"\t\t\texcept SituError as why:",
 		"\t\t\t\thooks.on_malformed(data, why)",
 		"\t\t\t\tcontinue",
+		*(["\t\t\tif not hooks.verify(reply):",
+		   "\t\t\t\thooks.on_unmatched(reply, TagError(",
+		   '\t\t\t\t\t"the reply\'s tag did not verify"))',
+		   "\t\t\t\tcontinue"] if region else []),
 		"\t\t\ttry:",
-		"\t\t\t\tanswered = drive.on_message(reply)",
+		(f"\t\t\t\tanswered = drive.on_message(reply.open_{region}(True))"
+		 if region else "\t\t\t\tanswered = drive.on_message(reply)"),
 		"\t\t\texcept SituError as why:",
 		"\t\t\t\thooks.on_unmatched(reply, why)",
 		"\t\t\t\tcontinue",
@@ -252,7 +269,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"import time as _time",
 		"from typing import Callable",
 		"",
-		"from situ_runtime import BoundsError, Message, SituError",
+		("from situ_runtime import BoundsError, Message, SituError, TagError"
+		 if any(after_region(relation) for relation, _ in ready) else
+		 "from situ_runtime import BoundsError, Message, SituError"),
 		"",
 		f"from {basename}_drive import *  # noqa: F403",
 		"",

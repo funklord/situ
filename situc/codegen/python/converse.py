@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
+from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
+                            SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -34,13 +35,24 @@ def refusals(schema: ast.Schema,
 	return found
 
 
-def _key(sides: Side, view: str) -> list[str]:
-	lines = ["\t\tkey = 0"]
+def _root(view: str, gated: bool) -> str:
+	"""Where a clear field is read: the view, or with `[after]` the view the
+	gate was opened over (26.1122). A member behind the gate is read off
+	the gate itself."""
+	return f"{view}._view" if gated else view
+
+
+def _key(sides: Side, view: str, gated: bool = False,
+		into: str = "key") -> list[str]:
+	"""The packed key into `into`; `gated` as `_root`."""
+	lines = [f"\t\t{into} = 0"]
 	for chain, width in sides:
-		source = view
+		source = _root(view, gated)
 		for step in chain:
+			if getattr(step, "region", None) is not None:
+				source = view
 			if isinstance(step, Read):
-				lines.append(f"\t\tkey = (key << {width}) | "
+				lines.append(f"\t\t{into} = ({into} << {width}) | "
 				             f"{source}.{py_name(step.member)}"
 				             f"\t# {step.path}")
 			elif isinstance(step, SubView):
@@ -50,14 +62,17 @@ def _key(sides: Side, view: str) -> list[str]:
 	return lines
 
 
-def _key_bytes(sides: Side, view: str) -> list[str]:
+def _key_bytes(sides: Side, view: str, gated: bool = False,
+		into: str = "key") -> list[str]:
 	"""The exact-bytes key (0042), Python's spelling: parts in declaration
 	order, scalars big-endian at ceil(width/8) bytes, byte arrays verbatim.
 	A `bytes` keys a dict exactly as an int does."""
 	lines = ["\t\tparts = []"]
 	for chain, width in sides:
-		source = view
+		source = _root(view, gated)
 		for step in chain:
+			if getattr(step, "region", None) is not None:
+				source = view
 			if isinstance(step, ReadBytes):
 				lines.append(f"\t\tparts.append(bytes({source}."
 				             f"{py_name(step.member)}))\t# {step.path}")
@@ -70,8 +85,16 @@ def _key_bytes(sides: Side, view: str) -> list[str]:
 				local = f"_{py_name(step.member)}"
 				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
 				source = local
-	lines.append('\t\tkey = b"".join(parts)')
+	lines.append(f'\t\t{into} = b"".join(parts)')
 	return lines
+
+
+def reply_type(relation: ast.Relation) -> str:
+	"""What the reply side takes: its view, or with `[after]` the gate of
+	that sealed region, which only a verified open hands out (26.1122)."""
+	region = after_region(relation)
+	struct = py_name(relation.params[1].type_name)
+	return f"{struct}._{region}_gate" if region else struct
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -105,6 +128,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		request, response = layout.request, layout.response
 		name = py_name(relation.name)
 		first, second = relation.params
+		region = after_region(relation)
+		reply = reply_type(relation)
+		asked = (_key(request, first.name, into="raw") if layout.packed
+		         else _key_bytes(request, first.name, into="raw"))
+		heard = (_key(response, second.name, bool(region), "raw")
+		         if layout.packed
+		         else _key_bytes(response, second.name, bool(region), "raw"))
 		lines += [
 			"",
 			f"class {name}_table:",
@@ -121,14 +151,18 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\tdef __init__(self, cap: int) -> None:",
 			"\t\tself._cap  = cap",
-			(f"\t\tself._live: dict[{'int' if layout.packed else 'bytes'}, "
-			 "int] = {}"),
+			(f"\t\tself._live: dict[tuple[int, "
+			 f"{'int' if layout.packed else 'bytes'}], int] = {{}}"),
 			"",
 			f"\tdef record(self, {first.name}: "
-			f"{py_name(first.type_name)}, id: int) -> None:",
-			f'\t\t"""Remember `{first.name}`. Raises BoundsError when full."""',
-			*(_key(request, first.name) if layout.packed
-			  else _key_bytes(request, first.name)),
+			f"{py_name(first.type_name)}, id: int, *, peer: int = 0) -> None:",
+			f'\t\t"""Remember `{first.name}`. Raises BoundsError when full.',
+			"",
+			"\t\t`peer` is yours to number -- a session, the context that",
+			"\t\tverifies the reply -- and only a reply taken with the same",
+			'\t\tone answers it (26.1122)."""',
+			*asked,
+			"\t\tkey = (peer, raw)",
 			"",
 			"\t\tif key not in self._live and len(self._live) >= self._cap:",
 			"\t\t\traise BoundsError(",
@@ -137,28 +171,31 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\t\tself._cap)",
 			"\t\tself._live[key] = id",
 			"",
-			f"\tdef take(self, {second.name}: "
-			f"{py_name(second.type_name)}) -> int:",
+			f"\tdef take(self, {second.name}: {reply}, *,"
+			" peer: int = 0) -> int:",
 			f'\t\t"""The request `{second.name}` answers, forgotten as it is',
 			"",
 			"\t\treturned. A duplicate or late reply names an exchange that",
-			'\t\tis over, and raises ConstraintError."""',
-			*(_key(response, second.name) if layout.packed
-			  else _key_bytes(response, second.name)),
+			"\t\tis over, and raises ConstraintError.",
+			*(["", f"\t\tHanded `{region}`'s gate: only a verified reply ends",
+			   "\t\tan exchange (26.1122)."] if region else []),
+			'\t\t"""',
+			*heard,
+			"\t\tkey = (peer, raw)",
 			"",
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",
 			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
 			"\t\treturn self._live.pop(key)",
 			"",
-			f"\tdef peek(self, {second.name}: "
-			f"{py_name(second.type_name)}) -> int:",
+			f"\tdef peek(self, {second.name}: {reply}, *,"
+			" peer: int = 0) -> int:",
 			'\t\t"""`take` without taking: which request a reply answers,',
 			"",
 			"\t\tleft pending for a reply that comes in pieces (26.1009).",
 			'\t\tRaises ConstraintError where none is."""',
-			*(_key(response, second.name) if layout.packed
-			  else _key_bytes(response, second.name)),
+			*heard,
+			"\t\tkey = (peer, raw)",
 			"",
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",

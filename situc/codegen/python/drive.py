@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.python.emit import py_name
-from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
+from situc.codegen.python.converse import _key, _key_bytes, reply_type
+from situc.relation import KeyLayout, Refused, after_region, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -27,43 +28,6 @@ def _policy(relation: ast.Relation) -> tuple[int, int] | None:
 		if attr.name in ("timeout_ms", "retries") and isinstance(value, int):
 			found[attr.name] = value
 	return (found["timeout_ms"], found["retries"]) if len(found) == 2 else None
-
-
-def _key(sides: Side, view: str) -> list[str]:
-	lines = ["\t\tkey = 0"]
-	for chain, width in sides:
-		source = view
-		for step in chain:
-			if isinstance(step, Read):
-				lines.append(f"\t\tkey = (key << {width}) | "
-				             f"{source}.{py_name(step.member)}")
-			elif isinstance(step, SubView):
-				local = f"_{py_name(step.member)}"
-				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
-				source = local
-	return lines
-
-
-def _key_bytes(sides: Side, view: str) -> list[str]:
-	"""The exact-bytes key (0042); see the converse twin for the layout."""
-	lines = ["\t\tparts = []"]
-	for chain, width in sides:
-		source = view
-		for step in chain:
-			if isinstance(step, ReadBytes):
-				lines.append(f"\t\tparts.append(bytes({source}."
-				             f"{py_name(step.member)}))\t# {step.path}")
-			elif isinstance(step, Read):
-				count = (width + 7) // 8
-				lines.append(f"\t\tparts.append(int({source}."
-				             f"{py_name(step.member)}).to_bytes({count}, "
-				             f"\"big\"))\t# {step.path}")
-			elif isinstance(step, SubView):
-				local = f"_{py_name(step.member)}"
-				lines.append(f"\t\t{local} = {source}.{py_name(step.member)}")
-				source = local
-	lines.append('\t\tkey = b"".join(parts)')
-	return lines
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -106,10 +70,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	lines += [
 		"",
 		"",
-		"#: A pending exchange's key: what a reply's relation fields come to,",
-		"#: or `(\"id\", id)` for one tracked by id alone, which no reply's",
-		"#: int or bytes can equal (26.1064).",
-		"_key = int | bytes | tuple[str, int]",
+		"#: A pending exchange's key: the caller's peer and what a reply's",
+		"#: relation fields come to (26.1122), or `(\"id\", id)` for one",
+		"#: tracked by id alone, which no peer's number can equal (26.1064).",
+		"_key = tuple[int, int] | tuple[int, bytes] | tuple[str, int]",
 		"",
 		"",
 		"class _exchange:",
@@ -154,6 +118,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		part   = part_of(relation) if resend else None
 		name = py_name(relation.name)
 		first, second = relation.params
+		region = after_region(relation)
+		reply  = reply_type(relation)
+		asked = (_key(request, first.name, into="raw") if layout.packed
+		         else _key_bytes(request, first.name, into="raw"))
+		heard = (_key(response, second.name, bool(region), "raw")
+		         if layout.packed
+		         else _key_bytes(response, second.name, bool(region), "raw"))
 		lines += [
 			"",
 			f"{name.upper()}_TIMEOUT_MS = {timeout}",
@@ -213,6 +184,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"\tdef track(self, {first.name}: {py_name(first.type_name)},",
 			"\t          data: bytes, id: int, now_ms: int, *,",
+			"\t          peer: int = 0,",
 			"\t          timeout_ms: int | None = None,",
 			("\t          retries: int | None = None,"
 			 "\n\t          resend_ms: int | None = None,"
@@ -226,9 +198,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			'\t\t"""Remember the request until it is answered, without sending',
 			"",
 			"\t\tit: one the caller sent already, or only awaits. The numbers",
-			'\t\toverride the driver\'s for this exchange (26.1055)."""',
-			*(_key(request, first.name) if layout.packed
-			  else _key_bytes(request, first.name)),
+			"\t\toverride the driver's for this exchange (26.1055). Only a",
+			"\t\treply taken with the same `peer` -- yours to number --",
+			'\t\tends it (26.1122)."""',
+			*asked,
+			"\t\tkey = (peer, raw)",
 			"",
 			"\t\tself._hold(key, data, id, now_ms, timeout_ms=timeout_ms,",
 			("\t\t           retries=retries, resend_ms=resend_ms,"
@@ -295,6 +269,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"\tdef send(self, {first.name}: {py_name(first.type_name)},",
 			"\t         data: bytes, id: int, now_ms: int, *,",
+			"\t         peer: int = 0,",
 			"\t         timeout_ms: int | None = None,",
 			("\t         retries: int | None = None,"
 			 "\n\t         resend_ms: int | None = None,"
@@ -309,7 +284,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\t\tid, where one was given, so a caller sealing every send under",
 			'\t\tit seals this one too (26.1055); through `submit` otherwise."""',
-			f"\t\tself.track({first.name}, data, id, now_ms, timeout_ms=timeout_ms,",
+			f"\t\tself.track({first.name}, data, id, now_ms, peer=peer,",
+			"\t\t           timeout_ms=timeout_ms,",
 			("\t\t           retries=retries, resend_ms=resend_ms,"
 			 "\n\t\t           resend_part_ms=resend_part_ms,"
 			 " retries_part=retries_part)" if part else
@@ -332,23 +308,25 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\traise ConstraintError(\"no exchange {} is outstanding\""
 			".format(id))",
 			"",
-			f"\tdef on_message(self, {second.name}: "
-			f"{py_name(second.type_name)}) -> int:",
-			*(_key(response, second.name) if layout.packed
-			  else _key_bytes(response, second.name)),
+			f"\tdef on_message(self, {second.name}: {reply}, *,"
+			" peer: int = 0) -> int:",
+			*([f'\t\t"""Handed `{region}`\'s gate: only a verified reply',
+			   '\t\tends an exchange (26.1122)."""'] if region else []),
+			*heard,
+			"\t\tkey = (peer, raw)",
 			"",
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",
 			f"\t\t\t\t\"{relation.name}: no exchange is waiting for this\")",
 			"\t\treturn self._live.pop(key).id",
 			"",
-			f"\tdef peek(self, {second.name}: "
-			f"{py_name(second.type_name)}) -> int:",
+			f"\tdef peek(self, {second.name}: {reply}, *,"
+			" peer: int = 0) -> int:",
 			'\t\t"""`on_message` without ending the exchange: which request',
 			"",
 			'\t\ta reply answers, for a reply in pieces (26.1009)."""',
-			*(_key(response, second.name) if layout.packed
-			  else _key_bytes(response, second.name)),
+			*heard,
+			"\t\tkey = (peer, raw)",
 			"",
 			"\t\tif key not in self._live:",
 			"\t\t\traise ConstraintError(",

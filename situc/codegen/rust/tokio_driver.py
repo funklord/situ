@@ -49,7 +49,7 @@ from situc import ast
 from situc.codegen import ACQUIRES_DATAGRAMS, argued_refusal
 from situc.codegen.rust.drive import _policy
 from situc.codegen.rust.emit import _pascal
-from situc.relation import Refused, key_layout
+from situc.relation import Refused, after_region, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -146,6 +146,7 @@ def _run(relation: ast.Relation, basename: str) -> list[str]:
 	hooks = f"{held}Hooks"
 	_, second = relation.params
 	resp = f"{basename}::{_pascal(second.type_name)}"
+	region = after_region(relation)
 
 	return [
 		f"/// What `{run}` tells you: the hooks every situ driver calls, by",
@@ -166,6 +167,10 @@ def _run(relation: ast.Relation, basename: str) -> list[str]:
 		"/// - `stop`: asked at the top of every turn; `true` ends the call",
 		"///   with `Ok(())`, leaving what is in flight in the drive machine.",
 		"///   Dropping the future ends it too.",
+		*(["/// - `verify`: `true` where the reply's tag verifies, the key",
+		   f"///   being yours. Only then is `{region}` opened and the reply",
+		   "///   matched; otherwise it goes to `on_unmatched` with `Tag`,",
+		   "///   as it does by default (26.1122)."] if region else []),
 		f"pub trait {hooks} {{",
 		f"\tfn on_reply(&mut self, _id: u32, _reply: &{resp}<'_>) {{}}",
 		f"\tfn on_unmatched(&mut self, _reply: &{resp}<'_>,",
@@ -178,6 +183,9 @@ def _run(relation: ast.Relation, basename: str) -> list[str]:
 		"\tfn stop(&self) -> bool {",
 		"\t\tfalse",
 		"\t}",
+		*([f"\tfn verify(&mut self, _reply: &{resp}<'_>) -> bool {{",
+		   "\t\tfalse",
+		   "\t}"] if region else []),
 		"}",
 		"",
 		f"impl {hooks} for () {{}}",
@@ -279,7 +287,12 @@ def _run(relation: ast.Relation, basename: str) -> list[str]:
 		"\t\t\t\t// or bytes that are not one.",
 		f"\t\t\t\tmatch {resp}::new(&buf[..n]) {{",
 		"\t\t\t\t\tErr(why) => hooks.on_malformed(&buf[..n], why),",
-		"\t\t\t\t\tOk(reply) => match drive.on_message(&reply) {",
+		*(["\t\t\t\t\tOk(reply) if !hooks.verify(&reply) =>",
+		   "\t\t\t\t\t\thooks.on_unmatched(&reply, situ_rt::Error::Tag),",
+		   f"\t\t\t\t\tOk(reply) => match reply.open_{region}(true)",
+		   "\t\t\t\t\t\t.and_then(|gate| drive.on_message(&gate)) {"]
+		  if region else
+		  ["\t\t\t\t\tOk(reply) => match drive.on_message(&reply) {"]),
 		"\t\t\t\t\t\tOk(id) => hooks.on_reply(id, &reply),",
 		"\t\t\t\t\t\tErr(why) => hooks.on_unmatched(&reply, why),",
 		"\t\t\t\t\t},",

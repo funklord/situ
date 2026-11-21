@@ -21,6 +21,7 @@ from typing import Callable
 
 from situc import ast
 from situc.codegen.c.drive import driven
+from situc.relation import after_region
 from situc.codegen.c.names import ident, macro, header_guard
 from situc.resolve import ResolvedSchema
 from situc import __version__
@@ -66,6 +67,12 @@ HOOKS_TYPE = [
 	" *                 (zero where it did not).",
 	" *   on_done       the loop is ending, with what `run` returns. Called",
 	" *                 exactly once, on every path out.",
+	" *   verify        for a relation matched `[after]` a sealed region",
+	" *                 (26.1122): SITU_OK where the reply's tag verifies,",
+	" *                 the key being yours. Only then is the region opened",
+	" *                 and the reply matched; without it, or on any other",
+	" *                 answer, the reply goes to `on_unmatched` with",
+	" *                 SITU_ERR_TAG. Unread for any other relation.",
 	" *",
 	" * `user` is passed to each. Set `stop` non-zero -- from a callback, or",
 	" * from a signal handler, whose interrupted wait ends the turn -- and",
@@ -81,6 +88,7 @@ HOOKS_TYPE = [
 	"\tvoid (*on_done)(situ_err_t rc, void *user);",
 	"\tvoid *user;",
 	"\tvolatile int stop;",
+	"\tsitu_err_t (*verify)(situ_view_t reply, void *user);",
 	"} situ_drive_hooks_t;",
 	"#endif",
 	"",
@@ -94,12 +102,51 @@ def call(name: str, args: str, indent: str) -> list[str]:
 	        f"{indent}}}"]
 
 
+def reply_gate(relation: ast.Relation, prefix: str) -> tuple[str, str] | None:
+	"""The gate type and open function `on_message` takes, where the
+	relation is matched `[after]` a sealed region (26.1122)."""
+	region = after_region(relation)
+	if region is None:
+		return None
+	reply = relation.params[1].type_name
+	return ident(prefix, reply, region, "t"), ident(prefix, reply, region,
+	                                                "open")
+
+
 def deliver(acquire: str, on_msg: str, buf: str, got: str,
-		indent: str) -> list[str]:
+		indent: str, gate: tuple[str, str] | None = None) -> list[str]:
 	"""Hand one received datagram to the drive machine, and every outcome
 	to a hook: a reply, a reply nobody is waiting for, or bytes that are
 	not one. Dropping the last two silently was the drivers' only answer
-	before 26.775, and the reply itself was never passed on at all."""
+	before 26.775, and the reply itself was never passed on at all.
+
+	With `gate`, the reply is matched only once the caller's `verify` hook
+	says its tag holds, through the gate that answer opens (26.1122)."""
+	if gate is not None:
+		kind, opened = gate
+		return [
+			f"{indent}situ_msg_t  msg;",
+			f"{indent}situ_view_t reply;",
+			f"{indent}{kind} gate;",
+			f"{indent}uint32_t    id = 0u;",
+			f"{indent}situ_msg_init(&msg, {buf}, (uint32_t){got});",
+			f"{indent}const situ_err_t viewed = {acquire};",
+			f"{indent}if (viewed != SITU_OK) {{",
+			*call("on_malformed", f"{buf}, (uint32_t){got}, viewed",
+			      indent + "\t"),
+			f"{indent}}} else if (hooks == NULL || hooks->verify == NULL",
+			f"{indent}           || hooks->verify(reply, hooks->user) != SITU_OK",
+			f"{indent}           || {opened}(reply, 1, &gate) != SITU_OK) {{",
+			*call("on_unmatched", "reply, SITU_ERR_TAG", indent + "\t"),
+			f"{indent}}} else {{",
+			f"{indent}\tconst situ_err_t matched = {on_msg}(drive, gate, &id);",
+			f"{indent}\tif (matched == SITU_OK) {{",
+			*call("on_reply", "id, reply", indent + "\t\t"),
+			f"{indent}\t}} else {{",
+			*call("on_unmatched", "reply, matched", indent + "\t\t"),
+			f"{indent}\t}}",
+			f"{indent}}}",
+		]
 	return [
 		f"{indent}situ_msg_t  msg;",
 		f"{indent}situ_view_t reply;",
@@ -209,7 +256,8 @@ def loop(relation: ast.Relation, resolved: ResolvedSchema, prefix: str,
 		*call("on_malformed", "buf, (uint32_t)got, SITU_ERR_BOUNDS", "\t\t\t"),
 		"\t\t\tcontinue;",
 		"\t\t}",
-		*deliver(acquire, f"{drive}_on_message", "buf", "got", "\t\t"),
+		*deliver(acquire, f"{drive}_on_message", "buf", "got", "\t\t",
+		         reply_gate(relation, prefix)),
 		"\t}",
 		*(["done:"] if jumps else []),
 		*teardown,

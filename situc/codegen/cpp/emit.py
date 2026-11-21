@@ -1506,6 +1506,20 @@ class Emitter:
 			if placement.path in secret:
 				continue
 			lines.extend(self._gated_span(struct, placement))
+		# The view the gate was opened over, whose clear fields the tag
+		# covers too: a reply matched behind the gate reads its key from
+		# one value (26.1122). Not where the view carries arguments, which
+		# the gate does not hold, nor where a member owns the name.
+		if not self._arguments(struct) and "view" not in {
+				self._gate_name(struct, entry.placement) for entry in inside}:
+			lines.extend([
+				"",
+				"\t\t/* The view this gate was opened over. */",
+				f"\t\t[[nodiscard]] {class_name(struct)} view() const noexcept",
+				"\t\t{",
+				f"\t\t\treturn {class_name(struct)}(raw_);",
+				"\t\t}",
+			])
 
 		lines.extend([
 			"",

@@ -263,6 +263,9 @@ ATTRIBUTE_NAMES = frozenset({
 	# and a second schedule for once part of the reply is held (fuzznet's
 	# sec 1168).
 	"resend_part_ms", "retries_part",
+	# 26.1122: the sealed region a reply is matched behind, after its tag
+	# verifies.
+	"after",
 	# section 14: cryptographic model
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
 	# section 14.2: a checksum that covers its own bytes, taken as this
@@ -293,7 +296,7 @@ VALUE_ATTRIBUTES = frozenset({
 	*REPLAY_ATTRIBUTES,
 	*IDENTIFY_ATTRIBUTES,
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
-	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "must_eq", "encoding", "endian", "bit_order",
+	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "after", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds", "chars",
 })
 

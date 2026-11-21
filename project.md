@@ -153,7 +153,9 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   `fzn_caller_t` session), not the network peer -- message numbers are per
   session and two sessions can talk to one peer. Reuse of a handle is safe
   once nothing can verify under the old session's key. No per-peer
-  `submit`. Unblocks building 26.1122.
+  `submit`. Built in all four backends (26.1122's last section): match,
+  peek and the driver's `on_message` take the gate; `_from` calls carry
+  the peer; the event-loop drivers gained a `verify` hook.
 - 20261120T2230Z (its sec 1327): a trailing member present when the bytes
   allow -- its setting record gained `rank` (u8) before `signature[64]`,
   and journals hold records one byte shorter. Asks for `[optional]` by the
@@ -9485,7 +9487,9 @@ Moved to `doc/decision/26.1123-datagram-reassembly.md`.
 ### 26.1122 A reply matched only after its tag verifies
 
 Also fuzznet's item 5, the peer in the key (a caller-assigned `peer` beside
-the relation's key). Moved to `doc/decision/26.1122-a-reply-matched-after-its-tag.md`.
+the relation's key). Built 2026-11-21 after fuzznet's review, in all four
+backends: `[after = REGION]`, the peer as the verifying session, and a
+`verify` hook in the event-loop drivers. Moved to `doc/decision/26.1122-a-reply-matched-after-its-tag.md`.
 
 ### 26.1121 A message is built around an arm already in its buffer
 

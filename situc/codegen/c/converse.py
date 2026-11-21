@@ -29,20 +29,31 @@ from situc import ast
 from situc.codegen import argued_refusal
 from situc.codegen.c.names import ident, macro, header_guard
 from situc.relation import (KeyLayout, Read, ReadBytes, Refused,
-                            Side, key_layout)
+                            Side, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
 __all__ = ["generate", "refusals"]
 
-def _key(sides: Side, view: str, prefix: str) -> list[str]:
-	"""Pack one side's fields into a `uint64_t`, widest shift last."""
+def _key(sides: Side, view: str, prefix: str, gated: bool = False
+		) -> list[str]:
+	"""Pack one side's fields into a `uint64_t`, widest shift last.
+
+	`gated`: `view` is a sealed region's gate (26.1122). A member behind it
+	is read through the gate's own accessor, and a clear one through the
+	view the gate was opened over -- one value handed in, both read."""
 	lines = ["\tuint64_t key = 0u;"]
 	for chain, width in sides:
-		source = view
+		source = f"{view}.view" if gated else view
 		for step in chain:
 			target = f"situ_k{step.target}"
-			if isinstance(step, Read):
+			if isinstance(step, Read) and step.region is not None:
+				getter = ident(prefix, step.struct, step.region, step.member,
+				               "get")
+				lines.append(f"\tconst uint64_t {target} = (uint64_t)"
+				             f"{getter}({view});\t/* {step.path} */")
+				lines.append(f"\tkey = (key << {width}u) | {target};")
+			elif isinstance(step, Read):
 				getter = ident(prefix, step.struct, step.member, "get")
 				lines.append(f"\tconst uint64_t {target} = (uint64_t)"
 				             f"{getter}({source});\t/* {step.path} */")
@@ -60,17 +71,23 @@ def _key(sides: Side, view: str, prefix: str) -> list[str]:
 
 
 def _key_bytes(sides: Side, view: str, prefix: str,
-		total: int) -> list[str]:
+		total: int, gated: bool = False) -> list[str]:
 	"""The exact-bytes key (0042): parts in declaration order, a scalar part
 	as big-endian ceil(width/8) bytes, a bytes part verbatim. The layout is
-	the language's; this is only C's spelling of it."""
+	the language's; this is only C's spelling of it. `gated` as `_key`."""
 	lines = [f"\tuint8_t key[{total}u];", "\tuint32_t at = 0u;"]
 	for chain, width in sides:
-		source = view
+		source = f"{view}.view" if gated else view
 		for step in chain:
 			target = f"situ_k{step.target}"
+			behind = getattr(step, "region", None)
+			if behind is not None:
+				# Through the gate's accessor, which takes the gate.
+				source = view
 			if isinstance(step, ReadBytes):
-				pointer = ident(prefix, step.struct, step.member, "ptr")
+				pointer = ident(prefix, step.struct, *([behind] if behind
+				                                       else []),
+				                step.member, "ptr")
 				lines += [
 					f"\tmemcpy(&key[at], {pointer}({source}), "
 					f"{width // 8}u);\t/* {step.path} */",
@@ -78,7 +95,9 @@ def _key_bytes(sides: Side, view: str, prefix: str,
 				]
 			elif isinstance(step, Read):
 				count = (width + 7) // 8
-				getter = ident(prefix, step.struct, step.member, "get")
+				getter = ident(prefix, step.struct, *([behind] if behind
+				                                      else []),
+				               step.member, "get")
 				lines += [
 					f"\tconst uint64_t {target} = (uint64_t)"
 					f"{getter}({source});\t/* {step.path} */",
@@ -119,17 +138,37 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 	request, response = layout.request, layout.response
 	name  = ident(prefix, "conv", relation.name)
 	first, second = relation.params
+	region = after_region(relation)
+	# What `match` and `peek` take: a plain view, or with `[after]` the
+	# region's gate, which only a verified open produces -- so a reply
+	# nobody verified cannot end an exchange (26.1122).
+	reply = (f"{ident(prefix, second.type_name, region, 't')} {second.name}"
+	         if region else f"situ_view_t {second.name}")
+	asked = (_key(request, first.name, prefix) if layout.packed
+	         else _key_bytes(request, first.name, prefix, layout.total_bytes))
+	heard = (_key(response, second.name, prefix, bool(region))
+	         if layout.packed
+	         else _key_bytes(response, second.name, prefix,
+	                         layout.total_bytes, bool(region)))
+	same = ("table->slots[i].key == key" if layout.packed else
+	        f"memcmp(table->slots[i].key, key, {layout.total_bytes}u) == 0")
 
 	return [
 		f"/* Pending requests for `{relation.name}`.",
 		" *",
 		" * The slots are yours and so is their number. A full table answers",
 		" * SITU_ERR_BOUNDS rather than evicting an exchange you still wanted.",
-		" */",
+		" *",
+		" * `peer` is yours too: a number for whatever the reply must come",
+		" * back through to count -- a session, the context that verifies it",
+		" * -- where the key alone would let two of them meet (26.1122).",
+		" * Reuse one only once nothing can verify under the old. The calls",
+		" * without `_from` hold peer 0. */",
 		"typedef struct {",
 		("\tuint64_t key;" if layout.packed
 		 else f"\tuint8_t  key[{layout.total_bytes}u];"),
 		"\tuint32_t id;\t/* your handle for the request */",
+		"\tuint32_t peer;",
 		"\tuint8_t  live;",
 		f"}} {name}_slot_t;",
 		"",
@@ -148,19 +187,21 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		"\t}",
 		"}",
 		"",
-		f"/* Remember `{first.name}` under its key, against your handle for it. */",
-		f"static inline situ_err_t {name}_record({name}_t *table,",
-		f"                                       situ_view_t {first.name},",
-		"                                       uint32_t id)",
+		f"/* Remember `{first.name}` under its key and `peer`, against your",
+		" * handle for it. */",
+		f"static inline situ_err_t {name}_record_from({name}_t *table,",
+		f"                                            situ_view_t {first.name},",
+		"                                            uint32_t peer,",
+		"                                            uint32_t id)",
 		"{",
-		*(_key(request, first.name, prefix) if layout.packed
-		  else _key_bytes(request, first.name, prefix, layout.total_bytes)),
+		*asked,
 		"",
 		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
 		"\t\tif (table->slots[i].live == 0u) {",
 		("\t\t\ttable->slots[i].key  = key;" if layout.packed else
 		 f"\t\t\tmemcpy(table->slots[i].key, key, {layout.total_bytes}u);"),
 		"\t\t\ttable->slots[i].id   = id;",
+		"\t\t\ttable->slots[i].peer = peer;",
 		"\t\t\ttable->slots[i].live = 1u;",
 		"\t\t\treturn SITU_OK;",
 		"\t\t}",
@@ -168,31 +209,47 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		"\treturn SITU_ERR_BOUNDS;",
 		"}",
 		"",
-		f"/* Match `{second.name}` to a request, and forget it.",
+		f"/* Remember `{first.name}` under its key, against your handle for it. */",
+		f"static inline situ_err_t {name}_record({name}_t *table,",
+		f"                                       situ_view_t {first.name},",
+		"                                       uint32_t id)",
+		"{",
+		f"\treturn {name}_record_from(table, {first.name}, 0u, id);",
+		"}",
+		"",
+		f"/* Match `{second.name}`, from `peer`, to a request, and forget it.",
+		*([f" * Handed the gate of `{region}`: the reply's tag has verified",
+		   " * before anything it says can end an exchange (26.1122)."]
+		  if region else []),
 		" *",
 		" * Forgetting is what makes a second reply to one request answer",
 		" * SITU_ERR_CONSTRAINT: a late or duplicated response names an",
 		" * exchange that is over, which is not the same as one that never",
 		" * happened and is reported the same way because a caller can do",
 		" * nothing different about either. */",
-		f"static inline situ_err_t {name}_match({name}_t *table,",
-		f"                                      situ_view_t {second.name},",
-		"                                      uint32_t *id)",
+		f"static inline situ_err_t {name}_match_from({name}_t *table,",
+		f"                                           {reply},",
+		"                                           uint32_t peer,",
+		"                                           uint32_t *id)",
 		"{",
-		*(_key(response, second.name, prefix) if layout.packed
-		  else _key_bytes(response, second.name, prefix, layout.total_bytes)),
+		*heard,
 		"",
 		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
-		("\t\tif (table->slots[i].live != 0u && table->slots[i].key == key) {"
-		 if layout.packed else
-		 f"\t\tif (table->slots[i].live != 0u && "
-		 f"memcmp(table->slots[i].key, key, {layout.total_bytes}u) == 0) {{"),
+		"\t\tif (table->slots[i].live != 0u && table->slots[i].peer == peer",
+		f"\t\t    && {same}) {{",
 		"\t\t\t*id = table->slots[i].id;",
 		"\t\t\ttable->slots[i].live = 0u;",
 		"\t\t\treturn SITU_OK;",
 		"\t\t}",
 		"\t}",
 		"\treturn SITU_ERR_CONSTRAINT;",
+		"}",
+		"",
+		f"static inline situ_err_t {name}_match({name}_t *table,",
+		f"                                      {reply},",
+		"                                      uint32_t *id)",
+		"{",
+		f"\treturn {name}_match_from(table, {second.name}, 0u, id);",
 		"}",
 		"",
 		f"/* Forget the request held under `id`, if one is. An exchange that",
@@ -213,23 +270,28 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		f"/* Whether `{second.name}` answers a request still pending, and which,",
 		" * without taking it: a reply in many pieces is asked once a piece,",
 		" * and only the last should end the exchange (26.1009). */",
-		f"static inline situ_err_t {name}_peek(const {name}_t *table,",
-		f"                                     situ_view_t {second.name},",
-		"                                     uint32_t *id)",
+		f"static inline situ_err_t {name}_peek_from(const {name}_t *table,",
+		f"                                          {reply},",
+		"                                          uint32_t peer,",
+		"                                          uint32_t *id)",
 		"{",
-		*(_key(response, second.name, prefix) if layout.packed
-		  else _key_bytes(response, second.name, prefix, layout.total_bytes)),
+		*heard,
 		"",
 		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
-		("\t\tif (table->slots[i].live != 0u && table->slots[i].key == key) {"
-		 if layout.packed else
-		 f"\t\tif (table->slots[i].live != 0u && "
-		 f"memcmp(table->slots[i].key, key, {layout.total_bytes}u) == 0) {{"),
+		"\t\tif (table->slots[i].live != 0u && table->slots[i].peer == peer",
+		f"\t\t    && {same}) {{",
 		"\t\t\t*id = table->slots[i].id;",
 		"\t\t\treturn SITU_OK;",
 		"\t\t}",
 		"\t}",
 		"\treturn SITU_ERR_CONSTRAINT;",
+		"}",
+		"",
+		f"static inline situ_err_t {name}_peek(const {name}_t *table,",
+		f"                                     {reply},",
+		"                                     uint32_t *id)",
+		"{",
+		f"\treturn {name}_peek_from(table, {second.name}, 0u, id);",
 		"}",
 		"",
 	]

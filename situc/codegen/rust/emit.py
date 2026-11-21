@@ -4962,6 +4962,20 @@ class Emitter:
 				"",
 				f"impl<'a> {gate}<'a> {{",
 			])
+			# The view the gate was opened over, whose clear fields the tag
+			# covers too: a reply matched behind the gate reads its key from
+			# one value (26.1122). Not where the view carries arguments,
+			# which the gate does not hold, nor where a member owns the name.
+			if not self._arguments(struct) and "view" not in {
+					_ident(self._gate_name(struct, entry.placement))
+					for entry in inside}:
+				lines += [
+					"\t/// The view this gate was opened over.",
+					f"\tpub fn view(&self) -> {_pascal(struct.name)}<'a> {{",
+					f"\t\t{_pascal(struct.name)} {{ bytes: self.bytes }}",
+					"\t}",
+					"",
+				]
 
 			# Rendered for the enclosing struct, then moved into the gate's
 			# vocabulary once, here, rather than in each emitter below: a

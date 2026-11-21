@@ -24,7 +24,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
-from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
+from situc.codegen.rust.converse import _key, _key_bytes, reply_type
+from situc.relation import KeyLayout, Refused, after_region, key_layout
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -38,58 +39,6 @@ def _policy(relation: ast.Relation) -> tuple[int, int] | None:
 		if attr.name in ("timeout_ms", "retries") and isinstance(value, int):
 			found[attr.name] = value
 	return (found["timeout_ms"], found["retries"]) if len(found) == 2 else None
-
-
-def _key_bytes(sides: Side, view: str, indent: str,
-		total: int, resolved: ResolvedSchema) -> list[str]:
-	"""The exact-bytes key (0042); see the converse twin for the layout."""
-	lines = [f"{indent}let mut key = [0u8; {total}];",
-	         f"{indent}let mut at = 0usize;"]
-	for chain, width in sides:
-		source = view
-		for step in chain:
-			if isinstance(step, ReadBytes):
-				count = width // 8
-				lines += [
-					f"{indent}key[at..at + {count}].copy_from_slice("
-					f"{source}.{_ident(step.member)}());\t// {step.path}",
-					f"{indent}at += {count};",
-				]
-			elif isinstance(step, Read):
-				count = (width + 7) // 8
-				read = numeric_accessor(resolved, step.struct, step.member)
-				lines += [
-					f"{indent}let v = u64::from({source}."
-					f"{read}());\t// {step.path}",
-					f"{indent}for b in 0..{count} {{",
-					f"{indent}\tkey[at + b] = (v >> (8 * ({count} - 1 - b))) as u8;",
-					f"{indent}}}",
-					f"{indent}at += {count};",
-				]
-			elif isinstance(step, SubView):
-				lines.append(f"{indent}let {_ident(step.member)} = "
-				             f"{source}.{_ident(step.member)}()?;")
-				source = _ident(step.member)
-	lines.append(f"{indent}let _ = at;")
-	return lines
-
-
-def _key(sides: Side, view: str, indent: str,
-		resolved: ResolvedSchema) -> list[str]:
-	lines = [f"{indent}let mut key: u64 = 0;"]
-	for chain, width in sides:
-		source = view
-		for step in chain:
-			if isinstance(step, Read):
-				# `_bits` for an enum member; its getter answers `Option<T>`.
-				read = numeric_accessor(resolved, step.struct, step.member)
-				lines.append(f"{indent}key = (key << {width}) | "
-				             f"u64::from({source}.{read}());")
-			elif isinstance(step, SubView):
-				lines.append(f"{indent}let {_ident(step.member)} = "
-				             f"{source}.{_ident(step.member)}()?;")
-				source = _ident(step.member)
-	return lines
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -146,7 +95,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		held = _pascal(relation.name)
 		first, second = relation.params
 		req  = _pascal(first.type_name)
-		resp = _pascal(second.type_name)
+		resp = reply_type(relation)
+		region = after_region(relation)
+		asked = (_key(request, first.name, resolved) if layout.packed
+		         else _key_bytes(request, first.name, layout.total_bytes,
+		                         resolved))
+		heard = (_key(response, second.name, resolved, bool(region))
+		         if layout.packed
+		         else _key_bytes(response, second.name, layout.total_bytes,
+		                         resolved, bool(region)))
 		lines += [
 			f"pub const {held.upper()}_TIMEOUT_MS: u32 = {timeout};",
 			f"pub const {held.upper()}_RETRIES: u32 = {retries};",
@@ -169,6 +126,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			("\tkey: u64," if layout.packed
 			 else f"\tkey: [u8; {layout.total_bytes}],"),
 			"\tid: u32,",
+			"\tpeer: u32,\t// yours to number; a reply is taken with it (26.1122)",
 			"\tdeadline_ms: u32,",
 			"\tleft: u32,",
 			"\tlive: bool,",
@@ -195,10 +153,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"impl Default for {held}Slot<'_> {{",
 			"\tfn default() -> Self {",
-			("\t\tSelf { bytes: &[], key: 0, keyed: false, id: 0, deadline_ms: 0,"
+			("\t\tSelf { bytes: &[], key: 0, keyed: false, id: 0, peer: 0,"
+			 " deadline_ms: 0,"
 			 if layout.packed else
 			 f"\t\tSelf {{ bytes: &[], key: [0u8; {layout.total_bytes}], "
-			 "keyed: false, id: 0, deadline_ms: 0,"),
+			 "keyed: false, id: 0, peer: 0, deadline_ms: 0,"),
 			("\t\t       left: 0, live: false, end_ms: 0, sent_ms: 0,"
 			 " part: false, retries: 0, resend_ms: 0, resend_part_ms: 0,"
 			 " retries_part: 0 }" if part else
@@ -248,14 +207,20 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t/// Remember `{first.name}` until it is answered, without",
 			"\t/// sending it: one the caller sent already, or only awaits",
 			"\t/// (26.1055). `own` overrides the driver's numbers.",
+			"\t/// `_from` holds it against `peer`: only `on_message_from` with",
+			"\t/// the same one ends it (26.1122).",
+			f"\tpub fn track_from(&mut self, {first.name}: &{req}, peer: u32,",
+			"\t                  bytes: &'a [u8], id: u32, now_ms: u32,",
+			f"\t                  own: Option<&{held}Policy>) -> Result<()> {{",
+			*asked,
+			"\t\tself.hold(key, true, peer, bytes, id, now_ms, own)",
+			"\t}",
+			"",
 			f"\tpub fn track_with(&mut self, {first.name}: &{req},"
 			" bytes: &'a [u8],",
 			"\t                  id: u32, now_ms: u32,",
 			f"\t                  own: Option<&{held}Policy>) -> Result<()> {{",
-			*(_key(request, first.name, "\t\t", resolved) if layout.packed
-			  else _key_bytes(request, first.name, "\t\t",
-			                  layout.total_bytes, resolved)),
-			"\t\tself.hold(key, true, bytes, id, now_ms, own)",
+			f"\t\tself.track_from({first.name}, 0, bytes, id, now_ms, own)",
 			"\t}",
 			"",
 			"\t/// `track` for a caller that matches replies itself -- after",
@@ -265,9 +230,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tpub fn track_by_id_with(&mut self, bytes: &'a [u8], id: u32,",
 			f"\t                        now_ms: u32, own: Option<&{held}Policy>)"
 			" -> Result<()> {",
-			("\t\tself.hold(0, false, bytes, id, now_ms, own)" if layout.packed
-			 else f"\t\tself.hold([0u8; {layout.total_bytes}], false, bytes, id,"
-			 " now_ms, own)"),
+			("\t\tself.hold(0, false, 0, bytes, id, now_ms, own)"
+			 if layout.packed
+			 else f"\t\tself.hold([0u8; {layout.total_bytes}], false, 0, bytes,"
+			 " id, now_ms, own)"),
 			"\t}",
 			"",
 			"\tpub fn track_by_id(&mut self, bytes: &'a [u8], id: u32,"
@@ -277,10 +243,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\t/// The slot an exchange takes; `keyed` false where no reply",
 			"\t/// is matched to it.",
-			("\tfn hold(&mut self, key: u64, keyed: bool, bytes: &'a [u8],"
+			("\tfn hold(&mut self, key: u64, keyed: bool, peer: u32,"
+			 " bytes: &'a [u8],"
 			 if layout.packed else
 			 f"\tfn hold(&mut self, key: [u8; {layout.total_bytes}], keyed: bool,"
-			 " bytes: &'a [u8],"),
+			 " peer: u32, bytes: &'a [u8],"),
 			"\t        id: u32, now_ms: u32,",
 			f"\t        own: Option<&{held}Policy>) -> Result<()> {{",
 			"\t\tlet timeout_ms = own.map_or(self.timeout_ms, |p| p.timeout_ms);",
@@ -295,7 +262,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
 			f"\t\t\t\t*slot = {held}Slot {{",
-			"\t\t\t\t\tbytes, key, keyed, id,",
+			"\t\t\t\t\tbytes, key, keyed, id, peer,",
 			*(["\t\t\t\t\tretries,"] if part else []),
 			*(["\t\t\t\t\tdeadline_ms: if retries == 0 {",
 			   "\t\t\t\t\t\tnow_ms.wrapping_add(timeout_ms)",
@@ -325,12 +292,18 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t/// `track`, then the first send -- through `Io::resend`, told",
 			"\t/// the id, so a caller sealing every send under it seals this",
 			"\t/// one too (26.1055); unless overridden that is `submit`.",
+			f"\tpub fn send_from(&mut self, {first.name}: &{req}, peer: u32,",
+			"\t                 bytes: &'a [u8], id: u32, now_ms: u32,",
+			f"\t                 own: Option<&{held}Policy>) -> Result<()> {{",
+			f"\t\tself.track_from({first.name}, peer, bytes, id, now_ms, own)?;",
+			"\t\tself.io.resend(id, bytes)",
+			"\t}",
+			"",
 			f"\tpub fn send_with(&mut self, {first.name}: &{req},"
 			" bytes: &'a [u8],",
 			"\t                 id: u32, now_ms: u32,",
 			f"\t                 own: Option<&{held}Policy>) -> Result<()> {{",
-			f"\t\tself.track_with({first.name}, bytes, id, now_ms, own)?;",
-			"\t\tself.io.resend(id, bytes)",
+			f"\t\tself.send_from({first.name}, 0, bytes, id, now_ms, own)",
 			"\t}",
 			"",
 			f"\t/// Send `{first.name}` and remember it until it is answered.",
@@ -351,16 +324,18 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tErr(Error::Constraint)",
 			"\t}",
 			"",
-			f"\t/// A `{second.name}` arrived. `Ok(id)` where it answers",
-			"\t/// something outstanding.",
-			f"\tpub fn on_message(&mut self, {second.name}: &{resp})"
-			" -> Result<u32> {",
-			*(_key(response, second.name, "\t\t", resolved) if layout.packed
-			  else _key_bytes(response, second.name, "\t\t",
-			                  layout.total_bytes, resolved)),
+			f"\t/// A `{second.name}` arrived, from `peer`. `Ok(id)` where it",
+			"\t/// answers something outstanding.",
+			*([f"\t///",
+			   f"\t/// Handed `{region}`'s gate: only a verified reply ends an",
+			   "\t/// exchange (26.1122)."] if region else []),
+			f"\tpub fn on_message_from(&mut self, {second.name}: &{resp},"
+			" peer: u32) -> Result<u32> {",
+			*heard,
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
-			"\t\t\tif slot.live && slot.keyed && slot.key == key {",
+			"\t\t\tif slot.live && slot.keyed && slot.peer == peer"
+			" && slot.key == key {",
 			"\t\t\t\tslot.live = false;",
 			"\t\t\t\treturn Ok(slot.id);",
 			"\t\t\t}",
@@ -368,20 +343,28 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tErr(Error::Constraint)",
 			"\t}",
 			"",
+			f"\tpub fn on_message(&mut self, {second.name}: &{resp})"
+			" -> Result<u32> {",
+			f"\t\tself.on_message_from({second.name}, 0)",
+			"\t}",
+			"",
 			"\t/// `on_message` without ending the exchange: which request a",
 			"\t/// reply answers, for a reply in pieces (26.1009).",
-			f"\tpub fn peek(&self, {second.name}: &{resp})"
+			f"\tpub fn peek_from(&self, {second.name}: &{resp}, peer: u32)"
 			" -> Result<u32> {",
-			*(_key(response, second.name, "\t\t", resolved) if layout.packed
-			  else _key_bytes(response, second.name, "\t\t",
-			                  layout.total_bytes, resolved)),
+			*heard,
 			"",
 			"\t\tfor slot in self.slots.iter() {",
-			"\t\t\tif slot.live && slot.keyed && slot.key == key {",
+			"\t\t\tif slot.live && slot.keyed && slot.peer == peer"
+			" && slot.key == key {",
 			"\t\t\t\treturn Ok(slot.id);",
 			"\t\t\t}",
 			"\t\t}",
 			"\t\tErr(Error::Constraint)",
+			"\t}",
+			"",
+			f"\tpub fn peek(&self, {second.name}: &{resp}) -> Result<u32> {{",
+			f"\t\tself.peek_from({second.name}, 0)",
 			"\t}",
 			"",
 			*_part_held(part),

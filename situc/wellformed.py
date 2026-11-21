@@ -1901,6 +1901,50 @@ def check_relations(schema: ast.Schema) -> None:
 			_check_must(relation, must, params, structs, imported)
 
 		_check_exchange_policy(relation)
+		_check_after(relation, structs, imported)
+
+
+def _check_after(relation: ast.Relation, structs: dict[str, ast.StructDecl],
+		imported: bool) -> None:
+	"""`[after = REGION]` names a `sealed` region of the reply's struct.
+
+	The table's match then takes that region's gate, which only a verified
+	open hands out, so a reply nobody verified cannot end an exchange
+	(26.1122). Any other region has no gate to take, and a name that is not
+	the reply's would gate nothing.
+	"""
+	held = next((attr for attr in relation.attrs if attr.name == "after"),
+	            None)
+	if held is None:
+		return
+	region = getattr(held.value, "name", None)
+	if not isinstance(region, str) or len(relation.params) != 2:
+		raise error(
+			"`after` needs the name of a sealed region",
+			held.span,
+			label = "expected a region's name",
+			notes = ["`[after = sealed]` matches a reply only through the "
+			         "gate its tag's verification hands out (26.1122)"],
+		)
+	reply = relation.params[1]
+	struct = structs.get(reply.type_name)
+	if struct is None:
+		if imported:
+			return
+		raise error(f"unknown struct `{reply.type_name}`", reply.span,
+		            label = "no such struct")
+	if not any(isinstance(member, ast.Sealed) and member.name == region
+	           for member in struct.members):
+		raise error(
+			f"`{reply.type_name}` has no sealed region `{region}`",
+			held.span,
+			label = f"`after` names a region of `{reply.name}`",
+			notes = ["only a `sealed` region has a gate: its open is what "
+			         "says the tag verified, and the match takes that gate "
+			         "(26.1122)",
+			         "the region is a member of the reply's own struct, "
+			         "where its open is generated"],
+		)
 
 
 #: What an exchange may state about its own timing (26.98). Shape in the
@@ -2754,6 +2798,8 @@ RELATION_ONLY_ATTRS = {
 	                  " timing",
 	"retries_part": "a `relation`, which is where an exchange states its"
 	                " timing",
+	"after":      "a `relation`, naming the sealed region its reply is "
+	              "matched behind (26.1122)",
 }
 
 #: Attributes whose own check runs only on the member kind that READS them,

@@ -982,9 +982,13 @@ def test_every_attribute_is_accounted_for() -> None:
 	#   media            `identify.recognisers` -- the media type a recognised
 	#                    format answers with, read where the evidence is
 	#                    compiled and nowhere else (26.1124).
+	#   after            `_check_after` -- the sealed region a relation's
+	#                    reply is matched behind, read off the relation and
+	#                    refused on a member as the timing attributes are
+	#                    (26.1122).
 	from situc.parser import IDENTIFY_ATTRIBUTES, REPLAY_ATTRIBUTES
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries", "resend_ms",
-	             "resend_part_ms", "retries_part", "align",
+	             "resend_part_ms", "retries_part", "after", "align",
 	             "bits", "since", "require_aligned", "stream", "tag_order",
 	             *REPLAY_ATTRIBUTES, *IDENTIFY_ATTRIBUTES}
 

@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.rust.emit import _ident, _pascal, numeric_accessor
-from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
+from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
+                            SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -36,12 +37,39 @@ def refusals(schema: ast.Schema,
 	return found
 
 
-def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
+def _gated(resolved: ResolvedSchema, step: Read | ReadBytes) -> str:
+	"""The gate's accessor for a member behind it, `_bits` for an enum as
+	`numeric_accessor` answers for a clear one."""
+	entry = resolved.find(f"{step.struct}.{step.region}.{step.member}")
+	enum = (isinstance(step, Read) and entry is not None
+	        and entry.placement.type_name in resolved.layout.env.enums)
+	return f"{_ident(step.member)}_bits" if enum else _ident(step.member)
+
+
+def _opened(sides: Side, view: str, gated: bool) -> tuple[list[str], str]:
+	"""Where a clear field is read from: the view, or with `[after]` the
+	view the gate was opened over, bound once (26.1122)."""
+	if not gated:
+		return [], view
+	if all(getattr(chain[0], "region", None) is not None
+	       for chain, _ in sides):
+		return [], view
+	return [f"\t\tlet {view}_view = {view}.view();"], f"{view}_view"
+
+
+def _key(sides: Side, view: str, resolved: ResolvedSchema,
+		gated: bool = False) -> list[str]:
 	lines = ["\t\tlet mut key: u64 = 0;"]
+	bound, root = _opened(sides, view, gated)
+	lines += bound
 	for chain, width in sides:
-		source = view
+		source = root
 		for step in chain:
-			if isinstance(step, Read):
+			if isinstance(step, Read) and step.region is not None:
+				lines.append(f"\t\tkey = (key << {width}) | "
+				             f"u64::from({view}.{_gated(resolved, step)}());"
+				             f"\t// {step.path}")
+			elif isinstance(step, Read):
 				# `_bits` where the member is an enum: its getter answers
 				# `Option<T>` and `u64::from` has no such impl, so a relation
 				# keyed on one did not compile at all.
@@ -57,24 +85,31 @@ def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
 
 
 def _key_bytes(sides: Side, view: str, total: int,
-		resolved: ResolvedSchema) -> list[str]:
+		resolved: ResolvedSchema, gated: bool = False) -> list[str]:
 	"""The exact-bytes key (0042), Rust's spelling. `[u8; N]` copies and
 	compares by value, so the slot needs no other change."""
 	lines = [f"\t\tlet mut key = [0u8; {total}];",
 	         "\t\tlet mut at = 0usize;"]
+	bound, root = _opened(sides, view, gated)
+	lines += bound
 	for chain, width in sides:
-		source = view
+		source = root
 		for step in chain:
+			behind = getattr(step, "region", None) is not None
 			if isinstance(step, ReadBytes):
 				count = width // 8
 				lines += [
 					f"\t\tkey[at..at + {count}].copy_from_slice("
-					f"{source}.{_ident(step.member)}());\t// {step.path}",
+					f"{view if behind else source}."
+					f"{_gated(resolved, step) if behind else _ident(step.member)}"
+					f"());\t// {step.path}",
 					f"\t\tat += {count};",
 				]
 			elif isinstance(step, Read):
 				count = (width + 7) // 8
-				read = numeric_accessor(resolved, step.struct, step.member)
+				read = (_gated(resolved, step) if behind else
+				        numeric_accessor(resolved, step.struct, step.member))
+				source = view if behind else source
 				lines += [
 					f"\t\tlet v = u64::from({source}."
 					f"{read}());\t// {step.path}",
@@ -89,6 +124,15 @@ def _key_bytes(sides: Side, view: str, total: int,
 				source = _ident(step.member)
 	lines.append("\t\tlet _ = at;")
 	return lines
+
+
+def reply_type(relation: ast.Relation) -> str:
+	"""What the reply side takes: its view, or with `[after]` the gate of
+	that sealed region, which only a verified open hands out (26.1122)."""
+	region = after_region(relation)
+	struct = relation.params[1].type_name
+	return (f"{_pascal(f'{struct}_{region}_gate')}<'_>" if region
+	        else _pascal(struct))
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -119,17 +163,31 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		request, response = layout.request, layout.response
 		held  = _pascal(relation.name)
 		first, second = relation.params
+		region = after_region(relation)
+		reply  = reply_type(relation)
+		asked = (_key(request, first.name, resolved) if layout.packed
+		         else _key_bytes(request, first.name, layout.total_bytes,
+		                         resolved))
+		heard = (_key(response, second.name, resolved, bool(region))
+		         if layout.packed
+		         else _key_bytes(response, second.name, layout.total_bytes,
+		                         resolved, bool(region)))
 		lines += [
 			f"/// Pending requests for `{relation.name}`.",
 			"///",
 			"/// The slots are yours and so is their number: a full table",
 			"/// answers `Error::Bounds` rather than evicting an exchange you",
 			"/// still wanted. Nothing is allocated.",
+			"///",
+			"/// `peer` is yours to number too -- a session, the context that",
+			"/// verifies the reply -- and only a reply taken with the same one",
+			"/// answers (26.1122). The calls without `_from` hold peer 0.",
 			"#[derive(Clone, Copy, Default)]",
 			f"pub struct {held}Slot {{",
 			("\tkey: u64," if layout.packed
 			 else f"\tkey: [u8; {layout.total_bytes}],"),
 			"\tid: u32,",
+			"\tpeer: u32,",
 			"\tlive: bool,",
 			"}",
 			"",
@@ -145,20 +203,24 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tSelf { slots }",
 			"\t}",
 			"",
-			f"\t/// Remember `{first.name}` under its key.",
-			f"\tpub fn record(&mut self, {first.name}: &"
-			f"{_pascal(first.type_name)}, id: u32) -> Result<()> {{",
-			*(_key(request, first.name, resolved) if layout.packed
-			  else _key_bytes(request, first.name, layout.total_bytes,
-			                  resolved)),
+			f"\t/// Remember `{first.name}` under its key and `peer`.",
+			f"\tpub fn record_from(&mut self, {first.name}: &"
+			f"{_pascal(first.type_name)}, peer: u32, id: u32) -> Result<()> {{",
+			*asked,
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
 			"\t\t\tif !slot.live {",
-			"\t\t\t\t*slot = Self::held(key, id);",
+			"\t\t\t\t*slot = Self::held(key, id, peer);",
 			"\t\t\t\treturn Ok(());",
 			"\t\t\t}",
 			"\t\t}",
 			"\t\tErr(Error::Bounds)",
+			"\t}",
+			"",
+			f"\t/// Remember `{first.name}` under its key.",
+			f"\tpub fn record(&mut self, {first.name}: &"
+			f"{_pascal(first.type_name)}, id: u32) -> Result<()> {{",
+			f"\t\tself.record_from({first.name}, 0, id)",
 			"\t}",
 			"",
 			f"\t/// Take the request `{second.name}` answers, and forget it.",
@@ -166,14 +228,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// `take` rather than `match`, which is a keyword -- and the",
 			"\t/// better name: it leaves nothing behind, which is why a",
 			"\t/// duplicate reply answers `Error::Constraint`.",
-			f"\tpub fn take(&mut self, {second.name}: &"
-			f"{_pascal(second.type_name)}) -> Result<u32> {{",
-			*(_key(response, second.name, resolved) if layout.packed
-			  else _key_bytes(response, second.name, layout.total_bytes,
-			                  resolved)),
+			*([f"\t///",
+			   f"\t/// Handed `{region}`'s gate: only a verified reply ends an",
+			   "\t/// exchange (26.1122)."] if region else []),
+			f"\tpub fn take_from(&mut self, {second.name}: &{reply}, "
+			"peer: u32) -> Result<u32> {",
+			*heard,
 			"",
 			"\t\tfor slot in self.slots.iter_mut() {",
-			"\t\t\tif slot.live && slot.key == key {",
+			"\t\t\tif slot.live && slot.peer == peer && slot.key == key {",
 			"\t\t\t\tslot.live = false;",
 			"\t\t\t\treturn Ok(slot.id);",
 			"\t\t\t}",
@@ -181,26 +244,33 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tErr(Error::Constraint)",
 			"\t}",
 			"",
+			f"\tpub fn take(&mut self, {second.name}: &{reply}) -> Result<u32> {{",
+			f"\t\tself.take_from({second.name}, 0)",
+			"\t}",
+			"",
 			"\t/// `take` without taking: which request a reply answers, left",
 			"\t/// pending for a reply that comes in pieces (26.1009).",
-			f"\tpub fn peek(&self, {second.name}: &"
-			f"{_pascal(second.type_name)}) -> Result<u32> {{",
-			*(_key(response, second.name, resolved) if layout.packed
-			  else _key_bytes(response, second.name, layout.total_bytes,
-			                  resolved)),
+			f"\tpub fn peek_from(&self, {second.name}: &{reply}, peer: u32)"
+			" -> Result<u32> {",
+			*heard,
 			"",
 			"\t\tfor slot in self.slots.iter() {",
-			"\t\t\tif slot.live && slot.key == key {",
+			"\t\t\tif slot.live && slot.peer == peer && slot.key == key {",
 			"\t\t\t\treturn Ok(slot.id);",
 			"\t\t\t}",
 			"\t\t}",
 			"\t\tErr(Error::Constraint)",
 			"\t}",
 			"",
-			(f"\tfn held(key: u64, id: u32) -> {held}Slot {{"
+			f"\tpub fn peek(&self, {second.name}: &{reply}) -> Result<u32> {{",
+			f"\t\tself.peek_from({second.name}, 0)",
+			"\t}",
+			"",
+			(f"\tfn held(key: u64, id: u32, peer: u32) -> {held}Slot {{"
 			 if layout.packed else
-			 f"\tfn held(key: [u8; {layout.total_bytes}], id: u32) -> {held}Slot {{"),
-			f"\t\t{held}Slot {{ key, id, live: true }}",
+			 f"\tfn held(key: [u8; {layout.total_bytes}], id: u32, peer: u32)"
+			 f" -> {held}Slot {{"),
+			f"\t\t{held}Slot {{ key, id, peer, live: true }}",
 			"\t}",
 			"}",
 			"",

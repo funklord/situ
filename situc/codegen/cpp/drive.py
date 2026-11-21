@@ -14,7 +14,9 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
-from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
+from situc.codegen.cpp.converse import _opened, reply_type
+from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
+                            SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -30,11 +32,16 @@ def _policy(relation: ast.Relation) -> tuple[int, int] | None:
 	return (found["timeout_ms"], found["retries"]) if len(found) == 2 else None
 
 
-def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
+def _key(sides: Side, view: str, resolved: ResolvedSchema,
+		gated: str | None = None) -> list[str]:
 	lines = ["\t\tstd::uint64_t key = 0u;"]
+	bound, root = _opened(sides, view, resolved, gated)
+	lines += bound
 	for chain, width in sides:
-		source = view
+		source = root
 		for step in chain:
+			if getattr(step, "region", None) is not None:
+				source = view
 			if isinstance(step, Read):
 				lines.append(f"\t\tkey = (key << {width}u) | "
 				             f"static_cast<std::uint64_t>("
@@ -54,13 +61,17 @@ def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
 
 
 def _key_bytes(sides: Side, view: str, resolved: ResolvedSchema,
-		total: int) -> list[str]:
+		total: int, gated: str | None = None) -> list[str]:
 	"""The exact-bytes key (0042); see the converse twin for the layout."""
 	lines = [f"\t\tstd::uint8_t key[{total}u];",
 	         "\t\tstd::uint32_t at = 0u;"]
+	bound, root = _opened(sides, view, resolved, gated)
+	lines += bound
 	for chain, width in sides:
-		source = view
+		source = root
 		for step in chain:
+			if getattr(step, "region", None) is not None:
+				source = view
 			if isinstance(step, ReadBytes):
 				count = width // 8
 				lines += [
@@ -170,7 +181,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		name = f"{c_name(relation.name)}_driver"
 		first, second = relation.params
 		req  = class_name(resolved.structs[first.type_name])
-		resp = class_name(resolved.structs[second.type_name])
+		resp = reply_type(relation, resolved)
+		region = after_region(relation)
+		gated = second.type_name if region else None
+		heard = (_key(response, second.name, resolved, gated)
+		         if layout.packed else
+		         _key_bytes(response, second.name, resolved,
+		                    layout.total_bytes, gated))
 		lines += [
 			f"#define SITU_{c_name(relation.name).upper()}_TIMEOUT_MS {timeout}u",
 			f"#define SITU_{c_name(relation.name).upper()}_RETRIES {retries}u",
@@ -197,6 +214,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tstd::uint32_t left;",
 			"\t\tbool          live;",
 			"\t\tbool          keyed;\t/* false for `track_by_id` */",
+			"\t\tstd::uint32_t peer;\t/* yours; a reply is taken with it (26.1122) */",
 			*(["\t\tstd::uint32_t end_ms;\t/* the whole exchange's end */"]
 			  if resend else []),
 			*(["\t\tstd::uint32_t sent_ms;\t/* the last send */",
@@ -287,10 +305,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\t/** Remember a request until it is answered, without sending it:",
 			"\t *  one the caller sent already, or only awaits (26.1055). The",
-			"\t *  bytes are the caller's and must not move until it ends. */",
-			f"\t[[nodiscard]] ::situ::rt::err track(const ::situ::{req} "
+			"\t *  bytes are the caller's and must not move until it ends.",
+			"\t *",
+			"\t *  `track_from` holds it against `peer`: only `on_message_from`",
+			"\t *  with the same one ends it (26.1122). */",
+			f"\t[[nodiscard]] ::situ::rt::err track_from(const ::situ::{req} "
 			f"&{first.name},",
-			"\t                                    const std::uint8_t *bytes,",
+			"\t                                         std::uint32_t peer,",
+			"\t                                         const std::uint8_t *bytes,",
 			"\t                                    std::uint32_t len,",
 			"\t                                    std::uint32_t id,",
 			"\t                                    std::uint32_t now_ms,",
@@ -308,7 +330,20 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			  "\t\t\tslots_[i].key[b] = key[b];",
 			  "\t\t}"]),
 			"\t\tslots_[i].keyed = true;",
+			"\t\tslots_[i].peer  = peer;",
 			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err track(const ::situ::{req} "
+			f"&{first.name},",
+			"\t                                    const std::uint8_t *bytes,",
+			"\t                                    std::uint32_t len,",
+			"\t                                    std::uint32_t id,",
+			"\t                                    std::uint32_t now_ms,",
+			"\t                                    const policy *own = nullptr)"
+			" noexcept",
+			"\t{",
+			f"\t\treturn track_from({first.name}, 0u, bytes, len, id, now_ms, own);",
 			"\t}",
 			"",
 			"\t/** `track` for a caller that matches replies itself -- after",
@@ -327,12 +362,32 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"\t\tslots_[i].keyed = false;",
+			"\t\tslots_[i].peer  = 0u;",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 			"",
 			"\t/** `track`, then the first send -- through `io::resend`, told",
 			"\t *  the id, so a caller sealing every send under it seals this",
 			"\t *  one too (26.1055); unless overridden that is `submit`. */",
+			f"\t[[nodiscard]] ::situ::rt::err send_from(const ::situ::{req} "
+			f"&{first.name},",
+			"\t                                        std::uint32_t peer,",
+			"\t                                        const std::uint8_t *bytes,",
+			"\t                                        std::uint32_t len,",
+			"\t                                        std::uint32_t id,",
+			"\t                                        std::uint32_t now_ms,",
+			"\t                                        const policy *own = nullptr)"
+			" noexcept",
+			"\t{",
+			f"\t\tconst ::situ::rt::err e = track_from({first.name}, peer, bytes,"
+			" len, id,",
+			"\t\t                                      now_ms, own);",
+			"\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\treturn e;",
+			"\t\t}",
+			"\t\treturn io_.resend(id, bytes, len);",
+			"\t}",
+			"",
 			f"\t[[nodiscard]] ::situ::rt::err send(const ::situ::{req} "
 			f"&{first.name},",
 			"\t                                   const std::uint8_t *bytes,",
@@ -342,12 +397,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t                                   const policy *own = nullptr)"
 			" noexcept",
 			"\t{",
-			f"\t\tconst ::situ::rt::err e = track({first.name}, bytes, len, id,"
-			" now_ms, own);",
-			"\t\tif (e != ::situ::rt::err::ok) {",
-			"\t\t\treturn e;",
-			"\t\t}",
-			"\t\treturn io_.resend(id, bytes, len);",
+			f"\t\treturn send_from({first.name}, 0u, bytes, len, id, now_ms, own);",
 			"\t}",
 			"",
 			"\t/** End exchange `id` without a reply to match (26.1055).",
@@ -363,17 +413,21 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\treturn ::situ::rt::err::constraint;",
 			"\t}",
 			"",
-			f"\t[[nodiscard]] ::situ::rt::err on_message(const ::situ::{resp} "
+			*([f"\t/** Handed `{region}`'s gate: only a verified reply ends an",
+			   "\t *  exchange (26.1122). */"] if region else []),
+			f"\t[[nodiscard]] ::situ::rt::err on_message_from(const ::situ::{resp} "
 			f"&{second.name},",
-			"\t                                         std::uint32_t &id) noexcept",
+			"\t                                              std::uint32_t peer,",
+			"\t                                              std::uint32_t &id)"
+			" noexcept",
 			"\t{",
-			*(_key(response, second.name, resolved) if layout.packed else
-			  _key_bytes(response, second.name, resolved, layout.total_bytes)),
+			*heard,
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
-			("\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].key == key) {"
+			("\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].peer == peer"
+			 " && slots_[i].key == key) {"
 			 if layout.packed else
-			 f"\t\t\tif (slots_[i].live && slots_[i].keyed"
+			 f"\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].peer == peer"
 			 f" && {_key_equal(layout.total_bytes)}) {{"),
 			"\t\t\t\tid = slots_[i].id;",
 			"\t\t\t\tslots_[i].live = false;",
@@ -383,25 +437,41 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\treturn ::situ::rt::err::constraint;",
 			"\t}",
 			"",
+			f"\t[[nodiscard]] ::situ::rt::err on_message(const ::situ::{resp} "
+			f"&{second.name},",
+			"\t                                         std::uint32_t &id) noexcept",
+			"\t{",
+			f"\t\treturn on_message_from({second.name}, 0u, id);",
+			"\t}",
+			"",
 			"\t/** `on_message` without ending the exchange: which request a",
 			"\t *  reply answers, for a reply in pieces (26.1009). */",
-			f"\t[[nodiscard]] ::situ::rt::err peek(const ::situ::{resp} "
+			f"\t[[nodiscard]] ::situ::rt::err peek_from(const ::situ::{resp} "
 			f"&{second.name},",
-			"\t                                   std::uint32_t &id) const noexcept",
+			"\t                                        std::uint32_t peer,",
+			"\t                                        std::uint32_t &id)"
+			" const noexcept",
 			"\t{",
-			*(_key(response, second.name, resolved) if layout.packed else
-			  _key_bytes(response, second.name, resolved, layout.total_bytes)),
+			*heard,
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
-			("\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].key == key) {"
+			("\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].peer == peer"
+			 " && slots_[i].key == key) {"
 			 if layout.packed else
-			 f"\t\t\tif (slots_[i].live && slots_[i].keyed"
+			 f"\t\t\tif (slots_[i].live && slots_[i].keyed && slots_[i].peer == peer"
 			 f" && {_key_equal(layout.total_bytes)}) {{"),
 			"\t\t\t\tid = slots_[i].id;",
 			"\t\t\t\treturn ::situ::rt::err::ok;",
 			"\t\t\t}",
 			"\t\t}",
 			"\t\treturn ::situ::rt::err::constraint;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err peek(const ::situ::{resp} "
+			f"&{second.name},",
+			"\t                                   std::uint32_t &id) const noexcept",
+			"\t{",
+			f"\t\treturn peek_from({second.name}, 0u, id);",
 			"\t}",
 			"",
 			*_part_held(part),

@@ -11,7 +11,8 @@ from __future__ import annotations
 from situc import ast
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
-from situc.relation import Read, KeyLayout, ReadBytes, Refused, Side, SubView, key_layout
+from situc.relation import (Read, KeyLayout, ReadBytes, Refused, Side,
+                            SubView, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -29,11 +30,30 @@ def refusals(schema: ast.Schema,
 	return found
 
 
-def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
+def _opened(sides: Side, view: str, resolved: ResolvedSchema,
+		gated: str | None) -> tuple[list[str], str]:
+	"""Where a clear field is read from: the view, or with `[after]` the
+	view the gate was opened over, bound once (26.1122). `gated` is the
+	reply's struct."""
+	if gated is None or all(getattr(chain[0], "region", None) is not None
+	                        for chain, _ in sides):
+		return [], view
+	held = class_name(resolved.structs[gated])
+	return ([f"\t\tconst ::situ::{held} {view}_view = {view}.view();"],
+	        f"{view}_view")
+
+
+def _key(sides: Side, view: str, resolved: ResolvedSchema,
+		gated: str | None = None) -> list[str]:
 	lines = ["\t\tstd::uint64_t key = 0u;"]
+	bound, root = _opened(sides, view, resolved, gated)
+	lines += bound
 	for chain, width in sides:
-		source = view
+		source = root
 		for step in chain:
+			if getattr(step, "region", None) is not None:
+				# Through the gate's own accessor.
+				source = view
 			if isinstance(step, Read):
 				lines.append(f"\t\tkey = (key << {width}u) | "
 				             f"static_cast<std::uint64_t>("
@@ -54,14 +74,18 @@ def _key(sides: Side, view: str, resolved: ResolvedSchema) -> list[str]:
 
 
 def _key_bytes(sides: Side, view: str, resolved: ResolvedSchema,
-		total: int) -> list[str]:
+		total: int, gated: str | None = None) -> list[str]:
 	"""The exact-bytes key (0042), C++'s spelling: byte loops rather than
 	<cstring>, because this runtime is deliberately freestanding."""
 	lines = [f"\t\tstd::uint8_t key[{total}u];",
 	         "\t\tstd::uint32_t at = 0u;"]
+	bound, root = _opened(sides, view, resolved, gated)
+	lines += bound
 	for chain, width in sides:
-		source = view
+		source = root
 		for step in chain:
+			if getattr(step, "region", None) is not None:
+				source = view
 			if isinstance(step, ReadBytes):
 				count = width // 8
 				lines += [
@@ -106,6 +130,15 @@ def _key_equal(total: int) -> str:
 	        "return true; }()")
 
 
+def reply_type(relation: ast.Relation, resolved: ResolvedSchema) -> str:
+	"""What the reply side takes, under `::situ::`: its view, or with
+	`[after]` that sealed region's gate, which only a verified open hands
+	out (26.1122)."""
+	region = after_region(relation)
+	held = class_name(resolved.structs[relation.params[1].type_name])
+	return f"{held}::{c_name(region)}_gate" if region else held
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str) -> dict[str, str]:
 	ready = []
@@ -142,7 +175,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		name  = f"{c_name(relation.name)}_table"
 		first, second = relation.params
 		req   = class_name(resolved.structs[first.type_name])
-		resp  = class_name(resolved.structs[second.type_name])
+		resp  = reply_type(relation, resolved)
+		region = after_region(relation)
+		gated = second.type_name if region else None
+		asked = (_key(request, first.name, resolved) if layout.packed else
+		         _key_bytes(request, first.name, resolved, layout.total_bytes))
+		heard = (_key(response, second.name, resolved, gated)
+		         if layout.packed else
+		         _key_bytes(response, second.name, resolved,
+		                    layout.total_bytes, gated))
+		same = ("slots_[i].key == key" if layout.packed
+		        else _key_equal(layout.total_bytes))
 		lines += [
 			f"/** Pending requests for `{relation.name}`.",
 			" *",
@@ -152,6 +195,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			" *",
 			" * The parameters are typed, so the two halves of an exchange",
 			" * cannot be passed the wrong way round.",
+			" *",
+			" * `peer` is yours to number -- a session, the context that",
+			" * verifies the reply -- and only a reply taken with the same one",
+			" * answers (26.1122). The calls without `_from` hold peer 0.",
+			*([f" * A reply is handed in as `{region}`'s gate: only a verified",
+			   " * one ends an exchange."] if region else []),
 			" */",
 			f"class {name} {{",
 			"public:",
@@ -160,6 +209,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			 else f"\t\tstd::uint8_t  key[{layout.total_bytes}u];"),
 			"\t\tstd::uint32_t id;",
 			"\t\tbool          live;",
+			"\t\tstd::uint32_t peer;",
 			"\t};",
 			"",
 			# `store`, not `slots`: Qt defines `slots` as an empty macro, so
@@ -174,20 +224,21 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t}",
 			"\t}",
 			"",
-			f"\t[[nodiscard]] ::situ::rt::err record(const ::situ::{req} "
+			f"\t[[nodiscard]] ::situ::rt::err record_from(const ::situ::{req} "
 			f"&{first.name},",
-			"\t                                     std::uint32_t id) noexcept",
+			"\t                                          std::uint32_t peer,",
+			"\t                                          std::uint32_t id) noexcept",
 			"\t{",
-			*(_key(request, first.name, resolved) if layout.packed else
-			  _key_bytes(request, first.name, resolved, layout.total_bytes)),
+			*asked,
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
 			"\t\t\tif (!slots_[i].live) {",
-			*(["\t\t\t\tslots_[i] = slot{key, id, true};"] if layout.packed else [
+			*(["\t\t\t\tslots_[i] = slot{key, id, true, peer};"] if layout.packed else [
 			  f"\t\t\t\tfor (std::uint32_t b = 0u; b < {layout.total_bytes}u; b++) {{",
 			  "\t\t\t\t\tslots_[i].key[b] = key[b];",
 			  "\t\t\t\t}",
 			  "\t\t\t\tslots_[i].id   = id;",
+			  "\t\t\t\tslots_[i].peer = peer;",
 			  "\t\t\t\tslots_[i].live = true;"]),
 			"\t\t\t\treturn ::situ::rt::err::ok;",
 			"\t\t\t}",
@@ -195,17 +246,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\treturn ::situ::rt::err::bounds;",
 			"\t}",
 			"",
-			f"\t[[nodiscard]] ::situ::rt::err take(const ::situ::{resp} "
-			f"&{second.name},",
-			"\t                                   std::uint32_t &id) noexcept",
+			f"\t[[nodiscard]] ::situ::rt::err record(const ::situ::{req} "
+			f"&{first.name},",
+			"\t                                     std::uint32_t id) noexcept",
 			"\t{",
-			*(_key(response, second.name, resolved) if layout.packed else
-			  _key_bytes(response, second.name, resolved, layout.total_bytes)),
+			f"\t\treturn record_from({first.name}, 0u, id);",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err take_from(const ::situ::{resp} "
+			f"&{second.name},",
+			"\t                                        std::uint32_t peer,",
+			"\t                                        std::uint32_t &id) noexcept",
+			"\t{",
+			*heard,
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
-			("\t\t\tif (slots_[i].live && slots_[i].key == key) {"
-			 if layout.packed else
-			 f"\t\t\tif (slots_[i].live && {_key_equal(layout.total_bytes)}) {{"),
+			f"\t\t\tif (slots_[i].live && slots_[i].peer == peer && {same}) {{",
 			"\t\t\t\tid = slots_[i].id;",
 			"\t\t\t\tslots_[i].live = false;",
 			"\t\t\t\treturn ::situ::rt::err::ok;",
@@ -214,24 +270,36 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\treturn ::situ::rt::err::constraint;",
 			"\t}",
 			"",
+			f"\t[[nodiscard]] ::situ::rt::err take(const ::situ::{resp} "
+			f"&{second.name},",
+			"\t                                   std::uint32_t &id) noexcept",
+			"\t{",
+			f"\t\treturn take_from({second.name}, 0u, id);",
+			"\t}",
+			"",
 			"\t/** `take` without taking: which request a reply answers, left",
 			"\t *  pending for a reply that comes in pieces (26.1009). */",
-			f"\t[[nodiscard]] ::situ::rt::err peek(const ::situ::{resp} "
+			f"\t[[nodiscard]] ::situ::rt::err peek_from(const ::situ::{resp} "
 			f"&{second.name},",
-			"\t                                   std::uint32_t &id) const noexcept",
+			"\t                                        std::uint32_t peer,",
+			"\t                                        std::uint32_t &id) const noexcept",
 			"\t{",
-			*(_key(response, second.name, resolved) if layout.packed else
-			  _key_bytes(response, second.name, resolved, layout.total_bytes)),
+			*heard,
 			"",
 			"\t\tfor (std::uint32_t i = 0u; i < cap_; i++) {",
-			("\t\t\tif (slots_[i].live && slots_[i].key == key) {"
-			 if layout.packed else
-			 f"\t\t\tif (slots_[i].live && {_key_equal(layout.total_bytes)}) {{"),
+			f"\t\t\tif (slots_[i].live && slots_[i].peer == peer && {same}) {{",
 			"\t\t\t\tid = slots_[i].id;",
 			"\t\t\t\treturn ::situ::rt::err::ok;",
 			"\t\t\t}",
 			"\t\t}",
 			"\t\treturn ::situ::rt::err::constraint;",
+			"\t}",
+			"",
+			f"\t[[nodiscard]] ::situ::rt::err peek(const ::situ::{resp} "
+			f"&{second.name},",
+			"\t                                   std::uint32_t &id) const noexcept",
+			"\t{",
+			f"\t\treturn peek_from({second.name}, 0u, id);",
 			"\t}",
 			"",
 			"private:",

@@ -74,13 +74,18 @@ class SubView:
 
 @dataclass(frozen=True)
 class Read:
-	"""Read the scalar `struct.member` out of `source`, binding `target`."""
+	"""Read the scalar `struct.member` out of `source`, binding `target`.
+
+	With `region`, the member is behind that sealed region's gate (26.1122):
+	`source` is the gate rather than a view, and the accessor is the
+	gate's."""
 
 	struct: str
 	member: str
 	source: str
 	target: str
 	path: str
+	region: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +104,8 @@ class ReadBytes:
 	path: str
 	#: Bytes, known here because only fixed-size arrays reach this.
 	length: int
+	#: As on `Read`: the sealed region whose gate this is read through.
+	region: str | None = None
 
 
 Binding = SubView | Read | ReadBytes
@@ -169,8 +176,39 @@ def _member(struct: ResolvedStruct, name: str) -> Placement | None:
 	return None
 
 
+def after_region(relation: ast.Relation) -> str | None:
+	"""The sealed region `[after = ...]` matches the reply behind (26.1122).
+
+	Only the reply's -- the second parameter's -- fields are read through
+	its gate: the request is the caller's own and was never in question."""
+	held = next((attr for attr in relation.attrs if attr.name == "after"),
+	            None)
+	name = getattr(held.value, "name", None) if held is not None else None
+	return name if isinstance(name, str) else None
+
+
+def _gated_leaf(struct: ResolvedStruct, region: str, name: str,
+		path: str) -> Placement:
+	"""The member `name` of sealed region `region`, which only its gate
+	reaches. A member nested deeper is refused: the gate's accessors are the
+	region's own members."""
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.path == f"{struct.name}.{region}.{name}":
+			return placement
+	raise Refused(f"`{path}` names no member of `{region}`")
+
+
+def _gate(components: list[str], position: int, struct: ResolvedStruct,
+		placement: Placement, gated: str | None) -> bool:
+	"""Whether this component is the gated region, reached by the reply."""
+	return (gated is not None and position == 0
+	        and placement.kind == "sealed" and components[1] == gated)
+
+
 def _leaf_placement(path: str, params: dict[str, ast.RelationParam],
-		resolved: ResolvedSchema) -> Placement:
+		resolved: ResolvedSchema, gated: dict[str, str] | None = None
+		) -> Placement:
 	"""The placement a path ends at, without binding anything.
 
 	The walk in `plan` binds as it goes, which is what a backend needs and
@@ -185,13 +223,23 @@ def _leaf_placement(path: str, params: dict[str, ast.RelationParam],
 		raise Refused(f"`{param.type_name}` has no resolved layout")
 
 	placement: Placement | None = None
+	region = (gated or {}).get(components[0])
 	for position, component in enumerate(components[1:]):
 		placement = _member(struct, component)
 		if placement is None:
 			raise Refused(f"`{struct.name}.{component}` has no placement")
 		if position == len(components) - 2:
 			break
+		if _gate(components, position, struct, placement, region):
+			if len(components) != 3:
+				raise Refused(f"`{path}` reaches past a member of `{region}`")
+			return _gated_leaf(struct, component, components[2], path)
 		nested = resolved.structs.get(placement.type_name or "")
+		if nested is None and placement.kind == "sealed":
+			raise Refused(
+				f"`{path}` is behind `{component}`'s gate, which only a "
+				f"verified open hands out; the conversation table reads it "
+				f"with `[after = {component}]` (26.1122)")
 		if nested is None:
 			raise Refused(f"`{path}` reaches through `{component}`, "
 			              f"which is not a struct")
@@ -219,7 +267,9 @@ def _array_bytes(path: str, placement: Placement) -> int:
 
 
 def _array_equality(expr: ast.Expr, params: dict[str, ast.RelationParam],
-		resolved: ResolvedSchema, where: str) -> tuple[str, str, int, bool] | None:
+		resolved: ResolvedSchema, where: str,
+		gated: dict[str, str] | None = None
+		) -> tuple[str, str, int, bool] | None:
 	"""`a.x == b.y` between two equal-length fixed arrays, or None.
 
 	None means "not this shape", and the ordinary scalar path handles it --
@@ -241,7 +291,8 @@ def _array_equality(expr: ast.Expr, params: dict[str, ast.RelationParam],
 		return None
 
 	left, right = paths[0][0], paths[1][0]
-	places = [_leaf_placement(one, params, resolved) for one in (left, right)]
+	places = [_leaf_placement(one, params, resolved, gated)
+	          for one in (left, right)]
 	if all(place.array_count is None for place in places):
 		return None
 	if any(place.array_count is None for place in places):
@@ -331,14 +382,24 @@ def _widen(operands: list[tuple[bool, int]], where: str) -> bool:
 	return True
 
 
-def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
+def plan(relation: ast.Relation, resolved: ResolvedSchema,
+		gated: bool = False) -> list[Constraint]:
 	"""Every constraint resolved to bindings, or a refusal naming the reason.
 
 	The local names are `_0`, `_1` and so on with the path in a comment at the
 	call site: a name derived from the path could collide with a parameter the
 	schema author chose, and a number cannot.
+
+	`gated` reads the reply's fields behind `[after = REGION]` through that
+	region's gate (26.1122) -- which only the conversation table, handed the
+	gate, can do. The predicate is handed two views, and a path behind the
+	gate stays refused there.
 	"""
 	params = {param.name: param for param in relation.params}
+	region = after_region(relation)
+	gates  = ({relation.params[1].name: region}
+	          if gated and region is not None and len(relation.params) == 2
+	          else {})
 	plans: list[Constraint] = []
 	index = 0
 
@@ -348,7 +409,7 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 		operands: list[tuple[bool, int]] = []
 		#: Path to what its value can be, for the shift rule in `_check`.
 		ranges: dict[str, tuple[int, int | None]] = {}
-		arrays     = _array_equality(must.expr, params, resolved, where)
+		arrays     = _array_equality(must.expr, params, resolved, where, gates)
 
 		for path in dict.fromkeys(paths_in(must.expr)):
 			components = path.split(".")
@@ -359,15 +420,28 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 
 			source = param.name
 			walked = param.name
+			behind: str | None = None
 
 			for position, component in enumerate(components[1:]):
 				walked = f"{walked}.{component}"
-				placement = _member(struct, component)
+				placement = _member(struct, component) if behind is None \
+					else _gated_leaf(struct, behind, component, path)
 				if placement is None:
 					# wellformed proved the name exists on the declaration; a
 					# placement absent here means the solver dropped it,
 					# which is a different fact and gets a different sentence.
 					raise Refused(f"`{struct.name}.{component}` has no placement")
+
+				if behind is None and _gate(components, position, struct,
+				                            placement,
+				                            gates.get(components[0])):
+					# The region itself binds nothing: the gate IS the
+					# source, and its accessors read the members.
+					if len(components) != 3:
+						raise Refused(f"`{path}` reaches past a member of "
+						              f"`{component}`")
+					behind = component
+					continue
 
 				target = f"_{index}"
 				index += 1
@@ -377,17 +451,24 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema) -> list[Constraint]:
 					if arrays is not None:
 						constraint.bindings.append(
 							ReadBytes(struct.name, component, source, target,
-							          path, _array_bytes(path, placement)))
+							          path, _array_bytes(path, placement),
+							          behind))
 						constraint.locals_for[path] = target
 						break
 					operands.append(_leaf(path, placement))
 					ranges[path] = _amount_range(placement)
 					constraint.bindings.append(
-						Read(struct.name, component, source, target, path))
+						Read(struct.name, component, source, target, path,
+						     behind))
 					constraint.locals_for[path] = target
 					break
 
 				nested = resolved.structs.get(placement.type_name or "")
+				if nested is None and placement.kind == "sealed":
+					raise Refused(
+						f"`{path}` is behind `{component}`'s gate, which only "
+						f"a verified open hands out; the conversation table "
+						f"reads it with `[after = {component}]` (26.1122)")
 				if nested is None:
 					raise Refused(f"`{path}` reaches through `{component}`, "
 					              f"which is not a struct")
@@ -695,9 +776,10 @@ class KeyLayout:
 def key_width(resolved: ResolvedSchema, bind: Read) -> int:
 	"""How many bits the field a read lands on occupies."""
 	struct = resolved.structs[bind.struct]
+	within = f"{bind.region}." if bind.region else ""
 	for entry in struct.entries:
 		placement = entry.placement
-		if placement.path == f"{bind.struct}.{bind.member}":
+		if placement.path == f"{bind.struct}.{within}{bind.member}":
 			return placement.size_bits or 0
 	return 0
 
@@ -719,7 +801,8 @@ def key_layout(relation: ast.Relation,
 	total = 0
 	any_bytes = False
 
-	for constraint, must in zip(plan(relation, resolved), relation.body):
+	for constraint, must in zip(plan(relation, resolved, gated=True),
+	                            relation.body):
 		if constraint.bytes_equal is not None:
 			if constraint.bytes_equal.negated:
 				# `!=` over byte strings is a constraint, not an identity:
