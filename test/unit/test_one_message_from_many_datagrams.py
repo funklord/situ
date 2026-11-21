@@ -331,8 +331,8 @@ def test_the_other_backends_say_they_have_none_yet(tmp_path: Path) -> None:
 	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
 	done = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
-		 "--target", "python", "--layer", "converse", "--out",
-		 str(tmp_path / "py")], cwd=ROOT, capture_output=True, text=True)
+		 "--target", "rust", "--layer", "converse", "--out",
+		 str(tmp_path / "rs")], cwd=ROOT, capture_output=True, text=True)
 	assert done.returncode == 0, done.stderr
 	assert "no reassembly table for `pieces`" in done.stderr
 
@@ -344,3 +344,82 @@ def test_its_words_mean_nothing_on_a_member() -> None:
 	for said in ("count = 2", "window = 3", 'media = "x/y"'):
 		reason = _refused(f"target buffer;\nstruct s {{ u8 a [{said}]; }}\n")
 		assert "means nothing here" in reason, (said, reason)
+
+
+PYTHON = r"""
+import random, sys
+sys.path[:0] = [".", RUNTIME]
+from situ_runtime import Message, ConstraintError, BoundsError
+import r, r_reassemble, r_converse
+
+def frame(who, mid, ix, n, body):
+	b = bytearray(18 + len(body))
+	b[0:8] = bytes([who]) * 8
+	b[8:12] = mid.to_bytes(4, "big")
+	b[12:14] = ix.to_bytes(2, "big")
+	b[14:16] = n.to_bytes(2, "big")
+	b[16:18] = len(body).to_bytes(2, "big")
+	b[18:] = body
+	return r.piece_frame.at(Message(b), 0, len(b))
+
+def refused(kind, *args):
+	try:
+		t.add(frame(*args), 0)
+	except kind:
+		return True
+	return False
+
+t = r_reassemble.pieces_table()
+assert t.add(frame(2, 8, 2, 3, b"IJ"), 0) is None
+assert t.add(frame(2, 8, 1, 3, b"EFGH"), 0) is None
+assert t.add(frame(2, 8, 1, 3, b"EFGH"), 0) is None
+assert t.add(frame(2, 8, 0, 3, b"ABCD"), 0) == b"ABCDEFGHIJ"
+assert refused(ConstraintError, 4, 1, 3, 3, b"abcd")
+t.add(frame(4, 1, 0, 3, b"abcd"), 0)
+assert refused(ConstraintError, 4, 1, 1, 3, b"abc")
+assert refused(ConstraintError, 4, 1, 2, 3, b"abcde")
+t = r_reassemble.pieces_table()
+for ix in (0, 1, 5):
+	t.add(frame(5, 2, ix, 10, b"aa"), 0)
+key = r_converse.same_message_table.key(2, 10, bytes([5]) * 8)
+assert t.missing(key, 8, 100) == [(2, 3), (6, 4)]
+assert t.missing(key, 8, 2) == [(2, 2), (4, 1), (6, 2), (8, 2)]
+assert t.expire(2999) == 0 and t.expire(3000) == 1
+t = r_reassemble.pieces_table()
+for who in range(4):
+	t.add(frame(who, 1, 0, 2, b"ab"), 0)
+assert refused(BoundsError, 9, 1, 0, 2, b"ab")
+random.seed(1)
+for round in range(500):
+	n, st = random.randint(1, 20), random.randint(1, 40)
+	last = random.randint(1, st)
+	whole = bytes(random.getrandbits(8) for _ in range((n - 1) * st + last))
+	order = list(range(n)) + [random.randrange(n) for _ in range(5)]
+	random.shuffle(order)
+	t = r_reassemble.pieces_table()
+	got = None
+	for ix in order:
+		body = whole[ix * st:ix * st + (last if ix == n - 1 else st)]
+		got = t.add(frame(1, round, ix, n, body), 0)
+		if got is not None:
+			break
+	assert got == whole, round
+print("python ok")
+"""
+
+
+def test_python_reassembles_alike(tmp_path: Path) -> None:
+	"""The same table in Python: C's rules, `add` answering the message or
+	None and raising where C refuses."""
+	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "python", "--layer", "converse", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	ran = subprocess.run(
+		[sys.executable, "-c", PYTHON.replace(
+			"RUNTIME", repr(str(ROOT / "runtime" / "python")))],
+		cwd=out, capture_output=True, text=True, timeout=120)
+	assert ran.stdout.strip() == "python ok", ran.stderr

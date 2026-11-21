@@ -310,7 +310,7 @@ must		= "must" expr ";" ;
 replay_decl	= "replay" ident "(" param ")" attrs ";" ;
 
 (* One message from many datagrams (26.1123): pieces keyed by a relation,
-   placed by an index of a count, every bound stated. *)
+ * placed by an index of a count, every bound stated. *)
 reassemble_decl	= "reassemble" ident "(" param ")" "by" ident attrs ";" ;
 
 (* How a file is recognised as this format (26.1124): evidence over a

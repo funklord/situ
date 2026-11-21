@@ -247,8 +247,8 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   the table; `missing` as capped `(first, count)` ranges. It adopts
   `_track_key_from` and the setting's per-arm builders. Built for C:
   `reassemble NAME(p: T) by REL [...]` and `<stem>_reassemble.h` (26.1123's
-  last section); the key ceiling moved 32 -> 64 for its 38-byte key. Python,
-  Rust and C++ say they have none yet.
+  last section); the key ceiling moved 32 -> 64 for its 38-byte key. Python
+  too; Rust and C++ say they have none yet.
 
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
