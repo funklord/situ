@@ -7608,7 +7608,7 @@ class Emitter:
 		body  = [f"\t\tmarks[{index}] = self.bytes.len();"
 		         for index in range(len(reads))]
 		body.extend([f"\t\tif depth >= {limit} {{",
-		             "\t\t\treturn 0;\t// `[depth]`/`[limit]`, not the frame",
+		             "\t\t\treturn self.bytes.len();\t// `[depth]`/`[limit]`: the rest (26.1127)",
 		             "\t\t}"])
 		if parts[0] and parts[1]:
 			body.extend([f"\t\tif self.bytes.len() < {parts[0]} {{",
@@ -7947,7 +7947,7 @@ class Emitter:
 		return [*head,
 		        "\tpub fn extent_at(&self, depth: usize) -> usize {",
 		        f"\t\tif depth >= {limit} {{",
-		        "\t\t\treturn 0;\t// `[depth]`/`[limit]`, not the frame",
+		        "\t\t\treturn self.bytes.len();\t// `[depth]`/`[limit]`: the rest (26.1127)",
 		        "\t\t}",
 		        *floor,
 		        f"\t\t{deep or extent}",

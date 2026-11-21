@@ -180,8 +180,12 @@ def test_all_four_validate_a_recursive_element(tmp_path: Path) -> None:
 	schema = tmp_path / "unit.situ"
 	schema.write_text(RECURSIVE, encoding="ascii")
 	command = fourway.build(tmp_path, schema)
+	# Six nodes under `[depth = 4]`: refused as too deep, CONSTRAINT in all
+	# four. It read BOUNDS while an extent at the cap answered 0 and the
+	# run's fit walk took that for an element the frame does not hold --
+	# the wrong error 26.676 names for a depth-capped message (26.1127).
 	for message, verdict in [*RECURSIVE_CASES.items(),
-	                         ("01010101010100", "1")]:
+	                         ("01010101010100", "2")]:
 		given = {backend: _verdict(fourway.answers(
 		                 argv, bytes.fromhex(message), tmp_path), "top")
 		         for backend, argv in command.items()}

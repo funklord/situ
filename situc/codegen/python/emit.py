@@ -7635,7 +7635,7 @@ class Emitter:
 		body  = [f"\t\tmarks[{index}] = self._len"
 		         for index in range(len(reads))]
 		body.extend([f"\t\tif depth >= {limit}:",
-		             "\t\t\treturn 0\t# `[depth]`/`[limit]`, not the frame"])
+		             "\t\t\treturn self._len\t# `[depth]`/`[limit]`: the rest (26.1127)"])
 		if parts[0] and parts[1]:
 			body.extend([f"\t\tif self._len < {parts[0]}:",
 			             f"\t\t\treturn {parts[0]}"])
@@ -7946,7 +7946,7 @@ class Emitter:
 		        "\tdef _extent_at(self, depth: int) -> int:",
 		        *doc,
 		        f"\t\tif depth >= {limit}:",
-		        "\t\t\treturn 0\t# `[depth]`/`[limit]`, not the frame",
+		        "\t\t\treturn self._len\t# `[depth]`/`[limit]`: the rest (26.1127)",
 		        *floor,
 		        f"\t\treturn {deep or extent}",
 		        "",

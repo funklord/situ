@@ -261,6 +261,25 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   as zero, as Rust and Python do -- guarding the whole extent with 0
   (gate 13) and then with the struct's floor (gate 14) each split the
   readers on a zero-byte view.
+- Run 10 (2026-11-21), libFuzzer over the 45 schemas the 8-schema sweep
+  had not reached, 90 s each: 44 clean, and CBOR timed out again. At the
+  depth cap an extent answered 0, so a pair whose key was capped measured
+  its value at the key's own offset, two descents a level for sixteen
+  CBOR levels, paid again by every probe, count and `_at` from depth zero
+  -- 1.6 KB of `bf` took 6.9 s in C, 5.3 s in C++, 70 bytes 20 s in
+  Python. The cap answers the rest of the view now (26.1127), one line per
+  backend; a message one turn too deep refuses as too deep rather than
+  BOUNDS, and C's and C++'s nesting probe gained the fixed-prefix guard the
+  change made reachable. `make fuzz-cpp` had not linked since a
+  checksum's kernels moved to the derived unit (efee14c3); its first full
+  run, 62 C++ harnesses at 30 s, was clean. On the fix: CBOR 600 s
+  clean; the Python harness over every C corpus (45 schemas) raised
+  nothing but `SituError` and nothing took over a second; a C-against-C++
+  libFuzzer differential -- both `differ` drivers in one binary, aborting
+  on any difference in their text -- 52 schemas at 60 s, no disagreement,
+  so it was not made a target. Its one trap: the C driver is a `main` that
+  never frees, so LeakSanitizer must be off (`ASAN_OPTIONS`, not only
+  `-detect_leaks=0`).
 
 - 20261121T1000Z: fuzznet answered 26.1123's three review points (its
   record's last section): a stride, not a total, set by the first non-last
@@ -9606,6 +9625,16 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1127 At the depth cap an extent answers the rest of its view
+
+Found by libFuzzer on CBOR (run 10). Moved to
+`doc/decision/26.1127-the-depth-cap-answers-the-rest.md`.
+
+### 26.1126 A relayed exchange, one id awaited under two keys
+
+fuzznet's sixth network item, built in all four backends. Moved to
+`doc/decision/26.1126-a-relayed-exchange.md`.
 
 ### 26.1125 The frame's length selects an arm
 

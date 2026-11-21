@@ -4103,7 +4103,7 @@ class Emitter:
 		        " const noexcept",
 		        "\t{",
 		        f"\t\tif (depth >= {limit}u) {{",
-		        "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
+		        "\t\t\treturn raw_.limit;\t/* `[depth]`/`[limit]`: the rest (26.1127) */",
 		        "\t\t}",
 		        *floor,
 		        f"\t\treturn {' + '.join(sums)};",
@@ -4152,7 +4152,7 @@ class Emitter:
 		body  = [f"\t\tmarks[{index}] = raw_.limit;"
 		         for index in range(len(reads))]
 		body.extend([f"\t\tif (depth >= {limit}u) {{",
-		             "\t\t\treturn 0;\t/* `[depth]`/`[limit]`, not the frame */",
+		             "\t\t\treturn raw_.limit;\t/* `[depth]`/`[limit]`: the rest (26.1127) */",
 		             "\t\t}"])
 		if parts[0] and parts[1]:
 			body.extend([f"\t\tif (!situ_in_bounds(raw_, 0u, {parts[0]}u)) {{",
@@ -10873,6 +10873,13 @@ class Emitter:
 			"\t\t\treturn depth;",
 			"\t\t}",
 		]
+		# The fixed prefix, as C's probe guards it (26.1127).
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is not None and parts[0]:
+			lines.extend([
+				f"\t\tif (!situ_in_bounds(raw_, 0u, {parts[0]}u)) {{",
+				"\t\t\treturn depth;",
+				"\t\t}"])
 		# The cycle, `own_members` rather than the flattened `entries`, and
 		# navigation by FRAME rather than through accessors whose sub-views
 		# are sized by the bounded extent. See the C backend's probe: all

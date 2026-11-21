@@ -5301,9 +5301,11 @@ class Emitter:
 	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
 		"""How deep this message actually nests, for `validate` to judge.
 
-		`extent_at` cannot answer it: at the limit it returns zero, and zero
-		is also what an absent run returns, so a message that nests too deep
-		measures short and validates clean. That is 26.113's "wrong values
+		`extent_at` cannot answer it: at the limit it returned zero, and zero
+		is also what an absent run returns, so a message that nested too deep
+		measured short and validated clean. It answers the rest of the view
+		there now (26.1127), which a message that merely ends there answers
+		too -- a length is still not a verdict. That is 26.113's "wrong values
 		indistinguishable from right ones" with the limit folded into a
 		length, and it is why the refusal cannot live in the extent.
 
@@ -5368,6 +5370,17 @@ class Emitter:
 			" \"too deep\" */",
 			"\t}",
 		]
+		# A view shorter than the struct's fixed bytes holds no child, and the
+		# offsets below read the fixed prefix unguarded, as an extent past its
+		# own guard does. Unreachable while an extent at the cap answered 0 --
+		# the parent stopped short before handing such a view down -- and
+		# reached once it answered the rest of the view (26.1127).
+		parts = extent_parts(self.resolved.structs, struct)
+		if parts is not None and parts[0]:
+			lines.extend([
+				f"\tif (!situ_in_bounds(view, 0u, {parts[0]}u)) {{",
+				"\t\treturn depth;\t/* nothing here to descend into */",
+				"\t}"])
 		# The cycle, not this struct. `expr -> item -> expr` descends into
 		# `item`, so the probe calls the PEER's `_nesting_at` and the two
 		# bounce -- which is what makes the count a count of nested structs
@@ -6118,7 +6131,7 @@ class Emitter:
 		         f"\tuint32_t extent = {constant}u;",
 		         "",
 		         f"\tif (depth >= {limit}u) {{",
-		         "\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
+		         "\t\treturn view.limit;\t/* `[depth]`/`[limit]`: the rest (26.1127) */",
 		         "\t}"]
 		# The plain branch's guard, for its reason (26.322): a walk hands
 		# this whatever remains of the frame, one byte of it included, and
@@ -6167,7 +6180,7 @@ class Emitter:
 		         for index in range(len(reads))]
 		body.extend([
 			f"\tif (depth >= {limit}u) {{",
-			"\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
+			"\t\treturn view.limit;\t/* `[depth]`/`[limit]`: the rest (26.1127) */",
 			"\t}"])
 		if constant and variable:
 			body.extend([

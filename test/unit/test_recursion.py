@@ -281,11 +281,14 @@ def test_the_generated_c_bounds_the_recursion_by_the_schema(
 	bounded stack means for a type whose nesting the data decides -- without
 	it a hostile message nests as deep as its own bytes allow.
 
-	The extent answers a short length rather than an error because it returns
-	a length and has no error channel; `validate` is where the refusal
-	belongs. A test that only checked the short answer would pass against a
-	generator that had lost the recursion entirely, so both sides of the
-	bound are asserted.
+	The extent answers a length rather than an error because it has no error
+	channel; `validate` is where the refusal belongs. At the bound that
+	length is the rest of the view (26.1127), so each view here carries ten
+	bytes past its chain: a chain inside the bound measures itself and not
+	the tail, and one past it answers the whole view, which following the
+	message to its end never would. A test that only checked the second
+	would pass against a generator that had lost the recursion entirely, so
+	both sides of the bound are asserted.
 	"""
 	from situc.cli import main
 
@@ -308,14 +311,15 @@ static uint32_t build(uint8_t *buf, uint32_t levels)
 }
 int main(void)
 {
-	uint8_t buf[4096];
+	uint8_t buf[4096] = { 0 };
 	uint32_t want[] = { 1u, 31u, 32u, 64u };
 	unsigned k;
 	for (k = 0; k < 4u; k++) {
 		situ_msg_t msg; situ_view_t view;
 		uint32_t used = build(buf, want[k]);
-		situ_msg_init(&msg, buf, used);
-		if (situ_node_view(&msg, 0u, used, &view) != SITU_OK) { return 1; }
+		buf[used] = 0xffu;	/* a tail no chain reaches */
+		situ_msg_init(&msg, buf, used + 10u);
+		if (situ_node_view(&msg, 0u, used + 10u, &view) != SITU_OK) { return 1; }
 		printf("%u %u\\n", used, situ_node_extent(view));
 	}
 	return 0;
@@ -340,13 +344,13 @@ int main(void)
 	# Inside the declared 32, the extent is the whole chain.
 	for used, extent in rows[:3]:
 		assert extent == used, rows
-	# Past it, the extent stops -- at 33 levels of three bytes rather than
-	# 32, because it reaches one level past the declared depth so that a
-	# message which nests too far is still measurable and can therefore be
-	# refused. Capped at 32 exactly, the offending level is invisible and
-	# `validate` sees a conforming message.
+	# Past it, the extent stops at the cap -- one level past the declared
+	# depth, so that a message which nests too far is still measurable and
+	# can be refused -- and answers the rest of the view, tail included.
+	# It answered 99 before, 33 levels of three bytes, and a parent then
+	# read whatever followed from inside the level it could not measure.
 	used, extent = rows[3]
-	assert used == 192 and extent == 99, rows
+	assert used == 192 and extent == 202, rows
 
 
 def test_every_backend_carries_the_depth_into_its_walk() -> None:
@@ -638,11 +642,16 @@ SHAPES: dict[str, tuple[str, Callable[[int], bytes], str]] = {
 #: turns where the other two admit eight levels -- which is the whole of
 #: what "depth counts nested structs, not turns of the cycle" means, stated
 #: as numbers rather than as prose.
+#:
+#: One turn past the bound the extent is the whole message: the struct at
+#: the cap answers the rest of its view (26.1127). It answered 0 before, so
+#: these rows read 27, 19 and 9 -- the bytes above the cap -- and a parent
+#: read whatever followed from inside the struct it could not measure.
 EXPECTED = {
-	"counted": {8: (27, 8, True), 9: (27, 9, False)},
+	"counted": {8: (27, 8, True), 9: (30, 9, False)},
 	"while":   {8: (9,  8, True), 9: (10, 9, False)},
-	"mutual":  {4: (19, 8, True), 5: (19, 10, False)},
-	"arm":     {8: (10, 8, True), 9: (9,  9, False)},
+	"mutual":  {4: (19, 8, True), 5: (23, 10, False)},
+	"arm":     {8: (10, 8, True), 9: (11, 9, False)},
 }
 
 
