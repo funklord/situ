@@ -106,3 +106,45 @@ def test_c_counts_each_run_apart(tmp_path: Path) -> None:
 	assert compiled.returncode == 0, compiled.stderr
 	ran = subprocess.run([str(tmp_path / "drive")], timeout = 30)
 	assert ran.returncode == 0
+
+
+FIXED = """target buffer;
+endian big;
+struct inner { u8 a; }
+struct names { u8 n; inner y[n]; }
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason = "needs a C compiler")
+def test_a_run_of_fixed_structs_declares_its_counter(tmp_path: Path) -> None:
+	"""`u8 n; inner y[n];` -- a count found by walking a run of a FIXED
+	struct -- counted into `situ_count` without declaring it: the
+	declaration looked for the run's own part to name its element, and a
+	fixed element's names none. Found probing derived names (2026-11-21)."""
+	schema = tmp_path / "fixed.situ"
+	schema.write_text(FIXED, encoding = "ascii")
+	out = tmp_path / "c"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(schema), "--target",
+		 "c", "--layer", "edit", "--out", str(out)],
+		cwd = ROOT, capture_output = True, text = True)
+	assert done.returncode == 0, done.stderr
+	(tmp_path / "drive.c").write_text(r"""#include "fixed_build.h"
+int main(void)
+{
+	static const uint8_t y[] = { 7, 8, 9 };
+	uint8_t  buf[8];
+	uint32_t wrote = 0;
+	return situ_names_build(buf, sizeof buf, y, sizeof y, &wrote) != SITU_OK
+	       || wrote != 4u || buf[0] != 3u;
+}
+""", encoding = "ascii")
+	runtime = ROOT / "runtime" / "c"
+	compiled = subprocess.run(
+		[COMPILER or "cc", "-std=c11", "-pedantic-errors", "-Wall", "-Wextra",
+		 "-Werror", "-Wconversion", "-Wsign-conversion", f"-I{runtime}",
+		 f"-I{out}", str(tmp_path / "drive.c"), str(out / "fixed.c"),
+		 str(runtime / "situ.c"), "-o", str(tmp_path / "drive")],
+		capture_output = True, text = True)
+	assert compiled.returncode == 0, compiled.stderr
+	assert subprocess.run([str(tmp_path / "drive")], timeout = 30).returncode == 0

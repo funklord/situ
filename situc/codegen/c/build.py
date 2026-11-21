@@ -2979,12 +2979,18 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		  if any(part.role == PAD for part in every_part(parts)) else []),
 		*([f"\tint64_t     {SOLVED};"]
 		  if any(part.solved is not None for part in parts) else []),
+		# And wherever a count field is found by walking its run: the
+		# walk counts whether or not the run's own part names the element,
+		# and a run of a FIXED struct names none, so `u8 n; inner y[n];`
+		# counted into a variable it never declared.
 		*([f"\tuint32_t    {COUNT} = 0u;"]
 		  if any(part.role == REPEAT
 		         and (part.digits or part.value == 1
 		              or part.inner in [other.inner for other in parts
 		                                if other.role == SIZE])
-		         for part in parts) else []),
+		         for part in parts)
+		  or any(part.role == SIZE and part.inner for part in parts)
+		  else []),
 		"",
 		f"\tif ({OUT} == NULL || {WROTE} == NULL) {{",
 		"\t\treturn SITU_ERR_BOUNDS;",

@@ -188,8 +188,14 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   functions, its prefix named at the import, instead of emitting them.
   Built as `build --linked FILE=PREFIX` (section 21): its request unit's
   text 4412 -> 482 bytes, both accepting its own vector alike. Found
-  beside it, in the plain build too: `_edit.h` declares `card_len` twice
-  for `u8 card_len; u8 card[card_len] [holds = ...]` (open).
+  beside it, in the plain build too: `_edit.h` declared `card_len` twice
+  for `u8 card_len; u8 card[card_len]` -- fixed, the run's length is
+  `<run>_span` where `<run>_len` is a member. The lens it suggested, members
+  named like the suffixes situ derives (`x_len`, `x_ptr`, `x_span`, `x_view`
+  beside a run `x`), found one more in C: a builder counting a run of FIXED
+  structs (`u8 n; inner y[n]`) never declared its counter. Python refuses
+  `x_offset` beside `x`, and C++ and Rust fail to compile it, which 0062
+  records as their way of refusing; the rest compile in all four.
   (2) A gained `holds` was reported BREAKING, "a peer misreads"; it is a
   tightening and now says so (26.1118 amended).
 
