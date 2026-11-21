@@ -36,7 +36,7 @@ from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	Entity, check_deferred_collisions,
 	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
-	entities, header_guard, ident, macro)
+	PROVIDED, UNITS, entities, header_guard, ident, is_linked, macro)
 from situc.codegen.varint import varint_limits, varint_measure, varint_stem
 from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
@@ -335,6 +335,9 @@ class Emitter:
 			"",
 			'#include "situ.h"',
 			*RUNTIME_GUARD,
+			# `--linked`: what another unit emits, included rather than
+			# emitted again (fuzznet, inbox 20261121T0400Z).
+			*(f'#include "{stem}.h"' for stem, _ in UNITS),
 			"",
 			"#ifdef __cplusplus",
 			'extern "C" {',
@@ -345,10 +348,12 @@ class Emitter:
 		lines.extend(declarations(self.schema, self.prefix))
 
 		for decl in self.schema.enums():
-			lines.extend(self._enum(decl))
+			if not is_linked(decl.name):
+				lines.extend(self._enum(decl))
 
 		for token_set in self.schema.token_sets():
-			lines.extend(self._tokens(token_set))
+			if not is_linked(token_set.name):
+				lines.extend(self._tokens(token_set))
 
 		# Containment order, not declaration order: a sub-view accessor names
 		# the nested struct's SIZE_FIXED macro and an indexed region calls its
@@ -359,7 +364,14 @@ class Emitter:
 		# dependency, so the solver had no reason to place it first.
 		for name in containment_order(self.resolved.structs,
 		                              list(self.resolved.structs)):
-			lines.extend(self._struct_header(self.resolved.structs[name]))
+			if not is_linked(name):
+				lines.extend(self._struct_header(self.resolved.structs[name]))
+			elif ident(self.prefix, name, "extent") not in PROVIDED:
+				# What this unit needs of a linked struct and its own unit
+				# does not offer: the extent, which a unit emits only where
+				# it walks one. Here, under this unit's prefix, reading the
+				# linked unit's member functions.
+				lines.extend(self._struct_extent(self.resolved.structs[name]))
 
 		# Registries last: each reads the structs its cells are (0070).
 		from situc.codegen.c.registry import Registry, policy_macros
@@ -13343,7 +13355,8 @@ class Emitter:
 			# the reason `_imported` gives: another compilation importing the
 			# same file would define the same external names (26.559).
 			if struct.layout.is_byte_sized \
-					and not self._imported(struct.name):
+					and not self._imported(struct.name) \
+					and not is_linked(struct.name):
 				lines.extend(self._validate_body(struct))
 				lines.extend(self._messages_body(struct))
 

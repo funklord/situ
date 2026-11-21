@@ -29,7 +29,7 @@ import re
 from situc import ast
 from situc.codegen import arguments
 from situc.codegen.c.emit import Emitter
-from situc.codegen.c.names import ident, macro, header_guard
+from situc.codegen.c.names import header_guard, ident, is_linked, macro
 from situc.codegen.c.owned import owned_structs
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -103,7 +103,8 @@ def refusals(resolved: ResolvedSchema) -> list[tuple[str, str]]:
 	editable_ = {struct.name for struct in editable(resolved)}
 	found = []
 	for name, struct in resolved.structs.items():
-		if name in ownable or name in editable_ or struct.layout.register:
+		if name in ownable or name in editable_ or struct.layout.register \
+				or is_linked(name):
 			continue
 		blocked = [entry.placement for entry in struct.entries
 		           if is_own_member(struct, entry.placement)
@@ -281,7 +282,8 @@ def _one(struct: ResolvedStruct, prefix: str, emitter: Emitter) -> list[str]:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> dict[str, str]:
 	"""The edit header, or nothing where no struct needs backing."""
-	structs = editable(resolved)
+	structs = [struct for struct in editable(resolved)
+	           if not is_linked(struct.name)]
 	if not structs:
 		return {}
 

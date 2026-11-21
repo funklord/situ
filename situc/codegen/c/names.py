@@ -14,6 +14,9 @@ constructs that collide, whatever convention either of them follows.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from dataclasses import dataclass
 
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, Span
@@ -161,6 +164,56 @@ def defined_symbols(text: str) -> frozenset[str]:
 		| set(re.findall(r"^\s*\}\s*(situ_\w+)\s*;", text, re.M)))
 
 
+#: `--linked FILE=PREFIX` (fuzznet, inbox 20261121T0400Z): the types another
+#: unit emits, by C name, and that unit's prefix; and the prefix of the unit
+#: being emitted. Empty outside such a build. Every name the C backend
+#: composes for a type is `ident(prefix, type, ...)`, so this is the one
+#: place a linked type's functions can be named as the unit that emits them
+#: names them -- in some six hundred call sites, none of which change.
+LINKED: dict[str, str] = {}
+EMITTING: list[str] = []
+#: Each linked unit's stem and the header it emits: the stem is what this
+#: unit includes, and the header says which of its structs have a
+#: `_required` for a builder here to call (`build.frames_itself`).
+UNITS: list[tuple[str, str]] = []
+#: Every identifier the linked headers define. A linked type's name is taken
+#: from its unit only where that unit defines it: a unit emits a struct's
+#: `_extent` only where something in it walks one, so an importer that
+#: needs one the unit does not offer emits it itself, under its own prefix.
+PROVIDED: set[str] = set()
+
+
+@contextmanager
+def linked(own: str, types: dict[str, str],
+		units: list[tuple[str, str]]) -> Iterator[None]:
+	"""Name each of `types` under its own unit's prefix while the unit
+	prefixed `own` is emitted."""
+	saved = dict(LINKED), list(EMITTING), list(UNITS), set(PROVIDED)
+	LINKED.clear()
+	LINKED.update({c_name(name): prefix for name, prefix in types.items()})
+	EMITTING[:] = [own]
+	UNITS[:] = units
+	PROVIDED.clear()
+	for _, text in units:
+		PROVIDED.update(re.findall(r"\b([A-Za-z_]\w*)\s*\(", text))
+		PROVIDED.update(re.findall(r"^#\s*define\s+(\w+)", text, re.M))
+		PROVIDED.update(re.findall(r"\b(\w+_t)\b", text))
+	try:
+		yield
+	finally:
+		LINKED.clear()
+		LINKED.update(saved[0])
+		EMITTING[:] = saved[1]
+		UNITS[:] = saved[2]
+		PROVIDED.clear()
+		PROVIDED.update(saved[3])
+
+
+def is_linked(name: str) -> bool:
+	"""Whether type `name` is emitted by a linked unit, not this one."""
+	return c_name(name) in LINKED
+
+
 def ident(*parts: str) -> str:
 	"""Join name fragments into a C identifier.
 
@@ -169,8 +222,18 @@ def ident(*parts: str) -> str:
 	output verbatim. That has to happen here rather than at the call sites:
 	there are dozens of those, and one that forgot would emit a header no
 	compiler accepts.
+
+	A linked type (`LINKED`) is named under the prefix of the unit that
+	emits it, so this unit calls that unit's functions.
 	"""
-	return "_".join(c_name(part) for part in parts if part)
+	names = [c_name(part) for part in parts if part]
+	if (LINKED and len(names) > 1 and EMITTING and names[0] == EMITTING[0]
+			and names[1] in LINKED):
+		theirs = "_".join([LINKED[names[1]], *names[1:]])
+		if theirs in PROVIDED or theirs.upper() in PROVIDED \
+				or f"{theirs}_t" in PROVIDED:
+			return theirs
+	return "_".join(names)
 
 
 def macro(*parts: str) -> str:

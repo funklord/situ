@@ -186,6 +186,10 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   header); about 30 layouts remain, several importing the contact device.
   Wanted: an importing unit that calls the imported unit's generated
   functions, its prefix named at the import, instead of emitting them.
+  Built as `build --linked FILE=PREFIX` (section 21): its request unit's
+  text 4412 -> 482 bytes, both accepting its own vector alike. Found
+  beside it, in the plain build too: `_edit.h` declares `card_len` twice
+  for `u8 card_len; u8 card[card_len] [holds = ...]` (open).
   (2) A gained `holds` was reported BREAKING, "a peer misreads"; it is a
   tightening and now says so (26.1118 amended).
 
@@ -5466,6 +5470,19 @@ that take `--target` do not accept the same set: `build` takes
 `c|cpp|python|rust`, `gen-derived` takes `c|rust|python`, and `gen-dissector`
 takes none, emitting Lua.
 There is no `--strict`; it was listed for a while and never existed.
+
+`build --linked FILE=PREFIX` (C, repeatable; fuzznet, inbox
+20261121T0400Z): the types FILE's compilation declares -- its own imports
+included -- are emitted by FILE's own unit, generated with PREFIX. This unit
+includes that header and names those types' functions under PREFIX, so a
+schema importing another for a `[holds]` or a nested member carries none of
+its code; fuzznet's contact request went from 4412 bytes of text to 482 and
+from 8500 header lines to 550. What the other unit does not offer -- a
+struct's `_extent`, which a unit emits only where it walks one -- is emitted
+here, under this unit's prefix. Names are rewritten in one place,
+`names.ident`, while such a build runs; without `--linked` the output is
+byte-identical. The other backends refuse it: they import a module, use a
+crate path or include a header already.
 
 `--out` names a **directory** in nine subcommands and a **file** in two, and
 this line said `--out=DIR` flatly until somebody passed a directory to `pack`

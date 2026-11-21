@@ -37,6 +37,13 @@ selects
 .IR c ", " cpp ", " rust " or " python ;
 .B \-\-out
 names the output directory.
+.B \-\-linked \fIFILE\fR=\fIPREFIX\fR
+(C, repeatable) says an imported
+.I FILE
+is emitted by its own unit, generated with
+.IR PREFIX :
+that unit's header is included and its functions called, rather than
+every one emitted again under this unit's prefix.
 .B \-\-deps
 writes a make-style dependency list: what was generated as the targets,
 and every schema this compilation read -- imports, transitively, \fBstd\fR

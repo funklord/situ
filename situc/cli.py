@@ -182,6 +182,11 @@ def build_parser() -> argparse.ArgumentParser:
 	                       help="backend for the generated accessors")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
+	build_cmd.add_argument("--linked", action="append", metavar="FILE=PREFIX",
+	                       help="an imported FILE whose types another C unit "
+	                            "emits, generated with PREFIX: include its "
+	                            "header and call its functions rather than "
+	                            "emitting them again (c only; repeatable)")
 	build_cmd.add_argument("--single-file", action="store_true",
 	                       help="inline the parts of the Python runtime this "
 	                            "schema reaches, so the output is one module "
@@ -977,7 +982,47 @@ def cmd_build(args: argparse.Namespace) -> int:
 	Both backends read the same layout and the same capability vectors; what
 	differs is how much of them the target language can enforce rather than
 	document (section 20.1).
+
+	`--linked FILE=PREFIX` (fuzznet, inbox 20261121T0400Z): the types an
+	import brings from FILE are emitted by FILE's own unit, generated with
+	PREFIX, so this unit includes that header and calls its functions
+	rather than emitting every one again under its own prefix.
 	"""
+	linked = getattr(args, "linked", None) or []
+	if not linked:
+		return _cmd_build(args)
+	if args.target != "c":
+		raise SystemExit(
+			f"situc: --linked names another C unit's functions, and --target "
+			f"is {args.target}. Python, Rust and C++ import a module, use a "
+			f"crate path or include a header; this is C's want, where one "
+			f"compilation would otherwise carry another's code again.")
+	from situc.codegen.c import generate as generate_c
+	from situc.codegen.c import names as c_names
+
+	types: dict[str, str] = {}
+	units: list[tuple[str, str]] = []
+	for spec in linked:
+		where, _, prefix = spec.partition("=")
+		if not where or not prefix:
+			raise SystemExit(f"situc: --linked takes FILE=PREFIX, not {spec!r}")
+		path = Path(where)
+		if not path.is_absolute():
+			path = (args.schema.parent / path)
+		other_source, other, _ = analyse(path, getattr(args, "define", None))
+		other_parsed = parse(other_source)
+		for name in [*(one.name for one in other_parsed.structs()),
+		             *(one.name for one in other_parsed.enums()),
+		             *(one.name for one in other_parsed.token_sets()),
+		             *(one.name for one in other_parsed.markers())]:
+			types[name] = prefix
+		units.append((path.stem, generate_c(other_parsed, other, path.stem,
+		                                    prefix).header))
+	with c_names.linked(args.prefix, types, units):
+		return _cmd_build(args)
+
+
+def _cmd_build(args: argparse.Namespace) -> int:
 	from situc.codegen.c import generate
 	from situc.codegen.cpp import generate as generate_cpp
 

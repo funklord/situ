@@ -35,7 +35,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from situc import ast, invariant, traverse
-from situc.codegen.c.names import bare_name, ident, macro, header_guard
+from situc.codegen.c.names import (UNITS, bare_name, header_guard, ident,
+                                    is_linked, macro)
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.c.owned import _ctype, order_suffix, storage_width
 from situc.layout import Arm, BITS_PER_BYTE, Placement
@@ -2184,6 +2185,8 @@ def refusals(resolved: ResolvedSchema,
 	"""Every struct with no builder, and why -- by name, on stderr."""
 	found = []
 	for name, struct in resolved.structs.items():
+		if is_linked(name):
+			continue		# its own unit says so (`--linked`)
 		cases = arms(struct)
 		if not cases:
 			parts, why = plan(struct, shape)
@@ -3990,11 +3993,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	guessed at, so a caller who does not pass it gets less rather than
 	something wrong.
 	"""
+	# `--linked`: a linked unit's header says which of its structs have a
+	# `_required` as this unit's says of its own, and its structs are built
+	# by its own builders, not again here.
+	header  = "".join([header, *(text for _, text in UNITS)])
 	shape   = Shape(header, prefix, resolved.structs,
 	                {decl.name: decl for decl in schema.varints()},
 	                derived_codecs(schema),
 	                {decl.name: decl for decl in schema.markers()})
-	structs = buildable(resolved, shape)
+	structs = [struct for struct in buildable(resolved, shape)
+	           if not is_linked(struct.name)]
 	if not structs:
 		return {}
 
