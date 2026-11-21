@@ -2502,6 +2502,16 @@ class Solver:
 
 		_refuse_a_pad_beside_bytes(variant, cursor, dict(arm_sizes))
 		if isinstance(variant.discriminant, ast.Remaining):
+			if _has_attr(variant.attrs, "equalize"):
+				raise error(
+					f"variant `{variant.name}` switches on `remaining` and "
+					f"asks for `[equalize]`",
+					variant.span,
+					label = "the arms' sizes are what selects them",
+					notes = ["padding every arm to the largest leaves the "
+					         "frame's length nothing to tell them apart by "
+					         "(26.1125)"],
+				)
 			_check_length_decided(variant, dict(arm_sizes), arm_cases,
 			                      last_in_frame)
 		state.cursor = cursor.advance(total)

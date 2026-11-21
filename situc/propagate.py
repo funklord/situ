@@ -638,8 +638,10 @@ def _indexes_outside_the_region(context: Context) -> bool:
 
 
 def _has_unequal_arms(context: Context) -> bool:
+	"""Not where the frame's length selects the arm (26.1125): there the
+	sizes are the discriminant, and `[equalize]` would erase it."""
 	sizes = context.placement.arm_widths
-	return len(sizes) > 1
+	return len(sizes) > 1 and context.placement.discriminant != "remaining"
 
 
 def _is_covered(context: Context) -> bool:

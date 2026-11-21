@@ -227,3 +227,19 @@ def test_an_arm_that_does_not_reproduce_them_still_breaks() -> None:
 	wider = OLD_SETTING.replace("u8 rank;", "u16 rank;")
 	said = compare(_wire(wider), _wire(NEW_SETTING)).findings
 	assert any(one.kind == "breaking" for one in said), said
+
+
+def test_equalize_is_refused_and_never_advised() -> None:
+	"""The arms' sizes are what selects them: `[equalize]` would leave the
+	frame's length nothing to tell them apart by, so the layout refuses it
+	and the advisor does not suggest it -- it did, for NTP's authenticator,
+	advice whose schema the compiler would then refuse."""
+	assert "asks for `[equalize]`" in _refused(SETTING.replace(
+		"switch (remaining) {", "switch (remaining) [equalize] {"))
+	import subprocess
+	import sys
+	advice = subprocess.run(
+		[sys.executable, "-m", "situc", "advise", str(NTP)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert advice.returncode == 0, advice.stderr
+	assert "authenticator" not in advice.stdout, advice.stdout

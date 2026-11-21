@@ -457,6 +457,11 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 			sizes     = placement.arm_sizes
 			if len({size for _, size in sizes}) <= 1:
 				continue
+			# A variant the frame's length selects (26.1125) is told apart
+			# BY its arms' sizes: padding them equal would leave nothing to
+			# select on, and the layout refuses it.
+			if placement.discriminant == "remaining":
+				continue
 
 			largest = max(size for _, size in sizes)
 			worst   = max(largest - size for _, size in sizes) // BITS_PER_BYTE
