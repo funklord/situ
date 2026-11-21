@@ -656,3 +656,73 @@ def test_cpp_reassembles_alike(tmp_path: Path) -> None:
 	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
 	                     text=True, timeout=120)
 	assert ran.stdout.strip() == "fail=0", ran.stdout
+
+
+def _frames(*pieces: tuple[int, int, int, int, bytes]) -> bytes:
+	"""The harness's input after its selector byte: per frame a two-byte
+	length, a clock step, and the frame."""
+	out = b""
+	for who, mid, index, count, body in pieces:
+		frame = (bytes([who]) * 8 + mid.to_bytes(4, "big")
+		         + index.to_bytes(2, "big") + count.to_bytes(2, "big")
+		         + len(body).to_bytes(2, "big") + body)
+		out += len(frame).to_bytes(2, "big") + b"\x01" + frame
+	return out
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_fuzz_harness_reassembles(tmp_path: Path) -> None:
+	"""`gen-fuzz` gives the table a harness: frames out of a fuzzer's
+	bytes, the first frame's key copied into the later ones so pieces can
+	meet. Held to completing a message from pieces with three different
+	keys, through a copy printing what the table hands back. Building it
+	found the relation harness calling a variable struct's view without
+	its length, which did not compile; this fixture's relation is over
+	one."""
+	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
+	out = tmp_path / "c"
+	for command in (["build", "--layer", "converse"], ["gen-fuzz"]):
+		done = subprocess.run(
+			[sys.executable, "-m", "situc", command[0], str(tmp_path / "r.situ"),
+			 *command[1:], "--out", str(out)],
+			cwd=ROOT, capture_output=True, text=True)
+		assert done.returncode == 0, done.stderr
+	harness = (out / "r_fuzz.c").read_text(encoding="ascii")
+	assert "fuzz_ra_pieces" in harness
+	sink = "\t\t\tsitu_fuzz_sink(length == 0u ? 0u : message[length - 1u]);"
+	assert harness.count(sink) == 1
+	(out / "probe.c").write_text(harness.replace(
+		sink, '\t\t\tprintf("done %.*s\\n", (int)length, '
+		      "(const char *)message);"), encoding="ascii")
+	runtime = ROOT / "runtime" / "c"
+	built = subprocess.run(
+		[COMPILER or "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+		 "-Wconversion", "-Wsign-conversion", "-include", "stdio.h", "-g",
+		 "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+		 "-DSITU_FUZZ_STANDALONE", f"-I{runtime}", f"-I{out}",
+		 str(out / "probe.c"), str(out / "r.c"), str(out / "r_relate.c"),
+		 str(runtime / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	frames = _frames((7, 9, 2, 3, b"IJ"), (1, 4, 0, 3, b"ABCD"),
+	                 (2, 5, 1, 3, b"EFGH"))
+	said = []
+	for selector in range(harness.count("\tcase ")):
+		ran = subprocess.run([str(tmp_path / "probe")],
+		                     input=bytes([selector]) + frames,
+		                     capture_output=True, timeout=60)
+		assert ran.returncode == 0, ran.stderr
+		said.append(ran.stdout)
+	assert said.count(b"done ABCDEFGHIJ\n") == 1, said
+
+
+def test_the_fuzz_harness_declines_a_sealed_piece(tmp_path: Path) -> None:
+	(tmp_path / "s.situ").write_text(SEALED, encoding="ascii")
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-fuzz", str(tmp_path / "s.situ"),
+		 "--out", str(tmp_path)], cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	harness = (tmp_path / "s_fuzz.c").read_text(encoding="ascii")
+	assert "No harness for reassembly pieces: its piece is behind a sealed" \
+		in harness
+	assert "fuzz_ra_" not in harness

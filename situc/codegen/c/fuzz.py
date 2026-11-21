@@ -66,8 +66,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	structs  = [struct for struct in fuzzable if not arguments(struct)]
 
 	relation_lines, relation_names = _relation_harnesses(schema, resolved, prefix)
+	held_lines, held_names = _reassembly_harnesses(schema, resolved, prefix)
+	relation_lines += held_lines
 
-	if declined and not structs and not relation_names:
+	if declined and not structs and not relation_names and not held_names:
 		# The skip above emptied the harness, and an empty harness is the
 		# one failure this file already knows by heart: `example/protobuf`
 		# was filtered out entirely and the result compiled, ran under the
@@ -146,11 +148,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		# is rung 3's output, so this file needs what `--layer relate` emits.
 		lines.insert(lines.index(f'#include "{basename}.h"') + 1,
 		             f'#include "{basename}_relate.h"\t/* situc build --layer relate */')
+	if held_names:
+		# The table is rung 5's output, so this needs `--layer converse`.
+		lines.insert(lines.index(f'#include "{basename}.h"') + 1,
+		             f'#include "{basename}_reassemble.h"\t/* situc build --layer converse */')
 
 	lines.extend(_declined_notes(declined))
 	lines.extend(bodies)
 	lines.extend(relation_lines)
-	lines.extend(_entry_point(structs, basename, prefix, relation_names))
+	lines.extend(_entry_point(structs, basename, prefix, relation_names,
+	                          held_names))
 	lines.extend(_standalone(basename))
 	return "\n".join(lines) + "\n"
 
@@ -1320,10 +1327,18 @@ def _relation_harnesses(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tsitu_view_t va, vb;",
 			"\tsitu_msg_init(&ma, a, (uint32_t)n);",
 			"\tsitu_msg_init(&mb, b, (uint32_t)n);",
-			f"\tif ({ident(prefix, first, 'view')}(&ma, 0u, &va) != SITU_OK) {{",
+			# A variable struct's view takes the length it may span and a
+			# fixed one's does not, as the builder keys it. Only fixed
+			# participants had met this harness, so a relation over a frame
+			# with a body emitted a call that did not compile (26.1123).
+			f"\tif ({ident(prefix, first, 'view')}(&ma, 0u, "
+			+ ("" if resolved.structs[first].layout.is_fixed_size
+			   else "(uint32_t)n, ") + "&va) != SITU_OK) {",
 			"\t\treturn;",
 			"\t}",
-			f"\tif ({ident(prefix, second, 'view')}(&mb, 0u, &vb) != SITU_OK) {{",
+			f"\tif ({ident(prefix, second, 'view')}(&mb, 0u, "
+			+ ("" if resolved.structs[second].layout.is_fixed_size
+			   else "(uint32_t)n, ") + "&vb) != SITU_OK) {",
 			"\t\treturn;",
 			"\t}",
 			"",
@@ -1334,8 +1349,125 @@ def _relation_harnesses(schema: ast.Schema, resolved: ResolvedSchema,
 	return lines, names
 
 
+def _reassembly_harnesses(schema: ast.Schema, resolved: ResolvedSchema,
+		prefix: str) -> tuple[list[str], list[str]]:
+	"""A harness per reassembly table (26.1123), and the names emitted.
+
+	The table is where a peer's datagrams meet index arithmetic over a
+	fixed buffer -- a stride, a parked last piece moved into place, a bit
+	per piece -- so it is parse safety in the sense section 20.3 means,
+	and it had no harness. The input is a run of frames, each a two-byte
+	length, a byte the clock advances by, and the piece; every frame that
+	views and validates goes to `_add`, then `_missing` for each message
+	held and `_expire`. What comes out is held to the table's own bounds,
+	and `abort` says where it is not.
+
+	**The key is copied, for the relation harness's reason.** Pieces end
+	in a message only when they share its key, a draw a fuzzer does not
+	make by luck over fourteen bytes, so the first frame's key bytes are
+	copied into each later one where the key has a constant offset.
+	"""
+	from situc.codegen.c import reassemble
+
+	lines: list[str] = []
+	names: list[str] = []
+	refused = dict(reassemble.refusals(schema, resolved))
+	for held in schema.reassemblies():
+		if held.name in refused:
+			continue
+		struct = resolved.structs[held.param.type_name]
+		piece  = reassemble._path(held, "piece").split(".")
+		sealed = any(entry.placement.path == f"{struct.name}.{piece[1]}"
+		             and entry.placement.kind == "sealed"
+		             for entry in struct.entries)
+		if sealed or arguments(struct):
+			why = ("its piece is behind a sealed region, and this harness has\n"
+			       " * no key to open it" if sealed else
+			       f"{struct.name} takes an argument the caller supplies\n"
+			       " * (decision 0050)")
+			lines += ["", f"/* No harness for reassembly {held.name}: {why}. */"]
+			continue
+		decl   = reassemble._relation(schema, held)
+		copies = [(_key_bytes(resolved, struct.name, a),
+		           _key_bytes(resolved, struct.name, b))
+		          for a, b in relation.conversation_key(decl)]
+		usable = [(x, y) for x, y in copies if x is not None and y is not None]
+		name   = c_name(held.name)
+		table  = ident(prefix, held.name)
+		view   = (f"{ident(prefix, struct.name, 'view')}(&m, 0u, "
+		          + ("" if struct.layout.is_fixed_size else "len, ")
+		          + "&v)")
+		names.append(name)
+		lines += [
+			"",
+			f"static void fuzz_ra_{name}(const uint8_t *data, size_t size)",
+			"{",
+			"	/* Static: the table is its slots' whole buffers. */",
+			f"	static {table}_t t;",
+			"	static uint8_t piece[65536u], first[65536u];",
+			"	uint32_t first_len = 0u, now = 0u, first_at[8], count[8];",
+			"	size_t at = 0u;",
+			"",
+			f"	{table}_init(&t);",
+			"	while (size - at >= 3u) {",
+			"		const uint32_t len = ((uint32_t)data[at] << 8) | data[at + 1u];",
+			"		now += data[at + 2u];",
+			"		at += 3u;",
+			"		if (len > size - at) {",
+			"			break;",
+			"		}",
+			"		memcpy(piece, data + at, len);",
+			"		at += len;",
+			"		if (first_len == 0u) {",
+			"			memcpy(first, piece, len);",
+			"			first_len = len;",
+			"		}",
+			"		/* The key the relation asks for, so pieces can meet. */",
+			*(line for (src, _), (dst, width) in usable for line in (
+				f"		if ({dst}u + {width}u <= len && {src}u + {width}u <= first_len) {{",
+				f"			memcpy(piece + {dst}u, first + {src}u, {width}u);",
+				"		}")),
+			"",
+			"		situ_msg_t m;",
+			"		situ_view_t v;",
+			"		situ_msg_init(&m, piece, len);",
+			f"		if ({view} != SITU_OK",
+			f"		    || {ident(prefix, struct.name, 'validate')}(v) != SITU_OK) {{",
+			"			continue;",
+			"		}",
+			"		const uint8_t *message = NULL;",
+			"		uint32_t length = 0u;",
+			f"		if ({table}_add(&t, v, now, &message, &length) == SITU_OK) {{",
+			f"			if (message == NULL || length > {macro(prefix, held.name, 'capacity')}) {{",
+			"				abort();",
+			"			}",
+			"			situ_fuzz_sink(length == 0u ? 0u : message[length - 1u]);",
+			"		}",
+			f"		for (uint32_t s = 0u; s < {macro(prefix, held.name, 'messages')}; s++) {{",
+			"			if (t.slot[s].live == 0u) {",
+			"				continue;",
+			"			}",
+			f"			const uint32_t n = {table}_missing(&t, t.slot[s].key, first_at,",
+			"				count, 8u, 1u + (now & 7u));",
+			"			if (n == 0u || n > 8u) {",
+			"				abort();	/* a live message wants something */",
+			"			}",
+			"			for (uint32_t k = 0u; k < n; k++) {",
+			"				if (count[k] == 0u || first_at[k] + count[k] > t.slot[s].count) {",
+			"					abort();",
+			"				}",
+			"			}",
+			"		}",
+			f"		situ_fuzz_sink({table}_expire(&t, now));",
+			"	}",
+			"}",
+		]
+	return lines, names
+
+
 def _entry_point(structs: list[ResolvedStruct], basename: str,
-		prefix: str, relations: list[str] | None = None) -> list[str]:
+		prefix: str, relations: list[str] | None = None,
+		reassemblies: list[str] | None = None) -> list[str]:
 	lines = [
 		"int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);",
 		"",
@@ -1345,7 +1477,7 @@ def _entry_point(structs: list[ResolvedStruct], basename: str,
 
 	targets = list(relations or [])
 
-	if not structs and not targets:
+	if not structs and not targets and not reassemblies:
 		lines.extend(["\t(void)data;", "\t(void)size;"])
 	else:
 		# The first byte selects a struct, so one corpus drives every parser in
@@ -1353,6 +1485,8 @@ def _entry_point(structs: list[ResolvedStruct], basename: str,
 		calls = [f"fuzz_{c_name(struct.name)}(data + 1, size - 1u)"
 		         for struct in structs]
 		calls += [f"fuzz_rel_{name}(data + 1, size - 1u)" for name in targets]
+		calls += [f"fuzz_ra_{name}(data + 1, size - 1u)"
+		          for name in reassemblies or []]
 
 		lines.extend([
 			"\tif (size < 1u) {",
