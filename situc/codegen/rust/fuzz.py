@@ -53,6 +53,12 @@ def _one(basename: str, enums: set[str],
 		placement = entry.placement
 		if placement.kind != "field" or placement.scalar is None:
 			continue
+		# A variable struct is here for its `validate`, which walks what
+		# varies; its getters may answer a `Result` even at a fixed offset
+		# (`edges`' `magic`), so none is read.
+		if not struct.layout.is_fixed_size:
+			passed += 1
+			continue
 		if (placement.array_count is not None
 				or data_sized(placement)
 				or placement.radix is not None
@@ -104,12 +110,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	# A register is a bus transaction rather than bytes off a wire, and a
 	# zero-byte struct would frame an unbounded number of empty messages.
 	# Both are `--target c`'s exclusions and for its reasons.
+	# Variable structs too: their `validate` walks runs, variants and
+	# nesting, which is where the C and C++ readers read past a buffer and
+	# all four took time exponential in nesting (87bba626) -- and a Rust
+	# reader that indexes wrongly panics, which is the same denial of
+	# service. Fixed-size only, the harness never reached any of it.
 	fuzzable = [struct for struct in resolved.structs.values()
 	            if struct.layout.is_byte_sized
 	            and not takes_arguments(struct)
 	            and struct.layout.register is None
-	            and struct.layout.is_fixed_size
-	            and struct.layout.size_bytes > 0]
+	            and not (struct.layout.is_fixed_size
+	                     and struct.layout.size_bytes == 0)]
 
 	bodies: list[str] = []
 	for struct in fuzzable:

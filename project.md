@@ -247,6 +247,17 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   all four (26.1126): one exchange id awaited under a second (peer, key),
   every key ending with it. Friction (b), a builder taking an arm's fields, was
   answered by 26.1121's in-place build and is not built.
+- Found by fuzzing, after the reassembly work (2026-11-21): the C fuzz
+  harness walked a counted run to its CLAIMED count, so a CBOR map
+  claiming 2^32 pairs hung `make test-c`'s smoke step for 30 minutes on
+  one random draw (fixed 4672cfec: stop at the first unreachable index).
+  With that gone, libFuzzer found two faults in the generated readers,
+  both on master: an extent guarded only by its constant prefix read a
+  peeked discriminant past the buffer (C and C++; 2 bytes, `A1 00`, read
+  a third), and the nesting probe went on after a "too deep" answer,
+  exponential in nesting (all four; 40 maps a second in C, 159 s in
+  Python). Fixed in 87bba626: the guard covers the struct's own peeks,
+  and the probe returns at the first too-deep answer.
 
 - 20261121T1000Z: fuzznet answered 26.1123's three review points (its
   record's last section): a stride, not a total, set by the first non-last
