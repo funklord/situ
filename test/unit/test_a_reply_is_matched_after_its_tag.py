@@ -278,6 +278,26 @@ int main(void)
 	CHECK(situ_conv_reply_to_record(&table, view, 12u) == SITU_OK);
 	CHECK(situ_conv_reply_to_match(&table, opened(rep, &rm), &id) == SITU_OK && id == 12u);
 
+	/* An exchange this side only awaits, holding no request: tracked by
+	 * the key's values, and a verified reply from the same peer ends it
+	 * (fuzznet, inbox 20261121T0600Z). */
+	{
+		situ_poll_ctx_t kctx;
+		kctx.fd = -1;
+		situ_drive_reply_to_slot_t kslots[2];
+		situ_conv_reply_to_slot_t kkeys[2];
+		situ_drive_reply_to_t kd;
+		situ_drive_reply_to_init(&kd, kslots, kkeys, 2u, situ_poll_io(&kctx),
+		                         60u, 0u);
+		CHECK(situ_drive_reply_to_track_key_from(&kd,
+		          situ_conv_reply_to_key(7u, 9u), 6u, NULL, 0u, 21u, 0u,
+		          NULL) == SITU_OK);
+		CHECK(situ_drive_reply_to_on_message_from(&kd, opened(rep, &rm), 5u,
+		                                          &id) == SITU_ERR_CONSTRAINT);
+		CHECK(situ_drive_reply_to_on_message_from(&kd, opened(rep, &rm), 6u,
+		                                          &id) == SITU_OK && id == 21u);
+	}
+
 	/* The driver: a verified reply ends the exchange; a forged one,
 	 * whose tag the hook refuses, never reaches the match. */
 	seen_t seen;

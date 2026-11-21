@@ -203,7 +203,9 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   track by the key's values, without a request view: its asks table also
   awaits exchanges whose request somebody else sealed and sent (a relay's
   forwarded question), holding only `msg` and its own sender, and
-  `_track_by_id_with` holds no key so the driver never matches them. (2) A
+  `_track_by_id_with` holds no key so the driver never matches them.
+  Built in C: `<table>_key(...)`, `_record_key_from`, `_track_key_from`
+  (26.1122's last section); the other three track by a view still. (2) A
   reply in pieces: it peeks per piece and matches only the completing one
   -- its own. (3) The gate points into the receive buffer; a line in
   `_on_message_from`'s comment should say its bytes must live until the

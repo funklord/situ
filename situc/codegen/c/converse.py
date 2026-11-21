@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen import argued_refusal
-from situc.codegen.c.names import ident, macro, header_guard
-from situc.relation import (KeyLayout, Read, ReadBytes, Refused,
+from situc.codegen.c.names import c_name, header_guard, ident, macro
+from situc.relation import (KeyLayout, KeyStep, Read, ReadBytes, Refused,
                             Side, after_region, key_layout)
 from situc.resolve import ResolvedSchema
 from situc import __version__
@@ -132,6 +132,65 @@ def refusals(schema: ast.Schema,
 	return found
 
 
+def _key_parameter(chain: list[KeyStep]) -> str:
+	"""A request key part's parameter name: its path below the request,
+	flattened -- `head.msg` is `head_msg` -- so two parts named alike in
+	different structs stay two parameters."""
+	return c_name(chain[-1].path.split(".", 1)[1])
+
+
+def _key_builder(name: str, request: Side, layout: KeyLayout) -> list[str]:
+	"""`<table>_key(...)`: the key a request would have, from its parts'
+	values, packed exactly as the table packs a request it reads. A value
+	wider than its part is cut to the part, as the field would hold it."""
+	if layout.packed:
+		params = [f"uint64_t {_key_parameter(chain)}"
+		          for chain, _ in request]
+		lines = ["\tuint64_t key = 0u;"]
+		for chain, width in request:
+			value = _key_parameter(chain)
+			cut = (value if width >= 64
+			       else f"({value} & UINT64_C({hex((1 << width) - 1)}))")
+			lines.append(f"\tkey = (key << {width}u) | {cut};")
+		lines.append("\treturn key;")
+		head = f"static inline uint64_t {name}_key("
+	else:
+		params = []
+		lines = ["\tuint32_t at = 0u;"]
+		for chain, width in request:
+			value = _key_parameter(chain)
+			if isinstance(chain[-1], ReadBytes):
+				params.append(f"const uint8_t *{value}")
+				lines += [f"\tmemcpy(&key[at], {value}, {width // 8}u);",
+				          f"\tat += {width // 8}u;"]
+			else:
+				count = (width + 7) // 8
+				params.append(f"uint64_t {value}")
+				lines += [
+					f"\tfor (uint32_t b = 0u; b < {count}u; b++) {{",
+					f"\t\tkey[at + b] = (uint8_t)({value} >> "
+					f"(8u * ({count}u - 1u - b)));",
+					"\t}",
+					f"\tat += {count}u;",
+				]
+		lines.append("\t(void)at;")
+		params.append(f"uint8_t key[{layout.total_bytes}]")
+		head = f"static inline void {name}_key("
+	pad = " " * len(head)
+	signature = [head + params[0] + ("," if len(params) > 1 else ")")]
+	signature += [pad + one + ("," if at < len(params) - 2 else ")")
+	              for at, one in enumerate(params[1:])]
+	return [
+		f"/* The key a request with these values would have, packed as the",
+		" * table packs one it reads. */",
+		*signature,
+		"{",
+		*lines,
+		"}",
+		"",
+	]
+
+
 def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		prefix: str) -> list[str]:
 	layout = key_layout(relation, resolved)
@@ -187,15 +246,19 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		"\t}",
 		"}",
 		"",
-		f"/* Remember `{first.name}` under its key and `peer`, against your",
-		" * handle for it. */",
-		f"static inline situ_err_t {name}_record_from({name}_t *table,",
-		f"                                            situ_view_t {first.name},",
-		"                                            uint32_t peer,",
-		"                                            uint32_t id)",
+		*_key_builder(name, request, layout),
+		f"/* Remember a request by its key alone, under `peer`, against your",
+		" * handle for it: one this side awaits without holding its bytes --",
+		" * sealed and sent by somebody else, or forwarded -- built with",
+		f" * `{name}_key` (fuzznet, inbox 20261121T0600Z). */",
+		f"static inline situ_err_t {name}_record_key_from({name}_t *table,",
+		("                                                uint64_t key,"
+		 if layout.packed else
+		 f"                                                const uint8_t "
+		 f"key[{layout.total_bytes}],"),
+		"                                                uint32_t peer,",
+		"                                                uint32_t id)",
 		"{",
-		*asked,
-		"",
 		"\tfor (uint32_t i = 0u; i < table->cap; i++) {",
 		"\t\tif (table->slots[i].live == 0u) {",
 		("\t\t\ttable->slots[i].key  = key;" if layout.packed else
@@ -207,6 +270,18 @@ def _table(relation: ast.Relation, resolved: ResolvedSchema,
 		"\t\t}",
 		"\t}",
 		"\treturn SITU_ERR_BOUNDS;",
+		"}",
+		"",
+		f"/* Remember `{first.name}` under its key and `peer`, against your",
+		" * handle for it. */",
+		f"static inline situ_err_t {name}_record_from({name}_t *table,",
+		f"                                            situ_view_t {first.name},",
+		"                                            uint32_t peer,",
+		"                                            uint32_t id)",
+		"{",
+		*asked,
+		"",
+		f"\treturn {name}_record_key_from(table, key, peer, id);",
 		"}",
 		"",
 		f"/* Remember `{first.name}` under its key, against your handle for it. */",

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen import ACQUIRES_DATAGRAMS, argued_refusal
-from situc.relation import after_region, key_layout
+from situc.relation import KeyLayout, after_region, key_layout
 from situc.codegen.c.names import ident, macro, header_guard
 from situc.relation import Refused
 from situc.resolve import ResolvedSchema
@@ -142,7 +142,7 @@ def refusals(schema: ast.Schema,
 
 
 def _machine(relation: ast.Relation, policy: tuple[int, int],
-		prefix: str) -> list[str]:
+		prefix: str, layout: "KeyLayout | None" = None) -> list[str]:
 	timeout, retries = policy
 	resend = resend_of(relation)
 	part   = part_of(relation) if resend else None
@@ -344,6 +344,40 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		" NULL);",
 		"}",
 		"",
+		*([f"/* `_track_from` by the request's key rather than its view: for",
+		   " * an exchange this side awaits holding none of the request's",
+		   " * bytes -- sealed and sent by somebody else, or forwarded --",
+		   f" * the key from `{table}_key`. `bytes` is what a resend sends,",
+		   " * or NULL with `len` 0 and a policy of no retries where this",
+		   " * side resends nothing (fuzznet, inbox 20261121T0600Z). */",
+		   f"static inline situ_err_t {name}_track_key_from({name}_t *drive,",
+		   ("                                               uint64_t key,"
+		    if layout.packed else
+		    "                                               const uint8_t "
+		    f"key[{layout.total_bytes}],"),
+		   "                                               uint32_t peer,",
+		   "                                               const uint8_t *bytes,",
+		   "                                               uint32_t len,"
+		   " uint32_t id,",
+		   "                                               uint32_t now_ms,",
+		   f"                                               const {name}_policy_t"
+		   " *policy)",
+		   "{",
+		   f"\tconst situ_err_t err = {table}_record_key_from(&drive->pending,"
+		   " key, peer, id);",
+		   "\tif (err != SITU_OK) {",
+		   "\t\treturn err;",
+		   "\t}",
+		   f"\tconst situ_err_t held = {name}_track_by_id_with(drive, bytes, len,"
+		   " id,",
+		   "\t                                                 now_ms, policy);",
+		   "\tif (held != SITU_OK) {",
+		   "\t\t/* Refused, so not pending either (26.1054). */",
+		   f"\t\t{table}_forget(&drive->pending, id);",
+		   "\t}",
+		   "\treturn held;",
+		   "}",
+		   ""] if layout is not None else []),
 		f"/* Remember `{first.name}` until it is answered, without sending it:",
 		" * for a caller that sent it already, sealed under its own id, or one",
 		" * that only awaits it because another host sent it (26.1055).",
@@ -473,7 +507,12 @@ def _machine(relation: ast.Relation, policy: tuple[int, int],
 		   f" * Handed `{region}`'s gate: verify the reply first, and only a",
 		   " * verified one can end an exchange (26.1122)."] if region else []),
 		" *",
-		" * `_on_message_from`: only an exchange tracked with this `peer`. */",
+		" * `_on_message_from`: only an exchange tracked with this `peer`.",
+		*([" *",
+		   f" * The gate points into the reply's bytes, which must live until",
+		   " * this returns: match where you receive, or keep the buffer",
+		   " * (fuzznet, inbox 20261121T0600Z)."] if region else []),
+		" */",
 		f"static inline situ_err_t {name}_on_message_from({name}_t *drive,",
 		f"                                                {reply},",
 		"                                                uint32_t peer,",
@@ -705,7 +744,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	]
 
 	for relation, policy in ready:
-		lines.extend(_machine(relation, policy, prefix))
+		lines.extend(_machine(relation, policy, prefix,
+		                      key_layout(relation, resolved)))
 
 	lines += [
 		"#ifdef __cplusplus",
