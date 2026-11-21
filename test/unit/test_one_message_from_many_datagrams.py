@@ -865,3 +865,304 @@ print("python ok")
 		ran = subprocess.run([str(tmp_path / "tc")], capture_output=True,
 		                     text=True, timeout=60)
 		assert ran.stdout.strip() == "cpp ok", ran.stdout + ran.stderr
+
+
+#: Two slots of 32 bytes, so a stream of pieces fills, overflows and
+#: expires them; keyed without the count, so the count check is reached.
+SMALL = NO_COUNT.replace("messages = 4, bytes = 4096", "messages = 2, bytes = 64")
+
+#: Every backend reads the same records -- a two-byte length, a four-byte
+#: clock, the frame -- and says for each: what `add` answered (and the
+#: message where it completed one), the ranges `missing` gives for every
+#: key the stream uses, and how many `expire` dropped.
+DIFF_C = r"""
+#include <stdio.h>
+#include <string.h>
+#include "r_reassemble.h"
+#include "r_converse.h"
+static situ_pieces_t t;
+static uint8_t buf[70000];
+int main(void)
+{
+	uint8_t head[6];
+	situ_pieces_init(&t);
+	while (fread(head, 1, 6, stdin) == 6) {
+		const uint32_t len = (uint32_t)head[0] << 8 | head[1];
+		const uint32_t now = (uint32_t)head[2] << 24 | (uint32_t)head[3] << 16
+		                     | (uint32_t)head[4] << 8 | head[5];
+		if (fread(buf, 1, len, stdin) != len)
+			return 2;
+		situ_msg_t m;
+		situ_view_t v;
+		const uint8_t *msg = NULL;
+		uint32_t length = 0u;
+		situ_msg_init(&m, buf, len);
+		situ_err_t e = situ_piece_frame_view(&m, 0u, len, &v);
+		if (e == SITU_OK)
+			e = situ_piece_frame_validate(v);
+		if (e != SITU_OK)
+			return 3;
+		e = situ_pieces_add(&t, v, now, &msg, &length);
+		printf("A %c", e == SITU_OK ? 'O' : e == SITU_ERR_TRUNCATED ? 'T'
+		       : e == SITU_ERR_CONSTRAINT ? 'C' : e == SITU_ERR_BOUNDS ? 'B' : '?');
+		if (e == SITU_OK) {
+			putchar(' ');
+			for (uint32_t i = 0u; i < length; i++)
+				printf("%02x", msg[i]);
+		}
+		putchar('\n');
+		for (unsigned who = 1u; who <= 3u; who++) {
+			for (unsigned mid = 1u; mid <= 2u; mid++) {
+				uint8_t sender[8], key[12];
+				uint32_t first[4], count[4];
+				memset(sender, (int)who, 8);
+				situ_conv_same_message_key(mid, sender, key);
+				const uint32_t n = situ_pieces_missing(&t, key, first, count, 4u, 2u);
+				printf("M");
+				for (uint32_t k = 0u; k < n; k++)
+					printf(" %u:%u", first[k], count[k]);
+				putchar('\n');
+			}
+		}
+		printf("E %u\n", situ_pieces_expire(&t, now));
+	}
+	return 0;
+}
+"""
+
+DIFF_PY = r"""
+import sys
+sys.path[:0] = [".", RUNTIME]
+from situ_runtime import Message, ConstraintError, BoundsError
+import r, r_reassemble, r_converse
+data = sys.stdin.buffer.read()
+t = r_reassemble.pieces_table()
+out = []
+at = 0
+while at + 6 <= len(data):
+	n = int.from_bytes(data[at:at + 2], "big")
+	now = int.from_bytes(data[at + 2:at + 6], "big")
+	frame = data[at + 6:at + 6 + n]
+	at += 6 + n
+	view = r.piece_frame.at(Message(bytearray(frame)), 0, n)
+	try:
+		got = t.add(view, now)
+		out.append("A T" if got is None else "A O " + got.hex())
+	except ConstraintError:
+		out.append("A C")
+	except BoundsError:
+		out.append("A B")
+	for who in (1, 2, 3):
+		for mid in (1, 2):
+			key = r_converse.same_message_table.key(mid, bytes([who]) * 8)
+			out.append("M" + "".join(f" {f}:{c}" for f, c in t.missing(key, 4, 2)))
+	out.append(f"E {t.expire(now)}")
+print("\n".join(out))
+"""
+
+DIFF_RS = r"""
+#![allow(unused_attributes)]
+#[allow(dead_code)] mod situ_rt;
+#[allow(dead_code)] mod r;
+#[allow(dead_code)] mod r_converse;
+#[allow(dead_code)] mod r_reassemble;
+use std::io::{Read, Write};
+fn main() {
+	let mut data = Vec::new();
+	std::io::stdin().read_to_end(&mut data).unwrap();
+	let mut t = Box::new(r_reassemble::PiecesTable::new());
+	let mut out = String::new();
+	let mut at = 0usize;
+	while at + 6 <= data.len() {
+		let n = (data[at] as usize) << 8 | data[at + 1] as usize;
+		let now = u32::from_be_bytes([data[at + 2], data[at + 3], data[at + 4], data[at + 5]]);
+		let frame = data[at + 6..at + 6 + n].to_vec();
+		at += 6 + n;
+		let v = r::PieceFrame::new(&frame).unwrap();
+		match t.add(&v, now) {
+			Ok(Some(m)) => {
+				out.push_str("A O ");
+				for b in m { out.push_str(&format!("{:02x}", b)); }
+				out.push('\n');
+			}
+			Ok(None) => out.push_str("A T\n"),
+			Err(situ_rt::Error::Constraint) => out.push_str("A C\n"),
+			Err(situ_rt::Error::Bounds) => out.push_str("A B\n"),
+			Err(_) => out.push_str("A ?\n"),
+		}
+		for who in 1u8..=3 {
+			for mid in 1u64..=2 {
+				let key = r_converse::SameMessageTable::key(mid, &[who; 8]);
+				let (mut first, mut count) = ([0u32; 4], [0u32; 4]);
+				let k = t.missing(&key, &mut first, &mut count, 2);
+				out.push('M');
+				for i in 0..k { out.push_str(&format!(" {}:{}", first[i], count[i])); }
+				out.push('\n');
+			}
+		}
+		out.push_str(&format!("E {}\n", t.expire(now)));
+	}
+	std::io::stdout().write_all(out.as_bytes()).unwrap();
+}
+"""
+
+DIFF_CPP = r"""
+#include <cstdio>
+#include <cstring>
+#include <vector>
+#include "r_reassemble.hpp"
+#include "r_converse.hpp"
+int main()
+{
+	std::vector<std::uint8_t> data;
+	int c;
+	while ((c = std::getchar()) != EOF)
+		data.push_back(static_cast<std::uint8_t>(c));
+	auto *t = new ::situ::pieces_table();
+	std::size_t at = 0;
+	while (at + 6u <= data.size()) {
+		const std::uint32_t n = static_cast<std::uint32_t>(data[at] << 8 | data[at + 1]);
+		const std::uint32_t now = static_cast<std::uint32_t>(data[at + 2]) << 24
+		    | static_cast<std::uint32_t>(data[at + 3]) << 16
+		    | static_cast<std::uint32_t>(data[at + 4]) << 8 | data[at + 5];
+		std::vector<std::uint8_t> frame(data.begin() + static_cast<long>(at + 6),
+		                                data.begin() + static_cast<long>(at + 6 + n));
+		at += 6u + n;
+		::situ::rt::message m(frame.data(), n);
+		::situ::piece_frame v;
+		if (::situ::piece_frame::at(m, 0u, n, v) != ::situ::rt::err::ok)
+			return 3;
+		::situ::rt::const_bytes out;
+		const ::situ::rt::err e = t->add(v, now, out);
+		std::printf("A %c", e == ::situ::rt::err::ok ? 'O'
+		            : e == ::situ::rt::err::truncated ? 'T'
+		            : e == ::situ::rt::err::constraint ? 'C'
+		            : e == ::situ::rt::err::bounds ? 'B' : '?');
+		if (e == ::situ::rt::err::ok) {
+			std::putchar(' ');
+			for (std::size_t i = 0; i < out.size(); i++)
+				std::printf("%02x", out[i]);
+		}
+		std::putchar('\n');
+		for (unsigned who = 1u; who <= 3u; who++) {
+			for (unsigned mid = 1u; mid <= 2u; mid++) {
+				std::uint8_t sender[8], key[12];
+				std::uint32_t first[4], count[4];
+				std::memset(sender, static_cast<int>(who), 8);
+				::situ::same_message_table::key(mid, sender, key);
+				const std::uint32_t k = t->missing(key, first, count, 4u, 2u);
+				std::printf("M");
+				for (std::uint32_t i = 0u; i < k; i++)
+					std::printf(" %u:%u", first[i], count[i]);
+				std::putchar('\n');
+			}
+		}
+		std::printf("E %u\n", t->expire(now));
+	}
+	delete t;
+	return 0;
+}
+"""
+
+
+def _adversarial_stream(seed: int, steps: int) -> bytes:
+	"""Pieces meant to collide: three senders, two message numbers, counts
+	that disagree with their message's, lengths off the stride and empty
+	ones, a count past a slot, and a clock starting just short of 2^32 so
+	it wraps under the deadlines."""
+	import random
+	rnd = random.Random(seed)
+	plans: dict[tuple[int, int], tuple[int, int]] = {}
+	now = 0xFFFFFFFF - 20000
+	out = b""
+	for _ in range(steps):
+		who, mid = rnd.randint(1, 3), rnd.randint(1, 2)
+		count, stride = plans.setdefault((who, mid), (rnd.choice(
+			[1, 2, 3, 4, 5, 6]), rnd.randint(1, 10)))
+		if rnd.random() < 0.05:
+			plans.pop((who, mid))
+		# The schema holds `index` under `chunks`, so a piece past its own
+		# count never reaches a table; one past its MESSAGE's count does.
+		if rnd.random() < 0.1:
+			count = rnd.choice([1, 7, 40, count + 1])
+		index = rnd.randrange(count)
+		length = (stride if index < count - 1 else rnd.randint(0, stride))
+		if rnd.random() < 0.1:
+			length = rnd.randint(0, 14)
+		body = bytes(rnd.getrandbits(8) for _ in range(length))
+		frame = (bytes([who]) * 8 + mid.to_bytes(4, "big")
+		         + index.to_bytes(2, "big") + count.to_bytes(2, "big")
+		         + length.to_bytes(2, "big") + body)
+		now = (now + rnd.choice([0, 0, 1, 50, 400, 1200])) & 0xFFFFFFFF
+		out += len(frame).to_bytes(2, "big") + now.to_bytes(4, "big") + frame
+	return out
+
+
+@pytest.mark.skipif(COMPILER is None or CXX is None or RUSTC is None,
+                    reason="needs C, C++ and Rust")
+def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path) -> None:
+	"""The four tables were written from one set of rules and held to
+	valid, shuffled messages; a piece saying another count got past all
+	four alike. So: one stream of colliding, malformed and late pieces,
+	every answer of every backend compared -- what `add` said and gave,
+	what `missing` lists for every key, what `expire` dropped."""
+	(tmp_path / "r.situ").write_text(SMALL, encoding="ascii")
+	runtime = ROOT / "runtime"
+	for target in ("c", "python", "rust", "cpp"):
+		done = subprocess.run(
+			[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+			 "--target", target, "--layer", "converse", "--out",
+			 str(tmp_path / target)], cwd=ROOT, capture_output=True, text=True)
+		assert done.returncode == 0, done.stderr
+	stream = _adversarial_stream(1, 3000)
+	said: dict[str, str] = {}
+
+	(tmp_path / "d.c").write_text(DIFF_C, encoding="ascii")
+	built = subprocess.run(
+		[COMPILER or "cc", "-std=c11", "-g", "-fsanitize=address,undefined",
+		 "-fno-sanitize-recover=all", f"-I{runtime / 'c'}",
+		 f"-I{tmp_path / 'c'}", str(tmp_path / "d.c"),
+		 str(tmp_path / "c" / "r.c"), str(runtime / "c" / "situ.c"), "-o",
+		 str(tmp_path / "dc")], capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	(tmp_path / "d.cpp").write_text(DIFF_CPP, encoding="ascii")
+	built = subprocess.run(
+		[CXX or "c++", "-std=c++17", "-g", "-fsanitize=address,undefined",
+		 "-fno-sanitize-recover=all", f"-I{runtime / 'c'}",
+		 f"-I{runtime / 'cpp'}", f"-I{tmp_path / 'cpp'}",
+		 str(tmp_path / "d.cpp"), str(runtime / "c" / "situ.c"), "-o",
+		 str(tmp_path / "dcpp")], capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	out = tmp_path / "rust"
+	(out / "situ_rt.rs").write_text(
+		(runtime / "rust" / "situ_rt.rs").read_text(encoding="ascii"),
+		encoding="ascii")
+	(out / "main.rs").write_text(DIFF_RS, encoding="ascii")
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-o", str(tmp_path / "drs"),
+		 str(out / "main.rs")], capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	for name, command, where in (
+			("c", [str(tmp_path / "dc")], tmp_path),
+			("cpp", [str(tmp_path / "dcpp")], tmp_path),
+			("rust", [str(tmp_path / "drs")], tmp_path),
+			("python", [sys.executable, "-c", DIFF_PY.replace(
+				"RUNTIME", repr(str(runtime / "python")))], tmp_path / "python")):
+		ran = subprocess.run(command, input=stream, cwd=where,
+		                     capture_output=True, timeout=120)
+		assert ran.returncode == 0, (name, ran.stderr[-2000:])
+		said[name] = ran.stdout.decode("ascii")
+
+	lines = said["c"].splitlines()
+	assert len(lines) == 3000 * 8
+	kinds = {line[:3] for line in lines if line.startswith("A ")}
+	assert kinds == {"A O", "A T", "A C", "A B"}, kinds
+	assert any(line.startswith("E ") and line != "E 0" for line in lines)
+	for name in ("cpp", "rust", "python"):
+		other = said[name].splitlines()
+		first = next((at for at, (a, b) in enumerate(zip(lines, other))
+		              if a != b), None)
+		assert first is None and len(other) == len(lines), \
+			(name, first, lines[first - 8:first + 1] if first else None,
+			 other[first - 8:first + 1] if first else None)
