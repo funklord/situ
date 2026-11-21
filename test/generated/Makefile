@@ -180,7 +180,7 @@ OBJS_test_spans		:= $(GEN_DIR)/edges.o codec_impl.c
 .SECONDEXPANSION:
 
 .PHONY: all test clean generate fuzz fuzz-generated fuzz-cpp \
-	fuzz-walker run-fuzz test-codec-san
+	fuzz-walker fuzz-python fuzz-rust run-fuzz test-codec-san
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 	$(CODEC_BINS)
@@ -600,6 +600,97 @@ $(FUZZ_DIR)/%: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.c
 	@mkdir -p '$(@D)'
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$^ '$(RUNTIME_INC)/situ.c' -o $@
+
+# And the same schemas through the Python accessors, under atheris: the
+# harness `gen-fuzz --target python` writes and the gate already runs on
+# random bytes (26.847), made coverage-guided by `atheris_fuzz.py`. One
+# directory per schema, because the harness imports its accessors and the
+# runtime by bare name. Not in `fuzz`, as atheris is not packaged for
+# Debian and that target needs only clang.
+PY_FUZZ_UNITS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/py_%/unit.ok)
+PY_SOURCES	:= $(wildcard $(REPO_ROOT)/situc/codegen/python/*.py) \
+		   $(REPO_ROOT)/runtime/python/situ_runtime.py
+
+$(FUZZ_DIR)/py_%/unit.ok: $$(REPO_ROOT)/$$(SCHEMA_$$*) $(SITUC_SOURCES) \
+		$(PY_SOURCES)
+	@mkdir -p '$(@D)'
+	cd '$(REPO_ROOT)' && $(SITUC) build '$(SCHEMA_$*)' --target python \
+		--out '$(abspath $(@D))' >/dev/null
+	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' --target python \
+		--out '$(abspath $(@D))' >/dev/null
+	cp '$(REPO_ROOT)/runtime/python/situ_runtime.py' '$(@D)/'
+	touch '$@'
+
+fuzz-python: $(PY_FUZZ_UNITS)
+	@for n in $(FUZZ_SCHEMAS); do \
+		dir='$(FUZZ_DIR)'/py_$$n; corpus='$(FUZZ_DIR)'/corpus/py_$$n; \
+		mkdir -p "$$corpus"; \
+		echo "--- $$n, Python ($(FUZZ_SECONDS)s)"; \
+		$(PYTHON) atheris_fuzz.py "$$dir" "$$n" \
+			-max_total_time=$(FUZZ_SECONDS) -timeout=10 \
+			-rss_limit_mb=2048 -print_final_stats=1 \
+			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
+	done
+	@echo "no crash in $(words $(FUZZ_SCHEMAS)) Python harnesses"
+
+# And through the Rust accessors, under cargo-fuzz: `gen-fuzz --target rust`
+# puts libFuzzer's entry point behind `cfg(fuzzing)`, so each harness is a
+# fuzz target as it stands, one binary each in a crate written here. `-s
+# none`, because Debian's rustc ships no sanitizer runtimes and these
+# readers are safe Rust: what fuzzing finds in them is a panic or a hang,
+# which libFuzzer reports with no sanitizer -- and with none, cargo-fuzz
+# passes no nightly flag, so the stable toolchain builds it. `libfuzzer-sys`
+# comes from crates.io on the first build.
+RS_FUZZ_DIR	:= $(FUZZ_DIR)/rust
+RS_TARGETS	:= $(RS_FUZZ_DIR)/fuzz/fuzz_targets
+RS_FUZZ_UNITS	:= $(FUZZ_SCHEMAS:%=$(RS_TARGETS)/%/unit.ok)
+RS_SOURCES	:= $(wildcard $(REPO_ROOT)/situc/codegen/rust/*.py) \
+		   $(REPO_ROOT)/runtime/rust/situ_rt.rs
+CARGO		?= cargo
+
+# The runtime as a module rather than a crate root, where `no_std` is an
+# attribute in the wrong place.
+$(RS_TARGETS)/%/unit.ok: $$(REPO_ROOT)/$$(SCHEMA_$$*) $(SITUC_SOURCES) \
+		$(RS_SOURCES)
+	@mkdir -p '$(@D)'
+	cd '$(REPO_ROOT)' && $(SITUC) build '$(SCHEMA_$*)' --target rust \
+		--out '$(abspath $(@D))' >/dev/null
+	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' --target rust \
+		--out '$(abspath $(@D))' >/dev/null
+	sed '/^#!\[no_std\]$$/d' '$(REPO_ROOT)/runtime/rust/situ_rt.rs' \
+		> '$(@D)/situ_rt.rs'
+	touch '$@'
+
+# `edges` binds codecs to C functions by `impl ... extern`, and cargo-fuzz
+# links with `-Clink-dead-code`, so every one of them is needed where a
+# plain build drops the unused. `codec_impl.c` holds them, as it does for
+# the C suites, with the runtime it calls; an archive contributes only
+# what a binary references, so every target is handed it.
+RS_IMPL		:= $(RS_FUZZ_DIR)/libcodec_impl.a
+
+$(RS_IMPL): codec_impl.c $(RUNTIME_INC)/situ.c $(RUNTIME_INC)/situ.h
+	@mkdir -p '$(@D)'
+	$(CC) -O1 -fPIE -I'$(RUNTIME_INC)' -c codec_impl.c -o '$(@D)/codec_impl.o'
+	$(CC) -O1 -fPIE -I'$(RUNTIME_INC)' -c '$(RUNTIME_INC)/situ.c' \
+		-o '$(@D)/situ_runtime.o'
+	rm -f '$@'
+	ar rcs '$@' '$(@D)/codec_impl.o' '$(@D)/situ_runtime.o'
+
+fuzz-rust: $(RS_FUZZ_UNITS) $(RS_IMPL)
+	$(PYTHON) cargo_fuzz_crate.py '$(RS_FUZZ_DIR)' $(FUZZ_SCHEMAS)
+	cd '$(RS_FUZZ_DIR)' && RUSTFLAGS='-C link-arg=$(abspath $(RS_IMPL))' \
+		$(CARGO) fuzz build -s none -O
+	@for n in $(FUZZ_SCHEMAS); do \
+		corpus='$(abspath $(FUZZ_DIR))'/corpus/rs_$$n; \
+		mkdir -p "$$corpus"; \
+		echo "--- $$n, Rust ($(FUZZ_SECONDS)s)"; \
+		( cd '$(RS_FUZZ_DIR)' && RUSTFLAGS='-C link-arg=$(abspath $(RS_IMPL))' \
+			$(CARGO) fuzz run -s none -O "$$n" \
+			"$$corpus" -- -max_total_time=$(FUZZ_SECONDS) \
+			-timeout=10 -rss_limit_mb=2048 -print_final_stats=1 \
+			-artifact_prefix="$$corpus/" ) || exit 1; \
+	done
+	@echo "no crash in $(words $(FUZZ_SCHEMAS)) Rust harnesses"
 
 # Split so CI can run the two sets side by side. `fuzz` is both, which is
 # what somebody at a terminal means; 74 harnesses at a minute each is over

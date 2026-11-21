@@ -50,7 +50,7 @@ export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
-	fuzz fuzz-generated fuzz-cpp fuzz-walker test-codec-san \
+	fuzz fuzz-generated fuzz-cpp fuzz-walker fuzz-python fuzz-rust test-codec-san \
 	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example install-gui FORCE \
 	cross cross-test install uninstall clean help deb deb-check
 
@@ -75,6 +75,8 @@ help:
 	@echo '  install-gui  install situ-edit-gui beside situ-edit (after install)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
+	@echo '  fuzz-python  the Python harnesses under atheris (pip install --user atheris)'
+	@echo '  fuzz-rust  the Rust harnesses under cargo-fuzz (cargo install cargo-fuzz)'
 	@echo '  test-codec-san  the codec property suites under ASan + UBSan'
 	@echo '  cross      compile-only build for aarch64'
 	@echo '  cross-test run generated accessors on aarch64 under emulation'
@@ -280,6 +282,14 @@ fuzz-cpp:
 
 fuzz-walker:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-walker
+
+# The Python and Rust harnesses under their own engines, atheris and
+# cargo-fuzz. Neither is packaged for Debian, so neither is in `fuzz`.
+fuzz-python:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-python
+
+fuzz-rust:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-rust
 
 # The codec property suites rebuilt under a sanitizer. `test-c` runs them with
 # the ordinary compiler, where the hostile-input property's guard catches a

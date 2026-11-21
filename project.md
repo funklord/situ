@@ -486,8 +486,9 @@ both walkers and the dissector. What a user cannot yet do is listed under
   reading one is still not evaluated, nor a `let` over a field wider than
   32 bits, a text number or a token.
 - `situc map` does not describe a registry; its contract is in `wire`.
-- Coverage-guided fuzzing of the Rust and Python harnesses needs
-  cargo-fuzz and atheris, not installed here -- the holder's machine.
+- Coverage-guided fuzzing of the Rust and Python harnesses: built
+  (26.1132), `make fuzz-python` and `make fuzz-rust`; atheris and
+  cargo-fuzz are user-level installs here (holder, 2026-11-21).
 - Schema-driven storage for fuzznet (derived rows, 0070's storage notes)
   is fuzznet's to ask for; told via its inbox.
 - From openmlx4 (inbox 20261119T1237Z and T1253Z, against 75d34362).
@@ -9641,6 +9642,34 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1132 The Python and Rust harnesses, fuzzed coverage-guided
+
+The holder had atheris and cargo-fuzz installed (2026-11-21), neither
+packaged for Debian: `pip install --user --break-system-packages atheris`
+(version `3.1.0`), and `cargo install --locked cargo-fuzz --version 0.12.0`, the
+newest that builds on Debian's rustc 1.85 (0.13 needs 1.91).
+
+- `make fuzz-python`: per schema, the accessors, `gen-fuzz --target
+  python`'s harness and the runtime in a directory of their own, run by
+  `test/generated/atheris_fuzz.py` with all three instrumented.
+- `make fuzz-rust`: `gen-fuzz --target rust` now puts libFuzzer's entry
+  point behind `cfg(fuzzing)`, the flag cargo-fuzz sets, so the generated
+  harness is a fuzz target as it stands and still a stdin program under
+  plain `rustc`. `test/generated/cargo_fuzz_crate.py` writes one crate of
+  62 binaries, rewriting a manifest only when it changes. `-s none`:
+  Debian's rustc ships no sanitizer runtimes, these readers are safe Rust
+  whose faults are panics and hangs, which libFuzzer reports anyway -- and
+  with no sanitizer cargo-fuzz passes no nightly flag. cargo-fuzz links with
+  `-Clink-dead-code`, so `edges`' extern codecs are linked from
+  `codec_impl.c` as the C suites do.
+
+First runs, 20 s a harness: 62 Python harnesses, 54 million inputs, and 62
+Rust, 531 million, no crash, timeout or out-of-memory. Their corpora, with
+the C one, replayed through the four-way differential: one split, Rust
+alone refusing 9 of ipv6ext's 25 (26.1131). With that fixed, 2997 inputs
+from the three corpora over every schema, at most 40 a corpus: the four
+agree on all of them.
 
 ### 26.1131 A `while` run asks its condition of the element it read
 

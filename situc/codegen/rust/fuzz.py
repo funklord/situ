@@ -5,11 +5,13 @@ and the same shape as `--target python`'s for the same reason (26.847):
 `one_input` is the entry point, a stdin `main` drives it, and no
 dependency is taken -- so this repository's own gate RUNS the harness
 rather than skipping where `cargo-fuzz` is absent. `cargo-fuzz` is three
-lines on top:
+lines on top -- and they are in the harness, behind `cfg(fuzzing)`, the
+flag `cargo fuzz` sets, so the file is a fuzz target as it stands and
+`make fuzz-rust` builds it with nothing written around it:
 
-    #![no_main]
-    use libfuzzer_sys::fuzz_target;
-    fuzz_target!(|data: &[u8]| { <name>_fuzz::one_input(data); });
+    #![cfg_attr(fuzzing, no_main)]
+    #[cfg(fuzzing)]
+    libfuzzer_sys::fuzz_target!(|data: &[u8]| { one_input(data); });
 
 That split is `--target c`'s, whose `SITU_FUZZ_STANDALONE` main exists "so
 the harness can be built and run without a fuzzing engine. This is what
@@ -139,16 +141,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"//",
 		"// `one_input` takes no dependency, which is what lets this",
 		"// repository's own gate RUN it rather than skip where cargo-fuzz",
-		"// is absent. An engine is three lines on top:",
-		"//",
-		"//     #![no_main]",
-		"//     use libfuzzer_sys::fuzz_target;",
-		f"//     fuzz_target!(|d: &[u8]| {{ {basename}_fuzz::one_input(d);"
-		" }});",
+		"// is absent. Built by `cargo fuzz`, which sets `cfg(fuzzing)`,",
+		"// the file is a fuzz target as it stands: libFuzzer's entry point",
+		"// below takes the place of `main`, and `libfuzzer-sys` is then",
+		"// the one dependency.",
 		"//",
 		"// The split is `--target c`'s, whose `SITU_FUZZ_STANDALONE` main",
 		'// exists so the harness "can be built and run without a fuzzing',
 		'// engine. This is what keeps it from rotting between runs."',
+		"",
+		"#![cfg_attr(fuzzing, no_main)]",
 		"",
 		"mod situ_rt;",
 		f"mod {basename};",
@@ -196,8 +198,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	lines.extend([
 		"",
+		"// libFuzzer's entry point, where `cargo fuzz` builds this file.",
+		"#[cfg(fuzzing)]",
+		"libfuzzer_sys::fuzz_target!(|data: &[u8]| {",
+		"\tone_input(data);",
+		"});",
+		"",
 		"/// One input from stdin, so the harness runs with no engine at",
 		"/// all. This is what keeps it from rotting between runs.",
+		"#[cfg(not(fuzzing))]",
 		"fn main() {",
 		"\tuse std::io::Read;",
 		"",
