@@ -5699,6 +5699,17 @@ class Emitter:
 			         f"situ_rt::remaining(self.bytes.len(), {start})"}
 		return self._rule_text(struct, source, extra)
 
+	def _same_reads(self, same: dict[str, traverse.RunEquality]
+			) -> dict[str, str]:
+		"""Each byte-run comparison of a `when` as Rust (26.1128): slice
+		equality, over getters that answer an empty slice on a view too short
+		for the run."""
+		def run(placement: Placement) -> str:
+			return f"self.{_ident(placement.name)}()"
+		return {name: f"({run(held.left)} {'==' if held.equal else '!='} "
+		              f"{run(held.right)})"
+		        for name, held in same.items()}
+
 	def _rule_text(self, struct: ResolvedStruct, local: str,
 			extra: dict[str, str] | None = None) -> str:
 		"""A `when` over a struct's fields, as a Rust condition.
@@ -11503,10 +11514,11 @@ class Emitter:
 
 		lines = ["\t\t// What the schema refuses this message over (0051)."]
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()'})} {{",
+				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()', **self._same_reads(same)})} {{",
 				f"\t\t\t// {when.name}",
 				"\t\t\treturn Err(situ_rt::Error::Constraint);",
 				"\t\t}",
@@ -11555,11 +11567,12 @@ class Emitter:
 			"\t\tlet mut found = 0usize;",
 		])
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t// {when.severity.value} {when.name}",
-				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()'})} {{",
+				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()', **self._same_reads(same)})} {{",
 				"\t\t\tif found < ids.len() {",
 				f"\t\t\t\tids[found] = Self::MSG_{_ident(when.name).upper()};",
 				"\t\t\t}",

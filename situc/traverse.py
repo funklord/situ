@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from collections.abc import Callable, Container, Sequence
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 from typing import TypeVar, cast
@@ -2061,6 +2062,74 @@ def messages(schema: Schema, struct_name: str) -> list[ast.When]:
 				found.append(when)
 				break
 	return found
+
+
+#: The name a byte comparison stands under in a rendered `when` (26.1128).
+#: Two underscores, which no schema name in the corpus carries.
+SAME = "situ__same"
+
+
+@dataclass(frozen=True)
+class RunEquality:
+	"""`a == b` or `a != b` between two byte runs of one struct (26.1128).
+
+	`wellformed.check_when_runs` admits exactly this shape, so a renderer
+	given one knows both are this struct's own fixed byte runs of `length`
+	bytes, and writes the comparison its language has for bytes.
+	"""
+
+	equal: bool
+	left: Placement
+	right: Placement
+	length: int
+
+
+def run_equalities(expr: ast.Expr, struct: ResolvedStruct
+		) -> tuple[ast.Expr, dict[str, RunEquality]]:
+	"""`expr` with each byte-run comparison replaced by a name (26.1128).
+
+	Every renderer reads a `when` by unparsing it and rewriting each name
+	to a read; a run has no read that is a number, so the comparison is
+	taken out whole and handed back keyed by the name standing for it,
+	for the renderer to supply as one of its `extra` reads.
+	"""
+	from situc.invariant import paths_in
+
+	by_path = {entry.placement.path: entry.placement
+	           for entry in struct.entries}
+	found: dict[str, RunEquality] = {}
+
+	def run(operand: ast.Expr) -> Placement | None:
+		if not isinstance(operand, (ast.NameRef, ast.Access)):
+			return None
+		paths = paths_in(operand)
+		held  = by_path.get(paths[0]) if len(paths) == 1 else None
+		if held is None or held.array_count is None \
+				or held.scalar is None or held.scalar.bits != 8 \
+				or held.size_max_bits != held.size_bits:
+			return None
+		return held
+
+	def rewrite(node: ast.Expr) -> ast.Expr:
+		if isinstance(node, ast.Binary):
+			left, right = run(node.left), run(node.right)
+			if node.op in ("==", "!=") and left is not None \
+					and right is not None:
+				name = f"{SAME}{len(found)}"
+				found[name] = RunEquality(node.op == "==", left, right,
+				                          left.size_bits // BITS_PER_BYTE)
+				# Compared with zero rather than standing alone: Rust casts
+				# every read to the rule's integer width, and `if` there
+				# takes nothing but a `bool`.
+				return ast.Binary(node.span, "!=", ast.NameRef(node.span, name),
+				                  ast.IntLiteral(node.span, 0, "0"))
+			return dataclasses.replace(node, left = rewrite(node.left),
+			                           right = rewrite(node.right))
+		if isinstance(node, ast.Unary):
+			return dataclasses.replace(node, operand = rewrite(node.operand))
+		return node
+
+	return rewrite(expr), found
 
 
 def obligation(schema: Schema, struct: ResolvedStruct,

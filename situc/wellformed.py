@@ -13,6 +13,7 @@ than a style one, which is why they are errors here.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import NoReturn
 
 import difflib
 import re
@@ -109,6 +110,7 @@ def check(schema: ast.Schema) -> None:
 	check_invariants(schema)
 	check_whens(schema)
 	check_when_sums(schema)
+	check_when_runs(schema)
 	check_relations(schema)
 	check_registries(schema)
 
@@ -4394,6 +4396,113 @@ def check_when_sums(schema: ast.Schema) -> None:
 				         "characters, and `sum(magic)` over an enum of bytes "
 				         "(26.896, 26.949)"],
 			)
+
+
+def check_when_runs(schema: ast.Schema) -> None:
+	"""A run in a `when` is compared with a run, or measured (26.1128).
+
+	A `when` reads numbers, and a run is not one: `old == successor` over
+	two `u8 [32]` keys reached C as `_old_get(view) == _successor_get(view)`
+	-- a getter only a scalar has, so the unit did not compile -- and
+	Python as a memoryview against a number, which is never equal and so a
+	refusal that never fired. Reported by fuzznet, whose rule is "a key
+	succeeded by itself is a cycle of one".
+
+	`==` and `!=` between two byte runs of this struct, of one length the
+	schema states, are byte comparisons in every reader. Anything else
+	reading a run as a value is refused here: `size(run)` and `sum(run)`
+	stay what they were, as they measure rather than read.
+	"""
+	structs = {decl.name: decl for decl in schema.structs()}
+	consts  = {decl.name: decl.value for decl in schema.consts()}
+	enums   = {decl.name for decl in schema.enums()}
+
+	def run_of(expr: ast.Expr) -> tuple[str, ast.Field] | None:
+		"""The run this operand reads, with its path, or None."""
+		if not isinstance(expr, (ast.NameRef, ast.Access)):
+			return None
+		paths = paths_in(expr)
+		if len(paths) != 1:
+			return None
+		struct_name, _, field = paths[0].partition(".")
+		struct = structs.get(struct_name)
+		if struct is None or not field or "[" in field:
+			return None
+		holder = struct
+		steps  = field.split(".")
+		for step in steps[:-1]:
+			inner = _find_member(holder, step)
+			if not isinstance(inner, ast.Field) \
+					or inner.type_ref.name not in structs:
+				return None
+			holder = structs[inner.type_ref.name]
+		member = _find_member(holder, steps[-1])
+		if not isinstance(member, ast.Field) or member.array is None \
+				or member.radix is not None:
+			return None
+		return paths[0], member
+
+	def length(member: ast.Field) -> int | None:
+		"""The run's count where the schema states it as a number."""
+		size = member.array.size if member.array is not None else None
+		if isinstance(size, ast.NameRef) and size.name in consts:
+			size = consts[size.name]
+		if member.until is not None or member.repeat is not None:
+			return None
+		return size.value if isinstance(size, ast.IntLiteral) else None
+
+	def comparable(path: str, member: ast.Field) -> bool:
+		scalar = member.type_ref.scalar
+		return ("." not in path.partition(".")[2]
+		        and member.type_ref.name not in enums
+		        and scalar is not None and not scalar.signed
+		        and scalar.bits == 8 and length(member) is not None)
+
+	def refuse(path: str, at: ast.Span, why: str) -> NoReturn:
+		raise error(
+			f"`{path}` is a run, and a `when` reads numbers",
+			at,
+			label = why,
+			notes = ["two byte runs of this struct whose lengths the "
+			         "schema states as one number compare byte for byte: "
+			         "`when s.old == s.successor refuse ...` (26.1128)",
+			         "`size(run)` measures one, and `sum(run)` adds a "
+			         "counted run's elements"],
+		)
+
+	def walk(expr: ast.Expr, held: ast.When) -> None:
+		if isinstance(expr, ast.Call):
+			return		# a measure: `size`, `sum`, `offset`, `count`
+		if isinstance(expr, ast.Binary):
+			left, right = run_of(expr.left), run_of(expr.right)
+			if expr.op in ("==", "!=") and (left or right):
+				if left is None or right is None:
+					one = left or right
+					assert one is not None
+					refuse(one[0], held.span,
+					       "compared with something that is not a run")
+				for path, member in (left, right):
+					if not comparable(path, member):
+						refuse(path, held.span,
+						       "not a byte run of this struct with a "
+						       "stated length")
+				if length(left[1]) != length(right[1]):
+					refuse(left[0], held.span,
+					       f"{length(left[1])} bytes against "
+					       f"{length(right[1])}: never equal")
+				return
+			walk(expr.left, held)
+			walk(expr.right, held)
+			return
+		if isinstance(expr, ast.Unary):
+			walk(expr.operand, held)
+			return
+		found = run_of(expr)
+		if found is not None:
+			refuse(found[0], held.span, "read here as a number")
+
+	for held in schema.whens():
+		walk(held.expr, held)
 
 
 def _summable(member: ast.Field, byte_enums: set[str],

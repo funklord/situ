@@ -1968,6 +1968,17 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				"names no struct in this image"
 			continue
 
+		# Two byte runs compared (26.1128): the image has a stack of numbers
+		# and no instruction comparing bytes, and loading a run as a number
+		# reads at most a word of it. Recorded as any expression the image
+		# cannot carry is, rather than answered from a word of a key.
+		if traverse.run_equalities(when.expr, resolved.structs[owner])[1]:
+			coverage.unencodable[f"when {when.name}"] = \
+				"compares two byte runs, and an image compares numbers"
+			if when.severity is ast.Severity.REFUSE:
+				refusal_lost.add(owner)
+			continue
+
 		start = len(program.code)
 		try:
 			program.compile(_measured(when.expr, resolved.structs[owner],

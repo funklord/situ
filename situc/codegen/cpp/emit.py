@@ -11295,16 +11295,31 @@ class Emitter:
 
 		lines = ["\t\t/* What the schema refuses this message over (0051). */"]
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct)})}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct), **self._same_reads(same)})}) {{",
 				f"\t\t\t/* {when.name} */",
 				*(["\t\t\t*which_ = no_check;"] if named else []),
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
 		return lines
+
+	def _same_reads(self, same: dict[str, traverse.RunEquality]
+			) -> dict[str, str]:
+		"""Each byte-run comparison of a `when` as C++ (26.1128): the C
+		runtime's byte compare over the two runs' spans, which on a view too
+		short for them are empty, so nothing is read past it."""
+		def run(placement: Placement, part: str) -> str:
+			return f"this->{bare_name(placement.name)}().{part}()"
+		return {name: f"(situ_bytes_eq({run(held.left, 'data')}, "
+		              f"static_cast<uint32_t>({run(held.left, 'size')}), "
+		              f"{run(held.right, 'data')}, "
+		              f"static_cast<uint32_t>({run(held.right, 'size')})) "
+		              f"{'!=' if held.equal else '=='} 0)"
+		        for name, held in same.items()}
 
 	def _messages(self, struct: ResolvedStruct) -> list[str]:
 		"""0051's sibling, as a member function and a class constant per id.
@@ -11339,11 +11354,12 @@ class Emitter:
 			"\t\tstd::size_t found = 0;",
 		])
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t/* {when.severity.value} {when.name} */",
-				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct)})}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct), **self._same_reads(same)})}) {{",
 				"\t\t\tif (found < cap) {",
 				f"\t\t\t\tids[found] = msg_{c_name(when.name)};",
 				"\t\t\t}",

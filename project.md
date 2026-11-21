@@ -9628,6 +9628,47 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1128 A `when` compares two byte runs, and refuses a run as a number
+
+Reported by fuzznet (inbox 20261121T1640Z): `when s.old == s.successor
+refuse succeeded_by_itself` over two `u8 [32]` keys was accepted and wrote
+`_old_get(view) == _successor_get(view)` into C -- a getter only a scalar
+has, so the unit did not compile. C++ and Rust likewise; Python compared two
+memoryviews and was right by accident, and `s.old == 3` there was a
+memoryview against a number, never equal: a refusal that never fired.
+
+**The rule.** `==` and `!=` between two byte runs of the struct's own,
+each `u8 [N]` with N a number or a `const`, the same N on both sides, are a
+byte comparison. Any other read of a run as a value in a `when` -- against
+a number, in arithmetic, ordered, two lengths, a `u16` run, a nested
+struct's run -- is refused by `wellformed.check_when_runs`. `size(run)` and
+`sum(run)` measure rather than read and stay as they were.
+
+**How each reader does it.** `traverse.run_equalities` takes the
+comparison out of the expression whole and leaves a name in its place,
+compared with zero -- Rust casts every read to the rule's width and its
+`if` takes only a `bool` -- and each renderer supplies that name as one of
+its `extra` reads: `situ_bytes_eq` over the two `_ptr`s in C, over the two
+spans in C++ (empty on a short view, so nothing is read past it), slice
+equality in Rust, `bytes(...)` equality in Python, and in the dissector the
+runs' `:raw()` strings -- `uint` reads four bytes, so reading the keys as
+numbers was right for four-byte runs and wrong for thirty-two -- guarded by
+the packet's length, and a number because no Lua boolean equals one.
+
+**The image does not carry it.** A walker's stack holds numbers and it has
+no instruction comparing bytes, so `pack` records the `when` as
+unencodable, and a `refuse` so lost marks its struct unvalidatable, as any
+expression an image cannot hold does; a walker abstains on it rather than
+answering from a word of each key. A `BYTES_EQ` op is the change if a
+walker consumer needs the verdict.
+
+Held by `test/unit/test_a_when_compares_two_byte_runs.py`: four backends
+on keys that differ only in their last byte (past any word), tshark on the
+dissector, the image's coverage, the five refusals; flipping the comparison
+fails the four-backend and tshark tests. fuzznet's own succession record
+(its chain/succession_record.situ) with the rule added builds
+warning-clean in all four.
+
 ### 26.1127 At the depth cap an extent answers the rest of its view
 
 Found by libFuzzer on CBOR (run 10). Moved to

@@ -13349,6 +13349,19 @@ class Emitter:
 		                  "(view)"
 		        for let in (decl.lets if decl is not None else ())}
 
+	def _same_reads(self, struct: ResolvedStruct,
+			same: dict[str, traverse.RunEquality]) -> dict[str, str]:
+		"""Each byte-run comparison of a `when` as C (26.1128): the
+		runtime's byte compare over the two runs' pointers, read where any
+		of the `when`'s fields are, over a view `validate` has measured."""
+		def run(placement: Placement) -> str:
+			return (f"{ident(self.prefix, struct.name, c_name(placement.name), 'ptr')}"
+			        f"(view{self._member_args(struct, placement)})")
+		return {name: f"(situ_bytes_eq({run(held.left)}, {held.length}u, "
+		              f"{run(held.right)}, {held.length}u) "
+		              f"{'!=' if held.equal else '=='} 0)"
+		        for name, held in same.items()}
+
 	def _messages_body(self, struct: ResolvedStruct,
 			linkage: str = "") -> list[str]:
 		"""`messages`, and its text table where one was asked for."""
@@ -13371,11 +13384,12 @@ class Emitter:
 			"",
 		]
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"	/* {when.severity.value} {when.name} */",
-				f"	if ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit', **self._let_reads(struct)})}) {{",
+				f"	if ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit', **self._let_reads(struct), **self._same_reads(struct, same)})}) {{",
 				"		if (held < cap) {",
 				f"			ids[held] = "
 				f"{macro(self.prefix, struct.name, when.name, 'MSG')};",
@@ -13673,10 +13687,11 @@ class Emitter:
 		         " Written on the", "\t * line above the refusal because"
 		         " that is `check`'s contract. */"]
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\tif ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit', **self._let_reads(struct)})}) {{",
+				f"\tif ({self._over_fields(struct, local, 'view', extra = {'remaining': 'view.limit', **self._let_reads(struct), **self._same_reads(struct, same)})}) {{",
 				f"\t\t/* {when.name} */",
 				f"\t\t*which = {_NO_CHECK};",
 				"\t\treturn SITU_ERR_CONSTRAINT;",

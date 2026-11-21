@@ -2364,9 +2364,10 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 	proto = _lua(struct.name)
 	lines = ["", "\t-- what the schema says about this message (0051)"]
 	for when in held:
-		source = expr_to_source(when.expr, explicit=True)
+		expr, same = traverse.run_equalities(when.expr, struct)
+		source = expr_to_source(expr, explicit=True)
 		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
-		extra  = {"remaining": "tvb:len()"}
+		extra  = {"remaining": "tvb:len()", **_same_reads(same)}
 		if not lost:
 			local = re.sub(rf"\bsize\(\s*{re.escape(struct.name)}\s*\)",
 			               "situ_struct_extent", local)
@@ -2386,6 +2387,32 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		             f"{proto}_e.{_lua(when.name)})")
 		lines.append("\tend")
 	return lines
+
+
+def _same_reads(same: dict[str, traverse.RunEquality]) -> dict[str, str]:
+	"""Each byte-run comparison of a `when` as Lua (26.1128).
+
+	The runs' raw bytes as Lua strings, which compare by content: `uint`
+	tops out at four bytes, so reading the runs as numbers was right for
+	four-byte keys by accident and wrong for fuzznet's thirty-two. A number
+	rather than a boolean, because the rule compares it with zero and in Lua
+	no boolean equals a number. Where the packet is too short for both, it
+	is neither equal nor unequal, as a reader would not have got this far.
+	A run the data places has no constant offset and is left unread, which
+	the caller declines as it declines any name it cannot read.
+	"""
+	reads = {}
+	for name, held in same.items():
+		left, right = held.left.offset_bits, held.right.offset_bits
+		if left is None or right is None or left % 8 or right % 8:
+			continue
+		left, right = left // 8, right // 8
+		reach = max(left, right) + held.length
+		op    = "==" if held.equal else "~="
+		reads[name] = (f"((tvb:len() >= {reach} and tvb({left}, "
+		               f"{held.length}):raw() {op} tvb({right}, "
+		               f"{held.length}):raw()) and 1 or 0)")
+	return reads
 
 
 def _key_read(resolved: ResolvedSchema, struct_name: str,

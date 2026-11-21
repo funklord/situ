@@ -9631,6 +9631,17 @@ class Emitter:
 		lines.extend(refusals)
 		return lines
 
+	def _same_reads(self, same: dict[str, traverse.RunEquality]
+			) -> dict[str, str]:
+		"""Each byte-run comparison of a `when` as Python (26.1128): the two
+		runs' bytes compared, where a number against a memoryview was never
+		equal and so a refusal that never fired."""
+		def run(placement: Placement) -> str:
+			return f"bytes(self.{py_name(placement.name)})"
+		return {name: f"({run(held.left)} {'==' if held.equal else '!='} "
+		              f"{run(held.right)})"
+		        for name, held in same.items()}
+
 	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""A `refuse` makes a message illegal, so `validate` says so (0051).
 
@@ -9645,10 +9656,11 @@ class Emitter:
 
 		lines = ["\t\t# What the schema refuses this message over (0051)."]
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct)})}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct), **self._same_reads(same)})}:",
 				f'\t\t\traise ConstraintError("{struct.name}: {when.name}")',
 			])
 		return lines
@@ -9683,11 +9695,12 @@ class Emitter:
 			"\t\tfound: _situ_list[int] = []",
 		])
 		for when in held:
-			source = unparse_expr(when.expr, explicit=True)
+			expr, same = traverse.run_equalities(when.expr, struct)
+			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t# {when.severity.value} {when.name}",
-				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct)})}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct), **self._same_reads(same)})}:",
 				f"\t\t\tfound.append(self.MSG_{py_name(when.name).upper()})",
 			])
 		lines.append("\t\treturn found")
