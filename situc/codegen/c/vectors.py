@@ -341,12 +341,45 @@ def _nested_of(resolved: ResolvedSchema, struct: str,
 
 	head, rest = path.split(".", 1)
 	found = resolved.find(f"{struct}.{head}")
+	if found is not None and found.placement.kind == "variant" \
+			and "." in rest:
+		# A variant's arm, `authenticator.sha1.key_id`: the arm is the
+		# nested struct, reached through its own view as any member's is,
+		# and no vector could name a field past a discriminant before.
+		arm, rest = rest.split(".", 1)
+		head = f"{head}.{arm}"
+		found = resolved.find(f"{struct}.{head}")
 	if found is None or found.placement.scalar is not None:
 		return None
 	inner = found.placement.type_name or ""
 	if resolved.find_struct(inner) is None:
 		return None
 	return head, inner, rest
+
+
+def vector_steps(resolved: ResolvedSchema, struct: str,
+		path: str) -> list[str]:
+	"""A vector path as the accessor steps that reach it: each member, and
+	a variant's arm as ONE step, `authenticator.sha1`, since an arm is read
+	through the struct's `<variant>_<arm>` accessor rather than through
+	the variant (26.1125's vectors were the first to name one)."""
+	parts = path.split(".")
+	steps: list[str] = []
+	at = 0
+	while at < len(parts):
+		step = parts[at]
+		found = resolved.find(f"{struct}.{step}")
+		if (found is not None and found.placement.kind == "variant"
+				and at + 2 < len(parts)):
+			step = f"{step}.{parts[at + 1]}"
+			found = resolved.find(f"{struct}.{step}")
+			at += 1
+		steps.append(step)
+		inner = found.placement.type_name if found is not None else None
+		if inner and resolved.find_struct(inner) is not None:
+			struct = inner
+		at += 1
+	return steps
 
 
 def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
@@ -362,15 +395,21 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 	nested = _nested_of(resolved, case.struct, path)
 	if nested is not None:
 		member, inner, rest = nested
+		# A name per level. Each level was `sub`, so two levels down --
+		# `packet.transmit.fraction` -- the inner declaration shadowed the
+		# outer and `transmit_view(sub, &sub)` read the uninitialised one:
+		# the suite crashed rather than compared (found adding NTP's
+		# datagram vectors, the first to name a field two structs deep).
+		sub = "sub" if held == "view" else f"{held}_in"
 		return [
 			"\t{",
-			"\t\tsitu_view_t sub;",
+			f"\t\tsitu_view_t {sub};",
 			"",
 			f"\t\tsitu_check_eq({ident(prefix, case.struct, member, 'view')}"
-			f"({held}, &sub), SITU_OK);",
+			f"({held}, &{sub}), SITU_OK);",
 			*[f"\t{line}" for line in
 			  _expectation_lines(resolved, Case(inner, case.name, b""),
-			                     rest, value, prefix, "sub")],
+			                     rest, value, prefix, sub)],
 			"\t}",
 		]
 

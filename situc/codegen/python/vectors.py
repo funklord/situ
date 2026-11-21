@@ -33,7 +33,7 @@ from situc import __version__, ast
 from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_only_arguments, refuse_parameters,
                            tally)
-from situc.codegen.c.vectors import Case, _check, _symbol
+from situc.codegen.c.vectors import Case, _check, _symbol, vector_steps
 from situc.codegen.python.emit import py_name
 from situc.resolve import ResolvedSchema
 
@@ -195,16 +195,16 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 			# is what makes a FAILURE print the bytes rather than
 			# `<memory at 0x...>`. Section 17 again.
 			lines.append(
-				f"\t\tself.assertEqual(bytes({_chain(path)}),"
+				f"\t\tself.assertEqual(bytes({_chain(resolved, case.struct, path)}),"
 				f" bytes.fromhex(\"{raw.hex()}\"), \"{path}\")")
 			continue
 		lines.append(
-			f"\t\tself.assertEqual({_chain(path)}, {literal},"
+			f"\t\tself.assertEqual({_chain(resolved, case.struct, path)}, {literal},"
 			f" \"{path}\")")
 	return lines
 
 
-def _chain(path: str) -> str:
+def _chain(resolved: ResolvedSchema, struct: str, path: str) -> str:
 	"""`head.magic` as `view.head.magic`.
 
 	A nested struct's accessor is a property returning its own view, so the
@@ -214,4 +214,5 @@ def _chain(path: str) -> str:
 	Python backend's and a part that needed it would otherwise name
 	something that does not exist.
 	"""
-	return "view." + ".".join(py_name(part) for part in path.split("."))
+	return "view." + ".".join(py_name(part)
+	                          for part in vector_steps(resolved, struct, path))

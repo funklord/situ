@@ -68,7 +68,8 @@ ntp_packet server_reply 24 02 06 E9 00 00 12 34 00 00 56 78 47 50 53 00 EC 3E D9
 # 7.3's authenticator -- none, a key identifier and an MD5 digest, or a key
 # identifier and a SHA-1 digest -- told apart by length alone. The key ids
 # and digests are placeholders, not a real MAC: what these hold the four
-# backends to is reading each length as its own shape.
+# backends to is reading each length as its own shape, and the key id
+# through the arm that length selects.
 
 ntp_datagram unauthenticated 24 02 06 E9 00 00 12 34 00 00 56 78 47 50 53 00 EC 3E D9 F0 00 00 00 00 EC 3E DB 80 80 00 00 00 EC 3E DB 81 00 00 00 00 EC 3E DB 81 40 00 00 00
 	packet.stratum = 2
@@ -77,7 +78,9 @@ ntp_datagram unauthenticated 24 02 06 E9 00 00 12 34 00 00 56 78 47 50 53 00 EC 
 ntp_datagram md5 24 02 06 E9 00 00 12 34 00 00 56 78 47 50 53 00 EC 3E D9 F0 00 00 00 00 EC 3E DB 80 80 00 00 00 EC 3E DB 81 00 00 00 00 EC 3E DB 81 40 00 00 00 00 00 00 07 A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 AA AB AC AD AE AF
 	packet.stratum = 2
 	packet.transmit.fraction = 0x40000000
+	authenticator.md5.key_id = 7
 
 ntp_datagram sha1 24 02 06 E9 00 00 12 34 00 00 56 78 47 50 53 00 EC 3E D9 F0 00 00 00 00 EC 3E DB 80 80 00 00 00 EC 3E DB 81 00 00 00 00 EC 3E DB 81 40 00 00 00 00 00 00 09 C0 C1 C2 C3 C4 C5 C6 C7 C8 C9 CA CB CC CD CE CF D0 D1 D2 D3
 	packet.stratum = 2
 	packet.transmit.fraction = 0x40000000
+	authenticator.sha1.key_id = 9

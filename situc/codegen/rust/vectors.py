@@ -34,7 +34,8 @@ from situc import __version__, ast
 from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_only_arguments, refuse_parameters,
                            tally)
-from situc.codegen.c.vectors import Case, _check, _symbol
+from situc.codegen.c.names import c_name
+from situc.codegen.c.vectors import Case, _check, _symbol, vector_steps
 from situc.codegen.rust.emit import _ident, _pascal
 from situc.resolve import ResolvedSchema
 
@@ -299,7 +300,7 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 			# returns `&[u8]` and an array literal is `[u8; N]`, which do
 			# not compare directly.
 			lines.append(
-				f"\t\tassert_eq!({_reach(path, case)}, &[{body}][..],"
+				f"\t\tassert_eq!({_reach(resolved, path, case)}, &[{body}][..],"
 				f" \"{path}\");")
 			continue
 
@@ -323,12 +324,12 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 		# the C name function knows nothing about. `test/schema/header` has
 		# one, and it was the last of eight schemas this broke.
 		lines.append(
-			f"\t\tassert_eq!({_reach(path, case)}, {right},"
+			f"\t\tassert_eq!({_reach(resolved, path, case)}, {right},"
 			f" \"{path}\");")
 	return lines
 
 
-def _reach(path: str, case: Case) -> str:
+def _reach(resolved: ResolvedSchema, path: str, case: Case) -> str:
 	"""`head.magic` as `view.head().expect(..).magic()`.
 
 	A nested struct's accessor returns `Result<Inner>`, so each step but the
@@ -341,9 +342,9 @@ def _reach(path: str, case: Case) -> str:
 	a bounds check per level is what section 12.3 asks for -- and "`one`
 	failed" would not say which level.
 	"""
-	parts = path.split(".")
+	parts = vector_steps(resolved, case.struct, path)
 	reached = "view"
 	for step in parts[:-1]:
-		reached += (f".{_ident(step)}()"
+		reached += (f".{_ident(c_name(step))}()"
 		            f".expect(\"`{case.struct}.{step}` must be reachable\")")
 	return f"{reached}.{_ident(parts[-1])}()"

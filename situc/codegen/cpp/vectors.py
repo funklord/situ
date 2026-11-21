@@ -28,7 +28,7 @@ from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_only_arguments, refuse_parameters,
                            tally)
 from situc.codegen.c.names import c_name
-from situc.codegen.c.vectors import Case, _check, _symbol
+from situc.codegen.c.vectors import Case, _check, _symbol, vector_steps
 from situc.codegen.cpp.emit import ctype
 from situc.resolve import ResolvedSchema
 
@@ -192,7 +192,7 @@ def _reach(resolved: ResolvedSchema, case: Case,
 	is what section 12.3 asks for -- and "`one` failed" would not say
 	which.
 	"""
-	parts = path.split(".")
+	parts = vector_steps(resolved, case.struct, path)
 	if len(parts) == 1:
 		return ([], "view", parts[0])
 
