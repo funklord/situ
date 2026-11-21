@@ -241,6 +241,12 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   left at that, since an always-inline `check` trades the size the
   build rules ask for.
 
+- 20261121T1000Z: fuzznet answered 26.1123's three review points (its
+  record's last section): a stride, not a total, set by the first non-last
+  piece, a last piece arriving first held until one does; no erasure on
+  the table; `missing` as capped `(first, count)` ranges. It adopts
+  `_track_key_from` and the setting's per-arm builders.
+
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
 without huge dependencies kept, and the pertinent code shared:
