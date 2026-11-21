@@ -1235,6 +1235,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
 		parsed = parse(source)
 		files.update(_converse(parsed, resolved, args))
 		files.update(_replay(parsed, resolved, args, ungenerated))
+		files.update(_reassemble(parsed, resolved, args, ungenerated))
 		for name, why in _backend_module(
 				"converse", args.target).refusals(parsed, resolved):
 			print(f"situc: no conversation table for `{name}`: {why}",
@@ -1866,6 +1867,28 @@ def _replay(schema: ast.Schema, resolved: ResolvedSchema,
 	if args.target == "rust":
 		return replay_rs.generate(schema, resolved, args.schema.stem)
 	return replay_c.generate(schema, resolved, args.schema.stem, args.prefix)
+
+
+def _reassemble(schema: ast.Schema, resolved: ResolvedSchema,
+		args: argparse.Namespace,
+		ungenerated: list[tuple[str, str]]) -> dict[str, str]:
+	"""Reassembly tables (26.1123). C writes them; the other three say they
+	do not yet, by name, rather than leaving the declaration silent."""
+	from situc.codegen.c import reassemble as reassemble_c
+
+	if args.target != "c":
+		for held in schema.reassemblies():
+			print(f"situc: no reassembly table for `{held.name}`: the "
+			      f"{args.target} backend has none yet (26.1123)",
+			      file=sys.stderr)
+			ungenerated.append((held.name, "reassembly"))
+		return {}
+	for name, why in reassemble_c.refusals(schema, resolved):
+		print(f"situc: no reassembly table for `{name}`: {why}",
+		      file=sys.stderr)
+		ungenerated.append((name, "reassembly"))
+	return reassemble_c.generate(schema, resolved, args.schema.stem,
+	                             args.prefix)
 
 
 def _relate(schema: ast.Schema, resolved: ResolvedSchema,

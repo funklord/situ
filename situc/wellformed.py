@@ -64,6 +64,7 @@ def check(schema: ast.Schema) -> None:
 	check_codec_bindings(schema)
 	check_tag_coverage(schema)
 	check_replays(schema)
+	check_reassemblies(schema)
 	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
 	check_authenticated_regions_hold_something(schema)
@@ -1852,6 +1853,71 @@ def check_replays(schema: ast.Schema) -> None:
 				            said[key].span, label="here")
 
 
+def check_reassemblies(schema: ast.Schema) -> None:
+	"""A reassembly states where a piece sits and every bound, and keys a
+	message by a relation over two of the datagram it reads (26.1123).
+
+	Every bound is required rather than defaulted: what is held in flight
+	is exactly what an attacker opening messages and never finishing them
+	gets to spend, so situ supplies no number for it."""
+	structs   = {decl.name for decl in schema.structs()}
+	relations = {decl.name: decl for decl in schema.relations()}
+	from situc.relation import paths_in
+	for held in schema.reassemblies():
+		said  = {attr.name: attr for attr in held.attrs}
+		where = held.span
+		if held.param.type_name not in structs:
+			raise error(f"`{held.name}` reads a `{held.param.type_name}`, "
+			            "which is not a struct of this schema", where,
+			            label="here")
+		relation = relations.get(held.relation)
+		if relation is None:
+			raise error(f"`{held.name}` is keyed `by {held.relation}`, which is "
+			            "not a relation of this schema", where, label="here")
+		if any(param.type_name != held.param.type_name
+		       for param in relation.params):
+			raise error(
+				f"`{held.relation}` is not a relation between two "
+				f"`{held.param.type_name}`", where, label="here",
+				notes=["a reassembly holds each later piece to the first with "
+				       "the relation's own `must`s, so both of its messages "
+				       "are the datagram the pieces arrive in"])
+		missing = [key for key in ("index", "count", "piece", "messages",
+		                           "bytes", "timeout") if key not in said]
+		if missing:
+			raise error(
+				f"`{held.name}` states no `{missing[0]}`", where,
+				label=f"`{missing[0]}` is missing",
+				notes=["situ supplies no number for what is held in flight: "
+				       "it is what a sender who never finishes a message gets "
+				       "to spend"] if missing[0] in ("messages", "bytes",
+				                                     "timeout") else [])
+		for key in ("index", "count", "piece"):
+			value = said[key].value
+			paths = paths_in(value) if value is not None else []
+			if len(paths) != 1 or "." not in paths[0] \
+					or paths[0].split(".")[0] != held.param.name:
+				raise error(f"`{key}` names a field of `{held.param.name}`, "
+				            f"as `{held.param.name}.field`", said[key].span,
+				            label="here")
+		for key, (low, high) in {"messages": (1, 1 << 16),
+		                         "bytes": (1, 1 << 31),
+		                         "timeout": (1, (1 << 63) - 1)}.items():
+			value = getattr(said[key].value, "value", None)
+			if not isinstance(value, int) or not low <= value <= high:
+				raise error(f"`{key}` is a number from {low} to {high}",
+				            said[key].span, label="here")
+		if "unit" in said and getattr(said["unit"].value, "name", None) \
+				not in REPLAY_UNITS:
+			raise error(f"`unit` is one of {', '.join(sorted(REPLAY_UNITS))}",
+			            said["unit"].span, label="here")
+		unknown = sorted(set(said) - {"index", "count", "piece", "messages",
+		                              "bytes", "timeout", "unit"})
+		if unknown:
+			raise error(f"unknown attribute `{unknown[0]}` on a reassembly",
+			            said[unknown[0]].span, label="here")
+
+
 def check_relations(schema: ast.Schema) -> None:
 	"""A relation is two named views and what must hold between them (26.95).
 
@@ -2802,6 +2868,20 @@ RELATION_ONLY_ATTRS = {
 	              "matched behind (26.1122)",
 }
 
+#: Read from a `replay`, a `reassemble` or an `identify` declaration and
+#: never from a member, which is where each says it belongs.
+DECLARATION_ONLY_ATTRS = {
+	**{name: "a `replay` window, whose form it states (26.1120)"
+	   for name in ("counter", "window", "expires", "capacity", "ahead",
+	                "expiry")},
+	"unit": "a `replay` window or a `reassemble`, whose clock it names",
+	**{name: "a `reassemble`, which places a piece and bounds what it holds "
+	         "(26.1123)"
+	   for name in ("index", "count", "piece", "messages", "bytes",
+	                "timeout")},
+	"media": "an `identify`, which answers with it (26.1124)",
+}
+
 #: Attributes whose own check runs only on the member kind that READS them,
 #: so a member of any other kind escapes every one of them. Each value is the
 #: kinds that can reach the reader, and the sentence naming where it belongs.
@@ -2864,6 +2944,13 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 
 	if attr.name in RELATION_ONLY_ATTRS:
 		return RELATION_ONLY_ATTRS[attr.name]
+
+	# A replay window's, a reassembly's and an identification's own words,
+	# read off that declaration and nowhere else: on a member nothing read
+	# them, so `[window = 3]` and `[count = 2]` were accepted and ignored.
+	# `nonce` is a sealed region's too, and stays theirs.
+	if attr.name in DECLARATION_ONLY_ATTRS:
+		return DECLARATION_ONLY_ATTRS[attr.name]
 
 	# `[on_read = clear]` and `[on_write = trigger]` are SystemRDL side
 	# effects: `_read_effect` and `_side_effect` read them, and a bus is what

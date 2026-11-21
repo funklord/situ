@@ -1983,6 +1983,28 @@ class RelationParam(Node):
 
 
 @dataclass(frozen=True)
+class Reassemble(Decl):
+	"""`reassemble pieces(f: frame) by same_message [index = f.head.index,
+	count = f.head.chunks, piece = f.body, messages = 8, bytes = 65536,
+	timeout = 30000, unit = ms];`
+
+	One message from many datagrams (26.1123). The relation's equalities
+	are the key that says which pieces belong together; `index` and
+	`count` place a piece; `piece` is the bytes it carries; `messages` and
+	`bytes` bound what is in flight; `timeout` drops a message whose pieces
+	stopped coming. Every piece but the last is one stride long, the last
+	no longer, and the stride is set by the first non-last piece to
+	arrive (fuzznet's review, inbox 20261121T1000Z).
+	"""
+
+	span: Span
+	name: str
+	param: "RelationParam"
+	relation: str
+	attrs: tuple[Attr, ...] = ()
+
+
+@dataclass(frozen=True)
 class Evidence(Node):
 	"""One line of an `identify`: `sufficient f.signature;`,
 	`required f.first.kind == ihdr;`, `supporting extension "png";`.
@@ -2125,6 +2147,9 @@ class Schema(Node):
 
 	def replays(self) -> list[Replay]:
 		return [decl for decl in self.decls if isinstance(decl, Replay)]
+
+	def reassemblies(self) -> list[Reassemble]:
+		return [decl for decl in self.decls if isinstance(decl, Reassemble)]
 
 	def requirements(self) -> list[Requirement]:
 		return [decl for decl in self.decls if isinstance(decl, Requirement)]

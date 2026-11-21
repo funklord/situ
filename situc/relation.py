@@ -735,7 +735,13 @@ KEY_BITS = 64
 #: WireGuard static keys at 32, QUIC connection ids at 20 -- and it exists so
 #: a schema cannot draft a kilobyte of payload into the slot table. A protocol
 #: that outgrows it moves it the way 0042 moved KEY_BITS: by its own record.
-KEY_MAX_BYTES = 32
+#:
+#: 32 -> 64 by 26.1123: fuzznet keys a message's pieces by its sender's
+#: 32-byte static key, the message number and the piece count, 38 bytes,
+#: and reassembly is keyed by exactly that relation. 64 holds a 32-byte key
+#: beside another, or beside the identifiers a key is paired with, and
+#: still keeps a payload out of the slot table.
+KEY_MAX_BYTES = 64
 
 
 def keykey_width(resolved: ResolvedSchema, bind: Read) -> int:

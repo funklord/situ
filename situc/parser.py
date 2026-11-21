@@ -155,6 +155,7 @@ DECLARATION_KEYWORDS = frozenset({
 	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
 	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
 	"impl", "require", "assert", "invariant", "when", "relation", "replay",
+	"reassemble",
 	"identify",
 	"policy", "registry",
 })
@@ -189,6 +190,12 @@ REPLAY_ATTRIBUTES = frozenset({
 	"expiry",
 })
 
+#: A reassembly's attributes (26.1123): where a piece sits, its bytes, and
+#: the bounds on what is in flight. Each takes a value.
+REASSEMBLE_ATTRIBUTES = frozenset({
+	"index", "count", "piece", "messages", "bytes", "timeout",
+})
+
 #: An `identify`'s attributes (26.1124): the media type it answers with.
 IDENTIFY_ATTRIBUTES = frozenset({"media"})
 
@@ -203,6 +210,7 @@ TEXT_HEURISTICS = ("utf8", "ascii", "csv", "json")
 ATTRIBUTE_NAMES = frozenset({
 	# 26.1120: a replay window's form and its state's size
 	*REPLAY_ATTRIBUTES,
+	*REASSEMBLE_ATTRIBUTES,
 	# 26.1124: the media type a recognised format answers with
 	*IDENTIFY_ATTRIBUTES,
 	# section 8.2 - 8.6: layout and representation
@@ -294,6 +302,7 @@ ATTRIBUTE_NAMES = frozenset({
 #: lone `[escape]` means something, and so does a lone `[secret]`.
 VALUE_ATTRIBUTES = frozenset({
 	*REPLAY_ATTRIBUTES,
+	*REASSEMBLE_ATTRIBUTES,
 	*IDENTIFY_ATTRIBUTES,
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "after", "must_eq", "encoding", "endian", "bit_order",
@@ -682,6 +691,7 @@ class Parser:
 			"when":		self.parse_when,
 			"relation":	self.parse_relation,
 			"replay":	self.parse_replay,
+			"reassemble":	self.parse_reassemble,
 			"identify":	self.parse_identify,
 			"policy":	self.parse_policy,
 			"registry":	self.parse_registry,
@@ -3628,6 +3638,33 @@ class Parser:
 		attrs = self.parse_attrs()
 		self.expect_symbol(";", "after the replay window")
 		return ast.Replay(self.span_from(start), name.text, param, attrs)
+
+	def parse_reassemble(self) -> ast.Reassemble:
+		"""`reassemble pieces(f: frame) by same_message [index = ..., ...];`
+
+		One parameter, the datagram a piece arrives in; `by` and the
+		relation whose equalities key a message; the attributes place a
+		piece and bound what is held (26.1123)."""
+		start = self.advance()
+		name  = self.expect_ident("a reassembly's name")
+		self.expect_symbol("(", "after the reassembly's name")
+		param = self.parse_relation_param()
+		self.expect_symbol(")", "after the reassembly's parameter")
+		if not self.current.is_ident("by"):
+			raise error(
+				"expected `by` and the relation that keys a message",
+				self.current.span,
+				label = "expected `by`",
+				notes = ["`reassemble pieces(f: frame) by same_message [...]`:"
+				         " the relation's equalities say which pieces are of "
+				         "one message (26.1123)"],
+			)
+		self.advance()
+		relation = self.expect_ident("the relation that keys a message")
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the reassembly")
+		return ast.Reassemble(self.span_from(start), name.text, param,
+		                      relation.text, attrs)
 
 	def parse_identify(self) -> ast.Identify:
 		"""`identify png(f: png_head) [media = "image/png"] { ... }`

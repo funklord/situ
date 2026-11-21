@@ -66,6 +66,7 @@ decl		= namespace_decl
 	| when_decl
 	| relation_decl
 	| replay_decl
+	| reassemble_decl
 	| identify_decl
 	| impl_decl
 	| varint_decl
@@ -307,6 +308,10 @@ must		= "must" expr ";" ;
 (* Which messages a receiver accepts once (26.1120): a counter window or a
  * nonce set, the attributes deciding which. *)
 replay_decl	= "replay" ident "(" param ")" attrs ";" ;
+
+(* One message from many datagrams (26.1123): pieces keyed by a relation,
+   placed by an index of a count, every bound stated. *)
+reassemble_decl	= "reassemble" ident "(" param ")" "by" ident attrs ";" ;
 
 (* How a file is recognised as this format (26.1124): evidence over a
  * struct at the start of the file, each line worth what its role says. *)

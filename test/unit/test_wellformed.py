@@ -979,6 +979,9 @@ def test_every_attribute_is_accounted_for() -> None:
 	#                    attributes taken together, one form or the other,
 	#                    and a position table placing each alone could not
 	#                    say "one form whole" (26.1120).
+	#   index ... timeout `check_reassemblies` -- where a piece sits and the
+	#                    bounds on what is in flight, held to that
+	#                    declaration's own list (26.1123).
 	#   media            `identify.recognisers` -- the media type a recognised
 	#                    format answers with, read where the evidence is
 	#                    compiled and nowhere else (26.1124).
@@ -986,11 +989,13 @@ def test_every_attribute_is_accounted_for() -> None:
 	#                    reply is matched behind, read off the relation and
 	#                    refused on a member as the timing attributes are
 	#                    (26.1122).
-	from situc.parser import IDENTIFY_ATTRIBUTES, REPLAY_ATTRIBUTES
+	from situc.parser import (IDENTIFY_ATTRIBUTES, REASSEMBLE_ATTRIBUTES,
+	                          REPLAY_ATTRIBUTES)
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries", "resend_ms",
 	             "resend_part_ms", "retries_part", "after", "align",
 	             "bits", "since", "require_aligned", "stream", "tag_order",
-	             *REPLAY_ATTRIBUTES, *IDENTIFY_ATTRIBUTES}
+	             *REPLAY_ATTRIBUTES, *REASSEMBLE_ATTRIBUTES,
+	             *IDENTIFY_ATTRIBUTES}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
 	         | set(wellformed.UNIMPLEMENTED_ATTRS))
@@ -3710,10 +3715,13 @@ def test_every_ast_node_that_carries_attributes_is_one_the_walk_reaches()\
 	# refuses against, rather than the member vocabulary above (0070).
 	# `Replay` carries its own vocabulary too, `parser.REPLAY_ATTRIBUTES`,
 	# which `check_replays` refuses against as a whole form (26.1120); an
-	# unknown name on it is still refused by `check_attribute_names`.
+	# unknown name on it is still refused by `check_attribute_names`. And
+	# `Reassemble`, `parser.REASSEMBLE_ATTRIBUTES`, which
+	# `check_reassemblies` holds to its own list (26.1123).
 	assert bearing == {
 		"Authenticated", "Coded", "Field", "MarkerField", "Opaque", "Pad",
-		"Identify", "RegistryEntry", "Relation", "Replay", "Reserved",
+		"Identify", "Reassemble", "RegistryEntry", "Relation", "Replay",
+		"Reserved",
 		"Sealed", "StructDecl", "TagField", "Tlv", "Variant",
 	}, f"the attribute-bearing nodes have moved: {sorted(bearing)}"
 

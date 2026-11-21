@@ -120,6 +120,11 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		        *[_indent(depth + 1, evidence_to_source(line))
 		          for line in decl.evidence]]
 
+	if isinstance(decl, ast.Reassemble):
+		return [_indent(depth, f"reassemble {decl.name}({decl.param.name}: "
+		                       f"{decl.param.type_name}) by {decl.relation}"),
+		        *_attrs(decl.attrs, depth + 1)]
+
 	if isinstance(decl, ast.Replay):
 		return [_indent(depth, f"replay {decl.name}({decl.param.name}: "
 		                       f"{decl.param.type_name})"),

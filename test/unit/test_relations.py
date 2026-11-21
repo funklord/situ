@@ -1325,18 +1325,19 @@ def test_a_key_wider_than_a_packed_word_is_exact_bytes() -> None:
 
 
 def test_a_key_past_the_ceiling_is_refused_with_the_reason() -> None:
-	"""The ceiling is 32 bytes -- a named number covering every identifier
-	14.8 lists -- and past it the refusal keeps the collision argument:
+	"""The ceiling is 64 bytes -- a named number covering every identifier
+	14.8 lists, and since 26.1123 a 32-byte static key beside what it is
+	paired with -- and past it the refusal keeps the collision argument:
 	hashing down would make two exchanges that collided indistinguishable.
 	A key that outgrows it moves the ceiling by its own record."""
 	schema = parse_text(
 		"target buffer;\nendian big;\n\n"
-		"struct wf {\n\tu8 huge[40];\n\tu8 kind;\n}\n\n"
+		"struct wf {\n\tu8 huge[72];\n\tu8 kind;\n}\n\n"
 		"relation vast(p: wf, q: wf) {\n\tmust q.huge == p.huge;\n}\n")
 	resolved = resolve(schema, solve(schema))
 
 	reason = dict(converse.refusals(schema, resolved))["vast"]
-	assert "40 bytes" in reason and "ceiling is 32" in reason
+	assert "72 bytes" in reason and "ceiling is 64" in reason
 	assert "indistinguishable" in reason
 	assert len(reason) < 300, f"{len(reason)} bytes of diagnostic"
 

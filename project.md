@@ -245,7 +245,10 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   record's last section): a stride, not a total, set by the first non-last
   piece, a last piece arriving first held until one does; no erasure on
   the table; `missing` as capped `(first, count)` ranges. It adopts
-  `_track_key_from` and the setting's per-arm builders.
+  `_track_key_from` and the setting's per-arm builders. Built for C:
+  `reassemble NAME(p: T) by REL [...]` and `<stem>_reassemble.h` (26.1123's
+  last section); the key ceiling moved 32 -> 64 for its 38-byte key. Python,
+  Rust and C++ say they have none yet.
 
 **Run 8 (2026-11-20), the editor's frontends as the siblings' (26.1113)**
 -- the holder asked for the GUI/TUI "like the other projects", a TUI
@@ -910,6 +913,7 @@ decl          = namespace_decl | const_decl | enum_decl | tokens_decl
               | struct_decl | endian_marker_decl | codec_decl
               | register_decl | register_block_decl | requirement
               | invariant | when_decl | relation_decl | replay_decl
+              | reassemble_decl
               | identify_decl
               | impl_decl | varint_decl | pipeline_decl
               | policy_decl | registry_decl ;
@@ -1115,6 +1119,10 @@ must          = "must" expr ";" ;
 (* Which messages a receiver accepts once (26.1120): a counter window or a
    nonce set, the attributes deciding which. *)
 replay_decl   = "replay" ident "(" param ")" attrs ";" ;
+
+(* One message from many datagrams (26.1123): pieces keyed by a relation,
+   placed by an index of a count, every bound stated. *)
+reassemble_decl = "reassemble" ident "(" param ")" "by" ident attrs ";" ;
 
 (* How a file is recognised as this format (26.1124): evidence over a
    struct at the start of the file, each line worth what its role says. *)

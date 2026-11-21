@@ -476,7 +476,14 @@ unit = ms]` a set of nonces until they expire, in a table the caller sizes
 asked of the caller per message, where the rule is the consumer's. Each generates a pure
 `check` to ask before the tag -- a replay costs no decryption -- and a
 `record` to ask after it, so a forgery records nothing; the state is the
-caller's.
+caller's. And one message sent as many datagrams is put back together by
+`reassemble pieces(f: frame) by same_message [index = f.head.index, count =
+f.head.chunks, piece = f.body, messages = 8, bytes = 65536, timeout = 30000]`:
+the relation's equalities say which pieces are one message, every piece but
+the last is one stride long, the stride is never taken from the last piece
+(whoever sends it would choose the layout), the bounds on what is held are
+stated rather than defaulted, and what is still missing comes back as ranges
+for a re-request. C writes the table today.
 
 ## The language
 

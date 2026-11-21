@@ -226,6 +226,11 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 		        *[f"\t{evidence_to_source(line)};" for line in decl.evidence],
 		        "}"]
 
+	if isinstance(decl, ast.Reassemble):
+		return [f"reassemble {decl.name}({decl.param.name}: "
+		        f"{decl.param.type_name}) by {decl.relation}"
+		        f"{_attrs_to_source(decl.attrs)};"]
+
 	if isinstance(decl, ast.Replay):
 		return [f"replay {decl.name}({decl.param.name}: "
 		        f"{decl.param.type_name}){_attrs_to_source(decl.attrs)};"]
