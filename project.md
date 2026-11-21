@@ -216,7 +216,12 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   -- `ntp_datagram` has none either. (2) `wire --check` calls moving the
   last two members into the 65-byte arm BREAKING ("everything after them
   shifts"); a ranked setting's bytes are identical. (3) The enum/field
-  macro-collision warning saved it a quiet collision.
+  macro-collision warning saved it a quiet collision. Answered: (1) the
+  builders exist, one per arm, `<struct>_build_<arm>` -- it found the arm
+  structs' own `<arm struct>_build` and took them for those; their comment
+  now says a length-selected arm writes no discriminant. (2) Fixed: members
+  that one `case` arm reproduces at the variant's offset compare as that
+  arm, and the change reads backward-compatible.
 - 20261121T0800Z (its sec 1344): OPEN, performance. Its signed record
   opened through the generated view and `check` costs 21-24 ns against
   7.5 ns by hand at -Os (20.8 against 5.9 at -O2), 20 million opens: 49%

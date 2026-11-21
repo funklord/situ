@@ -1169,10 +1169,82 @@ def _compare(before: str, after: str) -> Verdict:
 			findings.append(Finding("breaking", name,
 			                        "struct removed; an old peer still sends it"))
 			continue
+		moved = _into_a_length_arm(name, old, new, new_structs)
+		if moved is not None:
+			new, finding = moved
+			findings.append(finding)
 		findings.extend(_compare_struct(name, old, new))
 
 	findings.extend(_compare_registries(before, after))
 	return Verdict(findings)
+
+
+def _into_a_length_arm(name: str, old: list[str], new: list[str],
+		structs: dict[str, list[str]]
+		) -> tuple[list[str], Finding] | None:
+	"""Members that moved into a `switch (remaining)` arm (26.1125), or None.
+
+	fuzznet's setting ended `u8 rank; u8 signature[64]`; its new contract
+	ends in `variant tail switch (remaining)` whose `case 65` arm holds
+	exactly those two, and its default arm the signature alone. Read
+	member by member it was BREAKING -- "removed rank ... everything after
+	them shifts" -- while a ranked setting's bytes are identical (inbox
+	20261121T0700Z). So where the old struct's trailing members are one
+	case arm's members at the variant's offset, the comparison reads that
+	arm in the variant's place, and the finding is the one thing that did
+	change: the struct now admits shapes the old one did not, which a new
+	receiver reads and an old one refuses.
+	"""
+	members = [line for line in new[1:] if not _is_annotation(line)]
+	if not members or members[-1].split()[2:3] != ["variant"]:
+		return None
+	variant = _name_of(members[-1])
+	if f"{variant} switch: remaining" not in new:
+		return None
+	where = members[-1].split()[0]
+	if not where.startswith("@0x"):
+		return None
+	base = int(where[1:], 16)
+	before = [line for line in old[1:] if not _is_annotation(line)]
+	tail = before[len(members) - 1:]
+	if not tail or [_name_of(line) for line in before[:len(members) - 1]] \
+			!= [_name_of(line) for line in members[:-1]]:
+		return None
+	for line in new:
+		head, _, arm = line.partition(": ")
+		if not head.startswith(f"{variant} case ") or head.endswith("default"):
+			continue
+		words = arm.split()
+		if len(words) != 2 or words[1] not in structs:
+			continue
+		rebased = []
+		for member in structs[words[1]][1:]:
+			if _is_annotation(member):
+				continue
+			at, _, rest = member.partition(" ")
+			if not at.startswith("@0x"):
+				break
+			rebased.append(f"@0x{base + int(at[1:], 16):04x} {rest}")
+		else:
+			if rebased == tail:
+				others = sorted({line.partition(": ")[2].split()[0]
+				                 for line in new
+				                 if line.startswith(f"{variant} case ")
+				                 and line.partition(": ")[2].split()[0]
+				                 != words[0]} - {"error"})
+				# The variant's own annotations go with it: the struct it
+				# is compared against never had them.
+				return ([new[0], *members[:-1], *tail,
+				         *[line for line in new[1:] if _is_annotation(line)
+				           and not line.startswith(f"{variant} ")]],
+				        Finding(
+					"backward", name,
+					f"{', '.join(_name_of(line) for line in tail)} moved into "
+					f"`{variant}`'s `case {head.split()[-1]}` arm `{words[0]}` at "
+					f"the same bytes; the frame's length now also admits "
+					f"{', '.join(others) or 'no other arm'}, which an old "
+					f"receiver was not written for"))
+	return None
 
 
 #: Each side's enums as `{enum: {arm: value}}`, for the comparison under way;

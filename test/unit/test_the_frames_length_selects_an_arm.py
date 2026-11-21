@@ -183,3 +183,47 @@ def test_each_arms_builder_writes_its_length(tmp_path: Path) -> None:
 	ran = subprocess.run([str(tmp_path / "b")], capture_output=True,
 	                     text=True, timeout=30)
 	assert ran.returncode == 0 and ran.stdout.strip() == "built", ran.returncode
+
+
+OLD_SETTING = """target buffer;
+endian big;
+struct setting { u16 key; u8 rank; u8 signature[64]; }
+"""
+
+NEW_SETTING = """target buffer;
+endian big;
+struct ranked { u8 rank; u8 signature[64]; }
+struct unranked { u8 signature[64]; }
+struct setting {
+	u16 key;
+	variant tail switch (remaining) {
+		case 65: ranked   with_rank;
+		default: unranked without_rank;
+	}
+}
+"""
+
+
+def _wire(source: str) -> str:
+	from situc.wire import render
+	parsed = parse_text(source)
+	return render(parsed, resolve(parsed, solve(parsed)), "s.situ")
+
+
+def test_members_moved_into_a_length_arm_are_not_removed() -> None:
+	"""fuzznet (inbox 20261121T0700Z): the setting's last two members moved
+	into the 65-byte arm, every byte where it was, and `wire --check` said
+	BREAKING -- "removed rank ... everything after them shifts". What
+	changed is that a shorter shape is admitted too: backward-compatible."""
+	from situc.wire import compare
+	said = [(one.kind, one.subject)
+	        for one in compare(_wire(OLD_SETTING), _wire(NEW_SETTING)).findings]
+	assert ("backward", "setting") in said, said
+	assert not any(kind == "breaking" for kind, _ in said), said
+
+
+def test_an_arm_that_does_not_reproduce_them_still_breaks() -> None:
+	from situc.wire import compare
+	wider = OLD_SETTING.replace("u8 rank;", "u16 rank;")
+	said = compare(_wire(wider), _wire(NEW_SETTING)).findings
+	assert any(one.kind == "breaking" for one in said), said
