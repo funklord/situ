@@ -327,14 +327,18 @@ def test_a_sealed_piece_is_taken_through_its_gate(tmp_path: Path) -> None:
 	assert "sealed ok" in _run(tmp_path, SEALED, SEALED_PROGRAM, "s")
 
 
-def test_the_other_backends_say_they_have_none_yet(tmp_path: Path) -> None:
+def test_every_backend_writes_the_table(tmp_path: Path) -> None:
 	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
-	done = subprocess.run(
-		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
-		 "--target", "cpp", "--layer", "converse", "--out",
-		 str(tmp_path / "cpp")], cwd=ROOT, capture_output=True, text=True)
-	assert done.returncode == 0, done.stderr
-	assert "no reassembly table for `pieces`" in done.stderr
+	for target, name in (("c", "r_reassemble.h"), ("cpp", "r_reassemble.hpp"),
+	                     ("python", "r_reassemble.py"),
+	                     ("rust", "r_reassemble.rs")):
+		done = subprocess.run(
+			[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+			 "--target", target, "--layer", "converse", "--out",
+			 str(tmp_path / target)], cwd=ROOT, capture_output=True, text=True)
+		assert done.returncode == 0, done.stderr
+		assert (tmp_path / target / name).exists(), (target, done.stderr)
+		assert "no reassembly table" not in done.stderr, done.stderr
 
 
 def test_its_words_mean_nothing_on_a_member() -> None:
@@ -509,3 +513,146 @@ def test_rust_reassembles_alike(tmp_path: Path) -> None:
 	ran = subprocess.run([str(tmp_path / "m")], capture_output=True,
 	                     text=True, timeout=120)
 	assert ran.stdout.strip() == "rust ok", ran.stderr
+
+
+CXX = shutil.which("g++") or shutil.which("c++")
+
+CPP = r"""#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+#include "r_reassemble.hpp"
+#include "r_converse.hpp"
+
+static std::vector<std::uint8_t> frame(std::uint8_t who, std::uint32_t mid,
+		std::uint16_t ix, std::uint16_t n, const std::uint8_t *body,
+		std::uint16_t len)
+{
+	std::vector<std::uint8_t> b(18u + len, 0u);
+	std::memset(b.data(), who, 8);
+	for (unsigned i = 0; i < 4u; i++)
+		b[8u + i] = static_cast<std::uint8_t>(mid >> (24u - 8u * i));
+	b[12] = static_cast<std::uint8_t>(ix >> 8);
+	b[13] = static_cast<std::uint8_t>(ix);
+	b[14] = static_cast<std::uint8_t>(n >> 8);
+	b[15] = static_cast<std::uint8_t>(n);
+	b[16] = static_cast<std::uint8_t>(len >> 8);
+	b[17] = static_cast<std::uint8_t>(len);
+	if (len != 0u)
+		std::memcpy(b.data() + 18, body, len);
+	return b;
+}
+
+static ::situ::rt::err add(::situ::pieces_table &t,
+		std::vector<std::uint8_t> &b, ::situ::rt::const_bytes &out)
+{
+	::situ::rt::message m(b.data(), static_cast<std::uint32_t>(b.size()));
+	::situ::piece_frame v;
+	if (::situ::piece_frame::at(m, 0u, static_cast<std::uint32_t>(b.size()),
+	                            v) != ::situ::rt::err::ok)
+		return ::situ::rt::err::bounds;
+	return t.add(v, 0u, out);
+}
+
+static const std::uint8_t *text(const char *s)
+{
+	return reinterpret_cast<const std::uint8_t *>(s);
+}
+
+int main()
+{
+	int fail = 0;
+	::situ::rt::const_bytes out;
+	auto *t = new ::situ::pieces_table();
+	auto f1 = frame(2, 8, 2, 3, text("IJ"), 2);
+	auto f2 = frame(2, 8, 1, 3, text("EFGH"), 4);
+	auto f3 = frame(2, 8, 0, 3, text("ABCD"), 4);
+	if (add(*t, f1, out) != ::situ::rt::err::truncated) fail |= 1;
+	if (add(*t, f2, out) != ::situ::rt::err::truncated) fail |= 2;
+	if (add(*t, f3, out) != ::situ::rt::err::ok || out.size() != 10u
+	    || std::memcmp(out.data(), "ABCDEFGHIJ", 10) != 0) fail |= 4;
+	auto bad = frame(4, 1, 3, 3, text("abcd"), 4);
+	if (add(*t, bad, out) != ::situ::rt::err::constraint) fail |= 64;
+	delete t;
+
+	t = new ::situ::pieces_table();
+	static const std::uint16_t held[] = {0u, 1u, 5u};
+	for (std::uint16_t ix : held) {
+		auto f = frame(5, 2, ix, 10, text("aa"), 2);
+		(void)add(*t, f, out);
+	}
+	std::uint8_t sender[8];
+	std::memset(sender, 5, 8);
+	std::uint8_t key[14];
+	::situ::same_message_table::key(2u, 10u, sender, key);
+	std::uint32_t first[8], count[8];
+	std::uint32_t n = t->missing(key, first, count, 8u, 2u);
+	if (n != 4u || first[0] != 2u || count[0] != 2u || first[3] != 8u
+	    || count[3] != 2u) fail |= 8;
+	if (t->expire(2999u) != 0u || t->expire(3000u) != 1u) fail |= 16;
+	delete t;
+
+	std::srand(1);
+	for (std::uint32_t round = 0; round < 500u; round++) {
+		std::uint16_t cnt = static_cast<std::uint16_t>(1 + std::rand() % 20);
+		std::uint16_t st = static_cast<std::uint16_t>(1 + std::rand() % 40);
+		std::uint16_t last = static_cast<std::uint16_t>(1 + std::rand() % st);
+		std::vector<std::uint8_t> whole(
+			static_cast<std::size_t>((cnt - 1) * st + last));
+		for (auto &x : whole) x = static_cast<std::uint8_t>(std::rand());
+		std::vector<std::uint16_t> order;
+		for (std::uint16_t i = 0; i < cnt; i++) order.push_back(i);
+		for (int d = 0; d < 5; d++)
+			order.push_back(static_cast<std::uint16_t>(std::rand() % cnt));
+		for (std::size_t i = order.size() - 1; i > 0; i--)
+			std::swap(order[i],
+			          order[static_cast<std::size_t>(std::rand()) % (i + 1)]);
+		t = new ::situ::pieces_table();
+		bool done = false;
+		for (auto ix : order) {
+			std::uint16_t len = ix == cnt - 1 ? last : st;
+			auto f = frame(1, round, ix, cnt,
+			               whole.data() + static_cast<std::size_t>(ix) * st, len);
+			::situ::rt::err e = add(*t, f, out);
+			if (e == ::situ::rt::err::ok) {
+				done = out.size() == whole.size()
+				       && std::memcmp(out.data(), whole.data(), whole.size()) == 0;
+				break;
+			}
+			if (e != ::situ::rt::err::truncated) break;
+		}
+		delete t;
+		if (!done) { fail |= 32; break; }
+	}
+	std::printf("fail=%d\n", fail);
+	return fail;
+}
+"""
+
+
+@pytest.mark.skipif(CXX is None or COMPILER is None, reason="needs C and C++")
+def test_cpp_reassembles_alike(tmp_path: Path) -> None:
+	"""The same table in C++, allocating nothing: `add` answers `err::ok`
+	with the message, `err::truncated` while more is wanted, or the
+	refusal. Its relation's key reads three parts through one nested
+	struct, which the C++ conversation header could not compile until each
+	nested view was named after its binding."""
+	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
+	out = tmp_path / "cpp"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "cpp", "--layer", "drive", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	(tmp_path / "t.cpp").write_text(CPP, encoding="ascii")
+	runtime = ROOT / "runtime"
+	compiled = subprocess.run(
+		[CXX or "c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+		 "-Wconversion", "-Wsign-conversion", f"-I{runtime / 'c'}",
+		 f"-I{runtime / 'cpp'}", f"-I{out}", str(tmp_path / "t.cpp"),
+		 str(runtime / "c" / "situ.c"), "-o", str(tmp_path / "t")],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
+	                     text=True, timeout=120)
+	assert ran.stdout.strip() == "fail=0", ran.stdout

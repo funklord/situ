@@ -61,7 +61,10 @@ def _key(sides: Side, view: str, resolved: ResolvedSchema,
 				             f"\t/* {step.path} */")
 			elif isinstance(step, SubView):
 				held  = class_name(resolved.structs[step.into])
-				local = f"held_{c_name(step.member)}"
+				# Named after the binding, not the member: two key parts
+				# through one nested struct (`h.msg`, `h.sender`) declared
+				# `held_h` twice and the header did not compile.
+				local = f"held_{c_name(step.member)}{step.target}"
 				lines += [
 					f"\t\t::situ::{held} {local};",
 					f"\t\tif ({source}.{c_name(step.member)}({local}) != "
@@ -110,7 +113,10 @@ def _key_bytes(sides: Side, view: str, resolved: ResolvedSchema,
 				]
 			elif isinstance(step, SubView):
 				held  = class_name(resolved.structs[step.into])
-				local = f"held_{c_name(step.member)}"
+				# Named after the binding, not the member: two key parts
+				# through one nested struct (`h.msg`, `h.sender`) declared
+				# `held_h` twice and the header did not compile.
+				local = f"held_{c_name(step.member)}{step.target}"
 				lines += [
 					f"\t\t::situ::{held} {local};",
 					f"\t\tif ({source}.{c_name(step.member)}({local}) != "
