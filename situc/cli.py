@@ -1872,12 +1872,13 @@ def _replay(schema: ast.Schema, resolved: ResolvedSchema,
 def _reassemble(schema: ast.Schema, resolved: ResolvedSchema,
 		args: argparse.Namespace,
 		ungenerated: list[tuple[str, str]]) -> dict[str, str]:
-	"""Reassembly tables (26.1123). C and Python write them; the other two
-	say they do not yet, by name, rather than leaving it silent."""
+	"""Reassembly tables (26.1123). C, Python and Rust write them; C++ says
+	it does not yet, by name, rather than leaving it silent."""
 	from situc.codegen.c import reassemble as reassemble_c
 	from situc.codegen.python import reassemble as reassemble_py
+	from situc.codegen.rust import reassemble as reassemble_rs
 
-	if args.target not in ("c", "python"):
+	if args.target not in ("c", "python", "rust"):
 		for held in schema.reassemblies():
 			print(f"situc: no reassembly table for `{held.name}`: the "
 			      f"{args.target} backend has none yet (26.1123)",
@@ -1890,6 +1891,8 @@ def _reassemble(schema: ast.Schema, resolved: ResolvedSchema,
 		ungenerated.append((name, "reassembly"))
 	if args.target == "python":
 		return reassemble_py.generate(schema, resolved, args.schema.stem)
+	if args.target == "rust":
+		return reassemble_rs.generate(schema, resolved, args.schema.stem)
 	return reassemble_c.generate(schema, resolved, args.schema.stem,
 	                             args.prefix)
 

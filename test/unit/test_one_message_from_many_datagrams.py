@@ -331,8 +331,8 @@ def test_the_other_backends_say_they_have_none_yet(tmp_path: Path) -> None:
 	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
 	done = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
-		 "--target", "rust", "--layer", "converse", "--out",
-		 str(tmp_path / "rs")], cwd=ROOT, capture_output=True, text=True)
+		 "--target", "cpp", "--layer", "converse", "--out",
+		 str(tmp_path / "cpp")], cwd=ROOT, capture_output=True, text=True)
 	assert done.returncode == 0, done.stderr
 	assert "no reassembly table for `pieces`" in done.stderr
 
@@ -423,3 +423,89 @@ def test_python_reassembles_alike(tmp_path: Path) -> None:
 			"RUNTIME", repr(str(ROOT / "runtime" / "python")))],
 		cwd=out, capture_output=True, text=True, timeout=120)
 	assert ran.stdout.strip() == "python ok", ran.stderr
+
+
+RUSTC = shutil.which("rustc")
+
+RUST = r"""#![deny(warnings)]
+#![allow(unused_attributes)]
+#[allow(dead_code)] mod situ_rt;
+#[allow(dead_code)] mod r;
+#[allow(dead_code)] mod r_converse;
+#[allow(dead_code)] mod r_reassemble;
+use r::*;
+use r_reassemble::PiecesTable;
+use r_converse::SameMessageTable;
+fn frame(who: u8, mid: u32, ix: u16, n: u16, body: &[u8]) -> Vec<u8> {
+	let mut b = vec![who; 8];
+	b.extend_from_slice(&mid.to_be_bytes());
+	b.extend_from_slice(&ix.to_be_bytes());
+	b.extend_from_slice(&n.to_be_bytes());
+	b.extend_from_slice(&(body.len() as u16).to_be_bytes());
+	b.extend_from_slice(body);
+	b
+}
+fn add(t: &mut PiecesTable, b: &[u8]) -> situ_rt::Result<Option<Vec<u8>>> {
+	let v = PieceFrame::new(b).unwrap();
+	t.add(&v, 0).map(|o| o.map(|s| s.to_vec()))
+}
+fn main() {
+	let mut t = Box::new(PiecesTable::new());
+	assert!(add(&mut t, &frame(2, 8, 2, 3, b"IJ")).unwrap().is_none());
+	assert!(add(&mut t, &frame(2, 8, 1, 3, b"EFGH")).unwrap().is_none());
+	assert_eq!(add(&mut t, &frame(2, 8, 0, 3, b"ABCD")).unwrap().unwrap(), b"ABCDEFGHIJ");
+	assert!(add(&mut t, &frame(4, 1, 3, 3, b"abcd")).is_err());
+	let mut t = Box::new(PiecesTable::new());
+	for ix in [0u16, 1, 5] { add(&mut t, &frame(5, 2, ix, 10, b"aa")).unwrap(); }
+	let key = SameMessageTable::key(2, 10, &[5u8; 8]);
+	let (mut first, mut count) = ([0u32; 8], [0u32; 8]);
+	let n = t.missing(&key, &mut first, &mut count, 2);
+	assert_eq!(n, 4);
+	assert_eq!((first[0], count[0], first[3], count[3]), (2, 2, 8, 2));
+	assert_eq!(t.expire(2999), 0);
+	assert_eq!(t.expire(3000), 1);
+	let mut seed = 1u64;
+	let mut rnd = |m: u64| { seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (seed >> 33) % m };
+	for round in 0..500u32 {
+		let n = 1 + rnd(20) as u16; let st = 1 + rnd(40) as usize; let last = 1 + rnd(st as u64) as usize;
+		let total = (n as usize - 1) * st + last;
+		let whole: Vec<u8> = (0..total).map(|_| rnd(256) as u8).collect();
+		let mut order: Vec<u16> = (0..n).collect();
+		for _ in 0..5 { order.push(rnd(n as u64) as u16); }
+		for i in (1..order.len()).rev() { let j = rnd(i as u64 + 1) as usize; order.swap(i, j); }
+		let mut t = Box::new(PiecesTable::new());
+		let mut got = None;
+		for ix in order {
+			let at = ix as usize * st;
+			let len = if ix == n - 1 { last } else { st };
+			if let Some(m) = add(&mut t, &frame(1, round, ix, n, &whole[at..at + len])).unwrap() { got = Some(m); break; }
+		}
+		assert_eq!(got.unwrap(), whole, "round {}", round);
+	}
+	println!("rust ok");
+}
+"""
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_rust_reassembles_alike(tmp_path: Path) -> None:
+	"""The same table in Rust, `no_std` and allocating nothing: `add`
+	answers `Ok(Some(message))`, `Ok(None)` or the refusal."""
+	(tmp_path / "r.situ").write_text(SCHEMA, encoding="ascii")
+	out = tmp_path / "rs"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "rust", "--layer", "converse", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	(out / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs").read_text(encoding="ascii"),
+		encoding="ascii")
+	(out / "main.rs").write_text(RUST, encoding="ascii")
+	compiled = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-o", str(tmp_path / "m"),
+		 str(out / "main.rs")], capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+	ran = subprocess.run([str(tmp_path / "m")], capture_output=True,
+	                     text=True, timeout=120)
+	assert ran.stdout.strip() == "rust ok", ran.stderr
