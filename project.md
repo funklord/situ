@@ -494,8 +494,10 @@ both walkers and the dissector. What a user cannot yet do is listed under
   header and covers the header, BOOT2 and each section the chain reaches
   -- in scope (holder, 2026-11-20), gated part by part in 26.1117: its own
   bytes as 0xFFFF already exist (`[self_as]`); a tag covering bytes outside
-  its struct is to build (GPT and U-Boot need it too); coverage along a
-  chain waits on openmlx4 measuring whether real images are back to back; (e) a failsafe flash's
+  its struct is built (part B: `covers(after)`, `covers(message)`, in all
+  four backends, both walkers and the editor); coverage along a chain
+  (part C) waits on openmlx4 measuring whether real images are back to
+  back; (e) a failsafe flash's
   chunk interleave, whose chunk size is read from inside what it permutes
   -- a scope question, low priority. Also told: a schema with an
   unbounded codec builds Python only at `--layer edit`, and a view-layer
