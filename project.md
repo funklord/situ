@@ -270,6 +270,11 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   answer for a store scan is LTO (or inlining `check`), not a new shape;
   left at that, since an always-inline `check` trades the size the
   build rules ask for.
+- From fuzznet (inbox 20261122T1804Z): six gaps before its
+  `chunk/reassembly.c` can move onto 26.1123's table -- a per-sender slot
+  cap, forget by key, an add from parts already opened, a per-piece
+  deadline, bounds at init, a 64-bit clock. `forget` is built in all four;
+  the rest are open, in 26.1123's record with fuzznet's spelling.
 - fuzznet's network list, where it stands: (1) reassembly, (2) matching
   after the tag and (3) the replay window are built in all four backends;
   (4) erasure coding it declined; (5) many peers is 26.1122's `peer`. (6)

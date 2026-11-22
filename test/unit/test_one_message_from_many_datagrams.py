@@ -925,6 +925,14 @@ int main(void)
 			}
 		}
 		printf("E %u\n", situ_pieces_expire(&t, now));
+		if (now % 5u == 0u) {
+			uint8_t sender[8], key[12];
+			memset(sender, (int)(now % 3u + 1u), 8);
+			situ_conv_same_message_key(now % 2u + 1u, sender, key);
+			printf("F %u\n", situ_pieces_forget(&t, key));
+		} else {
+			printf("F -\n");
+		}
 	}
 	return 0;
 }
@@ -957,6 +965,12 @@ while at + 6 <= len(data):
 			key = r_converse.same_message_table.key(mid, bytes([who]) * 8)
 			out.append("M" + "".join(f" {f}:{c}" for f, c in t.missing(key, 4, 2)))
 	out.append(f"E {t.expire(now)}")
+	if now % 5 == 0:
+		key = r_converse.same_message_table.key(now % 2 + 1,
+		                                        bytes([now % 3 + 1]) * 8)
+		out.append(f"F {t.forget(key)}")
+	else:
+		out.append("F -")
 print("\n".join(out))
 """
 
@@ -1001,6 +1015,13 @@ fn main() {
 			}
 		}
 		out.push_str(&format!("E {}\n", t.expire(now)));
+		if now % 5 == 0 {
+			let key = r_converse::SameMessageTable::key((now % 2 + 1) as u64,
+				&[(now % 3 + 1) as u8; 8]);
+			out.push_str(&format!("F {}\n", t.forget(&key) as u32));
+		} else {
+			out.push_str("F -\n");
+		}
 	}
 	std::io::stdout().write_all(out.as_bytes()).unwrap();
 }
@@ -1058,6 +1079,14 @@ int main()
 			}
 		}
 		std::printf("E %u\n", t->expire(now));
+		if (now % 5u == 0u) {
+			std::uint8_t sender[8], key[12];
+			std::memset(sender, static_cast<int>(now % 3u + 1u), 8);
+			::situ::same_message_table::key(now % 2u + 1u, sender, key);
+			std::printf("F %u\n", t->forget(key));
+		} else {
+			std::printf("F -\n");
+		}
 	}
 	delete t;
 	return 0;
@@ -1155,7 +1184,10 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path) -> None
 		said[name] = ran.stdout.decode("ascii")
 
 	lines = said["c"].splitlines()
-	assert len(lines) == 3000 * 8
+	assert len(lines) == 3000 * 9
+	# `forget` (fuzznet, inbox 20261122T1804Z): a held message dropped by
+	# its key, and a key held by nothing, both met in the stream.
+	assert "F 1" in lines and "F 0" in lines
 	kinds = {line[:3] for line in lines if line.startswith("A ")}
 	assert kinds == {"A O", "A T", "A C", "A B"}, kinds
 	assert any(line.startswith("E ") and line != "E 0" for line in lines)
