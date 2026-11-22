@@ -186,7 +186,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			       for name, lets in _LETS.items()
 			       if name in resolved.structs for let in lets):
 		lines.extend(U64_HELPER)
-	if any(_let_value(resolved.structs[name], let) is None
+	# And for a rule spelled in `UInt64` over a 64-bit let (26.1151),
+	# whatever spelling the let's own row takes.
+	if any((_let_value(resolved.structs[name], let) is None
+	        or _let_bits(let)[0] == 64)
 	       and _let_wide(resolved.structs[name], let) is not None
 	       for name, lets in _LETS.items()
 	       if name in resolved.structs for let in lets):
@@ -2377,6 +2380,15 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		# walkers and the four backends read it in a `when`.
 		shown  = _over_fields(struct, local, "0", extra = extra)
 		if shown is None:
+			# A rule over an unsigned 64-bit `let`, which no Lua number
+			# holds exactly: spelled whole in `UInt64` (26.1151).
+			wide = _rule_wide(struct, expr)
+			if wide is not None:
+				lines.append(f"\tif {wide} then")
+				lines.append(f"\t\tsubtree:add_proto_expert_info("
+				             f"{proto}_e.{_lua(when.name)})")
+				lines.append("\tend")
+				continue
 			lines.append(f"\t-- {when.name}: {_unreadable(struct, local)}")
 			continue
 		# Lua spells these otherwise, and `&&` here is a file that does not
@@ -2388,6 +2400,106 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		             f"{proto}_e.{_lua(when.name)})")
 		lines.append("\tend")
 	return lines
+
+
+def _rule_wide(struct: ResolvedStruct, expr: "ast.Expr") -> str | None:
+	"""A `when` that reads an unsigned 64-bit `let`, spelled whole in
+	`UInt64`, or None (26.1151).
+
+	`_let_reads` hands a rule each let below 64 bits as a Lua number; a
+	64-bit one stays a `UInt64`, which never equals or orders against a
+	Lua number, so the rule was written out as a comment. Here every
+	operand is a `UInt64` -- the let as `_let_wide` spells it, a field as
+	`_let_wide` reads one, a literal in two words -- and the rule holds
+	where the result is not zero. Unsigned only: `UInt64` orders unsigned,
+	so a SIGNED let or field, which a rule may compare below zero, is
+	declined, as anything outside the arithmetic, comparisons and `&&`,
+	`||`, `!` is.
+	"""
+	lets = {let.name: let for let in _LETS.get(struct.name, [])}
+	if not any(_let_bits(let)[0] == 64 and not _let_bits(let)[1]
+	           for let in lets.values()):
+		return None
+	fields = {entry.placement.path[len(struct.name) + 1:]: entry.placement
+	          for entry in struct.entries}
+
+	class Declined(Exception):
+		pass
+
+	def literal(value: int) -> str:
+		value &= 0xFFFF_FFFF_FFFF_FFFF
+		return f"UInt64({value & 0xFFFFFFFF}, {value >> 32})"
+
+	def name(held: str) -> str:
+		if held in _CONSTS:
+			return literal(_CONSTS[held])
+		if held in lets:
+			bits, signed = _let_bits(lets[held])
+			value = _let_wide(struct, lets[held])
+			if signed or value is None:
+				raise Declined(held)
+			return value if bits == 64 else f"situ_w64({value})"
+		placement = fields.get(held)
+		if placement is None or placement.scalar is None \
+				or placement.scalar.signed or placement.array_count is not None:
+			raise Declined(held)
+		if placement.size_bits > 32:
+			whole = _read_u64(placement, "0")
+		else:
+			whole = _over_fields(struct, held, "0")
+			whole = None if whole is None else f"situ_w64({whole})"
+		if whole is None:
+			raise Declined(held)
+		return whole
+
+	def go(node: "ast.Expr") -> str:
+		if isinstance(node, ast.IntLiteral):
+			return literal(node.value)
+		if isinstance(node, ast.NameRef):
+			return name(node.name)
+		if isinstance(node, ast.Access) and isinstance(node.base, ast.NameRef):
+			if node.base.name == struct.name:
+				return name(node.name)
+			members = _ENUMS.get(node.base.name)
+			if members is not None and node.name in members:
+				return literal(members[node.name])
+			raise Declined(node.name)
+		if isinstance(node, ast.Unary):
+			inner = go(node.operand)
+			if node.op == "-":
+				return f"(situ_zero64 - {inner})"
+			if node.op == "~":
+				return f"({inner}):bnot()"
+			return f"situ_b64({inner} == situ_zero64)"
+		if isinstance(node, ast.Binary):
+			left, right = go(node.left), go(node.right)
+			if node.op == "&&":
+				return (f"situ_b64({left} ~= situ_zero64 and"
+				        f" {right} ~= situ_zero64)")
+			if node.op == "||":
+				return (f"situ_b64({left} ~= situ_zero64 or"
+				        f" {right} ~= situ_zero64)")
+			compared = {"==": "==", "!=": "~=", "<": "<", "<=": "<=",
+			            ">": ">", ">=": ">="}.get(node.op)
+			if compared is not None:
+				return f"situ_b64({left} {compared} {right})"
+			spelled = {"+": f"({left} + {right})", "-": f"({left} - {right})",
+			           "*": f"({left} * {right})",
+			           "/": f"situ_div64({left}, {right})",
+			           "%": f"situ_mod64({left}, {right})",
+			           "<<": f"situ_shl64({left}, {right})",
+			           ">>": f"situ_shr64({left}, {right})",
+			           "&": f"({left}):band({right})",
+			           "|": f"({left}):bor({right})",
+			           "^": f"({left}):bxor({right})"}.get(node.op)
+			if spelled is not None:
+				return spelled
+		raise Declined(type(node).__name__)
+
+	try:
+		return f"{go(expr)} ~= situ_zero64"
+	except Declined:
+		return None
 
 
 def _let_reads(struct: ResolvedStruct) -> dict[str, str]:
@@ -3438,10 +3550,12 @@ def _let_wide(struct: ResolvedStruct, let: "ast.Let") -> str | None:
 	Where `_let_value` declines -- a subtraction, a variable shift, a
 	product that wraps -- the value is still computable exactly: `UInt64`
 	is in every Wireshark's Lua, Lua 5.2's included (0021), and does the
-	backends' modulo-2^64 arithmetic. Each field read is a Lua number, so
-	a field wider than 32 bits is declined, and so is a text number or a
-	token, whose reads are their own; everything else spells through
-	`traverse.let_source` with the guards every reader uses.
+	backends' modulo-2^64 arithmetic. A field of at most 32 bits reads as
+	a Lua number and is widened; a wider one -- five to eight whole bytes
+	-- reads as two words put together in a `UInt64` (26.1151), since its
+	Lua number is a double and inexact past 2^53. A text number or a
+	token is declined, whose reads are their own; everything else spells
+	through `traverse.let_source` with the guards every reader uses.
 
 	The result is held to the value's width as the getters hold it: a
 	`u64` is the `UInt64` itself, a narrower one its masked low word, a
@@ -3449,12 +3563,18 @@ def _let_wide(struct: ResolvedStruct, let: "ast.Let") -> str | None:
 	"""
 	bits, signed = _let_bits(let)
 	reads: dict[str, str] = {}
+	wide: dict[str, str] = {}
 	for entry in struct.entries:
 		placement = entry.placement
 		local = placement.path[len(struct.name) + 1:]
 		if placement.scalar is None or "." in local \
-				or placement.radix is not None or placement.size_bits > 32 \
+				or placement.radix is not None \
 				or placement.array_count is not None:
+			continue
+		if placement.size_bits > 32:
+			whole = _read_u64(placement, "0")
+			if whole is not None:
+				wide[local] = whole
 			continue
 		got = _over_fields(struct, local, "0")
 		if got is None:
@@ -3473,6 +3593,8 @@ def _let_wide(struct: ResolvedStruct, let: "ast.Let") -> str | None:
 		pass
 
 	def read(name: str) -> str:
+		if name in wide:
+			return wide[name]
 		if name not in reads:
 			raise Declined(name)
 		return f"situ_w64({reads[name]})"
@@ -3555,6 +3677,43 @@ def _let_rows(struct: ResolvedStruct) -> list[str]:
 		lines.append(f"\tsubtree:add({proto}.fields.{_lua(let.name)},"
 		             f" {shown}):set_generated()")
 	return lines
+
+
+def _read_u64(placement: Placement, base: str) -> str | None:
+	"""A field of five to eight whole bytes as Wireshark's `UInt64`, exact,
+	or None (26.1151).
+
+	`_read` gives such a field as a Lua number -- two four-byte reads and
+	arithmetic -- which is a double in Lua 5.2 and loses the low bits past
+	2^53, so a `let` over a `u64` was declined. Here the two words become
+	`UInt64(low, high)`. A signed field only at 64 bits, where its bits are
+	its value modulo 2^64 as every reader computes it; a narrower signed
+	one would need extending and is declined.
+	"""
+	if placement.scalar is None or placement.offset_bits is None \
+			or placement.radix is not None or placement.delimiters \
+			or placement.marker is not None or placement.parameter \
+			or placement.path in _captured or _varint_value(placement) is not None \
+			or _host_order(placement):
+		return None
+	width = placement.size_bits
+	off   = placement.offset_bits
+	if off % BITS_PER_BYTE or width % BITS_PER_BYTE \
+			or not 32 < width <= 64 \
+			or (placement.scalar.signed and width != 64):
+		return None
+	little = _little(placement, base)
+	if little is None:
+		return None
+	first = off // BITS_PER_BYTE
+	rest  = width // BITS_PER_BYTE - 4
+	if little == "true":
+		low  = f"situ_uint(tvb, {_at(base, first)}, 4, true)"
+		high = f"situ_uint(tvb, {_at(base, first + 4)}, {rest}, true)"
+	else:
+		high = f"situ_uint(tvb, {_at(base, first)}, {rest}, false)"
+		low  = f"situ_uint(tvb, {_at(base, first + rest)}, 4, false)"
+	return f"UInt64({low}, {high})"
 
 
 def _over_fields(struct: ResolvedStruct, source: str, base: str,

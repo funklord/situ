@@ -512,9 +512,10 @@ both walkers and the dissector. What a user cannot yet do is listed under
   the size is known nonzero; 33 `pos` scopes per generated function. Each
   is noise in a consumer build, not behaviour -- taken up again when a
   consumer reports one.
-- The dissector computes a `let` in `UInt64` (26.1112) and a `when` reads
-  one below 64 bits (26.1133); a rule reading a 64-bit let is declined, as
-  is a `let` over a field wider than 32 bits, a text number or a token.
+- The dissector computes a `let` in `UInt64` (26.1112), over a field of up
+  to 64 bits, and a `when` reads one of any width (26.1133, 26.1151); a
+  `let` over a text number or a token is declined, and so is a rule over a
+  SIGNED 64-bit let, which `UInt64` would order unsigned.
 - `situc map` does not describe a registry; its contract is in `wire`.
 - Coverage-guided fuzzing of the Rust and Python harnesses: built
   (26.1132), `make fuzz-python` and `make fuzz-rust`; atheris and
@@ -9723,6 +9724,26 @@ where the walker's public counts count varints and hold at zero, and
 read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
+
+### 26.1151 The dissector reads a 64-bit field into a `let`, and a rule over a 64-bit let
+
+From the goal-gap walk at the end of run 13; 0a's open register listed
+both as declined, and the last run dropped them for want of a corpus
+schema -- a reason about the corpus, not about what a user can do. A
+`let` over a field wider than 32 bits was declined because the field read
+is a Lua number, a double, inexact past 2^53; such a field of five to
+eight whole bytes now reads as two words put together, `UInt64(low,
+high)` (`_read_u64`), signed only at 64 bits, where the bits are the
+value. And a `when` reading a 64-bit let was a comment, because a
+`UInt64` never equals or orders against a Lua number; such a rule is now
+spelled whole in `UInt64` (`_rule_wide`) -- every operand a `UInt64`,
+`&&`, `||` and `!` over `~= situ_zero64` -- for an unsigned let;
+a signed one stays declined, `UInt64` ordering unsigned. Held by hand-
+worked values in `test_a_dissector_computes_every_named_value.py`
+(x = 2^53 + 1, plus one, is the first sum a double gets wrong) and in
+`test_a_when_may_read_a_let.py`, whose `huge` cases the four backends,
+both walkers and tshark answer alike; both tshark tests fail on the old
+dissector.
 
 ### 26.1150 A sibling that shadows an arm is not the arm in `wire --check`
 

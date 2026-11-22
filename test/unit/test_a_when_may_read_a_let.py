@@ -42,17 +42,30 @@ when wide.total > 300
 	refuse wide_too_big "a and b may not sum past 300";
 when narrow.total > 10
 	refuse narrow_too_big "held to a byte, the sum may not pass 10";
+struct huge {
+	u64 x;
+	u8  y;
+	let u64 sum = x + y;
+}
 when signed_let.diff < 0
 	refuse backwards "b may not exceed a";
+when huge.sum == 0x0020000000000002 && huge.y != 0
+	refuse exactly "the sum may not be 2^53 + 2";
 """
 
 #: (struct, bytes, verdict). `ff ff` is 510 to the u16 and 254 to the u8 --
-#: the width is the let's, not the arithmetic's.
+#: the width is the let's, not the arithmetic's. `huge` is 2^53 + 1 and 1:
+#: a double reads x as 2^53 and misses the sum, and the dissector wrote a
+#: rule over a 64-bit let as a comment until 26.1151.
 CASES = [("wide", b"\x01\x02", "0"), ("wide", b"\xff\xff", "2"),
          ("narrow", b"\x01\x02", "0"), ("narrow", b"\x06\x06", "2"),
          ("narrow", b"\xff\x02", "0"),		# 257 held to a byte is 1
          ("signed_let", b"\x05\x02", "0"), ("signed_let", b"\x02\x05", "2"),
-         ("signed_let", b"\xff\x00", "2")]	# 255 as an i8 is -1
+         ("signed_let", b"\xff\x00", "2"),	# 255 as an i8 is -1
+         ("huge", bytes.fromhex("0020000000000001" "01"), "2"),
+         ("huge", bytes.fromhex("0020000000000001" "00"), "0"),
+         ("huge", bytes.fromhex("0020000000000000" "02"), "2"),
+         ("huge", bytes.fromhex("0020000000000000" "01"), "0")]
 
 
 def _validate(said: str, struct: str) -> str:
@@ -101,7 +114,7 @@ def test_tshark_reads_the_let_in_a_when(tmp_path: Path) -> None:
 	                str(tmp_path), str(source)],
 	               check=True, capture_output=True, cwd=ROOT)
 	names = {"wide": "wide_too_big", "narrow": "narrow_too_big",
-	         "signed_let": "backwards"}
+	         "signed_let": "backwards", "huge": "exactly"}
 	for struct, raw, want in CASES:
 		script = tmp_path / f"{struct}.lua"
 		script.write_text((tmp_path / "lets.lua").read_text("ascii")
