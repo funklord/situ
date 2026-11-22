@@ -9738,7 +9738,12 @@ RV was named unchecked and a flipped RV byte conformed. The Python reader
 now gives such a run -- in an arm of a SIZED variant, whose end is known
 without a count -- `<run>_count` and `<run>(index)`, walked as `validate`
 walks it, behind the arm's own test; `verify` takes an absent arm's run as
-empty, as it takes an absent arm's checker. openmlx4's vectors: the good
+empty, as it takes an absent arm's checker. Its first version read every element's
+`_extent`, which a FIXED struct's view does not have, and `verify` raised
+AttributeError on openmlx4's MFA TOC -- 24-byte entries in a sized arm --
+turning its `make check` red (inbox 20261122T1500Z); a fixed element now
+steps by its size. Before pushing a change to what `verify` drives,
+openmlx4's own schemas and vectors are run through it. openmlx4's vectors: the good
 one conforms, the flipped one is a `ChecksumError` on `vpd_rv.sum`.
 
 Found beside it: Python, C++ and Rust emitted a covered "parent setter"

@@ -4040,6 +4040,14 @@ class Emitter:
 			return None
 		inner = py_name(placement.type_name or "")
 		made  = self._made(struct, placement, inner)
+		# A FIXED element has no `_extent` property -- its extent is its
+		# size, a constant -- and reading one raised AttributeError out of
+		# `verify` on openmlx4's MFA TOC, a run of 24-byte entries in a
+		# sized arm (inbox 20261122T1500Z).
+		if element.layout.is_fixed_size and element.layout.is_byte_sized:
+			measure = f"\t\t\tsize    = {int(element.layout.size_bytes)}"
+		else:
+			measure = "\t\t\tsize    = _element._extent"
 		return [
 			"",
 			f"\tdef _{name}_walk(self) -> _situ_list[int]:",
@@ -4057,7 +4065,7 @@ class Emitter:
 			"\t\tstarts: _situ_list[int] = []",
 			"\t\twhile at < end:",
 			f"\t\t\t_element = {made}(self._msg, self._at + at, end - at)",
-			"\t\t\tsize    = _element._extent",
+			measure,
 			"\t\t\tif size == 0 or size > end - at:",
 			"\t\t\t\tbreak",
 			"\t\t\tstarts.append(at)",

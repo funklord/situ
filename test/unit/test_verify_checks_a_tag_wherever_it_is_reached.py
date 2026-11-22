@@ -206,3 +206,31 @@ def test_no_parent_setter_writes_a_run_element_s_member(tmp_path: Path,
 	text = "".join(path.read_text(encoding="ascii")
 	               for path in (tmp_path / "out").iterdir() if path.is_file())
 	assert "set_data_fields_keyword" not in text
+
+
+FIXED_RUN = """target buffer;
+endian big;
+
+struct pair { u8 a; u8 b; }
+
+struct fixed_arm {
+	u8 size;
+	u8 kind;
+	variant body[size] switch (kind) {
+		case 0:  pair items[remaining];
+		default: u8   raw[remaining];
+	}
+}
+"""
+
+
+def test_a_run_of_fixed_elements_in_a_sized_arm_is_walked(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""The arm-run walk of 26.1155 read each element's `_extent`, which a
+	FIXED struct's view does not have: `verify` raised AttributeError on
+	openmlx4's MFA TOC, a run of 24-byte entries in a sized arm, and its
+	`make check` went red (inbox 20261122T1500Z)."""
+	out = _verify(tmp_path, FIXED_RUN,
+	              "fixed_arm one 02 00 01 02\n"
+	              "fixed_arm other 02 07 aa bb\n", capsys)
+	assert "2 vectors conform" in out, out
