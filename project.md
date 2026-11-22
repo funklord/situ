@@ -9727,6 +9727,37 @@ read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
 
+### 26.1154 A lone `0` before its delimiter is minimal in the C walker
+
+Found by `make fuzz-walker-c-differ` (26.1152) on its first full pass:
+HTTP's `decimal u16 code until " " [minimal]` over `0 ` was refused by
+the C walker and accepted by the C reader. Its `[minimal]` check took the
+member's span -- the digits and the delimiter -- so the lone zero was two
+characters opening with `0`. `walk.digits_of` serves the read and the
+check alike; the C walker now has the same, `digit_span` (the scan's
+content, then `[trim]`), which the digit read and both minimal checks (a
+member's, a variant arm's) ask. Only a lone zero could trip it, which is
+why nothing had. Held in `test_walker_c.py`
+(`test_a_lone_zero_before_its_delimiter_is_minimal`), failing on the old
+walker.
+
+### 26.1152 The C walker against the C reader, coverage-guided
+
+The replays of 26.1148 compared the walkers over the corpus a fuzzer had
+kept -- a few hundred inputs a schema -- and still found two faults. `make
+fuzz-walker-c-differ` compares every input the fuzzer runs: one libFuzzer
+binary per schema (`test/generated/walker_c_differ.{c,py}`) holding the
+four-way differential's C driver, its `main` renamed and its output
+captured in memory, beside `situ_walk_validate`; each struct whose section
+prints a `validate` line is asked of both, and a difference aborts. Not
+compared: a struct the reader cannot view, one the walker cannot say
+about, a sealed region both say they cannot open (26.1142), and an argued
+struct. A copy of the harness with the walker's answer bent aborts at
+once, which is what says it compares something. Its first pass stopped
+at cpio on a leak in the driver itself -- a schema with nothing to write
+never freed its buffer, harmless in a process that exits -- now freed on
+both paths in `differ.py`; its second found 26.1154.
+
 ### 26.1153 A rule over a signed 64-bit let orders signed in the dissector
 
 26.1151 spelled a rule over a 64-bit let in `UInt64`, unsigned only:

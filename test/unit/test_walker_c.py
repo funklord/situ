@@ -1090,6 +1090,31 @@ def test_a_variant_has_no_scalar_value_in_either_walker(
 			== [str(data[0]), "refused"], message
 
 
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_lone_zero_before_its_delimiter_is_minimal(tmp_path: Path) -> None:
+	"""HTTP's `decimal u16 code until " " [minimal]` over `0 `: the C
+	walker's `[minimal]` took the member's span, delimiter and all, so
+	the lone `0` was two characters opening with a zero and refused, where
+	`walk.py` and the four backends ask the digits alone (26.1154). Found
+	by `make fuzz-walker-c-differ` on its first full pass. `01` is the
+	control that is refused everywhere."""
+	from situc.cli import analyse
+	from situc.parser import parse
+
+	source, resolved, _ = analyse(ROOT / "example" / "http" / "http.situ")
+	blob  = pack(parse(source), resolved, metadata=True)[0]
+	image = load(blob)
+	shape = next(index for index in range(len(image.structs))
+	             if image.struct_name(index) == "status_line")
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for message, want in ((b"HTTP/1.1 0 x\r\n", "0"),
+	                      (b"HTTP/1.1 200 OK\r\n", "0"),
+	                      (b"HTTP/1.1 01 x\r\n", "2")):
+		assert python_verdict(blob, message, shape) == want, message
+		assert c_verdict(tmp_path, blob, message, shape, drive) == want, \
+			message
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;

@@ -4224,6 +4224,90 @@ static situ_walk_err order_from_marker(const situ_walk_image *image,
 	return SITU_WALK_UNSUPPORTED;
 }
 
+/* Where a text number's digits are, in bytes: for the delimited form the
+ * scan's content, its *span* carrying the delimiter and a delimiter being
+ * no digit of any radix, and with `[trim]` the member's whitespace off both
+ * ends, as the backends' `situ_trim_start` and `situ_trim_len` hand them --
+ * parsed untrimmed, JSON's ` 1` was CONSTRAINT here where all four read 1
+ * (26.1137). The read and `[minimal]` both ask it, as `walk.digits_of`
+ * serves both there: the minimal check took the span, so a lone `0` before
+ * its delimiter was two characters with a leading zero (26.1154). */
+static situ_walk_err digit_span(const situ_walk_image *image,
+                                const uint8_t *message, uint32_t len,
+                                uint32_t shape, uint32_t index,
+                                uint32_t depth, uint32_t *at_out,
+                                uint32_t *width_out)
+{
+	situ_walk_placement held;
+	uint32_t            at    = 0u;
+	uint32_t            width = 0u;
+	situ_walk_err       err = situ_walk_placement_at(image, index, &held);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	err = offset_bits_deep(image, message, len, shape, index, depth, &at);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	err = content_bits_deep(image, message, len, shape, index, depth, &width);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (at % 8u || width % 8u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	at /= 8u;
+	width /= 8u;
+	if (delimiter_rules(image, index) != NULL) {
+		int      terminated = 0;
+		uint32_t took       = 0u;
+		err = situ_walk_scan(image, message, len, index, at,
+		                     &width, &terminated, &took);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+	}
+	if (at > len || width > len - at) {
+		return SITU_WALK_BOUNDS;
+	}
+	if ((held.text_flags & TEXT_PADDED) != 0u
+	                && delimiter_rules(image, index) != NULL) {
+		while (width > 0u && trims(image, index, message[at])) {
+			at++;
+			width--;
+		}
+		while (width > 0u && trims(image, index, message[at + width - 1u])) {
+			width--;
+		}
+	}
+	*at_out    = at;
+	*width_out = width;
+	return SITU_WALK_OK;
+}
+
+/* The bytes `[minimal]` asks about: a delimited member's digits, as
+ * `digit_span` finds them, and any other member's whole span as before. */
+static situ_walk_err minimal_digits(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t depth, const uint8_t **digits,
+                                    uint32_t *count)
+{
+	uint32_t at = 0u;
+
+	if (delimiter_rules(image, index) == NULL) {
+		return situ_walk_bytes(image, message, len, shape, index, digits,
+		                       count);
+	}
+	const situ_walk_err err = digit_span(image, message, len, shape, index,
+	                                     depth, &at, count);
+	if (err == SITU_WALK_OK) {
+		*digits = message + at;
+	}
+	return err;
+}
+
 static situ_walk_err read_deep(const situ_walk_image *image,
                                const uint8_t *message, uint32_t len,
                                uint32_t shape, uint32_t index,
@@ -4254,51 +4338,10 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		uint32_t at    = 0u;
 		uint32_t width = 0u;
 
-		err = offset_bits_deep(image, message, len, shape, index, depth, &at);
+		err = digit_span(image, message, len, shape, index, depth, &at,
+		                 &width);
 		if (err != SITU_WALK_OK) {
 			return err;
-		}
-		err = content_bits_deep(image, message, len, shape, index, depth,
-		                        &width);
-		if (err != SITU_WALK_OK) {
-			return err;
-		}
-		if (at % 8u || width % 8u) {
-			return SITU_WALK_UNSUPPORTED;
-		}
-
-		/* The digits, which for the delimited form stop where the scan
-		 * stopped: its *span* carries the delimiter, and a delimiter is not
-		 * a digit of any radix. */
-		at /= 8u;
-		width /= 8u;
-		if (delimiter_rules(image, index) != NULL) {
-			int      terminated = 0;
-			uint32_t took       = 0u;
-			err = situ_walk_scan(image, message, len, index, at,
-			                     &width, &terminated, &took);
-			if (err != SITU_WALK_OK) {
-				return err;
-			}
-		}
-		if (at > len || width > len - at) {
-			return SITU_WALK_BOUNDS;
-		}
-		/* `[trim]`, the same bit on a delimited member: the digits are
-		 * what is left once the member's whitespace is off both ends, as
-		 * the backends' `situ_trim_start` and `situ_trim_len` hand them.
-		 * Parsed untrimmed, JSON's ` 1` was CONSTRAINT here where all four
-		 * read 1 (26.1137). */
-		if ((held.text_flags & TEXT_PADDED) != 0u
-		                && delimiter_rules(image, index) != NULL) {
-			while (width > 0u && trims(image, index, message[at])) {
-				at++;
-				width--;
-			}
-			while (width > 0u
-			       && trims(image, index, message[at + width - 1u])) {
-				width--;
-			}
 		}
 		if ((held.text_flags & TEXT_SCALED) != 0u) {
 			return parse_scaled(message + at, width,
@@ -5631,8 +5674,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			const uint8_t *digits = NULL;
 			uint32_t       count_of = 0u;
 
-			err = situ_walk_bytes(image, message, len, shape, chosen,
-			                      &digits, &count_of);
+			err = minimal_digits(image, message, len, shape, chosen, 0u,
+			                     &digits, &count_of);
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
 			}
@@ -8158,8 +8201,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (kind == CHECK_DIGITS_MINIMAL) {
 				const uint8_t *digits = NULL;
 				uint32_t       count_of = 0u;
-				err = situ_walk_bytes(image, message, len, shape, index,
-				                      &digits, &count_of);
+				err = minimal_digits(image, message, len, shape, index,
+				                     depth, &digits, &count_of);
 				if (err == SITU_WALK_UNSUPPORTED) {
 					return err;
 				}
