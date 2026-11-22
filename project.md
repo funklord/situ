@@ -9667,6 +9667,23 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1145 A window framed before a resize refuses to write
+
+Found walking the goal gap after 26.1141: a run grown in one window moves
+every byte after it, and another window still open over part of the file
+-- the IEND chunk after a grown `tEXt`, or an enclosing chunk whose length
+it grew -- keeps the offset and length it was opened with. Its display is
+stale, and a write through it would land in its neighbour's bytes: a
+corrupted file, not a stale view. Every window over one document now
+shares a count of writes that changed the file's length; the window that
+wrote follows its own frame (26.1141) and catches up, and any other
+window over PART of the file whose count is behind refuses to write,
+saying to reopen it. A window over the whole file is never stale. The
+refusal has no automated test: the headless driver edits only the last
+window it opens, so two windows' writes cannot be ordered from it; the
+Qt suite holds that the writing window's own bookkeeping still lets a
+second write through.
+
 ### 26.1144 Every frontend opens an element of a run of structs
 
 A run of structs opened as nested was framed whole, and read its first
@@ -9773,7 +9790,8 @@ the struct it holds, framed by the run, which is 26.1115's other refusal
 }` with `inner { u8 n; u8 name[n]; ... }` grows `name` by moving `inner.n`
 and `outer.len` both. Not yet: another window open on an enclosing struct
 keeps its old length until reopened, and so does one opened on a sibling
-after the edit, whose offset moved. Held in
+after the edit, whose offset moved -- each refuses to write until then
+(26.1145). Held in
 `test/unit/test_a_run_grows_inside_a_window.py` and
 `test_the_qt_window_edits_as_the_cli_does.py`.
 

@@ -86,6 +86,13 @@ private:
 	QString                        error_;
 	QStringList                    notes_;
 	std::shared_ptr<bool>          modified_ = std::make_shared<bool>(false);
+	// How many writes have changed the working file's length, shared by
+	// every window over it, and how many this window has followed. A
+	// window over part of the file whose count is behind was framed
+	// before bytes moved under it: its offset may name another member's
+	// bytes, so it refuses to write until reopened (26.1145).
+	std::shared_ptr<qint64>        resizes_ = std::make_shared<qint64>(0);
+	qint64                         seen_resizes_ = 0;
 };
 
 #endif

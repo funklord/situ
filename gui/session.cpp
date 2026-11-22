@@ -44,6 +44,8 @@ bool session::open(const open_options &options)
 {
 	options_  = options;
 	modified_ = std::make_shared<bool>(false);
+	resizes_  = std::make_shared<qint64>(0);
+	seen_resizes_ = 0;
 	notes_.clear();
 	scratch_ = std::make_shared<QTemporaryDir>();
 	if (!scratch_->isValid()) {
@@ -197,6 +199,18 @@ bool session::set(const QString &field, const QString &text)
 	// Into a second file, renamed over the first only once the CLI has
 	// accepted the write: a refused edit leaves the working bytes exactly
 	// as they were, which is what the CLI's own all-or-nothing promises.
+	// A window over PART of the file, framed before a write elsewhere
+	// changed the file's length, may name the wrong bytes: a chunk window
+	// opened after the one grown still holds the old offset, and a write
+	// through it would land inside its neighbour (26.1145).
+	const bool whole = options_.offset == 0 && options_.length < 0;
+	if (!whole && seen_resizes_ != *resizes_) {
+		error_ = QStringLiteral("a write in another window changed the "
+		                        "file's length since this one was opened, "
+		                        "so its frame may be stale; reopen it");
+		return false;
+	}
+	const qint64 before = QFileInfo(work_).size();
 	const QString next = scratch_->filePath(QStringLiteral("next.bin"));
 	QFile::remove(next);
 	QStringList arguments = common_arguments();
@@ -218,6 +232,10 @@ bool session::set(const QString &field, const QString &text)
 		return false;
 	}
 	*modified_ = true;
+	if (QFileInfo(work_).size() != before)
+		++*resizes_;
+	// This window followed its own frame, which `follow_frames` sets.
+	seen_resizes_ = *resizes_;
 	const QJsonDocument after = QJsonDocument::fromJson(printed);
 	if (after.isObject())
 		follow_frames(after.object());
@@ -267,6 +285,8 @@ bool session::open_nested(const session &parent, const QString &structure,
 	image_    = parent.image_;
 	work_     = parent.work_;
 	modified_ = parent.modified_;
+	resizes_  = parent.resizes_;
+	seen_resizes_ = *resizes_;
 	notes_.clear();
 	return refresh();
 }
