@@ -11884,6 +11884,9 @@ class Emitter:
 			if count is None:
 				return [f"\t\t// {placement.path}: this backend cannot resolve"
 				        " how many reserved bytes there are."]
+		elif pad is not None:
+			# A pad at a known offset: all of it, which may be none (26.1139).
+			count = str(placement.size_bits // BITS_PER_BYTE)
 		else:
 			count = str(width)
 

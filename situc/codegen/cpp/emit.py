@@ -12839,7 +12839,9 @@ class Emitter:
 			# reaching for one crashed the compiler. For a whole-byte scalar
 			# the byte loop says the same thing -- zero is zero in either
 			# byte order -- so the two cases share one emitter.
-			if placement.offset_bits is None:
+			# And a pad, whose bytes may be three or none (26.1139).
+			if placement.offset_bits is None \
+					or pad_alignment(placement) is not None:
 				return [*self._pad_bounds_checks(struct, placement),
 				        *self._reserved_checks(struct, placement)]
 			policy = _reserved_policy(placement.attrs)
@@ -13114,6 +13116,9 @@ class Emitter:
 			if count is None:
 				return [f"\t\t/* {placement.path}: this backend cannot resolve"
 				        " how many reserved bytes there are. */"]
+		elif pad is not None:
+			# A pad at a known offset: all of it, which may be none (26.1139).
+			count = str(placement.size_bits // BITS_PER_BYTE)
 		else:
 			count = str(width)
 

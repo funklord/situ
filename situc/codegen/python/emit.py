@@ -10735,7 +10735,10 @@ class Emitter:
 			# At a dynamic offset there is no constant to load from, and
 			# reaching for one crashed the compiler. For a whole-byte scalar
 			# the byte comparison says the same thing in either byte order.
-			if placement.offset_bits is None:
+			# And a pad, whose element is a byte and whose bytes may be
+			# three or none: loaded as its element it checked one (26.1139).
+			if placement.offset_bits is None \
+					or pad_alignment(placement) is not None:
 				return [*self._pad_bounds_check(struct, placement),
 				        *self._reserved_check(struct, placement)]
 			policy = _reserved_policy(placement.attrs)
@@ -10939,6 +10942,10 @@ class Emitter:
 				return [f"\t\t# {placement.path}: this backend cannot resolve"
 				        " how many reserved bytes there are."]
 			count = length
+		elif pad is not None:
+			# A pad at a known offset: all of it, which may be none. Its
+			# element is a byte, and `width` asked one (26.1139).
+			count = str(placement.size_bits // BITS_PER_BYTE)
 		else:
 			count = str(width)
 

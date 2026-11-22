@@ -14380,6 +14380,11 @@ class Emitter:
 
 		if placement.kind == "reserved":
 			policy = _reserved_policy(placement.attrs)
+			# A pad is its bytes, however many: read as its one-byte element
+			# it checked the first of `pad_to(4)`'s three after a `u8`, and
+			# a pad of none read the next member's first byte (26.1139).
+			if pad_alignment(placement) is not None:
+				return self._reserved_array_check(struct, placement, scalar)
 			if policy in RESERVED_STATED:
 				expect = "0" if policy == "must_be_zero" else _all_ones(scalar.bits)
 				read   = self._load_expression(scalar, placement, "situ_base(view)")
@@ -15935,9 +15940,9 @@ class Emitter:
 		pad    = pad_alignment(placement)
 		if pad is not None:
 			# The padding is `align_up(at, n) - at`, computed the same way
-			# the offset function advances the running sum (0043). A static
-			# pad has a fixed `size_bits` and falls to the constant path
-			# below; only a dynamic one reaches here.
+			# the offset function advances the running sum (0043), for a
+			# static pad as for a dynamic one: the static one fell to the
+			# scalar path and checked one byte of three (26.1139).
 			count = f"situ_align_up_u32(at, {pad}u, view.limit) - at"
 			shown = f" (pad_to {pad})"
 		elif placement.array_count is not None:

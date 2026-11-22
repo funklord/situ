@@ -9643,6 +9643,22 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1139 A pad at a known offset is checked over all its bytes
+
+Same replay, `test/schema/padded.situ`: `u8 one; pad_to(4); u32 word;`
+with `00 00 01 00` -- a nonzero third pad byte, which 0043 makes
+`must_be_zero` -- validated clean in all four backends and was refused by
+the walker. A static pad was checked as its one-byte element: C's scalar
+path loaded byte 1 alone (its comment said a static pad "falls to the
+constant path"), and the other three counted one element. And a pad of
+NO bytes still read one, the next member's: `u32 a; pad_to(4); u8 b;`
+with `b = 5` was refused by all four. C now sends a pad to the run check,
+whose `align_up` count is right static or dynamic; Python and C++ route a
+static pad there too, and the three count its `size_bits`. Of the corpus
+only `padded`'s generated code moves. Held in
+`test/unit/test_a_static_pad_is_all_its_bytes.py`, which fails on the old
+backends; both walkers were right.
+
 ### 26.1135 A varint cut short ahead of a descent is no nesting
 
 Same replay, `cbor`: a lone `d9` is a tag whose head wants two more bytes.
