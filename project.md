@@ -9727,6 +9727,22 @@ read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
 
+### 26.1158 `verify` names a coded region whose contents it did not read
+
+From openmlx4 (inbox 20261122T1445Z): MFA's MAP section, xz-compressed,
+holds 174 records; one changed and recompressed still conformed, and
+`verify` said nothing. A coded region's members are in its DECODED bytes:
+the generated reader leaves decoding to the caller (its accessors over
+such a region read the encoded bytes), and `validate` reads none of it.
+`verify` now names such a region beside the arrays it already named as
+unread -- "coded by `xz`, which `verify` does not decode, so nothing inside
+it was read" -- where something inside could be refused (a struct, or a
+field with a constraint); a region of bare bytes has nothing to read and
+is not named. The summary reads "except inside arrays or coded regions".
+Decoding in `verify` -- `lzma` for an `extern "lzma"` codec, the interior
+then validated -- is the step after, and openmlx4 keeps the arm as bytes
+until it exists. Held in `test_verify_checks_a_tag_wherever_it_is_reached.py`.
+
 ### 26.1157 Python frames a variant that states its size by the size
 
 From openmlx4 (inbox 20261122T1445Z, its MFA TOC): Python's `required`

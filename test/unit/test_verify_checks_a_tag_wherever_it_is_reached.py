@@ -249,3 +249,36 @@ def test_a_sized_variant_frames_its_run_whole(tmp_path: Path,
 	out = _verify(tmp_path, FIXED_RUN, "fixed_arm long 02 07 aa bb cc\n",
 	              capsys)
 	assert "1 are surplus" in out, out
+
+
+CODED = """target buffer;
+endian little;
+
+codec xz {
+	expansion = unbounded;
+	granularity = stream;
+	not seekable;
+	invertible;
+}
+impl xz extern "lzma";
+
+struct rec { u8 n [max = 3]; u8 v[n]; }
+
+struct packed { u8 kind; coded stream(xz) { rec records[remaining]; } }
+struct opaque { u8 kind; coded stream(xz) { u8 data[remaining]; } }
+"""
+
+
+def test_a_coded_region_s_records_are_named_unread(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""A record inside `coded stream(xz)` is in decoded bytes nothing here
+	produces, and a change to one conformed with no word said (openmlx4,
+	inbox 20261122T1445Z). `verify` names the region now (26.1158); one
+	holding bytes alone has nothing to read and is not named."""
+	out = _verify(tmp_path, CODED, "packed one 01 aa bb\n", capsys)
+	assert "except inside arrays or coded regions" in out, out
+	assert ("`packed.stream`: coded by `xz`, which `verify` does not "
+	        "decode") in out, out
+	out = _verify(tmp_path, CODED, "opaque one 01 aa bb\n", capsys)
+	assert "coded by" not in out, out
+	assert "1 vectors conform" in out, out

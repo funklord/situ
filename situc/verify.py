@@ -758,6 +758,25 @@ def _gather(resolved: ResolvedSchema, struct: ResolvedStruct, found: list[str],
 		if placement.kind == "element" or "[]" in placement.path:
 			continue
 
+		# A CODED region's members are in its DECODED bytes, which nothing
+		# here produces: the generated reader leaves decoding to the
+		# caller, and `validate` reads none of it. So a record changed
+		# inside openmlx4's xz-compressed MFA map conformed, and the report
+		# said nothing at all (inbox 20261122T1445Z, 26.1158).
+		# Only where something inside could be refused -- a struct, or a
+		# field carrying a constraint: `u8 data[remaining]` has nothing
+		# to read, and naming it would be noise.
+		if placement.kind == "coded" and any(
+				other.placement.path.startswith(placement.path + ".")
+				and (other.placement.type_name in resolved.structs
+				     or any(attr.name in ("must_eq", "min", "max")
+				            for attr in other.placement.attrs))
+				for other in struct.entries):
+			found.append(f"`{placement.path}`: coded by "
+			             f"`{placement.codec}`, which `verify` does not "
+			             f"decode, so nothing inside it was read")
+			continue
+
 		inner    = resolved.structs.get(placement.type_name or "")
 		# A RUN ENDED BY A DELIMITER IS REPEATED TOO, and it was the one
 		# shape missing here -- this docstring has claimed "and so is a run
@@ -896,7 +915,8 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 		# tag nothing could check sat beside the ones that were.
 		lines.append(f"situc: {len(found)} vectors conform to {schema_path}, "
 		             "except " + " and ".join(
-				             what for what, held in (("inside arrays", arrays),
+				             what for what, held in (("inside arrays or coded "
+				                                      "regions", arrays),
 				                                     ("unchecked tags", tags))
 				             if held))
 	else:
@@ -905,8 +925,8 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 	if found and arrays:
 		lines.append("note: `validate` does not read these elements -- an "
 		             "enum array's, and a run's that is in a variant arm, "
-		             "names its own type or takes arguments -- so these "
-		             "were not read:")
+		             "names its own type or takes arguments, and what a "
+		             "coded region holds -- so these were not read:")
 		lines.extend(f"    = {one}" for one in arrays)
 	if found and tags:
 		lines.append("note: these tags were not checked:")
