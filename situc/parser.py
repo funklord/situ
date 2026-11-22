@@ -197,7 +197,7 @@ REASSEMBLE_ATTRIBUTES = frozenset({
 	# The cap one value of a key field holds (fuzznet, inbox
 	# 20261122T1804Z): `per = f.head.sender, per_max = 1`.
 	"per", "per_max",
-	# A piece's own deadline: the slot's is the earliest seen.
+	# A piece's own deadline: the first piece's bounds the slot it opens.
 	"expires",
 })
 

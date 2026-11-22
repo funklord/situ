@@ -1350,7 +1350,7 @@ EXPIRING = SCHEMA.replace("\tu16  chunks;\n", "\tu16  chunks;\n\tu32  until;\n")
 EXPIRING_PY = r"""
 import sys
 sys.path[:0] = [".", RUNTIME]
-from situ_runtime import Message, BoundsError
+from situ_runtime import Message, BoundsError, ConstraintError
 import r, r_reassemble
 
 def frame(ix, n, until, body):
@@ -1368,19 +1368,44 @@ except BoundsError:
 assert t.add(frame(0, 2, 150, b"ab"), 100) is None
 # Its deadline, 150, is the slot's: earlier than 100 + the timeout.
 assert t.expire(149) == 0 and t.expire(150) == 1
-# A later piece stating an earlier deadline pulls the slot's in: held
-# from 200 with the table's timeout it would go at 3200, and goes at 300.
+# The first piece fixes the slot's deadline, and a later one never moves
+# it, as fuzznet's own table does (fuzznet, 2026-11-23): held from 200
+# with the table's timeout of 3000, it goes at 3200, though the second
+# piece says 300 -- and a refused piece, a rewrite saying 250, moves
+# nothing either.
 assert t.add(frame(0, 3, 5000, b"ab"), 200) is None
 assert t.add(frame(1, 3, 300, b"cd"), 210) is None
-assert t.expire(299) == 0 and t.expire(300) == 1
+try:
+	t.add(frame(1, 3, 250, b"xx"), 220)
+	raise SystemExit("a rewrite was taken")
+except ConstraintError:
+	assert t.why == t.WHY_CONFLICT
+assert t.expire(3199) == 0 and t.expire(3200) == 1
+# A refused piece refuses only itself: a parked last piece, then a piece
+# shorter than it while the stride is unknown, keeps the message held.
+assert t.add(frame(2, 3, 9000, b"xyz"), 4000) is None
+try:
+	t.add(frame(0, 3, 9000, b"ab"), 4001)
+	raise SystemExit("a stride shorter than the last piece was taken")
+except ConstraintError:
+	assert t.why == t.WHY_LAST_LONGER
+assert t.add(frame(0, 3, 9000, b"abc"), 4002) is None
+assert t.add(frame(1, 3, 9000, b"def"), 4003) == b"abcdefxyz"
+# But a piece refused as it opens a slot leaves no slot behind.
+try:
+	t.add(frame(0, 3, 9000, b""), 4004)
+	raise SystemExit("an empty piece was taken")
+except BoundsError:
+	assert t.why == t.WHY_EMPTY
+assert len(t._live) == 0
 print("python ok")
 """
 
 
 def test_a_piece_s_own_deadline_bounds_its_slot(tmp_path: Path) -> None:
 	"""`expires` (fuzznet, inbox 20261122T1804Z): a piece already at its
-	deadline is refused, and a slot's deadline is the earliest any of its
-	pieces states, so it expires before the table's own timeout. The four
+	deadline is refused, and the first piece's deadline, where earlier than
+	the table's timeout, is its slot's; a later piece never moves it. The four
 	tables agree on it in the hostile stream; this says what it is."""
 	(tmp_path / "r.situ").write_text(EXPIRING, encoding="ascii")
 	out = tmp_path / "py"
