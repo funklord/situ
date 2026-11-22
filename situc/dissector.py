@@ -2403,56 +2403,80 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 
 
 def _rule_wide(struct: ResolvedStruct, expr: "ast.Expr") -> str | None:
-	"""A `when` that reads an unsigned 64-bit `let`, spelled whole in
-	`UInt64`, or None (26.1151).
+	"""A `when` that reads a 64-bit `let`, spelled whole in `UInt64`, or
+	None (26.1151, 26.1153).
 
 	`_let_reads` hands a rule each let below 64 bits as a Lua number; a
 	64-bit one stays a `UInt64`, which never equals or orders against a
 	Lua number, so the rule was written out as a comment. Here every
 	operand is a `UInt64` -- the let as `_let_wide` spells it, a field as
 	`_let_wide` reads one, a literal in two words -- and the rule holds
-	where the result is not zero. Unsigned only: `UInt64` orders unsigned,
-	so a SIGNED let or field, which a rule may compare below zero, is
-	declined, as anything outside the arithmetic, comparisons and `&&`,
-	`||`, `!` is.
+	where the result is not zero.
+
+	`UInt64` orders unsigned, and the readers compare what the values ARE:
+	`walk.py` with Python's integers, the backends in `int64_t`. So each
+	operand carries what it may be -- `n`, never negative and below 2^63;
+	`s`, possibly negative; `u`, possibly 2^63 or more -- and a comparison
+	with an `s` side orders signed, by flipping the sign bit of both,
+	which is two's complement ordering. An `s` against a `u` is declined:
+	no 64-bit order holds both, as the backends' widening refusal says of
+	a bound (26.1150). So is anything outside the arithmetic, comparisons
+	and `&&`, `||`, `!`.
 	"""
 	lets = {let.name: let for let in _LETS.get(struct.name, [])}
-	if not any(_let_bits(let)[0] == 64 and not _let_bits(let)[1]
-	           for let in lets.values()):
+	if not any(_let_bits(let)[0] == 64 for let in lets.values()):
 		return None
 	fields = {entry.placement.path[len(struct.name) + 1:]: entry.placement
 	          for entry in struct.entries}
+	sign = "UInt64(0, 2147483648)"
 
 	class Declined(Exception):
 		pass
 
-	def literal(value: int) -> str:
+	def literal(value: int) -> tuple[str, str]:
+		kind = "n" if 0 <= value < 1 << 63 else "u"
 		value &= 0xFFFF_FFFF_FFFF_FFFF
-		return f"UInt64({value & 0xFFFFFFFF}, {value >> 32})"
+		return f"UInt64({value & 0xFFFFFFFF}, {value >> 32})", kind
 
-	def name(held: str) -> str:
+	def name(held: str) -> tuple[str, str]:
 		if held in _CONSTS:
 			return literal(_CONSTS[held])
 		if held in lets:
 			bits, signed = _let_bits(lets[held])
-			value = _let_wide(struct, lets[held])
-			if signed or value is None:
+			value = _let_wide(struct, lets[held], raw = True)
+			if value is None:
 				raise Declined(held)
-			return value if bits == 64 else f"situ_w64({value})"
+			kind = "s" if signed else "u" if bits == 64 else "n"
+			return (value if bits == 64 else f"situ_w64({value})"), kind
 		placement = fields.get(held)
 		if placement is None or placement.scalar is None \
-				or placement.scalar.signed or placement.array_count is not None:
+				or placement.array_count is not None:
 			raise Declined(held)
-		if placement.size_bits > 32:
+		width = placement.size_bits
+		signed = placement.scalar.signed
+		if width > 32:
 			whole = _read_u64(placement, "0")
+			kind = "s" if signed else "u"
 		else:
 			whole = _over_fields(struct, held, "0")
+			if whole is not None and signed:
+				# Its unsigned bytes, as `_let_wide` reads one, extended.
+				whole = (f"(function (n) if n >= {1 << (width - 1)} then"
+				         f" return n - {1 << width} end return n end)"
+				         f"({whole})")
 			whole = None if whole is None else f"situ_w64({whole})"
+			kind = "s" if signed else "n"
 		if whole is None:
 			raise Declined(held)
-		return whole
+		return whole, kind
 
-	def go(node: "ast.Expr") -> str:
+	def joined(left: str, right: str) -> str:
+		if "s" in (left, right) and "u" in (left, right):
+			raise Declined("a signed and an unsigned 64-bit value")
+		return "s" if "s" in (left, right) else \
+			"u" if "u" in (left, right) else "n"
+
+	def go(node: "ast.Expr") -> tuple[str, str]:
 		if isinstance(node, ast.IntLiteral):
 			return literal(node.value)
 		if isinstance(node, ast.NameRef):
@@ -2465,24 +2489,37 @@ def _rule_wide(struct: ResolvedStruct, expr: "ast.Expr") -> str | None:
 				return literal(members[node.name])
 			raise Declined(node.name)
 		if isinstance(node, ast.Unary):
-			inner = go(node.operand)
+			inner, kind = go(node.operand)
 			if node.op == "-":
-				return f"(situ_zero64 - {inner})"
+				if kind == "u":
+					raise Declined("the negation of a 64-bit unsigned value")
+				return f"(situ_zero64 - {inner})", "s"
 			if node.op == "~":
-				return f"({inner}):bnot()"
-			return f"situ_b64({inner} == situ_zero64)"
+				if kind == "u":
+					raise Declined("the complement of a 64-bit value")
+				return f"({inner}):bnot()", "s"
+			return f"situ_b64({inner} == situ_zero64)", "n"
 		if isinstance(node, ast.Binary):
-			left, right = go(node.left), go(node.right)
-			if node.op == "&&":
-				return (f"situ_b64({left} ~= situ_zero64 and"
-				        f" {right} ~= situ_zero64)")
-			if node.op == "||":
-				return (f"situ_b64({left} ~= situ_zero64 or"
-				        f" {right} ~= situ_zero64)")
+			(left, lk), (right, rk) = go(node.left), go(node.right)
+			if node.op in ("&&", "||"):
+				word = "and" if node.op == "&&" else "or"
+				return (f"situ_b64({left} ~= situ_zero64 {word}"
+				        f" {right} ~= situ_zero64)"), "n"
 			compared = {"==": "==", "!=": "~=", "<": "<", "<=": "<=",
 			            ">": ">", ">=": ">="}.get(node.op)
+			kind = joined(lk, rk)
 			if compared is not None:
-				return f"situ_b64({left} {compared} {right})"
+				if kind == "s" and compared not in ("==", "~="):
+					left  = f"({left}):bxor({sign})"
+					right = f"({right}):bxor({sign})"
+				return f"situ_b64({left} {compared} {right})", "n"
+			# What each operator may give: a difference may be negative, a
+			# sum, product or left shift may pass 2^63, and the rest of two
+			# never-negative values below 2^63 stays there.
+			if node.op == "-":
+				kind = "s" if kind == "n" else kind
+			elif node.op in ("*", "<<", "+") and kind == "n":
+				kind = "u"
 			spelled = {"+": f"({left} + {right})", "-": f"({left} - {right})",
 			           "*": f"({left} * {right})",
 			           "/": f"situ_div64({left}, {right})",
@@ -2493,11 +2530,13 @@ def _rule_wide(struct: ResolvedStruct, expr: "ast.Expr") -> str | None:
 			           "|": f"({left}):bor({right})",
 			           "^": f"({left}):bxor({right})"}.get(node.op)
 			if spelled is not None:
-				return spelled
+				if kind == "s" and node.op in ("/", "%", ">>"):
+					raise Declined("a signed division or shift")
+				return spelled, kind
 		raise Declined(type(node).__name__)
 
 	try:
-		return f"{go(expr)} ~= situ_zero64"
+		return f"{go(expr)[0]} ~= situ_zero64"
 	except Declined:
 		return None
 
@@ -3543,7 +3582,8 @@ def _let_value(struct: ResolvedStruct, let: "ast.Let") -> str | None:
 	                    tree=let.expr)
 
 
-def _let_wide(struct: ResolvedStruct, let: "ast.Let") -> str | None:
+def _let_wide(struct: ResolvedStruct, let: "ast.Let",
+		raw: bool = False) -> str | None:
 	"""A named value in Wireshark's `UInt64`, held to its width, or None
 	(26.1112).
 
@@ -3631,7 +3671,9 @@ def _let_wide(struct: ResolvedStruct, let: "ast.Let") -> str | None:
 	except (Declined, ValueError, AssertionError):
 		return None
 	if bits == 64:
-		return value if not signed \
+		# `raw`: a signed one's bits as the `UInt64` they are, which
+		# `_rule_wide` orders signed by itself (26.1153).
+		return value if not signed or raw \
 			else f"(function (v) return Int64(v:lower(), v:higher()) end)({value})"
 	mask = (1 << bits) - 1
 	held = f"({value}):band(UInt64({mask & 0xFFFFFFFF}, {mask >> 32})):tonumber()"

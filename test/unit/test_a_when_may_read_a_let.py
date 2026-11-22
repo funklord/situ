@@ -51,12 +51,21 @@ when signed_let.diff < 0
 	refuse backwards "b may not exceed a";
 when huge.sum == 0x0020000000000002 && huge.y != 0
 	refuse exactly "the sum may not be 2^53 + 2";
+struct huge_signed {
+	i64 x;
+	i8  k;
+	let i64 d = x - 5;
+}
+when huge_signed.d < huge_signed.k
+	refuse below "d may not be under k";
 """
 
 #: (struct, bytes, verdict). `ff ff` is 510 to the u16 and 254 to the u8 --
 #: the width is the let's, not the arithmetic's. `huge` is 2^53 + 1 and 1:
 #: a double reads x as 2^53 and misses the sum, and the dissector wrote a
-#: rule over a 64-bit let as a comment until 26.1151.
+#: rule over a 64-bit let as a comment until 26.1151. `huge_signed` orders a
+#: signed one (26.1153): `x - 5` for x = 3 is -2, below 0 and not below -2;
+#: for x = -2^63 it wraps to 2^63 - 5, held to an `i64`, and is above both.
 CASES = [("wide", b"\x01\x02", "0"), ("wide", b"\xff\xff", "2"),
          ("narrow", b"\x01\x02", "0"), ("narrow", b"\x06\x06", "2"),
          ("narrow", b"\xff\x02", "0"),		# 257 held to a byte is 1
@@ -65,7 +74,13 @@ CASES = [("wide", b"\x01\x02", "0"), ("wide", b"\xff\xff", "2"),
          ("huge", bytes.fromhex("0020000000000001" "01"), "2"),
          ("huge", bytes.fromhex("0020000000000001" "00"), "0"),
          ("huge", bytes.fromhex("0020000000000000" "02"), "2"),
-         ("huge", bytes.fromhex("0020000000000000" "01"), "0")]
+         ("huge", bytes.fromhex("0020000000000000" "01"), "0"),
+         ("huge_signed", bytes.fromhex("0000000000000003" "00"), "2"),
+         ("huge_signed", bytes.fromhex("0000000000000009" "00"), "0"),
+         ("huge_signed", bytes.fromhex("0000000000000003" "fe"), "0"),
+         ("huge_signed", bytes.fromhex("8000000000000000" "00"), "0"),
+         ("huge_signed", bytes.fromhex("8000000000000004" "00"), "0"),
+         ("huge_signed", bytes.fromhex("fffffffffffffff0" "f0"), "2")]
 
 
 def _validate(said: str, struct: str) -> str:
@@ -114,7 +129,8 @@ def test_tshark_reads_the_let_in_a_when(tmp_path: Path) -> None:
 	                str(tmp_path), str(source)],
 	               check=True, capture_output=True, cwd=ROOT)
 	names = {"wide": "wide_too_big", "narrow": "narrow_too_big",
-	         "signed_let": "backwards", "huge": "exactly"}
+	         "signed_let": "backwards", "huge": "exactly",
+	         "huge_signed": "below"}
 	for struct, raw, want in CASES:
 		script = tmp_path / f"{struct}.lua"
 		script.write_text((tmp_path / "lets.lua").read_text("ascii")

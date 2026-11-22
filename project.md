@@ -514,8 +514,9 @@ both walkers and the dissector. What a user cannot yet do is listed under
   consumer reports one.
 - The dissector computes a `let` in `UInt64` (26.1112), over a field of up
   to 64 bits, and a `when` reads one of any width (26.1133, 26.1151); a
-  `let` over a text number or a token is declined, and so is a rule over a
-  SIGNED 64-bit let, which `UInt64` would order unsigned.
+  `let` over a text number or a token is declined, and so is a rule that
+  compares a possibly negative value with a possibly huge unsigned one
+  (26.1153).
 - `situc map` does not describe a registry; its contract is in `wire`.
 - Coverage-guided fuzzing of the Rust and Python harnesses: built
   (26.1132), `make fuzz-python` and `make fuzz-rust`; atheris and
@@ -9724,6 +9725,22 @@ where the walker's public counts count varints and hold at zero, and
 read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
+
+### 26.1153 A rule over a signed 64-bit let orders signed in the dissector
+
+26.1151 spelled a rule over a 64-bit let in `UInt64`, unsigned only:
+`UInt64` orders unsigned, and `when d < k` with `d` an `i64` at -2 would
+have read it as 2^64 - 2. Each operand now carries what it may be --
+never negative and below 2^63, possibly negative, possibly 2^63 or more
+-- and an ordering with a possibly negative side flips the sign bit of
+both, which is two's complement order. A possibly negative value against
+a possibly huge unsigned one is declined, as no 64-bit order holds both
+(the backends refuse the same comparison in a bound, 26.1150); so are a
+signed division, remainder or right shift, where Lua's `UInt64` and the
+readers part. Held in `test_a_when_may_read_a_let.py`: `x - 5` for x = 3
+is below 0, and for x = -2^63 wraps to 2^63 - 5 held to an `i64`, above
+both -- the four backends, both walkers and tshark agree on all six
+cases, and the tshark one fails on 26.1151's dissector.
 
 ### 26.1151 The dissector reads a 64-bit field into a `let`, and a rule over a 64-bit let
 
