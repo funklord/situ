@@ -9743,6 +9743,20 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1162 An indexed region is not held to its own reach in the C walker
+
+`make fuzz-walker-c-differ`, sqlite: a leaf page of no cells whose eight
+bytes after the header read as one cell -- a sqlite varint ending on its
+eighth byte, a payload far past the frame -- was BOUNDS in the C walker
+and valid to the readers and `walk.py`. The region's reach, walked over
+those bytes, was too wide to count, and the walker's "too wide is past
+any frame" branch refused it. An indexed region's elements are where its
+table points them and are validated there (26.1143); `walk.py` measures
+the region and asks only that the TABLE fit. The C walker now takes an
+uncountable reach of an indexed region as nothing and goes on to that
+table check, which still refuses a table the page does not hold. Held in
+`test_walker_c.py` (`test_an_indexed_region_is_not_held_to_its_own_reach`).
+
 ### 26.1161 An arm's fit check in the C walker added its width in 32 bits
 
 `make fuzz-walker-c-differ` over the schemas after `edges`: wasm's

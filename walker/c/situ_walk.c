@@ -7302,11 +7302,20 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (held.located_code != SITU_WALK_NONE) {
 				continue;
 			}
-			/* Too wide to count in bits is past any frame, and where the
-			 * member is held to the frame that is the check that refuses
-			 * it, as `report` names it with integers that do not overflow:
-			 * riff's `data[size]` under a drawn `size` (26.928). */
-			{
+			/* Nor an `indexed` region: its elements are where the table
+			 * points them and are validated there, and its own reach is
+			 * no member's length -- `walk.py` measures it and asks only
+			 * that the TABLE fit, below. A sqlite leaf page of no cells
+			 * whose bytes after the header read as one oversized cell was
+			 * BOUNDS here and valid to the readers (26.1162, found by
+			 * `make fuzz-walker-c-differ`). */
+			if (table_row(image->indexes, image->index_count,
+			              image->index_stride, index) == NULL) {
+				/* Too wide to count in bits is past any frame, and where
+				 * the member is held to the frame that is the check that
+				 * refuses it, as `report` names it with integers that do
+				 * not overflow: riff's `data[size]` under a drawn `size`
+				 * (26.928). */
 				uint32_t       rows   = 0u;
 				const uint8_t *checks = check_rows(image, index, &rows);
 				uint8_t        named  = SITU_WALK_NO_CHECK;
@@ -7318,9 +7327,10 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					}
 				}
 				record(why, index, named);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
 			}
-			*verdict = SITU_WALK_BOUNDS;
-			return SITU_WALK_OK;
+			wide = 0u;
 		}
 		/* A varint the frame cuts short. Its width is zero so that the lax
 		 * reader goes on placing what follows, which is that reader's answer

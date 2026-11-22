@@ -1166,6 +1166,32 @@ def test_an_arm_reaching_past_2_to_the_32_bits_is_past_the_frame(
 		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
 
 
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_an_indexed_region_is_not_held_to_its_own_reach(
+		tmp_path: Path) -> None:
+	"""A sqlite leaf page of no cells whose bytes after the header read
+	as one cell with a payload past the frame: the region's reach could
+	not be counted, and the C walker refused it as too wide where the
+	readers and `walk.py` ask only that the offset TABLE fit (26.1162,
+	found by `make fuzz-walker-c-differ`). A table that does not fit is
+	still refused."""
+	from situc.cli import analyse
+	from situc.parser import parse
+
+	source, resolved, _ = analyse(ROOT / "example" / "sqlite" / "sqlite.situ")
+	blob  = pack(parse(source), resolved)[0]
+	named = load(pack(parse(source), resolved, metadata=True)[0])
+	shape = next(index for index in range(len(named.structs))
+	             if named.struct_name(index) == "btree_leaf_page")
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for message, want in (("0d13190000b5fcd4ffd2e8e6ffffff00", "0"),
+	                      ("0d1319000a00fcd4", "1"),
+	                      ("0d13190000b5fcd4", "0")):
+		data = bytes.fromhex(message)
+		assert python_verdict(blob, data, shape) == want, message
+		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;
