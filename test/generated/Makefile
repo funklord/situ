@@ -180,7 +180,8 @@ OBJS_test_spans		:= $(GEN_DIR)/edges.o codec_impl.c
 .SECONDEXPANSION:
 
 .PHONY: all test clean generate fuzz fuzz-generated fuzz-cpp \
-	fuzz-walker fuzz-walker-differ fuzz-python fuzz-rust run-fuzz \
+	fuzz-walker fuzz-walker-differ fuzz-walker-c-differ fuzz-python \
+	fuzz-rust run-fuzz \
 	test-codec-san
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
@@ -659,6 +660,27 @@ fuzz-walker-differ:
 			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
 	done
 	@echo "no difference in $(words $(FUZZ_SCHEMAS)) walker differentials"
+
+# The C walker's verdict against the generated C reader's, one libFuzzer
+# binary per schema (26.1152): every input the fuzzer runs is compared, not
+# only the corpus it keeps. Seeded from the C walker's own corpus where
+# `fuzz-walker` left one.
+fuzz-walker-c-differ:
+	@for pair in $(WALK_DIFFER); do \
+		n=$${pair%%=*}; schema=$${pair#*=}; \
+		corpus='$(FUZZ_DIR)'/corpus/wcd_$$n; seed='$(FUZZ_DIR)'/corpus/walk_$$n; \
+		if [ ! -d "$$corpus" ] && [ -d "$$seed" ]; then \
+			mkdir -p "$$corpus"; cp "$$seed"/* "$$corpus"/ 2>/dev/null; \
+		fi; \
+		mkdir -p "$$corpus"; \
+		echo "--- $$n, the C walker against the C reader ($(FUZZ_SECONDS)s)"; \
+		$(PYTHON) walker_c_differ.py '$(REPO_ROOT)'/"$$schema" \
+			'$(FUZZ_DIR)'/wcd_$$n '$(FUZZ_CC)' \
+			-max_total_time=$(FUZZ_SECONDS) -timeout=20 \
+			-rss_limit_mb=3072 -print_final_stats=1 \
+			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
+	done
+	@echo "no difference in $(words $(FUZZ_SCHEMAS)) C walker differentials"
 
 # And through the Rust accessors, under cargo-fuzz: `gen-fuzz --target rust`
 # puts libFuzzer's entry point behind `cfg(fuzzing)`, so each harness is a

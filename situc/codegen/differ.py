@@ -1897,8 +1897,11 @@ def _c_writes(resolved: ResolvedSchema, prefix: str) -> list[str]:
 			])
 		lines.extend(["\t\t}", "\t}"])
 
+	# Freed on both paths: a schema with nothing to write left its buffer
+	# allocated, harmless in a process that exits and a leak in-process,
+	# where the C walker differential runs this driver (26.1152).
 	if not any_write:
-		return lines
+		return lines + ["\tfree(raw);"]
 
 	return lines + [
 		"\t{",

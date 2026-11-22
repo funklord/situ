@@ -50,7 +50,8 @@ export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
-	fuzz fuzz-generated fuzz-cpp fuzz-walker fuzz-walker-differ fuzz-python \
+	fuzz fuzz-generated fuzz-cpp fuzz-walker fuzz-walker-differ \
+	fuzz-walker-c-differ fuzz-python \
 	fuzz-rust test-codec-san \
 	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example install-gui FORCE \
 	cross cross-test install uninstall clean help deb deb-check
@@ -78,6 +79,7 @@ help:
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  fuzz-python  the Python harnesses under atheris (pip install --user atheris)'
 	@echo '  fuzz-walker-differ  the Python walker against the Python reader, under atheris'
+	@echo '  fuzz-walker-c-differ  the C walker against the C reader, under libFuzzer'
 	@echo '  fuzz-rust  the Rust harnesses under cargo-fuzz (cargo install cargo-fuzz)'
 	@echo '  test-codec-san  the codec property suites under ASan + UBSan'
 	@echo '  cross      compile-only build for aarch64'
@@ -290,6 +292,11 @@ fuzz-walker:
 # for Debian.
 fuzz-walker-differ:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-walker-differ
+
+# The C walker's verdict against the generated C reader's, under libFuzzer
+# (26.1152). Not in `fuzz`, which gates on crashes rather than answers.
+fuzz-walker-c-differ:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-walker-c-differ
 
 # The Python and Rust harnesses under their own engines, atheris and
 # cargo-fuzz. Neither is packaged for Debian, so neither is in `fuzz`.
