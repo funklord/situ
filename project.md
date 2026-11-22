@@ -351,8 +351,8 @@ without huge dependencies kept, and the pertinent code shared:
   caller's, `expiry = caller` -- and designs for its items 1 and 2 put to
   it for review before code: reply matching after the tag (26.1122) and
   datagram reassembly (26.1123). Also the shifting write, member-by-member
-  display, checksums over an image (26.1115-7, part C of 26.1117 waiting
-  on openmlx4), the wire check through `[holds]`, capped remaining runs
+  display, checksums over an image (26.1115-7; part C of 26.1117 not
+  needed, by openmlx4's measurement), the wire check through `[holds]`, capped remaining runs
   and in-place builders (26.1118-21).
 - File identification (26.1124), the holder's shape: `identify` in the
   format's schema, `situc identify` judging files in named levels, and
@@ -545,8 +545,9 @@ both walkers and the dissector. What a user cannot yet do is listed under
   bytes as 0xFFFF already exist (`[self_as]`); a tag covering bytes outside
   its struct is built (part B: `covers(after)`, `covers(message)`, in all
   four backends, both walkers and the editor); coverage along a chain
-  (part C) waits on openmlx4 measuring whether real images are back to
-  back; (e) a failsafe flash's
+  (part C) is not needed -- openmlx4 measured all nine NVIDIA images back
+  to back, one CRC16 over `[0, image_size)` matching each (inbox
+  20261122T1417Z, 26.1117 amended); (e) a failsafe flash's
   chunk interleave, whose chunk size is read from inside what it permutes
   -- a scope question, low priority. Also told: a schema with an
   unbounded codec builds Python only at `--layer edit`, and a view-layer
