@@ -506,6 +506,17 @@ def _decoded(resolved: ResolvedSchema, struct: ResolvedStruct, view: object,
 		if inner is None:
 			continue
 		local = traverse.local_name(struct, inner_placement)
+		# The run ends where the decoded stream does. Counting stops at
+		# an element the stream cuts short, so the elements alone pass a
+		# record that overruns it: NVIDIA's MAP with one count raised ran
+		# its records to byte 79547 of 52552 and conformed, where the
+		# same bytes stored plain are refused (openmlx4, inbox
+		# 20261122T1530Z). The reader's own `_fits` is that question.
+		fits = getattr(opened, f"{py_name(local)}_fits", None)
+		if callable(fits) and not fits():
+			raise getattr(module, "BoundsError")(
+				f"{inner_placement.path}: the decoded stream does not hold "
+				"every declared element")
 		for element in _elements(opened, local, depth) or ():
 			getattr(element, "validate")()
 			for one in _checked_tags(resolved, inner, element, depth + 1):

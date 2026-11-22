@@ -321,3 +321,12 @@ def test_an_lzma_region_is_decoded_and_its_records_read(tmp_path: Path,
 	assert "do not decode as `lzma`" in out, out
 	assert "3 of 5 vectors do not conform" in out, out
 	assert "coded by" not in out, out
+
+	# A record overrunning the decoded stream: counting stopped at it, so
+	# the elements alone passed it (openmlx4, inbox 20261122T1530Z).
+	short = lzma.compress(bytes([1, 0xAA, 3, 0xBB]))
+	out = _verify(tmp_path, NESTED_CODED,
+	              f"section short 01 {len(short):02x} {short.hex(' ')}\n",
+	              capsys)
+	assert "the decoded stream does not hold every declared element" in out, \
+		out

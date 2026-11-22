@@ -9758,7 +9758,15 @@ something inside could be refused -- a struct, a constrained field -- so a
 region of bare bytes keeps the verdict it had; any other codec is still
 named unread. openmlx4's shape, records in xz inside a struct in a sized
 arm, is held in `test_verify_checks_a_tag_wherever_it_is_reached.py`, and
-its own fs2, mfa and vpd vectors conform unchanged.
+its own fs2, mfa and vpd vectors conform unchanged. Its first version
+validated each element the reader counted and never asked whether the run
+ends where the decoded stream does; counting stops at an element the
+stream cuts short, so NVIDIA's MAP with one record's `nimages` raised --
+records walking to byte 79547 of 52552 -- conformed, where the same bytes
+stored plain are refused (openmlx4, inbox 20261122T1530Z, tried before
+adopting). The reader's own `<run>_fits` is asked now, and a run that
+overruns is BOUNDS: "the decoded stream does not hold every declared
+element".
 
 ### 26.1159 A peek in a struct whose arm may be empty, said in the README
 
