@@ -528,8 +528,7 @@ def test_the_image_carries_the_trim_set_per_member(tmp_path: Path) -> None:
 	worse than the shared mistake it replaced.
 	"""
 	from walker.image import load as load_image
-	from walker.walk import acquire
-	from walker import report
+	from walker.walk import acquire, trim_span
 
 	schema, resolved = _ws_schema(tmp_path)
 	image = load_image(pack(schema, resolved, metadata=True)[0])
@@ -540,10 +539,10 @@ def test_the_image_carries_the_trim_set_per_member(tmp_path: Path) -> None:
 	# A tab is inner's whitespace and a space is not, so the two spellings
 	# separate the sets rather than merely exercising one.
 	view = acquire(image, b"\thi\t,X", shape)
-	assert report._trim_span(view, index, 4) == (1, 2)
+	assert trim_span(view, index, 4) == (1, 2)
 
 	view = acquire(image, b" hi ,X", shape)
-	assert report._trim_span(view, index, 4) == (0, 4)
+	assert trim_span(view, index, 4) == (0, 4)
 
 
 #: A shared type, and two schemas that each import it. The shape `raidcfgd`
