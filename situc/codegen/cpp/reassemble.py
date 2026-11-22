@@ -115,6 +115,12 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	                           _path(held, "index"), "at")
 	count_walk, count = _reach(resolved, held.param.type_name, root,
 	                           _path(held, "count"), "of")
+	# A piece's own deadline (fuzznet, inbox 20261122T1804Z), its low 32
+	# bits on the table's wrapping clock, as C reads it.
+	expires_walk, expires = ((_reach(resolved, held.param.type_name, root,
+	                                 _path(held, "expires"), "until"))
+	                         if _attr(held, "expires") is not None
+	                         else ([], None))
 	name = c_name(held.name)
 	key_decl = ("std::uint64_t key;" if layout.packed
 	            else f"std::uint8_t  key[{layout.total_bytes}u];")
@@ -165,6 +171,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		*keyed,
 		*index_walk,
 		*count_walk,
+		*expires_walk,
 		*walk,
 		f"\t\tconst std::uint32_t index = static_cast<std::uint32_t>({index});",
 		f"\t\tconst std::uint32_t count = static_cast<std::uint32_t>({count});",
@@ -176,6 +183,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\tif (count > capacity) {",
 		"\t\t\treturn ::situ::rt::err::bounds;",
 		"\t\t}",
+		*([f"\t\tconst std::uint32_t deadline = static_cast<std::uint32_t>({expires});",
+		   "\t\tif (static_cast<std::int32_t>(now - deadline) >= 0) {",
+		   "\t\t\treturn ::situ::rt::err::bounds;",
+		   "\t\t}"] if expires is not None else []),
 		"\t\tstd::uint32_t s = messages;",
 		"\t\tfor (std::uint32_t i = 0u; i < messages; i++) {",
 		f"\t\t\tif (slot_[i].live && {same}) {{",
@@ -208,6 +219,9 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\t}",
 		"\t\t}",
 		"\t\tslot &m = slot_[s];",
+		*(["\t\tif (static_cast<std::int32_t>(deadline - m.deadline) < 0) {",
+		   "\t\t\tm.deadline = deadline;",
+		   "\t\t}"] if expires is not None else []),
 		"\t\tif (count != m.count) {",
 		"\t\t\treturn ::situ::rt::err::constraint;\t/* not its message's count */",
 		"\t\t}",

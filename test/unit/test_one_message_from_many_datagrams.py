@@ -1122,7 +1122,8 @@ int main()
 _CAPPED_AND_NOT: list[str] = []
 
 
-def _adversarial_stream(seed: int, steps: int) -> bytes:
+def _adversarial_stream(seed: int, steps: int,
+		expiry: bool = False) -> bytes:
 	"""Pieces meant to collide: three senders, two message numbers, counts
 	that disagree with their message's, lengths off the stride and empty
 	ones, a count past a slot, and a clock starting just short of 2^32 so
@@ -1147,10 +1148,14 @@ def _adversarial_stream(seed: int, steps: int) -> bytes:
 		if rnd.random() < 0.1:
 			length = rnd.randint(0, 14)
 		body = bytes(rnd.getrandbits(8) for _ in range(length))
+		now = (now + rnd.choice([0, 0, 1, 50, 400, 1200])) & 0xFFFFFFFF
+		# A piece's own deadline: sometimes past already, sometimes before
+		# the table's timeout, sometimes after it, across the wrap.
+		until = ((now + rnd.choice([-5, 0, 3, 200, 1000, 2500, 9000]))
+		         & 0xFFFFFFFF).to_bytes(4, "big") if expiry else b""
 		frame = (bytes([who]) * 8 + mid.to_bytes(4, "big")
 		         + index.to_bytes(2, "big") + count.to_bytes(2, "big")
-		         + length.to_bytes(2, "big") + body)
-		now = (now + rnd.choice([0, 0, 1, 50, 400, 1200])) & 0xFFFFFFFF
+		         + until + length.to_bytes(2, "big") + body)
 		out += len(frame).to_bytes(2, "big") + now.to_bytes(4, "big") + frame
 	return out
 
@@ -1163,7 +1168,11 @@ def _adversarial_stream(seed: int, steps: int) -> bytes:
 	# at a time, its DoS bound.
 	SMALL.replace("messages = 2", "per = f.h.sender, per_max = 1, "
 	              "messages = 2"),
-], ids=["plain", "per"])
+	# `expires` (the same message): a piece's own deadline bounds its
+	# slot's, and a piece already past it is refused.
+	SMALL.replace("\tu16  chunks;\n", "\tu16  chunks;\n\tu32  until;\n")
+	     .replace("messages = 2", "expires = f.h.until, messages = 2"),
+], ids=["plain", "per", "expires"])
 def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		schema: str) -> None:
 	"""The four tables were written from one set of rules and held to
@@ -1180,7 +1189,7 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 			 "--target", target, "--layer", "converse", "--out",
 			 str(tmp_path / target)], cwd=ROOT, capture_output=True, text=True)
 		assert done.returncode == 0, done.stderr
-	stream = _adversarial_stream(1, 3000)
+	stream = _adversarial_stream(1, 3000, expiry="expires =" in schema)
 	said: dict[str, str] = {}
 
 	(tmp_path / "d.c").write_text(DIFF_C, encoding="ascii")
@@ -1244,3 +1253,55 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		assert first is None and len(other) == len(lines), \
 			(name, first, lines[first - 8:first + 1] if first else None,
 			 other[first - 8:first + 1] if first else None)
+
+
+EXPIRING = SCHEMA.replace("\tu16  chunks;\n", "\tu16  chunks;\n\tu32  until;\n") \
+	.replace("messages = 4", "expires = f.h.until, messages = 4")
+
+EXPIRING_PY = r"""
+import sys
+sys.path[:0] = [".", RUNTIME]
+from situ_runtime import Message, BoundsError
+import r, r_reassemble
+
+def frame(ix, n, until, body):
+	b = (bytes([7]) * 8 + (1).to_bytes(4, "big") + ix.to_bytes(2, "big")
+	     + n.to_bytes(2, "big") + until.to_bytes(4, "big")
+	     + len(body).to_bytes(2, "big") + body)
+	return r.piece_frame.at(Message(bytearray(b)), 0, len(b))
+
+t = r_reassemble.pieces_table()
+try:
+	t.add(frame(0, 2, 100, b"ab"), 100)
+	raise SystemExit("a piece at its own deadline was taken")
+except BoundsError:
+	pass
+assert t.add(frame(0, 2, 150, b"ab"), 100) is None
+# Its deadline, 150, is the slot's: earlier than 100 + the timeout.
+assert t.expire(149) == 0 and t.expire(150) == 1
+# A later piece stating an earlier deadline pulls the slot's in: held
+# from 200 with the table's timeout it would go at 3200, and goes at 300.
+assert t.add(frame(0, 3, 5000, b"ab"), 200) is None
+assert t.add(frame(1, 3, 300, b"cd"), 210) is None
+assert t.expire(299) == 0 and t.expire(300) == 1
+print("python ok")
+"""
+
+
+def test_a_piece_s_own_deadline_bounds_its_slot(tmp_path: Path) -> None:
+	"""`expires` (fuzznet, inbox 20261122T1804Z): a piece already at its
+	deadline is refused, and a slot's deadline is the earliest any of its
+	pieces states, so it expires before the table's own timeout. The four
+	tables agree on it in the hostile stream; this says what it is."""
+	(tmp_path / "r.situ").write_text(EXPIRING, encoding="ascii")
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "python", "--layer", "converse", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	ran = subprocess.run(
+		[sys.executable, "-c", EXPIRING_PY.replace(
+			"RUNTIME", repr(str(ROOT / "runtime" / "python")))],
+		cwd=out, capture_output=True, text=True, timeout=120)
+	assert ran.stdout.strip() == "python ok", ran.stderr

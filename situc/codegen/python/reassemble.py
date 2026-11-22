@@ -52,6 +52,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	         else _key_bytes(layout.request, view, into="raw"))
 	index = _read(view, _path(held, "index"))
 	count = _read(view, _path(held, "count"))
+	# A piece's own deadline (fuzznet, inbox 20261122T1804Z): its low 32
+	# bits, on the table's wrapping clock, as C reads it.
+	expires = (_read(view, _path(held, "expires"))
+	           if _attr(held, "expires") is not None else None)
 	name  = py_name(held.name)
 	return [
 		"",
@@ -85,6 +89,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\traise ConstraintError(\"a piece's index is past its count\")",
 		"\t\tif count > self.CAPACITY:",
 		"\t\t\traise BoundsError(\"more pieces than a slot holds bytes\", self.CAPACITY)",
+		*([f"\t\tdeadline = int({expires}) & 0xFFFFFFFF",
+		   "\t\tif ((now - deadline) & 0xFFFFFFFF) < 0x80000000:",
+		   "\t\t\traise BoundsError(\"the piece is past its own deadline\","
+		   " deadline)"] if expires else []),
 		"\t\tm = self._live.get(raw)",
 		"\t\tif m is None:",
 		*_per_lines(schema, held, resolved, layout),
@@ -92,6 +100,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\t\traise BoundsError(\"every slot is taken\", self.MESSAGES)",
 		"\t\t\tm = _message(count, now + self.TIMEOUT)",
 		"\t\t\tself._live[raw] = m",
+		*(["\t\tif ((deadline - m.deadline) & 0xFFFFFFFF) >= 0x80000000:",
+		   "\t\t\tm.deadline = deadline"] if expires else []),
 		"\t\tif count != m.count:",
 		"\t\t\traise ConstraintError(\"a piece's count is not its message's\")",
 		"\t\tif index in m.pieces:",

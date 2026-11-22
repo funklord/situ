@@ -273,10 +273,10 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 - From fuzznet (inbox 20261122T1804Z): six gaps before its
   `chunk/reassembly.c` can move onto 26.1123's table -- a per-sender slot
   cap, forget by key, an add from parts already opened, a per-piece
-  deadline, bounds at init, a 64-bit clock. `forget` and the per-sender cap
-  (`per`, `per_max`) are built in all four, and the clock needs nothing;
-  an add from opened parts, a per-piece deadline and bounds at init are
-  open, in 26.1123's record with fuzznet's spelling.
+  deadline, bounds at init, a 64-bit clock. `forget`, the per-sender cap
+  (`per`, `per_max`) and a piece's own deadline (`expires`) are built in
+  all four, and the clock needs nothing; an add from opened parts and
+  bounds at init are open, in 26.1123's record with fuzznet's spelling.
 - fuzznet's network list, where it stands: (1) reassembly, (2) matching
   after the tag and (3) the replay window are built in all four backends;
   (4) erasure coding it declined; (5) many peers is 26.1122's `peer`. (6)

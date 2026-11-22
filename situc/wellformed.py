@@ -1936,9 +1936,17 @@ def check_reassemblies(schema: ast.Schema) -> None:
 			if not isinstance(most, int) or not 1 <= most <= limit:
 				raise error(f"`per_max` is a number from 1 to `messages`, "
 				            f"{limit}", said["per_max"].span, label="here")
+		if "expires" in said:
+			value = said["expires"].value
+			paths = paths_in(value) if value is not None else []
+			if len(paths) != 1 or "." not in paths[0] \
+					or paths[0].split(".")[0] != held.param.name:
+				raise error(f"`expires` names a field of `{held.param.name}`, "
+				            f"as `{held.param.name}.field`",
+				            said["expires"].span, label="here")
 		unknown = sorted(set(said) - {"index", "count", "piece", "messages",
 		                              "bytes", "timeout", "unit", "per",
-		                              "per_max"})
+		                              "per_max", "expires"})
 		if unknown:
 			raise error(f"unknown attribute `{unknown[0]}` on a reassembly",
 			            said[unknown[0]].span, label="here")

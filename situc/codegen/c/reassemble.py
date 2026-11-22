@@ -162,8 +162,9 @@ def refusals(schema: ast.Schema,
 	for held in schema.reassemblies():
 		try:
 			key_layout(_relation(schema, held), resolved)
-			for key in ("index", "count"):
-				path_bindings(_path(held, key), held.param, resolved)
+			for key in ("index", "count", "expires"):
+				if _attr(held, key) is not None:
+					path_bindings(_path(held, key), held.param, resolved)
 			_piece(held, resolved, "situ")
 			per_cap(schema, held, resolved)
 		except Refused as why:
@@ -219,7 +220,11 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	reads: list[str] = []
 	local: dict[str, str] = {}
 	first = 0
-	for key in ("index", "count"):
+	# `expires` (fuzznet, inbox 20261122T1804Z): the piece's own deadline,
+	# its low 32 bits on the table's wrapping clock.
+	for key in ("index", "count", "expires"):
+		if key == "expires" and _attr(held, key) is None:
+			continue
 		bindings, _ = path_bindings(_path(held, key), held.param, resolved,
 		                            first)
 		first += len(bindings)
@@ -227,6 +232,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 			reads += _binding(bind, "uint32_t", prefix)
 		local[key] = _local(bindings[-1].target)
 	index, count = local["index"], local["count"]
+	expires = local.get("expires")
 	walk, piece, piece_len, region = _piece(held, resolved, prefix)
 	keyed = (_key(layout.request, param, prefix) if layout.packed
 	         else _key_bytes(layout.request, param, prefix,
@@ -323,6 +329,9 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tif ({count} > {upper}_CAPACITY) {{",
 		"\t\treturn SITU_ERR_BOUNDS;\t/* a byte a piece at least */",
 		"\t}",
+		*([f"\tif ((int32_t)(now - {expires}) >= 0) {{",
+		   "\t\treturn SITU_ERR_BOUNDS;\t/* past its own deadline */",
+		   "\t}"] if expires else []),
 		"",
 		f"\tuint32_t s = {upper}_MESSAGES;",
 		f"\tfor (uint32_t i = 0u; i < {upper}_MESSAGES; i++) {{",
@@ -356,6 +365,12 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t}",
 		"\t}",
 		f"\t{name}_slot_t *m = &t->slot[s];",
+		# The slot's deadline is the earliest any of its pieces states,
+		# as fuzznet's is: a message cannot outlive the piece that said
+		# it ends first.
+		*([f"\tif ((int32_t)({expires} - m->deadline) < 0) {{",
+		   f"\t\tm->deadline = {expires};",
+		   "\t}"] if expires else []),
 		# Every piece of one message says the same count. A relation whose
 		# key leaves the count out lets a later piece say a larger one, and
 		# its index, checked only against its own count, then placed it at
