@@ -394,10 +394,20 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		# CONSTRAINT over a nonzero byte it could see and this could not,
 		# and the two readers disagreed about which refusal a message
 		# earns rather than about whether it is malformed.
+		#
+		# At a DYNAMIC offset only. A pad at a static offset has the size
+		# the layout gives it, and the frame holds all of it or the struct
+		# is short: `padded_arm`'s `pad_to(4)` after one byte is three
+		# bytes, and over a three-byte frame the four backends refuse the
+		# arm as BOUNDS while this, clamped to two, read a nonzero byte in
+		# them as CONSTRAINT (26.1142).
 		unit = placement.pad_to * BITS_PER_BYTE
 		off  = offset_bits(view, index)
 		room = (view.limit - view.at) * BITS_PER_BYTE
-		return min(((off + unit - 1) // unit) * unit, room) - off
+		aligned = ((off + unit - 1) // unit) * unit
+		if placement.offset_known:
+			return aligned - off
+		return min(aligned, room) - off
 	if placement.repeat_code != NONE and placement.type_struct != NONE:
 		# A `while` run's extent is however far the walk got. Falling
 		# through to the record's `size_bits` gave the *minimum* -- one
@@ -766,11 +776,15 @@ def _arm_bits(view: View, variant: int, chosen: int, depth: int) -> int:
 	if placement.located_code != NONE:
 		return 0
 	if placement.pad_to:
-		# From where the variant starts, for the reason above.
+		# From where the variant starts, for the reason above, and clamped
+		# only where that start is dynamic (26.1142).
 		unit = placement.pad_to * BITS_PER_BYTE
 		off  = offset_bits(view, variant)
 		room = (view.limit - view.at) * BITS_PER_BYTE
-		return min(((off + unit - 1) // unit) * unit, room) - off
+		aligned = ((off + unit - 1) // unit) * unit
+		if view.image.placements[variant].offset_known:
+			return aligned - off
+		return min(aligned, room) - off
 	shape     = view.image.structs[placement.type_struct] \
 		if placement.type_struct != NONE else None
 
@@ -1705,7 +1719,11 @@ def varint_run_count(view: View, index: int) -> int:
 	"""
 	placement = view.image.placements[index]
 	if not _sizes_in_bytes(view.image, placement.size_code):
-		return _count(view, index)
+		# Bounded at the leaf, as `run_count` bounds a run of records and
+		# the backends bound every leaf (14.2b): a five-byte `uleb` count
+		# past 32 bits read 34359737172 here and 2147483647 in all four
+		# (26.1142).
+		return min(max(_count(view, index), 0), 0x7FFFFFFF)
 	rules = view.image.varint_rules.get(index)
 	if rules is None:
 		raise Refused(f"placement {index} has no varint rules in this image")
@@ -2170,6 +2188,12 @@ def digits_of(view: View, index: int) -> bytes:
 	else:
 		content = content_bits(view, index) // BITS_PER_BYTE
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	# The digits the member declares, all in the frame: a slice past the
+	# end is quietly shorter, so `u8 n; decimal u32 count[n]` over `30 30`
+	# -- 48 digits declared, one there -- read the one and answered 0 where
+	# the four backends and the C walker refuse (26.1142).
+	if start + content > view.limit:
+		raise Refused("the frame does not hold this text number's digits")
 	if index in view.image.delimiters:
 		head, content = trim_span(view, index, content)
 		start += head

@@ -9643,6 +9643,38 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1142 What fuzzing the walker found: three bounds and an accepted count
+
+A differential fuzzed coverage-guided over the WALKER (run 12): atheris
+instrumenting `walker/`, each input handed to the generated Python
+reader's differ driver and to `report.listing`, every line both print
+about a member compared, 60 s a schema over all 62. The corpora replayed
+before were guided by the generated code and could not reach these.
+
+- `u8 n; decimal u32 count[n]` over `30 30` declares 48 digits, one in
+  the frame: `digits_of` sliced the buffer, quietly short past its end,
+  and read `count ok=1 value=0` where the four backends and the C walker
+  refuse. It refuses a frame short of the digits now.
+- wasm's `uleb type_index[count]` under a five-byte count past 32 bits:
+  the backends hold every size leaf to 2147483647 (14.2b) and this walk
+  did for a run of records, not for a run of varints (34359738367).
+- edges' `padded_arm`: `pad_to(4)` as an arm after one byte is three bytes
+  at a static offset, and a three-byte frame is short of it -- BOUNDS in
+  all four. Both walkers clamped the pad to the frame (26.578's rule, for
+  a pad at a DYNAMIC offset, where every backend clamps too) and refused
+  the nonzero byte in the two they kept. Both clamp only at a dynamic
+  offset now.
+- Accepted, not fixed: hpack's `block.fields count` where the run's last
+  field opens with an integer cut short at the frame's end. The four
+  backends measure that field as the rest of the frame and count it; the
+  walk gives it no extent and counts none. A varint is cut short only at
+  the frame's end, so the field is the last and the message is refused
+  BOUNDS by all five; the count of a run in a refused message is not a
+  contract either side owes. The harness skips exactly that case.
+
+Held in `test/unit/test_the_walk_bounds_what_a_count_declares.py` and the
+`static-pad` case of `test_both_walkers_read_what_the_backends_check.py`.
+
 ### 26.1140 The bytes a tag covers are asked of the members in them
 
 Same replay, `packet`: a frame ending where the sealed body ends, with no

@@ -2396,7 +2396,16 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 		}
 		const uint32_t rem = off % unit;
 		const uint32_t pad = rem != 0u ? unit - rem : 0u;
+		situ_walk_placement where;
 
+		/* Clamped only where the variant's start is dynamic: at a static
+		 * one the arm's pad has the size the layout gives it, and a frame
+		 * short of it is BOUNDS, as the four backends answer (26.1142). */
+		if (situ_walk_placement_at(image, variant, &where) == SITU_WALK_OK
+		                && (where.flags & SITU_WALK_OFFSET_KNOWN) != 0u) {
+			*out = pad;
+			return SITU_WALK_OK;
+		}
 		*out = off >= room ? 0u : (pad < room - off ? pad : room - off);
 		return SITU_WALK_OK;
 	}
@@ -3345,6 +3354,12 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		const uint64_t aligned = (((uint64_t)off + unit - 1u) / unit) * unit;
 		const uint64_t room    = (uint64_t)len * 8u;
 
+		/* Not at a static offset, where the pad is the size the layout
+		 * gives it and a frame short of it is BOUNDS (26.1142). */
+		if ((held.flags & SITU_WALK_OFFSET_KNOWN) != 0u) {
+			*out = (uint32_t)(aligned - off);
+			return SITU_WALK_OK;
+		}
 		*out = (aligned < room ? (uint32_t)aligned
 		        : room > off ? (uint32_t)room : off) - off;
 		return SITU_WALK_OK;

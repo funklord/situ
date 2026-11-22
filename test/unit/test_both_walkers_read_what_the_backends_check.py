@@ -54,11 +54,21 @@ CLOCK = {"00000006060699": "0", "000000062602ff": "2",
          "00000006070a2e": "2", "0000000606069f": "2"}
 
 
+#: edges' `padded_arm`: `pad_to(4)` as an arm after one byte is three bytes
+#: at a static offset, so a three-byte frame is short of it -- BOUNDS in
+#: all four backends -- where both walkers clamped the pad to the frame's
+#: two and refused the nonzero byte in them (26.1142).
+PADDED_ARM = {"010100": "1", "010001": "1", "01000000": "1",
+              "0100000005": "0", "0207ee": "0"}
+EDGES = ROOT / "test" / "schema" / "edges.situ"
+
+
 @pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
 @pytest.mark.parametrize("schema, struct, cases",
                          [(JSON, "number", TRIMMED),
-                          (RTC, "wall_clock", CLOCK)],
-                         ids=["trim", "bcd"])
+                          (RTC, "wall_clock", CLOCK),
+                          (EDGES, "padded_arm", PADDED_ARM)],
+                         ids=["trim", "bcd", "static-pad"])
 def test_both_walkers_judge_it_as_the_backends_do(schema: Path, struct: str,
 		cases: dict[str, str], tmp_path: Path) -> None:
 	image = image_for(schema)
