@@ -9720,11 +9720,13 @@ windows it was opened inside as `--within STRUCT:OFFSET:LENGTH`, outermost
 first (`open_within` finds each slot by containment), and its JSON says
 each one's frame afterwards (`within`). The window passes its chain and
 follows its own frame and its chain's from the response, so a second
-write lands where the first left the bytes. Not yet: another window open
-on an enclosing struct keeps its old length until reopened, and a
-`[holds]` run and a variant's arm are not openable as nested documents,
-so the two-field case behind an outer length is reached only through a
-plain nested member. Held in `test/unit/test_a_run_grows_inside_a_window.py`
+write lands where the first left the bytes. And a `[holds]` run opens as
+the struct it holds, framed by the run, which is 26.1115's other refusal
+-- "two fields at once": `outer { u16 len; u8 body[len] [holds = inner];
+}` with `inner { u8 n; u8 name[n]; ... }` grows `name` by moving `inner.n`
+and `outer.len` both. Not yet: another window open on an enclosing struct
+keeps its old length until reopened, and a variant's arm does not open as
+a nested document. Held in `test/unit/test_a_run_grows_inside_a_window.py`
 and `test_the_qt_window_edits_as_the_cli_does.py`.
 
 ### 26.1140 The bytes a tag covers are asked of the members in them

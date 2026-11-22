@@ -127,3 +127,28 @@ def test_without_the_chain_the_command_line_still_refuses(
 	            "--set-bytes", "data=" + b"Comment\x00hello".hex())
 	assert done.returncode == 1
 	assert "opened from its parent" in done.stderr
+
+
+HELD = """target buffer;
+endian big;
+struct inner { u8 n; u8 name[n]; u8 flag; }
+struct outer { u8 kind; u16 len; u8 body[len] [holds = inner]; u8 end; }
+"""
+
+
+def test_two_fields_move_a_run_inside_an_outer_length() -> None:
+	"""26.1115's other refusal, "two fields at once": a run sized by one
+	field inside a struct framed by another. A `[holds]` run opens as the
+	struct it holds, and growing `name` moves `inner.n` and `outer.len`
+	both."""
+	document = open_document(_image(HELD),
+	                         bytearray(bytes.fromhex("070004026869" "01ee")),
+	                         "outer")
+	assert {f.name: f.nested for f in document.fields()}["body"] \
+		== ("inner", 3)
+	inner = document.open_nested(2)
+	notes = inner.set("name", b"hello")
+	assert bytes(document.buffer) \
+		== bytes.fromhex("070007" "05" "68656c6c6f" "01ee")
+	assert any("`outer.len` moved by +3" in note for note in notes), notes
+	assert document.verdict is not None and document.verdict[0] == "ok"

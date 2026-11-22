@@ -510,7 +510,14 @@ class Document:
 				           f"lands {self.at} byte(s) before this struct's "
 				           f"own base")
 				note = f"{note}; {located}" if note else located
-			if placement.type_struct != NONE:
+			# A run of bytes that `[holds]` a struct opens as that struct,
+			# framed by the run (26.898) -- the shape behind an outer length,
+			# where the struct's own run and the length framing it both move
+			# when the run grows (26.1141).
+			held_struct = (placement.type_struct
+			               if placement.type_struct != NONE
+			               else image.holds.get(index, NONE))
+			if held_struct != NONE:
 				# NAMING THE STRUCT AND THE OFFSET, because the note asks
 				# the reader to do something and both are what it takes to
 				# do it. It said "a nested struct; open it as its own
@@ -525,8 +532,7 @@ class Document:
 				# the command takes. A document opened at 8 reporting a
 				# chunk's `data` at 8 would send the reader to the
 				# signature.
-				opens  = (image.struct_name(placement.type_struct),
-				          self.at + at)
+				opens  = (image.struct_name(held_struct), self.at + at)
 				nested = (f"a nested `{opens[0]}`; "
 				          f"open it with --offset {opens[1]}")
 				# APPENDED, like every other note on this row. It assigned,
@@ -1575,7 +1581,8 @@ def open_within(window: Document,
 	for outer, inner in zip(chain, chain[1:]):
 		end = len(outer.buffer) if inner.limit is None else inner.limit
 		holds = [index for index in image.members(image.structs[outer.struct])
-		         if image.placements[index].type_struct != NONE]
+		         if image.placements[index].type_struct != NONE
+		         or index in image.holds]
 		found = None
 		for index, where in ((index, outer._extents().get(image.name_of(index)))
 		                     for index in holds):
