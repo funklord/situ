@@ -9727,6 +9727,22 @@ read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
 
+### 26.1156 A count over a huge unsigned field is past the frame in C, not empty
+
+`make fuzz-walker-c-differ` (26.1152), `edges`: `u16 d[n + 1]` over a
+varint `n` past INT64_MAX was accepted by the C walker and refused by the
+C reader and `walk.py`. 26.1148 saturated a length program that IS one
+unsigned field; `n + 1` is not, and wrapped -- for `n` = 2^64 - 1 to
+exactly zero, so no sign test could have caught it. The evaluator now
+notes an unsigned field past INT64_MAX loaded, and whether anything since
+could make a value smaller; through only `+`, `|`, `<<` and a `*` by no
+zero the result is at least that field, and reads as INT64_MAX, past any
+frame. Anything else keeps the bits, which is what `popcount(present)`
+over bit 63 needs (the first version of 26.1148 broke exactly that). This
+replaces 26.1148's bare-field rule, which it covers. Held in
+`test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
+failing on the old walker.
+
 ### 26.1159 A peek in a struct whose arm may be empty, said in the README
 
 From openmlx4 (inbox 20261122T1430Z), recording its adoption: FS2's image

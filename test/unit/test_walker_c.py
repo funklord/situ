@@ -1115,6 +1115,33 @@ def test_a_lone_zero_before_its_delimiter_is_minimal(tmp_path: Path) -> None:
 			message
 
 
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_count_over_a_huge_unsigned_is_past_the_frame(
+		tmp_path: Path) -> None:
+	"""`edges`' `varint_driver`: `u16 d[n + 1]` over a varint `n` past
+	INT64_MAX. 26.1148 saturated a length that IS one field; `n + 1`
+	wrapped -- for `n` = 2^64 - 1 to exactly zero -- so the run was empty
+	and the message accepted, where `walk.py` and the four backends
+	measure it past the frame (26.1156, found by `make
+	fuzz-walker-c-differ`). A program that can make the value smaller
+	keeps its bits, `popcount`'s case."""
+	from situc.cli import analyse
+	from situc.parser import parse
+
+	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
+	blob  = pack(parse(source), resolved)[0]
+	named = load(pack(parse(source), resolved, metadata=True)[0])
+	shape = next(index for index in range(len(named.structs))
+	             if named.struct_name(index) == "varint_driver")
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for message, want in (("d3b6b6b6969696969628b6", "1"),
+	                      ("ffffffffffffffff7f" + "00" * 6, "1"),
+	                      ("00aaaabbbb", "0")):
+		data = bytes.fromhex(message)
+		assert python_verdict(blob, data, shape) == want, message
+		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;

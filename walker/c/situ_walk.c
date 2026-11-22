@@ -8636,6 +8636,11 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 	unsigned depth = 0u;
 	uint32_t pc    = at;
 	int      wrapping = 0;
+	/* An UNSIGNED field past INT64_MAX was loaded (`huge`), and whether
+	 * anything since could have made a value smaller (`shrinks`): see
+	 * OP_END (26.1148, 26.1156). */
+	int      huge = 0;
+	int      shrinks = 0;
 
 	/* The loop terminates because the program counter only ever advances
 	 * and the program has a length: that is section 10 being total, and it
@@ -8649,24 +8654,21 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_MALFORMED;
 			}
 			*out = stack[0];
-			/* A program that is one UNSIGNED field and nothing else is that
-			 * field's value, and past INT64_MAX that value is large, not
-			 * negative: a compact size of 2^63 read below zero, a length
-			 * reads that as nothing, and bitcoin's `script[script_length]`
-			 * over `ff 00000000ffffffff` was empty and the message
-			 * accepted, where `walk.py` and the four backends measure it
-			 * past the frame (26.1148). Here and not where the field is
-			 * loaded: inside a larger program the bits are what count --
-			 * `popcount(present)` over bit 63 is 1, which saturating the
-			 * load made 63. */
-			if (*out < 0 && pc == at + 6u && image->code[at] == OP_FIELD) {
-				situ_walk_placement held;
-
-				if (situ_walk_placement_at(image, u32_at(image->code + at + 1u),
-				                           &held) == SITU_WALK_OK
-				    && (held.flags & FLAG_SIGNED) == 0u) {
-					*out = INT64_MAX;
-				}
+			/* A program over an UNSIGNED field past INT64_MAX, through
+			 * nothing that can make a value smaller -- `+`, `|`, `<<`, a
+			 * `*` by no zero -- is at least that field, so past INT64_MAX
+			 * whatever its bits read as: saturated, it measures past any
+			 * frame, as `walk.py` and the four backends measure it. A
+			 * compact size of 2^63 read below zero and a length read that
+			 * as nothing, so bitcoin's `script[script_length]` was empty
+			 * and the message accepted (26.1148); `d[n + 1]` over an `n`
+			 * of 2^64 - 1 wrapped to exactly zero (26.1156, found by `make
+			 * fuzz-walker-c-differ`). Anything that can shrink a value
+			 * keeps the bits, which are what count there: `popcount
+			 * (present)` over bit 63 is 1, which saturating every load
+			 * made 63. */
+			if (huge && !shrinks && !wrapping) {
+				*out = INT64_MAX;
 			}
 			return SITU_WALK_OK;
 		}
@@ -8698,6 +8700,15 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			                               &value);
 			if (err != SITU_WALK_OK) {
 				return err;
+			}
+			if (value < 0) {
+				situ_walk_placement held;
+
+				if (situ_walk_placement_at(image, u32_at(image->code + pc),
+				                           &held) == SITU_WALK_OK
+				    && (held.flags & FLAG_SIGNED) == 0u) {
+					huge = 1;
+				}
 			}
 			stack[depth++] = value;
 			pc += 4u;
@@ -8881,6 +8892,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (depth < 1u) {
 				return SITU_WALK_MALFORMED;
 			}
+			shrinks = 1;
 			if (wrapping) {
 				const uint64_t bits = (uint64_t)stack[depth - 1u];
 				stack[depth - 1u] = (int64_t)((op == 0x1au) ? 0u - bits
@@ -8896,6 +8908,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (depth < 1u) {
 				return SITU_WALK_MALFORMED;
 			}
+			shrinks = 1;
 			uint64_t bits = (uint64_t)stack[depth - 1u];
 			int64_t  set  = 0;
 
@@ -8912,6 +8925,13 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 		const int64_t right = stack[--depth];
 		const int64_t left  = stack[depth - 1u];
 		int64_t answer      = 0;
+
+		/* Only `+`, `|` and `<<`, and `*` by no zero, keep a value at least
+		 * what it was; everything else may make it smaller. */
+		if (!(op == 0x10u || op == 0x16u || op == 0x18u
+		      || (op == 0x12u && left != 0 && right != 0))) {
+			shrinks = 1;
+		}
 
 		/* A named value's arithmetic, on the bits as the four backends'
 		 * getters compute it (26.1059). */
