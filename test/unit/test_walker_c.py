@@ -592,7 +592,10 @@ def python_arms(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 			if flags or chosen == NONE:
 				continue
 			picked = False
-			if selects != NONE:
+			# `switch (remaining)` selects by the frame (26.1125): its
+			# selector is no placement to read, and this read past the
+			# table, raising IndexError on every NTP message.
+			if selects != NONE and selects < len(image.placements):
 				try:
 					picked = read_scalar(view, selects) == case
 				except (Refused, Unplaceable, Unsupplied):
@@ -825,8 +828,15 @@ def python_elements(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 			# would move expression semantics on one side only.
 			if placement.repeat_code != NONE:
 				count = walk.while_count(view, index)
+			elif index in image.varints:
+				# A varint run's own count: `x[remaining]` is BYTES, and
+				# `_count` answered four for a four-byte frame of three
+				# varints where the walk and C say three (26.1148's replay).
+				count = walk.varint_run_count(view, index)
 			else:
-				count = walk._count(view, index)
+				# Held at zero, as every public count is (14.2b): a
+				# `value[length - 1]` with `length` 0 printed `-1:`.
+				count = max(walk._count(view, index), 0)
 		except (Refused, Unplaceable):
 			found.append("refused")
 			continue

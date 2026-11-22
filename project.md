@@ -9711,6 +9711,15 @@ netlink); and a `pad_to` read as a number, which C declines for having no
 byte order and `walk.py` reads big-endian -- no frontend reads a pad's
 value. A struct with no members gave the verdict driver nothing to
 print, a harness artifact.
+The six asks the replay had not made -- elements, arms, tags, gates,
+markers, region counts -- over 41 of the 62 corpora (the rest claim
+runs of billions, which the test's element lister walks one by one)
+found no walker fault: what differed was the test helpers, which counted
+a `x[remaining]` varint run in bytes and printed a negative count raw
+where the walker's public counts count varints and hold at zero, and
+read `switch (remaining)`'s selector as a placement, raising on every
+NTP message. They ask what the walk asks now; what remains is counts in
+messages both walkers refuse.
 
 ### 26.1150 A sibling that shadows an arm is not the arm in `wire --check`
 
