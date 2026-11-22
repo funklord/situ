@@ -9675,6 +9675,30 @@ before were guided by the generated code and could not reach these.
 Held in `test/unit/test_the_walk_bounds_what_a_count_declares.py` and the
 `static-pad` case of `test_both_walkers_read_what_the_backends_check.py`.
 
+### 26.1141 A run grows inside a window opened from its parent
+
+26.1115 refused a shifting write in any window: a parent's lengths would
+go stale, and 12.3's invalidation model, which would find them, is not
+built. A window opened from its parent now knows the chain
+(`Document.parent`, `slot`), and `_resize_through` measures each level as
+`_resize` measures one -- the grown member's tail moved by `delta`, every
+other member read the same, a level that conformed still conforming --
+with nothing or one writable scalar ahead moving at each level. The
+fewest fields moved wins; two combinations at that count are refused as
+ambiguous. And `open_element` opens element N of a run of structs, which
+`open_nested` (the first element only) never reached: a PNG `tEXt` chunk
+grown inside the whole file moves the chunk's `length`, recomputes its
+CRC, and leaves bytes zlib agrees with. A derived frame that cannot
+follow (`invariant total == size(body)`) still refuses the write.
+
+Not yet: the `situ-edit` CLI, and the window that drives it, open a
+nested struct as a stand-alone window (`--struct --offset --length`), so
+they carry no chain and still refuse; a chain over the CLI needs the
+window to say where it was opened from. A `[holds]` run and a variant's
+arm are not openable as nested documents at all, so the two-field case
+behind an outer length is reached only through a plain nested member.
+Held in `test/unit/test_a_run_grows_inside_a_window.py`.
+
 ### 26.1140 The bytes a tag covers are asked of the members in them
 
 Same replay, `packet`: a frame ending where the sealed body ends, with no

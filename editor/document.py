@@ -30,7 +30,8 @@ bytes, with the second off at 3 against one.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+import itertools
+from dataclasses import dataclass, field as dataclass_field
 from typing import Literal
 
 from walker.image import LITTLE, NONE, Image, load
@@ -193,6 +194,14 @@ class Document:
 	#: that takes one crashed with a traceback out of `render` -- the view
 	#: being lazy, the document opened and then exploded (26.598).
 	args: tuple[int, ...] = ()
+	#: The document this one was opened from, and the placement in it this
+	#: one is (26.1141). A run resized inside a window moves what frames the
+	#: window -- a chunk's `length`, and then whatever frames the chunk --
+	#: and the chain is how the write finds them. None for a document
+	#: opened on its own, whose window is all it knows.
+	parent: "Document | None" = dataclass_field(default=None, repr=False,
+	                                            compare=False)
+	slot: int = -1
 
 	@property
 	def name(self) -> str:
@@ -221,7 +230,31 @@ class Document:
 			                 f"open it with --struct {name} --offset {at} "
 			                 "and --arg")
 		limit = None if field.size is None else at + field.size
-		return Document(self.image, self.buffer, chosen, at, limit)
+		return Document(self.image, self.buffer, chosen, at, limit,
+		                parent=self, slot=self._members()[field.name])
+
+	def open_element(self, index: int, which: int) -> "Document":
+		"""Element `which` of the run of structs in field `index`, as a
+		document over this one's buffer, as `open_nested` opens a member.
+
+		`open_nested` on a run opened its FIRST element only: a PNG file's
+		`chunks` gave the IHDR chunk and no way to reach the `tEXt` after it
+		(26.1141). The elements are where the run's own walk puts them.
+		"""
+		field = self.fields()[index]
+		if field.nested is None:
+			raise Refused(f"`{field.name}` is not a run of structs")
+		slot = self._members()[field.name]
+		spans = report._run_elements(self.view(), slot)
+		if spans is None:
+			raise Refused(f"`{field.name}` is not a run whose elements this "
+			              f"walk can place")
+		if not 0 <= which < len(spans):
+			raise Refused(f"`{field.name}` has {len(spans)} element(s)")
+		at, size = spans[which]
+		chosen = self.image.placements[slot].type_struct
+		return Document(self.image, self.buffer, chosen, at, at + size,
+		                parent=self, slot=slot)
 
 	@property
 	def verdict(self) -> tuple[str, str] | None:
@@ -705,10 +738,13 @@ class Document:
 		"""
 		if self.at != 0 or (self.limit is not None
 		                    and self.limit != len(self.buffer)):
-			raise Refused(
-				f"`{name}`: a run's length can change only in a document "
-				f"over the whole buffer -- a window inside a larger message "
-				f"has a parent whose lengths would go stale (0034, 12.3)")
+			if self.parent is None:
+				raise Refused(
+					f"`{name}`: a run's length can change only in a "
+					f"document over the whole buffer, or one opened from "
+					f"its parent -- a window opened on its own has a parent "
+					f"whose lengths would go stale (0034, 12.3)")
+			return self._resize_through(name, index, value, held)
 
 		start, bits = held
 		at = self.at + start // BITS_PER_BYTE
@@ -826,6 +862,172 @@ class Document:
 					image.capability_of(touched, "auth") == "Covered":
 				notes.extend(self._recompute(
 					image.name_of(touched).rpartition(".")[2], touched))
+		return notes
+
+	def _resize_through(self, name: str, index: int, value: bytes,
+			held: tuple[int, int]) -> list[str]:
+		"""`_resize` in a window opened from its parent (26.1141).
+
+		The same measured search, at every level from this window out to
+		the document over the whole buffer: here the run grows by `delta`,
+		and in each parent the member holding the level below grows by the
+		same. At each level either nothing moves with it -- the frame sizes
+		it -- or one writable scalar ahead of it moves by `delta` (here, by
+		elements too, as `_resize` steps). A combination holds when every
+		level measures as `_resize` measures one: what precedes the grown
+		member sits where it sat, what follows is `delta` bytes on, every
+		other member reads the same, and a level that conformed still
+		conforms. The fewest fields moved wins, and two combinations at that
+		count are refused as ambiguous rather than one picked.
+
+		12.3's invalidation model would find the stale lengths by
+		dependency; this finds them by measurement, along the one path the
+		window was opened down -- an offset table elsewhere, or a length in
+		a sibling, is not on it, and a combination that leaves one stale is
+		refused by the walk rather than written.
+		"""
+		chain: list[Document] = [self]
+		while chain[-1].parent is not None:
+			chain.append(chain[-1].parent)
+		root = chain[-1]
+		if root.at != 0 or (root.limit is not None
+		                    and root.limit != len(root.buffer)):
+			raise Refused(
+				f"`{name}`: the outermost document this was opened from is "
+				f"itself a window, so what frames it cannot be seen")
+		if any(doc.buffer is not root.buffer for doc in chain):
+			raise Refused(f"`{name}`: the documents along this chain hold "
+			              f"different buffers")
+
+		image = self.image
+		start, bits = held
+		at = self.at + start // BITS_PER_BYTE
+		old = bits // BITS_PER_BYTE
+		delta = len(value) - old
+		here = image.name_of(index)
+		local = here.rpartition(".")[2] or here
+		element = image.placements[index].element_bits // BITS_PER_BYTE
+
+		def short(of: int) -> str:
+			return image.name_of(of).rpartition(".")[2] or image.name_of(of)
+
+		# Per level: what it was, the member that grows in it, and what may
+		# move with it -- `(placement, step)`, None for nothing.
+		levels = []
+		for depth, doc in enumerate(chain):
+			before = doc._extents()
+			values = doc._values(doc.view())
+			grows = index if depth == 0 else chain[depth - 1].slot
+			where = before.get(image.name_of(grows))
+			if where is None:
+				raise Refused(f"`{name}`: `{doc.name}` cannot place the "
+				              f"member this window is")
+			steps = [delta]
+			if depth == 0 and element > 1 and delta % element == 0:
+				steps.append(delta // element)
+			options: list[tuple[int, int] | None] = [None]
+			for other in image.members(image.structs[doc.struct]):
+				if other == grows:
+					continue
+				spot = before.get(image.name_of(other))
+				if spot is None or spot[0] >= where[0]:
+					continue
+				was = values.get(short(other))
+				if not isinstance(was, int) or isinstance(was, bool):
+					continue
+				if image.capability_of(other, "mutate") in (None, "Immutable"):
+					continue
+				options.extend((other, step) for step in steps)
+			verdict = doc.verdict
+			levels.append((doc, before, values, grows, where[0],
+			               verdict is not None and verdict[0] == "ok",
+			               options))
+
+		def limit_of(doc: Document) -> int | None:
+			return None if doc.limit is None else doc.limit + delta
+
+		def attempt(choice: tuple[tuple[int, int] | None, ...]
+				) -> bytearray | None:
+			grown = bytearray(root.buffer[:at]) + bytearray(value) \
+				+ bytearray(root.buffer[at + old:])
+			for (doc, _, values, *_rest), moved in zip(levels, choice):
+				if moved is None:
+					continue
+				was = values[short(moved[0])]
+				assert isinstance(was, int)
+				try:
+					write_scalar(Document(image, grown, doc.struct, doc.at,
+					                      limit_of(doc), doc.args).view(),
+					             moved[0], was + moved[1])
+				except Refused:
+					return None
+			for depth, ((doc, before, values, grows, begins, was_ok, _),
+			            moved) in enumerate(zip(levels, choice)):
+				again = Document(image, grown, doc.struct, doc.at,
+				                 limit_of(doc), doc.args)
+				try:
+					after = again._extents()
+					read = again._values(again.view())
+					verdict = again.verdict
+				except Refused:
+					return None
+				if was_ok and (verdict is None or verdict[0] != "ok"):
+					return None
+				if not self._shifted_by(before, after, begins, delta,
+				                        image.name_of(grows)):
+					return None
+				if depth == 0 and read.get(local) != value:
+					return None
+				skip = {short(grows)} | ({short(moved[0])} if moved else set())
+				if any(read.get(key) != was for key, was in values.items()
+				       if key not in skip):
+					return None
+			return grown
+
+		combos = list(itertools.product(*(options for *_, options in levels)))
+		if len(combos) > 4096:
+			raise Refused(f"`{name}`: {len(combos)} ways to move the fields "
+			              f"framing this window are too many to measure")
+		combos.sort(key=lambda choice: sum(one is not None for one in choice))
+		passing: list[tuple[tuple[tuple[int, int] | None, ...], bytearray]] = []
+		for choice in combos:
+			moved_count = sum(one is not None for one in choice)
+			if passing and moved_count > sum(
+					one is not None for one in passing[0][0]):
+				break
+			grown = attempt(choice)
+			if grown is not None:
+				passing.append((choice, grown))
+		if not passing:
+			raise Refused(
+				f"`{name}`: a shifting write of {len(value)} byte(s) where "
+				f"there are {old} needs what frames it to move too, and no "
+				f"field along {' < '.join(doc.name for doc in chain)} does "
+				f"that and leaves the rest reading as it did")
+		if len(passing) > 1:
+			said = [", ".join(f"`{short(one[0])}`" for one in choice
+			                  if one is not None) for choice, _ in passing]
+			raise Refused(f"`{name}`: {' or '.join(said)} could each be what "
+			              f"sizes it; set it at its length and say which by "
+			              f"hand")
+
+		choice, grown = passing[0]
+		root.buffer[:] = grown
+		for doc in chain:
+			if doc.limit is not None:
+				doc.limit += delta
+		notes = [f"`{name}` is {len(value)} byte(s) now"]
+		for (doc, *_), moved in zip(levels, choice):
+			if moved is not None:
+				notes.append(f"`{doc.name}.{short(moved[0])}` moved by "
+				             f"{moved[1]:+d}")
+		notes.append("and what follows it moved with it")
+		# Innermost first: a chunk's CRC before anything covering the chunk.
+		for (doc, _, _, grows, *_), moved in zip(levels, choice):
+			for touched in (grows, None if moved is None else moved[0]):
+				if touched is not None and \
+						image.capability_of(touched, "auth") == "Covered":
+					notes.extend(doc._recompute(short(touched), touched))
 		return notes
 
 	def _take(self, grown: bytearray) -> None:
