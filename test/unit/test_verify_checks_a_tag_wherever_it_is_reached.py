@@ -234,3 +234,18 @@ def test_a_run_of_fixed_elements_in_a_sized_arm_is_walked(tmp_path: Path,
 	              "fixed_arm one 02 00 01 02\n"
 	              "fixed_arm other 02 07 aa bb\n", capsys)
 	assert "2 vectors conform" in out, out
+
+
+def test_a_sized_variant_frames_its_run_whole(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""Python's `required` framed `body[size]` through its arm: a run of
+	pairs needed ONE pair, so two pairs were called surplus, and a default
+	arm took the rest of what had arrived. C and Rust frame by the size,
+	and so does Python now (26.1157, openmlx4 inbox 20261122T1445Z)."""
+	out = _verify(tmp_path, FIXED_RUN,
+	              "fixed_arm two 04 00 01 02 03 04\n"
+	              "fixed_arm raw 02 07 aa bb\n", capsys)
+	assert "2 vectors conform" in out, out
+	out = _verify(tmp_path, FIXED_RUN, "fixed_arm long 02 07 aa bb cc\n",
+	              capsys)
+	assert "1 are surplus" in out, out

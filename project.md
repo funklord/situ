@@ -9727,6 +9727,25 @@ read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
 
+### 26.1157 Python frames a variant that states its size by the size
+
+From openmlx4 (inbox 20261122T1445Z, its MFA TOC): Python's `required`
+framed `variant body[size]` through the arm the discriminant selects, so
+an arm holding a run of fixed structs needed ONE element and a default
+arm took the rest of what had arrived; `verify`, which asks `required`
+where the layout ends, called a whole message surplus. C and Rust frame
+such a variant by its size, and `_variant_framing` now declines one for
+the plain length path, which is `_variant_length`'s `max(0, size)`. Held
+in `test_verify_checks_a_tag_wherever_it_is_reached.py`, failing on the
+old emitter.
+
+Open beside it, the same message's second finding: a `[remaining]` run of
+fixed structs in a sized arm accepts a partial last element -- `body[3]`
+over one 2-byte pair and a stray byte -- in all four backends and both
+walkers, where the same run as a struct's own last member is refused as
+BOUNDS. Making the arm agree is a verdict change in six readers;
+openmlx4 does not depend on it.
+
 ### 26.1155 `verify` checks a tag in a run inside an arm, and no parent setter writes an element's member
 
 From openmlx4 (inbox 20261122T1432Z, against 125a832b). VPD's RV checksum

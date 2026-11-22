@@ -7322,6 +7322,13 @@ class Emitter:
 		if cursor is None or not placement.arm_cases \
 				or placement.discriminant is None:
 			return None
+		# A variant that states its size is framed by it, as C and Rust
+		# frame it: through the arm, `body[size]` holding a run of pairs
+		# needed ONE pair, and a default arm the rest of what had arrived,
+		# so `verify` called a whole message surplus (openmlx4's MFA TOC,
+		# inbox 20261122T1445Z, 26.1157).
+		if placement.size_expr is not None:
+			return None
 		pairs = [(arm, member)
 		         for arm, member in arm_members(struct, placement)
 		         if member is not None]
