@@ -271,14 +271,53 @@ struct opaque { u8 kind; coded stream(xz) { u8 data[remaining]; } }
 
 def test_a_coded_region_s_records_are_named_unread(tmp_path: Path,
 		capsys: pytest.CaptureFixture[str]) -> None:
-	"""A record inside `coded stream(xz)` is in decoded bytes nothing here
-	produces, and a change to one conformed with no word said (openmlx4,
-	inbox 20261122T1445Z). `verify` names the region now (26.1158); one
-	holding bytes alone has nothing to read and is not named."""
-	out = _verify(tmp_path, CODED, "packed one 01 aa bb\n", capsys)
+	"""A record inside `coded stream(xz)` is in decoded bytes, and a change
+	to one conformed with no word said (openmlx4, inbox 20261122T1445Z).
+	Where `verify` has no decoder -- an `extern` Python's library does not
+	carry -- it names the region (26.1158); one holding bytes alone has
+	nothing to read and is not named."""
+	brotli = CODED.replace('extern "lzma"', 'extern "brotli"')
+	out = _verify(tmp_path, brotli, "packed one 01 aa bb\n", capsys)
 	assert "except inside arrays or coded regions" in out, out
 	assert ("`packed.stream`: coded by `xz`, which `verify` does not "
 	        "decode") in out, out
-	out = _verify(tmp_path, CODED, "opaque one 01 aa bb\n", capsys)
+	out = _verify(tmp_path, brotli, "opaque one 01 aa bb\n", capsys)
 	assert "coded by" not in out, out
 	assert "1 vectors conform" in out, out
+
+
+NESTED_CODED = CODED + """
+struct xz_recs { coded stream(xz) { rec records[remaining]; } }
+
+struct section {
+	u8 flag;
+	u8 size;
+	variant payload[size] switch (flag) {
+		case 0:  rec records[remaining];
+		case 1:  xz_recs packed;
+		default: error;
+	}
+}
+"""
+
+
+def test_an_lzma_region_is_decoded_and_its_records_read(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""`extern "lzma"` is a decoder Python carries, so `verify` decodes the
+	region and reads each record in it (26.1160): a record breaking `[max
+	= 3]` is refused, through a struct in a sized arm as openmlx4's MFA map
+	has it, and bytes that are no xz stream are the vector's refusal."""
+	import lzma
+
+	good = lzma.compress(bytes([1, 0xAA, 2, 0xBB, 0xCC]))
+	bad  = lzma.compress(bytes([5, 1, 2, 3, 4, 5]))
+	out = _verify(tmp_path, NESTED_CODED,
+	              f"packed good 01 {good.hex(' ')}\n"
+	              f"packed bad 01 {bad.hex(' ')}\n"
+	              "packed junk 01 aa bb\n"
+	              f"section good 01 {len(good):02x} {good.hex(' ')}\n"
+	              f"section bad 01 {len(bad):02x} {bad.hex(' ')}\n", capsys)
+	assert out.count("ConstraintError: rec.n is 5, max 3") == 2, out
+	assert "do not decode as `lzma`" in out, out
+	assert "3 of 5 vectors do not conform" in out, out
+	assert "coded by" not in out, out

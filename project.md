@@ -9743,6 +9743,23 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1160 `verify` decodes an `lzma` or `zlib` region and reads what it holds
+
+26.1158's step after. A coded region whose codec is `impl ... extern
+"lzma"` or `extern "zlib"` -- decoders Python's own library carries -- at an
+offset its struct fixes is decoded by `verify`: the region's bytes to the
+end of the view (a stream codec's extent), and a view of the same struct
+opened over the struct's bytes before the region followed by the decoded
+ones, which is where the generated reader reads a coded region's members
+from. Every run of structs inside is walked, each element validated and
+its tags checked as anywhere else; bytes the decoder refuses are the
+vector's refusal ("its bytes do not decode as `lzma`"). Only where
+something inside could be refused -- a struct, a constrained field -- so a
+region of bare bytes keeps the verdict it had; any other codec is still
+named unread. openmlx4's shape, records in xz inside a struct in a sized
+arm, is held in `test_verify_checks_a_tag_wherever_it_is_reached.py`, and
+its own fs2, mfa and vpd vectors conform unchanged.
+
 ### 26.1159 A peek in a struct whose arm may be empty, said in the README
 
 From openmlx4 (inbox 20261122T1430Z), recording its adoption: FS2's image
@@ -9774,9 +9791,8 @@ unread -- "coded by `xz`, which `verify` does not decode, so nothing inside
 it was read" -- where something inside could be refused (a struct, or a
 field with a constraint); a region of bare bytes has nothing to read and
 is not named. The summary reads "except inside arrays or coded regions".
-Decoding in `verify` -- `lzma` for an `extern "lzma"` codec, the interior
-then validated -- is the step after, and openmlx4 keeps the arm as bytes
-until it exists. Held in `test_verify_checks_a_tag_wherever_it_is_reached.py`.
+Decoding in `verify` followed at once, for the codecs Python carries
+(26.1160); this note stays for every other. Held in `test_verify_checks_a_tag_wherever_it_is_reached.py`.
 
 ### 26.1157 Python frames a variant that states its size by the size
 

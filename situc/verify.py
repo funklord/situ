@@ -60,8 +60,12 @@ being wrong about exactly that.
 from __future__ import annotations
 
 import inspect
+import lzma
 import sys
 import types
+import zlib
+from collections.abc import Callable
+from typing import cast
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -195,6 +199,11 @@ def check(schema: ast.Schema, resolved: ResolvedSchema, name: str,
 	module = _module(schema, resolved, name)
 	macros = _enum_macros(schema, resolved)
 	found: list[Outcome] = []
+	_EXTERNS.clear()
+	_EXTERNS.update({decl.codec: decl.symbol for decl in schema.decls
+	                 if isinstance(decl, ast.ImplDecl)
+	                 and decl.kind is ast.ImplKind.EXTERN
+	                 and decl.symbol is not None})
 
 	for case in parse_vectors(vectors):
 		held   = getattr(module, case.struct, None)
@@ -344,6 +353,35 @@ def _is_tag(placement: Placement) -> bool:
 #: recursion limit.
 _TAG_DEPTH = 256
 
+#: The `extern` symbols whose decoders Python's standard library has, so a
+#: coded region naming one is decoded and its contents read (26.1160).
+#: `lzma.decompress` reads the .xz container and raw LZMA alike.
+_DECODERS: dict[str, Callable[[bytes], bytes]] = {
+	"lzma": lzma.decompress, "zlib": zlib.decompress}
+
+#: Each codec's `extern` symbol in the schema being checked, set by `check`:
+#: the resolved schema carries no `impl`, the parsed one does.
+_EXTERNS: dict[str, str] = {}
+
+
+def _checkable_inside(resolved: ResolvedSchema, struct: ResolvedStruct,
+		region: Placement) -> bool:
+	"""Whether a coded region holds something that could be refused -- a
+	struct, or a field with a constraint. `u8 data[remaining]` holds
+	nothing to read, and is neither decoded nor named (26.1158)."""
+	return any(entry.placement.path.startswith(region.path + ".")
+	           and (entry.placement.type_name in resolved.structs
+	                or any(attr.name in ("must_eq", "min", "max")
+	                       for attr in entry.placement.attrs))
+	           for entry in struct.entries)
+
+
+def _decodable(placement: Placement) -> bool:
+	"""Whether `verify` decodes this coded region: an `extern` codec whose
+	decoder Python has, at an offset its struct fixes."""
+	return placement.kind == "coded" and placement.offset_bits is not None \
+		and _EXTERNS.get(placement.codec or "") in _DECODERS
+
 
 def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
 		view: object, depth: int = 0) -> tuple[str, ...]:
@@ -375,6 +413,11 @@ def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
 				struct, placement) if held is not None)
 	for placement in members:
 		local = traverse.local_name(struct, placement)
+		if _decodable(placement) \
+				and _checkable_inside(resolved, struct, placement):
+			unchecked.extend(_decoded(resolved, struct, view, placement,
+			                          depth))
+			continue
 		if _is_tag(placement):
 			checker = getattr(view, f"{py_name(local)}_check", None)
 			if checker is None:
@@ -413,6 +456,61 @@ def _checked_tags(resolved: ResolvedSchema, struct: ResolvedStruct,
 		elif opened is not _ABSENT:
 			unchecked.extend(_checked_tags(resolved, inner, opened,
 			                               depth + 1))
+	return tuple(unchecked)
+
+
+def _decoded(resolved: ResolvedSchema, struct: ResolvedStruct, view: object,
+		region: Placement, depth: int) -> tuple[str, ...]:
+	"""A coded region's contents, decoded and read (26.1160).
+
+	The generated reader leaves decoding to the caller and reads a coded
+	region's members where the caller puts the decoded bytes: at the
+	region's own offset, in a message holding them there. So the region's
+	bytes -- to the end of the view, a stream codec's extent -- are decoded
+	and a view of the same struct is opened over the struct's bytes before
+	the region followed by the decoded ones. Each run of structs inside is
+	then walked: every element validated and its tags checked, as anywhere
+	else. Bytes the decoder refuses are the vector's refusal.
+	"""
+	held   = view
+	buffer = getattr(held, "_msg").buffer
+	at     = getattr(held, "_at")
+	length = getattr(held, "_len")
+	start  = region.offset_bits // 8 if region.offset_bits is not None else 0
+	# The generated module is built in memory and never registered, so its
+	# names are reached through one of its own functions.
+	module = types.SimpleNamespace(
+		**getattr(type(held), "validate").__globals__)
+	try:
+		plain = _DECODERS[_EXTERNS[region.codec or ""]](
+			bytes(buffer[at + start:at + length]))
+	except Exception as why:                            # noqa: BLE001
+		raise getattr(module, "ConstraintError")(
+			f"{region.path}: its bytes do not decode as "
+			f"`{_EXTERNS[region.codec or '']}` ({why})") from None
+	message = getattr(module, "Message")(
+		bytearray(bytes(buffer[at:at + start]) + plain))
+	opened = cast(Callable[..., object], type(held))(message, 0,
+	                                               start + len(plain))
+	for key, value in vars(held).items():
+		if key.startswith("arg_"):
+			setattr(opened, key, value)
+
+	unchecked: list[str] = []
+	for entry in struct.entries:
+		inner_placement = entry.placement
+		if not inner_placement.path.startswith(region.path + ".") \
+				or "[]" in inner_placement.path:
+			continue
+		inner = resolved.structs.get(inner_placement.type_name or "")
+		if inner is None:
+			continue
+		local = traverse.local_name(struct, inner_placement)
+		for element in _elements(opened, local, depth) or ():
+			getattr(element, "validate")()
+			for one in _checked_tags(resolved, inner, element, depth + 1):
+				if one not in unchecked:
+					unchecked.append(one)
 	return tuple(unchecked)
 
 
@@ -766,12 +864,8 @@ def _gather(resolved: ResolvedSchema, struct: ResolvedStruct, found: list[str],
 		# Only where something inside could be refused -- a struct, or a
 		# field carrying a constraint: `u8 data[remaining]` has nothing
 		# to read, and naming it would be noise.
-		if placement.kind == "coded" and any(
-				other.placement.path.startswith(placement.path + ".")
-				and (other.placement.type_name in resolved.structs
-				     or any(attr.name in ("must_eq", "min", "max")
-				            for attr in other.placement.attrs))
-				for other in struct.entries):
+		if placement.kind == "coded" and not _decodable(placement) \
+				and _checkable_inside(resolved, struct, placement):
 			found.append(f"`{placement.path}`: coded by "
 			             f"`{placement.codec}`, which `verify` does not "
 			             f"decode, so nothing inside it was read")
