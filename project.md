@@ -169,6 +169,9 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 - Run 13: `--insert NAME:N=HEX` and `--remove NAME:N` put an element into a
   run of structs or take one out -- a PNG chunk -- its count and its new
   tags following (26.1147).
+- Run 13: the C walker's own fuzz corpora, never kept before, replayed
+  against the Python walker: a `u64` past INT64_MAX read negative in
+  lengths and bounds (26.1148), and a variant read as a number (26.1149).
 
 **Run 9 (2026-11-21), from fuzznet's inbox:**
 
@@ -9671,6 +9674,52 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1148 An unsigned value past INT64_MAX is large, not negative, in C
+
+The C walker's own fuzz corpora (`make fuzz-walker`, kept for the first
+time) replayed through both walkers' verdict, values, widths and offsets
+-- the replays before this asked the generated readers' corpora, which
+the walker's coverage never guided. bitcoin's `output` over a compact
+size of `ff 00000000ffffffff` -- 2^63 and more -- was accepted by the C
+walker and refused by `walk.py` and the four backends: `ctx_load` cast
+the `u64` to `int64_t`, the value read below zero, and 14.2b's
+negative-length clamp made the script empty. The same cast sat in the
+`[min]`, `[max]`, `[must_eq]` and `must_be_one` comparisons, so `u64 x
+[max = 1000]` holding 2^64 - 1 passed and `[min = 5]` refused it, in a
+member's checks and in a variant arm's -- where the four backends,
+asked the same five messages, each answer as `walk.py` does. An unsigned value past
+INT64_MAX now saturates where an expression loads it (and where an
+element-relative load does), and the comparisons read the value by the
+member's own signedness. Held in `test_walker_c.py`
+(`test_a_length_past_int64_is_past_the_frame_not_negative`,
+`test_a_u64_past_int64_is_held_to_its_bounds_as_unsigned`), each failing
+on the old walker. Two differences the replay shows are not faults: a
+position past 2^29 bytes is no `uint32_t` of bits, which `situ_walk.c`
+states and refuses; and a frame shorter than a struct's `size_min_bits`
+-- which every generated reader calls `no-view` -- is answered member by
+member by both walkers, the Python `acquire` checking the floor only for
+a fixed struct, and they differ only past its end. After the fixes, the
+same corpora through the four backends' drivers: every schema agrees.
+Through the two walkers, what still differs is in one of four classes,
+none a fault: a member after one too wide for `uint32_t` bits (cpio,
+matroska, png, riff); a member's answer in a message both walkers
+refuse (26.1142's class: edges, hpack, quic and most of netlink and
+padded); a multi-byte read in `endian native`, which the C walker
+declines by design and `walk.py` reads in the host's order (native,
+netlink); and a `pad_to` read as a number, which C declines for having no
+byte order and `walk.py` reads big-endian -- no frontend reads a pad's
+value. A struct with no members gave the verdict driver nothing to
+print, a harness artifact.
+
+### 26.1149 A variant has no scalar value in the C walker either
+
+Same replay, CBOR: `any_array.form` over `80` read 128 -- the selected
+arm's first byte as an integer -- where `walk.read_scalar` refuses a
+variant by name ("the arm the discriminant selects is what holds a
+value"). The C walker never gained that refusal; `read_deep` now
+refuses a member with arm rows as it refuses a run. Held in
+`test_walker_c.py` (`test_a_variant_has_no_scalar_value_in_either_walker`).
 
 ### 26.1147 A run of structs gains or loses an element
 

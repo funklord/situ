@@ -1014,6 +1014,72 @@ def test_they_agree_that_a_negative_length_reads_as_zero(
 	assert c_widths(tmp_path, blob, long_) == ["1", "4", "2"]
 
 
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_length_past_int64_is_past_the_frame_not_negative(
+		tmp_path: Path) -> None:
+	"""A compact size of 2^63 or more cast to `int64_t` read below zero, and
+	the negative-length clamp above made the script empty: bitcoin's
+	`output` over `ff 00000000ffffffff` was accepted by this walker and
+	refused by `walk.py` and the four backends, a length that large being
+	past any frame (26.1148). Found replaying the C walker's own fuzz
+	corpora against the Python walker. 2^32 is the control, which both
+	already refused; the last message is a well-formed output."""
+	blob = image_for(ROOT / "example" / "bitcoin" / "bitcoin.situ")
+	value = "0100ffff55ffffff"
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for length, want in (("ff00000000ffffffff", "1"),
+	                     ("ffffffbcfeff5832cd", "1"),
+	                     ("ff0000000001000000", "1"),
+	                     ("03aabbcc",            "0")):
+		message = bytes.fromhex(value + length)
+		assert python_verdict(blob, message, 1) == want, length
+		assert c_verdict(tmp_path, blob, message, 1, drive) == want, length
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("schema", [
+	"struct s { u64 x [max = 1000]; }",
+	"struct s { u64 x [min = 5]; }",
+	"struct s { u64 x [must_eq = 3]; }",
+	"struct s { i64 x [min = -5, max = 5]; }",
+	"struct s { u8 k; variant v switch (k) { case 1: u64 a [max = 9]; "
+	"default: u8 b; } }",
+])
+def test_a_u64_past_int64_is_held_to_its_bounds_as_unsigned(
+		tmp_path: Path, schema: str) -> None:
+	"""The `[min]`, `[max]` and `[must_eq]` comparisons cast the value to
+	`int64_t`, so a `u64` holding 2^63 or more read negative: `[max = 1000]`
+	passed 2^64 - 1 and `[min = 5]` refused it, the reverse of `walk.py`
+	(26.1148). The member's own signedness decides now, in a member's
+	checks and in a variant arm's."""
+	blob = _inline_image(f"target buffer;\nendian big;\n{schema}\n")
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for message in ("ffffffffffffffff", "8000000000000000",
+	                "0000000000000003", "fffffffffffffffb",
+	                "01ffffffffffffffff", "010000000000000009"):
+		data = bytes.fromhex(message)
+		assert c_verdict(tmp_path, blob, data, 0, drive) \
+			== python_verdict(blob, data), message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_variant_has_no_scalar_value_in_either_walker(
+		tmp_path: Path) -> None:
+	"""`walk.read_scalar` refuses a variant -- the arm holds the value,
+	through its own placement -- and this walker read the arm's first
+	bytes as an integer: CBOR's `any_array.form` over `80` answered 128
+	(26.1149). The discriminant beside it still reads."""
+	blob = _inline_image("target buffer;\nendian big;\n"
+	                     "struct s { u8 k; variant v switch (k) { "
+	                     "case 1: u16 a; default: u8 b; } }\n")
+	drive = _build_driver(tmp_path, blob, VALUES)
+	for message in ("01abcd", "02ef"):
+		data = bytes.fromhex(message)
+		assert c_answers(tmp_path, blob, data, 0, drive) \
+			== python_answers(blob, data) \
+			== [str(data[0]), "refused"], message
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;

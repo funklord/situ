@@ -1971,16 +1971,18 @@ static situ_walk_err read_based(const situ_walk_image *image,
 		} else if (err != SITU_WALK_OK) {
 			return err;
 		}
-		*out = (int64_t)value;
-		return SITU_WALK_OK;
+	} else {
+		err = read_at(message, len, &held,
+		              held.offset_bits + (uint32_t)base * 8u,
+		              held.size_bits, &value);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
 	}
-	err = read_at(message, len, &held,
-	              held.offset_bits + (uint32_t)base * 8u, held.size_bits,
-	              &value);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-	*out = (int64_t)value;
+	/* Past INT64_MAX an unsigned value is that large, not negative, as
+	 * `ctx_load` holds it (26.1148). */
+	*out = (held.flags & FLAG_SIGNED) == 0u && value > (uint64_t)INT64_MAX
+	       ? INT64_MAX : (int64_t)value;
 	return SITU_WALK_OK;
 }
 
@@ -2229,6 +2231,18 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		                && digits_out_of_domain(ctx->image, index, &held,
 		                                        value)) {
 			*out = 0;
+			return SITU_WALK_OK;
+		}
+		/* And an UNSIGNED value past INT64_MAX is that large, not negative:
+		 * a compact size of 2^63 cast to `int64_t` read below zero, which a
+		 * length reads as nothing, so bitcoin's `script[script_length]` over
+		 * `ff 00000000ffffffff` was empty and the message accepted, where
+		 * `walk.py` and the four backends measure it past the frame and
+		 * refuse it (26.1148). Saturated, it is past any frame here too. */
+		if (situ_walk_placement_at(ctx->image, index, &held) == SITU_WALK_OK
+		                && (held.flags & SITU_WALK_SIGNED) == 0u
+		                && value > (uint64_t)INT64_MAX) {
+			*out = INT64_MAX;
 			return SITU_WALK_OK;
 		}
 	}
@@ -4329,6 +4343,19 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
+	/* Nor does a variant: it is a shape the discriminant chooses, and the
+	 * arm is what holds a value, through its own placement. This read the
+	 * arm's first bytes as an integer -- CBOR's `any_array.form` over `80`
+	 * answered 128 -- where `walk.read_scalar` refuses it by name (26.1149,
+	 * found replaying this walker's own fuzz corpora against that one). */
+	{
+		uint32_t arms = 0u;
+
+		if (arm_rows(image, index, &arms) != NULL) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+	}
+
 	uint32_t offset = 0u;
 	err = offset_bits_deep(image, message, len, shape, index, depth, &offset);
 	if (err != SITU_WALK_OK) {
@@ -4878,6 +4905,24 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_MUST_EQ_BY     19u
 #define CHECK_MINIMUM_BY     20u
 #define CHECK_MAXIMUM_BY     21u
+
+/* A member's value against a bound the image or an expression states, the
+ * value read as its own signedness says: -1 below, 0 equal, 1 above. An
+ * UNSIGNED value past INT64_MAX is that large; cast to `int64_t` it read
+ * below zero, so `u64 x [max = 1000]` holding 2^64 - 1 passed and `[min =
+ * 5]` refused it, the reverse of `walk.py` (26.1148). */
+static int compare_value(uint64_t value, int is_signed, int64_t bound)
+{
+	if (is_signed) {
+		const int64_t held = (int64_t)value;
+
+		return held < bound ? -1 : held > bound ? 1 : 0;
+	}
+	if (bound < 0) {
+		return 1;
+	}
+	return value < (uint64_t)bound ? -1 : value > (uint64_t)bound ? 1 : 0;
+}
 #define CHECK_BY             19u
 /* `[ascending]` (26.985): not an `image_check` row, its own table carries
  * it; numbered after the three above so the two walkers keep one list. */
@@ -5538,6 +5583,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		*verdict = digits != 0u ? SITU_WALK_CONSTRAINT : SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
+	const int arm_signed = (arm->flags & FLAG_SIGNED) != 0u;
+
 	for (uint32_t c = 0u; c < rows; c++) {
 		const uint8_t *row  = checks + c * image->constraint_stride;
 		const int64_t  want = i64_at(row + 4);
@@ -5546,13 +5593,13 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 
 		switch (kind) {
 		case CHECK_MUST_EQ:
-			broken = ((int64_t)value != want);
+			broken = compare_value(value, arm_signed, want) != 0;
 			break;
 		case CHECK_MINIMUM:
-			broken = ((int64_t)value < want);
+			broken = compare_value(value, arm_signed, want) < 0;
 			break;
 		case CHECK_MAXIMUM:
-			broken = ((int64_t)value > want);
+			broken = compare_value(value, arm_signed, want) > 0;
 			break;
 		case CHECK_MUST_BE_ZERO:
 			broken = (value != 0u);
@@ -5562,7 +5609,7 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			 * means every bit, so a reserved `u4` is compared against
 			 * 0xF. The member path says the same thing a few hundred
 			 * lines below. */
-			broken = ((int64_t)value != want);
+			broken = compare_value(value, arm_signed, want) != 0;
 			break;
 		case CHECK_DIGITS_VALID:
 			/* The read above has already parsed them; what is left is the
@@ -8084,21 +8131,22 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 
 			int broken = 0;
+			const int is_signed = (held.flags & FLAG_SIGNED) != 0u;
 			switch (asked) {
 			case CHECK_MUST_EQ:
-				broken = ((int64_t)value != bound);
+				broken = compare_value(value, is_signed, bound) != 0;
 				break;
 			case CHECK_MINIMUM:
-				broken = ((int64_t)value < bound);
+				broken = compare_value(value, is_signed, bound) < 0;
 				break;
 			case CHECK_MAXIMUM:
-				broken = ((int64_t)value > bound);
+				broken = compare_value(value, is_signed, bound) > 0;
 				break;
 			case CHECK_MUST_BE_ZERO:
 				broken = (value != 0u);
 				break;
 			case CHECK_MUST_BE_ONE:
-				broken = ((int64_t)value != want);
+				broken = compare_value(value, is_signed, want) != 0;
 				break;
 			case CHECK_ENUM_KNOWN:
 				broken = !enum_admits(image, (uint32_t)want, (int64_t)value);
