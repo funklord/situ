@@ -2479,6 +2479,24 @@ def _arm_validates(image: Image, view: View, index: int,
 	if arm_type != NONE and not image.structs[arm_type].measurable:
 		return OK
 
+	# A `[remaining]` run of fixed elements wider than a byte, in a variant
+	# that states its size, is whole elements: the arm's frame is the
+	# size, and 26.736 holds a struct's own such run to whole elements.
+	# All six readers accepted `body[3]` over one two-byte pair and a
+	# stray byte (26.1164).
+	held = image.placements[chosen]
+	if image.placements[index].size_code != NONE \
+			and held.size_code != NONE \
+			and _sizes_in_bytes(image, held.size_code) \
+			and held.element_bits != NONE and held.element_bits > 8 \
+			and held.array_count == NONE:
+		try:
+			wide = size_bits(view, index)
+		except (Refused, Unplaceable):
+			return ERR_BOUNDS
+		if wide % held.element_bits:
+			return ERR_BOUNDS
+
 	# AN ARM PLACED BY `at` (26.1044) is where the message puts it, not
 	# where the variant sits: the variant measures it as nothing, and the
 	# struct is validated over its own extent from that offset, bounded by

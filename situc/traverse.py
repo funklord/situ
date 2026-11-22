@@ -2966,6 +2966,31 @@ def walks_to_the_frame_end(placement: Placement) -> bool:
 	        and placement.varint is not None)
 
 
+def arm_remaining_strides(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct, variant: Placement
+		) -> list[tuple["Arm", int]]:
+	"""Each arm of a variant that states its size holding a `[remaining]`
+	run of fixed elements wider than a byte, with the element's width.
+
+	The arm's frame is the variant's size, and 26.736's rule is the same
+	there: a size no multiple of the element leaves bytes no element
+	accounts for. As a struct's own member such a run refused a stray byte
+	in all four backends and both walkers; in a sized arm all six accepted
+	it, `body[3]` over one two-byte pair and a byte (openmlx4, inbox
+	20261122T1445Z, 26.1164).
+	"""
+	if variant.kind != "variant" or variant.size_expr is None:
+		return []
+	found = []
+	for arm, member in arm_members(struct, variant):
+		if member is None:
+			continue
+		stride = remaining_stride(structs, member)
+		if stride is not None:
+			found.append((arm, stride))
+	return found
+
+
 def remaining_stride(structs: dict[str, ResolvedStruct],
 		placement: Placement) -> int | None:
 	"""The width of one element of a `[remaining]` run, where it is fixed

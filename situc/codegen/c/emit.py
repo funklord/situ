@@ -51,7 +51,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.unparse import expr_to_source
-from situc.traverse import (
+from situc.traverse import (arm_remaining_strides,
 	LetSpelling,
 	let_source,
 	let_split,
@@ -10270,7 +10270,35 @@ class Emitter:
 			f"\tif (situ_remaining_u32(view.limit, {base}) < ({length})) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-		]
+		] + self._arm_strides(struct, placement, length)
+
+	def _arm_strides(self, struct: ResolvedStruct, placement: Placement,
+			length: str) -> list[str]:
+		"""A sized variant's arm holding a `[remaining]` run of fixed
+		elements is whole elements, as such a run is at the top level
+		(26.736, 26.1164)."""
+		found = arm_remaining_strides(self.resolved.structs, struct,
+		                              placement)
+		if not found:
+			return []
+		disc  = self._disc(struct, placement, "view")
+		named = [arm.value for arm, _ in arm_members(struct, placement)
+		         if arm.value is not None]
+		lines: list[str] = []
+		for arm, stride in found:
+			if arm.value is not None:
+				when = f"{disc} == {arm.value}u"
+			elif named:
+				when = " && ".join(f"{disc} != {value}u" for value in named)
+			else:
+				when = "1"
+			lines.extend([
+				f"\t/* {placement.path}: the arm is whole {stride}-byte elements */",
+				f"\tif (({when}) && ({length}) % {stride}u != 0u) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			])
+		return lines
 
 	def _arm_tails(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

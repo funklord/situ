@@ -5948,6 +5948,26 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 	}
+	/* A `[remaining]` run of fixed elements wider than a byte, in a
+	 * variant that states its size, is whole elements: the arm's frame is
+	 * the size, and 26.736 holds a struct's own such run to whole
+	 * elements. All six readers accepted `body[3]` over one two-byte pair
+	 * and a stray byte (26.1164). */
+	{
+		situ_walk_placement sized;
+
+		if (situ_walk_placement_at(image, index, &sized) == SITU_WALK_OK
+		    && sized.size_code != SITU_WALK_NONE
+		    && arm.size_code != SITU_WALK_NONE
+		    && size_code_is_bytes(image, arm.size_code)
+		    && arm.array_count == SITU_WALK_NONE
+		    && arm.element_bits != SITU_WALK_NONE && arm.element_bits > 8u
+		    && wide % arm.element_bits != 0u) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+	}
 
 	/* A VARIANT THAT STATES ITS SIZE frames its arm (26.1040): a run in
 	 * it ends where the variant does, not where the frame does. Walked to

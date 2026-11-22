@@ -9743,6 +9743,20 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1164 A sized arm's `[remaining]` run of fixed elements is whole elements
+
+26.1157's open half. A `[remaining]` run of fixed elements wider than a
+byte refuses bytes no element accounts for as a struct's own member
+(26.736); in an arm of a variant that states its size -- whose frame is
+that size -- all four backends and both walkers accepted `body[3]` over
+one two-byte pair and a stray byte. `traverse.arm_remaining_strides` names
+each such arm with its element's width, and each backend's
+`_variant_fits` refuses, under that arm's discriminant test, a size that
+is no multiple of it, after the frame check and before any element is
+validated; both walkers ask the same in their arm validation. A byte-wide
+element divides anything and is not asked. Held in
+`test_a_sized_arm_holds_whole_elements.py`, all six on six cases.
+
 ### 26.1163 The walkers ask what follows a variant before its nested arm
 
 26.1152's open difference, `edges.hands_on_arms`: where a variant cannot
@@ -9861,8 +9875,7 @@ Open beside it, the same message's second finding: a `[remaining]` run of
 fixed structs in a sized arm accepts a partial last element -- `body[3]`
 over one 2-byte pair and a stray byte -- in all four backends and both
 walkers, where the same run as a struct's own last member is refused as
-BOUNDS. Making the arm agree is a verdict change in six readers;
-openmlx4 does not depend on it.
+BOUNDS. Made to agree in all six by 26.1164.
 
 ### 26.1155 `verify` checks a tag in a run inside an arm, and no parent setter writes an element's member
 
