@@ -7113,12 +7113,21 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * Found by asking the two walkers about the CORPUS rather than
 		 * about six schemas written for the question. */
 		uint32_t on_arms = 0u;
+		/* Nor an `indexed` region, whose `type_struct` is its ELEMENT's:
+		 * the elements are validated where the table points them
+		 * (`indexed_elements_validate`), and descending here validated one
+		 * element over the bytes after the table -- so a sqlite page of
+		 * zero cells in eight or nine bytes, nothing after its header, was
+		 * BOUNDS here and valid to the four backends and the Python walk
+		 * (26.1143). */
 		const int nested = (held.type_struct != SITU_WALK_NONE
 		                    && held.repeat_code == SITU_WALK_NONE
 		                    && held.array_count == SITU_WALK_NONE
 		                    && held.size_code == SITU_WALK_NONE
 		                    && delimiter_rules(image, index) == NULL
-		                    && arm_rows(image, index, &on_arms) == NULL);
+		                    && arm_rows(image, index, &on_arms) == NULL
+		                    && table_row(image->indexes, image->index_count,
+		                                 image->index_stride, index) == NULL);
 
 		/* A STRUCT PLACED BY `at`, validated where the message puts it:
 		 * from the root, not from this struct's own bytes, and bounded by

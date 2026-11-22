@@ -156,7 +156,9 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   pass (26.1136-26.1138, 26.1140). A second pass: every schema agrees.
 - A differential fuzzed over the walker itself, kept as `make
   fuzz-walker-differ`: three more walker bounds and one accepted count
-  (26.1142).
+  (26.1142). The corpora through the C walker's verdict against the
+  Python walker's: one more, an indexed region validated as one element
+  (26.1143).
 - The editor: a run grows inside a window opened from its parent, a run's
   elements open one by one, and the CLI and the Qt window carry the chain
   (`--within`, 26.1141) -- a PNG `tEXt` chunk edited in a whole file.
@@ -9662,6 +9664,23 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1143 The C walker does not validate an indexed region as one element
+
+The fuzz corpora replayed through the C walker's verdict against the
+Python walker's, every struct of every schema (W2, run 12): one
+disagreement, sqlite's `btree_leaf_page` with no cells in eight or nine
+bytes -- BOUNDS in the C walker alone. An `indexed` region's
+`type_struct` is its ELEMENT's, so the region met every test for "one
+nested member" and the C walker validated a `table_leaf_cell` over the
+bytes after the table; with nothing after the header that walk failed.
+The elements are validated where the table points them
+(`indexed_elements_validate`), so the region is no longer taken for a
+nested member. An earlier symptom of the same cause, a 16-byte frame
+of zero cells, had been answered by skipping the element's minimum
+check there. Held in the `empty-table` case of
+`test/unit/test_both_walkers_read_what_the_backends_check.py`, which
+fails on the old walker; the four backends accept the page.
 
 ### 26.1142 What fuzzing the walker found: three bounds and an accepted count
 

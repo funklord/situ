@@ -62,13 +62,23 @@ PADDED_ARM = {"010100": "1", "010001": "1", "01000000": "1",
               "0100000005": "0", "0207ee": "0"}
 EDGES = ROOT / "test" / "schema" / "edges.situ"
 
+#: sqlite's `btree_leaf_page` with no cells, in eight and nine bytes, a byte
+#: short of its header, and one cell at offset 8: the C walker validated the
+#: indexed region's ELEMENT once over the bytes after the table, so an
+#: empty page with nothing after its header was BOUNDS there alone
+#: (26.1143). The four backends accept the first two.
+EMPTY_TABLE = {"0d00000000000002": "0", "0d0000000000000200": "0",
+               "0d000000000000": "1", "0d000100000000000008": "0"}
+SQLITE = ROOT / "example" / "sqlite" / "sqlite.situ"
+
 
 @pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
 @pytest.mark.parametrize("schema, struct, cases",
                          [(JSON, "number", TRIMMED),
                           (RTC, "wall_clock", CLOCK),
-                          (EDGES, "padded_arm", PADDED_ARM)],
-                         ids=["trim", "bcd", "static-pad"])
+                          (EDGES, "padded_arm", PADDED_ARM),
+                          (SQLITE, "btree_leaf_page", EMPTY_TABLE)],
+                         ids=["trim", "bcd", "static-pad", "empty-table"])
 def test_both_walkers_judge_it_as_the_backends_do(schema: Path, struct: str,
 		cases: dict[str, str], tmp_path: Path) -> None:
 	image = image_for(schema)
