@@ -9727,6 +9727,31 @@ read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
 
+### 26.1155 `verify` checks a tag in a run inside an arm, and no parent setter writes an element's member
+
+From openmlx4 (inbox 20261122T1432Z, against 125a832b). VPD's RV checksum
+sits in VPD-R's keyword RUN, an arm of a variant that states its size;
+26.1111 reached a tag one struct down, behind an arm and along `at` links,
+but `verify` drives the generated Python reader, and that has no accessor
+for a run of structs in an arm (26.689: `validate` walks it instead), so
+RV was named unchecked and a flipped RV byte conformed. The Python reader
+now gives such a run -- in an arm of a SIZED variant, whose end is known
+without a count -- `<run>_count` and `<run>(index)`, walked as `validate`
+walks it, behind the arm's own test; `verify` takes an absent arm's run as
+empty, as it takes an absent arm's checker. openmlx4's vectors: the good
+one conforms, the flipped one is a `ChecksumError` on `vpd_rv.sum`.
+
+Found beside it: Python, C++ and Rust emitted a covered "parent setter"
+for a member of a run's ELEMENT, `set_data_fields_keyword`, writing two
+bytes at offset 0 -- over `length`. Such a member has one place per
+element and none the parent can name; `traverse.inside_a_nested_member`,
+which all four backends and the differ ask, compared path prefixes ending
+in `fields[]`, which names no member, and let it through. It answers yes
+for any path through `[]` now. No corpus schema had one -- the shape is
+new -- and C, which skips an element's member in its own emitter, never
+emitted it. Held in `test_verify_checks_a_tag_wherever_it_is_reached.py`,
+four of whose cases fail on the old code.
+
 ### 26.1154 A lone `0` before its delimiter is minimal in the C walker
 
 Found by `make fuzz-walker-c-differ` (26.1152) on its first full pass:

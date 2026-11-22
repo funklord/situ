@@ -424,7 +424,15 @@ def _elements(view: object, local: str, depth: int) -> list[object] | None:
 	name = py_name(local)
 	if not hasattr(type(view), f"{name}_count") or depth >= _TAG_DEPTH:
 		return None
-	count = getattr(view, f"{name}_count")
+	# A run in an arm the discriminant does not select is not there, and
+	# has no elements to check: its count says so with `VersionError`, as
+	# an absent arm's checker does (26.1155).
+	try:
+		count = getattr(view, f"{name}_count")
+	except Exception as why:		# noqa: BLE001
+		if type(why).__name__ != "VersionError":
+			raise
+		return []
 	element = getattr(view, name, None)
 	if callable(count):
 		count = count()

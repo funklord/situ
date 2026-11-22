@@ -114,3 +114,95 @@ def test_every_link_of_a_chain_has_its_tag_checked(tmp_path: Path,
 	assert "ChecksumError: sect.sum" in out, out
 	assert "1 of 2 vectors do not conform" in out, out
 	assert "not checked" not in out, out
+
+
+#: openmlx4's VPD (inbox 20261122T1432Z): the RV keyword inside VPD-R's
+#: keyword RUN, which sits in an arm of a variant that states its size.
+VPD_RUN = """target buffer;
+endian little;
+bit_order msb_first;
+
+codec checksum8 { kernel = byte_sum(width = 8, negate); }
+impl checksum8 derived;
+
+/* RV's data: the checksum byte, then reserved bytes to the length. */
+struct vpd_rv {
+	u8   length [min = 1];
+	checksum u8 sum[1] covers(before) is checksum8;
+	u8   reserved[length - 1];
+}
+
+struct vpd_value {
+	u8   length;
+	u8   data[length];
+}
+
+/* A keyword field of VPD-R. The two ASCII characters are read as one
+ * little-endian u16, so "RV" is 0x5652. */
+struct vpd_ro_field {
+	u16  keyword;
+	variant field switch (keyword) {
+		case 0x5652: vpd_rv    rv;
+		default:     vpd_value value;
+	}
+}
+
+/* `name` is the large resource's seven-bit name: 0x02 the identifier,
+ * 0x10 VPD-R, 0x11 VPD-W. */
+struct vpd_large_body {
+	parameter u8 name;
+	u16  length;
+	variant data[length] switch (name) {
+		case 0x10: vpd_ro_field fields[remaining];
+		default:   u8 bytes[remaining];
+	}
+}
+
+struct vpd_resource [allow_straddle] {
+	bit  is_large;
+	u4   item_high;
+	u3   item_low;
+	variant body switch (is_large) {
+		case 1:  vpd_large_body(name = item_high * 8 + item_low) large;
+		default: u8 small_data[item_low];
+	}
+}
+
+struct vpd {
+	vpd_resource items[] while (is_large == 1 || item_high != 0x0F) max 32768;
+}
+"""
+
+VPD_GOOD = ("82 0E 00 43 6F 6E 6E 65 63 74 58 2D 33 20 50 72 6F 90 12 00 50 4E"
+            " 0B 4D 43 58 33 35 34 41 2D 46 43 42 52 56 01 EC 78")
+
+
+def test_a_tag_in_a_run_inside_an_arm_is_checked(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""The Python reader had no accessor for a run of structs in an arm,
+	so `verify` named RV unchecked and the flipped vector conformed; the
+	run is walked now, as `validate` walks it (26.1155). The identifier
+	resource before VPD-R selects the other arm, whose run is not there."""
+	flipped = VPD_GOOD[:-5] + "ED 78"
+	out = _verify(tmp_path, VPD_RUN,
+	              f"vpd good {VPD_GOOD}\n"
+	              f"vpd flipped {flipped}\n", capsys)
+	assert "ChecksumError: vpd_rv.sum: stored 0xed, computed 0xec" in out, out
+	assert "1 of 2 vectors do not conform" in out, out
+	assert "not checked" not in out, out
+
+
+@pytest.mark.parametrize("target", ["c", "cpp", "rust", "python"])
+def test_no_parent_setter_writes_a_run_element_s_member(tmp_path: Path,
+		target: str) -> None:
+	"""`set_data_fields_keyword` wrote two bytes at offset 0 -- over
+	`length` -- in Python, C++ and Rust: a member of a run's element has
+	one place per element and none the parent can name (26.1155)."""
+	from situc.cli import main as cli
+
+	(tmp_path / "vpd.situ").write_text(VPD_RUN, encoding="ascii")
+	assert cli(["build", "--target", target, "--layer", "edit", "--out",
+	            str(tmp_path / "out"), str(tmp_path / "vpd.situ")]) in (0, None)
+	text = "".join(path.read_text(encoding="ascii")
+	               for path in (tmp_path / "out").iterdir() if path.is_file())
+	assert "set_data_fields_keyword" not in text

@@ -4014,6 +4014,71 @@ class Emitter:
 			kept.append(line)
 		return kept
 
+	def _sized_arm_run(self, struct: ResolvedStruct, variant: Placement,
+			placement: Placement, name: str, test: str,
+			start: str) -> list[str] | None:
+		"""A run of structs in an arm of a variant that states its size:
+		`<run>_count` and `<run>(index)`, walked as `validate` walks it
+		(26.1155), or None for any other run in an arm.
+
+		The arm ends where the variant does, so the walk has an end without
+		a count, and each element's own `_extent` steps it. `situc verify`
+		opens a run element by element through exactly this pair, and
+		without it VPD's RV checksum, in a keyword run inside VPD-R's arm,
+		went unchecked (openmlx4, inbox 20261122T1432Z).
+		"""
+		if variant.size_expr is None:
+			return None
+		element = self.resolved.structs.get(placement.type_name or "")
+		if element is None or self._no_element_extent(element) \
+				or descends(self.resolved.structs, struct,
+				            placement.type_name or ""):
+			return None
+		base = self._offset_expression(struct, variant)
+		size = self._over_fields(struct, variant.size_expr, "self")
+		if base is None or size is None:
+			return None
+		inner = py_name(placement.type_name or "")
+		made  = self._made(struct, placement, inner)
+		return [
+			"",
+			f"\tdef _{name}_walk(self) -> _situ_list[int]:",
+			f'\t\t"""Where each `{placement.type_name}` of {placement.path}'
+			" starts,",
+			"\t\tand where the arm ends: each element's own extent, up to",
+			"\t\tthe variant's stated size. Bounded by that end and by",
+			'\t\trefusing to advance over a zero-extent element."""',
+			f"\t\tif {test}:",
+			f'\t\t\traise VersionError("{placement.path}: that arm is not'
+			' the one present")',
+			"\t\tself._check()",
+			f"\t\tat     = {start}",
+			f"\t\tend    = min(({base}) + max(0, {size}), self._len)",
+			"\t\tstarts: _situ_list[int] = []",
+			"\t\twhile at < end:",
+			f"\t\t\t_element = {made}(self._msg, self._at + at, end - at)",
+			"\t\t\tsize    = _element._extent",
+			"\t\t\tif size == 0 or size > end - at:",
+			"\t\t\t\tbreak",
+			"\t\t\tstarts.append(at)",
+			"\t\t\tat += size",
+			"\t\tstarts.append(at)",
+			"\t\treturn starts",
+			"",
+			"\t@property",
+			f"\tdef {name}_count(self) -> int:",
+			f'\t\t"""How many whole `{placement.type_name}`s the arm holds."""',
+			f"\t\treturn len(self._{name}_walk()) - 1",
+			"",
+			f"\tdef {name}(self, index: int) -> {inner}:",
+			f'\t\t"""Element `index` of {placement.path}, walked."""',
+			f"\t\tstarts = self._{name}_walk()",
+			"\t\tif not 0 <= index < len(starts) - 1:",
+			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+			f"\t\treturn {made}(self._msg, self._at + starts[index],",
+			"\t\t\tstarts[index + 1] - starts[index])",
+		]
+
 	def _arm_member_lines(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, raising where the arm is not the one present.
@@ -4297,6 +4362,10 @@ class Emitter:
 		# C, C++ and Rust decline it with this sentence; `validate` walks
 		# the run itself (26.689).
 		if is_struct_run(self.resolved.structs, placement):
+			walked = self._sized_arm_run(struct, variant, placement, name,
+			                             test, start)
+			if walked is not None:
+				return walked
 			return [
 				f"\t# ...and `{placement.name}` is not a shape this backend "
 				f"reaches into yet.",

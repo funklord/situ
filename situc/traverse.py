@@ -95,7 +95,18 @@ def inside_a_nested_member(struct: ResolvedStruct,
 	constant inside it. Adding that disjunct removed two working setters,
 	measured by counting the exclusions over the corpus and finding ten
 	where the claim said eight (26.821).
+
+	**And a member of a run's ELEMENT, whatever the element's size.**
+	There is one such member per element, so it has no offset the parent
+	could name, and its own `offset_bits` is the element's. The prefixes
+	below end in `fields[]`, which names no member, so it got through:
+	VPD's `vpd_large_body.data.fields[].keyword` came out as
+	`set_data_fields_keyword` in Python, C++ and Rust, writing two bytes at
+	offset 0 -- over `length` (openmlx4, inbox 20261122T1432Z, 26.1155). C
+	skips an element's member in its own emitter and emitted none.
 	"""
+	if "[]" in placement.path:
+		return True
 	parts = placement.path.split(".")
 	for cut in range(2, len(parts)):
 		prefix = ".".join(parts[:cut])
