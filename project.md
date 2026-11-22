@@ -9643,6 +9643,20 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1134 The walk gives a padded `minimal` varint no value
+
+The fuzz corpora replayed through the Python walker against C's differ
+(run 12): every line both print about a member compared. Bitcoin's
+`compact_size` is `minimal`, so `fd f4 00` -- 244 in three bytes -- is
+refused by every backend's getter: `_len` answers 3, `_get` refuses, and
+the differ prints `input_count len=3 value=0`. The walk's listing read the
+transform alone and printed 244; the getter's refusal,
+`varint_admissible`, sat beside it unasked. The C walker asks it in its
+getter already. 23 of bitcoin's 80 corpus inputs; random draws almost
+never put `fd` before a small number, so the walker differential had not
+met it. Held in `test/unit/test_a_padded_varint_has_no_value_in_the_walk.py`,
+which fails on the old walker.
+
 ### 26.1133 The dissector evaluates a `when` that reads a `let`
 
 The four backends and both walkers have read a `let` in a `when` since

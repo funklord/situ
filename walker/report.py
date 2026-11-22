@@ -26,6 +26,7 @@ from walker import vm
 from walker.image import (FRAME_CAP, LITTLE, NONE, REMAINING, Image, Tag,
                           _string_at)
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
+                         varint_admissible,
                          says_little,
                          Unsupplied, View, child_args, frame_end,
                          acquire, digits_of,
@@ -2872,6 +2873,15 @@ def _members(image: Image, view: View, struct_index: int,
 			# (26.1073).
 			lines.append(f"{local} len=0 value=0")
 			continue
+		try:
+			varint_admissible(view, index)
+		except Refused:
+			# A padded encoding where the varint declares `minimal`: the
+			# backends' `_len` answers its length and `_get` refuses it,
+			# so their line is `len=3 value=0` for bitcoin's `fd f4 00`.
+			# This printed the decoded 244 (found replaying the fuzz
+			# corpora through the walker, 26.1134).
+			value = 0
 		lines.append(f"{local} len={consumed} value={value}")
 
 	for index in _varint_runs(image, struct_index):
