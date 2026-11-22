@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <vector>
 #include <unistd.h>
 
 #ifdef SITU_QTTY
@@ -237,8 +238,9 @@ int main(int argc, char **argv)
 	const QCommandLineOption open_field(QStringLiteral("open"),
 	    QStringLiteral("open the nested struct in this field in its own "
 	                   "window, as a double click does -- FIELD:N for element "
-	                   "N of a run of structs; repeat to go deeper, and "
-	                   "--set applies in the last"),
+	                   "N of a run of structs; repeat to go deeper, /FIELD "
+	                   "to open from the first window instead, and --set "
+	                   "applies in the last, or in window N as @N:NAME=..."),
 	    QStringLiteral("FIELD"));
 	const QCommandLineOption no_ui(QStringLiteral("no-ui"),
 	    QStringLiteral("apply --set/--set-bytes through the window, print "
@@ -303,15 +305,21 @@ int main(int argc, char **argv)
 	}
 
 	// Down through the nested structs named, as a person would double
-	// click their way there; the edits below land in the last.
+	// click their way there; the edits below land in the last. `/FIELD`
+	// starts again from the first window, so two windows can stand over
+	// different parts of the file at once, as a person leaves them.
 	edit_window *here = &window;
+	std::vector<edit_window *> opened{&window};
 	for (const QString &field : parser.values(open_field)) {
-		here = here->open_field(field);
+		edit_window *from = field.startsWith(QLatin1Char('/')) ? &window : here;
+		here = from->open_field(field.startsWith(QLatin1Char('/'))
+		                        ? field.mid(1) : field);
 		if (here == nullptr) {
 			std::fprintf(stderr, "situ-edit-gui: cannot open `%s`\n",
 			             qPrintable(field));
 			return 1;
 		}
+		opened.push_back(here);
 	}
 
 	// The CLI applies every --set, then every --set-bytes; so does this.
@@ -324,8 +332,24 @@ int main(int argc, char **argv)
 				      .arg(assignment);
 				return false;
 			}
-			if (!type_into(*here, assignment.left(equals).trimmed(),
-			               assignment.mid(equals + 1), &why))
+			// `@N:` names the window, counted as --open opened them
+			// from 0, the first: a write in one and then another is
+			// how a window learns that bytes moved under it (26.1146).
+			edit_window *in = here;
+			QString name = assignment.left(equals).trimmed();
+			if (name.startsWith(QLatin1Char('@'))) {
+				const qsizetype colon = name.indexOf(QLatin1Char(':'));
+				bool number = false;
+				const qsizetype which = name.mid(1, colon - 1).toLongLong(&number);
+				if (colon < 0 || !number || which < 0
+				    || which >= qsizetype(opened.size())) {
+					why = QStringLiteral("`%1` names no window").arg(name);
+					return false;
+				}
+				in = opened[std::size_t(which)];
+				name = name.mid(colon + 1);
+			}
+			if (!type_into(*in, name, assignment.mid(equals + 1), &why))
 				return false;
 		}
 		return true;

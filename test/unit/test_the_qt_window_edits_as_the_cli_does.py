@@ -369,3 +369,41 @@ def test_an_element_of_a_run_opens_and_grows(window_binary: Path,
 	                 str(tmp_path / "f.png"))
 	assert window.returncode == 0, window.stderr
 	assert (tmp_path / "g.png").read_bytes() == png(b"Comment\x00hello")
+
+
+@pytest.mark.parametrize("first", [
+	# The window over the chunk AFTER the one grown: it moves by as much.
+	"chunks:2",
+	# A second window over the very chunk grown: its frame grows with it.
+	"chunks:1",
+])
+def test_a_window_follows_a_resize_made_in_another(window_binary: Path,
+		tmp_path: Path, first: str) -> None:
+	"""Two windows over a PNG's chunks, as a person leaves them open: text
+	grown in one moves the bytes the other stands on. That window was
+	refused until reopened (26.1145); it now moves its frame by the write
+	and its own write lands in its own chunk (26.1146)."""
+	import struct
+	import zlib
+
+	def chunk(kind: bytes, data: bytes) -> bytes:
+		return struct.pack(">I", len(data)) + kind + data \
+			+ struct.pack(">I", zlib.crc32(kind + data))
+
+	def png(*texts: bytes) -> bytes:
+		return bytes.fromhex("89504e470d0a1a0a") + chunk(b"IHDR", bytes(13)) \
+			+ b"".join(chunk(b"tEXt", text) for text in texts) \
+			+ chunk(b"IEND", b"")
+
+	(tmp_path / "f.png").write_bytes(png(b"A\x00one", b"B\x00two"))
+	window = _window(window_binary, "--struct", "png_file",
+	                 "--open", first, "--open", "/chunks:1",
+	                 "--set-bytes", "@2:data=" + b"A\x00eleven".hex(),
+	                 "--set-bytes", "@1:data=" + b"Z\x00twelve".hex(),
+	                 "--out", str(tmp_path / "g.png"),
+	                 str(ROOT / "example" / "png" / "png.situ"),
+	                 str(tmp_path / "f.png"))
+	assert window.returncode == 0, window.stderr
+	want = (png(b"A\x00eleven", b"Z\x00twelve") if first == "chunks:2"
+	        else png(b"Z\x00twelve", b"B\x00two"))
+	assert (tmp_path / "g.png").read_bytes() == want

@@ -164,6 +164,8 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   run opens as its struct, so two lengths move at once; and every frontend
   opens a run's elements one by one (26.1144) -- a PNG `tEXt` chunk edited
   in a whole file.
+- Run 13: a window over part of the file follows a resize made in another
+  rather than refusing (26.1146).
 
 **Run 9 (2026-11-21), from fuzznet's inbox:**
 
@@ -9667,6 +9669,26 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1146 A window follows a resize made in another
+
+26.1145's refusal, replaced where the move can be followed. Every window
+over one document shares a log of the writes that changed the file's
+length -- where the field began, where it ended, how far the file grew --
+and a window catches up on what it has not seen before it reads or
+writes: a frame wholly after the field moves by the growth, one around it
+grows by it, one before it stays. That is exact only where the field's
+own growth is the file's, so a write is logged as followable only then;
+one that also moved a length prefix's width, or a frame that crosses the
+field or meets an empty field at its edge (it may be that frame's first
+member or its neighbour's), leaves the window refusing until reopened, as
+before. A window refreshed by another's write now shows its own member
+again rather than whatever sits at its old offset. The headless driver
+gained `/FIELD` (open from the first window) and `@N:NAME=` (write in
+window N), so the Qt suite holds both cases -- a window on the chunk after
+the one grown, and a second window on the same chunk -- each failing on
+26.1145's code. The refusing path has no test of its own: no corpus
+schema gives the editor a prefix that changes width.
+
 ### 26.1145 A window framed before a resize refuses to write
 
 Found walking the goal gap after 26.1141: a run grown in one window moves
@@ -9790,8 +9812,8 @@ the struct it holds, framed by the run, which is 26.1115's other refusal
 }` with `inner { u8 n; u8 name[n]; ... }` grows `name` by moving `inner.n`
 and `outer.len` both. Not yet: another window open on an enclosing struct
 keeps its old length until reopened, and so does one opened on a sibling
-after the edit, whose offset moved -- each refuses to write until then
-(26.1145). Held in
+after the edit, whose offset moved -- each refused to write until then
+(26.1145), and now follows the move (26.1146). Held in
 `test/unit/test_a_run_grows_inside_a_window.py` and
 `test_the_qt_window_edits_as_the_cli_does.py`.
 

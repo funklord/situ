@@ -20,6 +20,7 @@
 #include <QTemporaryDir>
 
 #include <memory>
+#include <vector>
 
 struct open_options {
 	QString     schema;
@@ -86,13 +87,29 @@ private:
 	QString                        error_;
 	QStringList                    notes_;
 	std::shared_ptr<bool>          modified_ = std::make_shared<bool>(false);
-	// How many writes have changed the working file's length, shared by
-	// every window over it, and how many this window has followed. A
-	// window over part of the file whose count is behind was framed
-	// before bytes moved under it: its offset may name another member's
-	// bytes, so it refuses to write until reopened (26.1145).
-	std::shared_ptr<qint64>        resizes_ = std::make_shared<qint64>(0);
-	qint64                         seen_resizes_ = 0;
+	// Every write that changed the working file's length, in the order
+	// made, shared by every window over it; and how many of them this
+	// window has followed. A window framed before bytes moved under it
+	// would name another member's bytes (26.1145), so before it reads or
+	// writes it moves its frames by each one it has not seen (26.1146).
+	// `exact` is false where the field's own change is not the file's --
+	// a length prefix that changed width too -- and there, or where a
+	// frame meets the field ambiguously, the window cannot say where it
+	// now is and refuses until reopened.
+	struct resize {
+		qint64 start;	// where the field written began, in the buffer
+		qint64 end;	// where it ended before the write
+		qint64 delta;	// how many bytes the file grew by
+		bool   exact;
+	};
+	bool catch_up();
+	bool span_of(const QString &field, qint64 *start, qint64 *size) const;
+	std::shared_ptr<std::vector<resize>> resizes_
+	    = std::make_shared<std::vector<resize>>();
+	std::size_t                    seen_resizes_ = 0;
+	bool                           stale_ = false;
+	// How many of them `document_` was read after.
+	std::size_t                    framed_ = 0;
 };
 
 #endif

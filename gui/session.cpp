@@ -11,6 +11,8 @@
 #include <QProcess>
 #include <QStandardPaths>
 
+#include <limits>
+
 #ifndef SITU_TREE_BIN
 #define SITU_TREE_BIN ""
 #endif
@@ -44,8 +46,10 @@ bool session::open(const open_options &options)
 {
 	options_  = options;
 	modified_ = std::make_shared<bool>(false);
-	resizes_  = std::make_shared<qint64>(0);
+	resizes_  = std::make_shared<std::vector<resize>>();
 	seen_resizes_ = 0;
+	framed_   = 0;
+	stale_    = false;
 	notes_.clear();
 	scratch_ = std::make_shared<QTemporaryDir>();
 	if (!scratch_->isValid()) {
@@ -138,6 +142,78 @@ void session::follow_frames(const QJsonObject &after)
 	}
 }
 
+namespace {
+
+// Where a frame -- `offset`, and `length` or -1 for the rest of the file
+// -- is after a write grew the field [start, end) by `delta`: unmoved
+// wholly before it, moved by `delta` wholly after it, grown by `delta`
+// around it. False where it meets the field so that two of those are
+// possible -- an empty field at its edge may be its first or last member
+// or its neighbour's -- or crosses it, which no nesting does (26.1146).
+bool follow(qint64 &offset, qint64 &length, qint64 start, qint64 end,
+            qint64 delta)
+{
+	const bool rest = length < 0;
+	if (offset == 0 && rest)
+		return true;	// the whole file
+	const qint64 stop = rest ? std::numeric_limits<qint64>::max()
+	                         : offset + length;
+	const bool empty = start == end;
+	if (empty && (offset == start || stop == start))
+		return false;
+	if (stop <= start)
+		return true;
+	if (offset >= end) {
+		offset += delta;
+		return true;
+	}
+	if (offset <= start && end <= stop) {
+		if (!rest)
+			length += delta;
+		return true;
+	}
+	return false;
+}
+
+}
+
+// Moves this window's frames by every resize made in another window since
+// this one last looked, so it reads and writes the member it was opened
+// on rather than whatever bytes now sit at its old offset (26.1145,
+// 26.1146). False, for good, where one cannot be followed.
+bool session::catch_up()
+{
+	for (; seen_resizes_ < resizes_->size(); ++seen_resizes_) {
+		const resize &moved = (*resizes_)[seen_resizes_];
+		bool followed = moved.exact
+		                && follow(options_.offset, options_.length,
+		                          moved.start, moved.end, moved.delta);
+		for (QString &window : options_.within) {
+			QStringList parts = window.split(QLatin1Char(':'));
+			if (parts.size() != 3) {
+				followed = false;
+				continue;
+			}
+			qint64 offset = parts[1].toLongLong();
+			qint64 length = parts[2].isEmpty() ? -1 : parts[2].toLongLong();
+			followed = followed && follow(offset, length, moved.start,
+			                              moved.end, moved.delta);
+			parts[1] = QString::number(offset);
+			parts[2] = length < 0 ? QString() : QString::number(length);
+			window = parts.join(QLatin1Char(':'));
+		}
+		if (!followed)
+			stale_ = true;
+	}
+	if (stale_) {
+		error_ = QStringLiteral("a write in another window moved bytes "
+		                        "around this one's frame in a way it "
+		                        "cannot follow; reopen it");
+		return false;
+	}
+	return true;
+}
+
 bool session::run(const QStringList &extra, QByteArray *out)
 {
 	const QString cli = find_tool(QStringLiteral("situ-edit"));
@@ -174,6 +250,8 @@ bool session::run(const QStringList &extra, QByteArray *out)
 
 bool session::refresh()
 {
+	if (!catch_up())
+		return false;
 	QByteArray printed;
 	QStringList arguments = common_arguments();
 	arguments << QStringLiteral("--format") << QStringLiteral("json")
@@ -191,7 +269,28 @@ bool session::refresh()
 		return false;
 	}
 	document_ = parsed.object();
+	framed_   = seen_resizes_;
 	return true;
+}
+
+// The bytes `field` covers in the buffer as the document last read them:
+// false where it names none.
+bool session::span_of(const QString &field, qint64 *start, qint64 *size) const
+{
+	const qint64 at = document_.value(QStringLiteral("at")).toInteger();
+	for (const QJsonValue &value : document_.value(QStringLiteral("fields"))
+	                               .toArray()) {
+		const QJsonObject one = value.toObject();
+		if (one.value(QStringLiteral("name")).toString() != field)
+			continue;
+		const QJsonValue offset = one.value(QStringLiteral("offset"));
+		if (offset.isNull())
+			return false;
+		*start = at + offset.toInteger();
+		*size  = one.value(QStringLiteral("size")).toInteger();
+		return true;
+	}
+	return false;
 }
 
 bool session::set(const QString &field, const QString &text)
@@ -203,13 +302,14 @@ bool session::set(const QString &field, const QString &text)
 	// changed the file's length, may name the wrong bytes: a chunk window
 	// opened after the one grown still holds the old offset, and a write
 	// through it would land inside its neighbour (26.1145).
-	const bool whole = options_.offset == 0 && options_.length < 0;
-	if (!whole && seen_resizes_ != *resizes_) {
-		error_ = QStringLiteral("a write in another window changed the "
-		                        "file's length since this one was opened, "
-		                        "so its frame may be stale; reopen it");
+	// A window framed before a write elsewhere moved bytes follows the
+	// move first, and reads where its field now is (26.1146); one that
+	// cannot follow refuses, as every one did before.
+	if (seen_resizes_ != resizes_->size() && !refresh())
 		return false;
-	}
+	qint64 start = 0;
+	qint64 old_size = 0;
+	const bool spanned = span_of(field, &start, &old_size);
 	const qint64 before = QFileInfo(work_).size();
 	const QString next = scratch_->filePath(QStringLiteral("next.bin"));
 	QFile::remove(next);
@@ -232,15 +332,25 @@ bool session::set(const QString &field, const QString &text)
 		return false;
 	}
 	*modified_ = true;
-	if (QFileInfo(work_).size() != before)
-		++*resizes_;
-	// This window followed its own frame, which `follow_frames` sets.
-	seen_resizes_ = *resizes_;
+	const qint64 delta = QFileInfo(work_).size() - before;
 	const QJsonDocument after = QJsonDocument::fromJson(printed);
 	if (after.isObject())
 		follow_frames(after.object());
+	// This window followed its own frame, which `follow_frames` set; the
+	// others follow the log.
+	if (delta != 0) {
+		resizes_->push_back({start, start + old_size, delta, false});
+		seen_resizes_ = resizes_->size();
+	}
 	if (!refresh())
 		return false;
+	qint64 new_start = 0;
+	qint64 new_size = 0;
+	// Exact only where the field's own growth is the file's, from where
+	// it was: anything else moved bytes somewhere the log cannot say.
+	if (delta != 0 && spanned && span_of(field, &new_start, &new_size)
+	    && new_start == start && new_size - old_size == delta)
+		resizes_->back().exact = true;
 	notes_ = cost;
 	return true;
 }
@@ -286,7 +396,10 @@ bool session::open_nested(const session &parent, const QString &structure,
 	work_     = parent.work_;
 	modified_ = parent.modified_;
 	resizes_  = parent.resizes_;
-	seen_resizes_ = *resizes_;
+	// The offset came from the parent's document, so this frame is as
+	// old as that: follow from there.
+	seen_resizes_ = parent.framed_;
+	stale_    = parent.stale_;
 	notes_.clear();
 	return refresh();
 }
