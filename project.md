@@ -9729,6 +9729,15 @@ before were guided by the generated code and could not reach these.
   the frame's end, so the field is the last and the message is refused
   BOUNDS by all five; the count of a run in a refused message is not a
   contract either side owes. The harness skips exactly that case.
+- Accepted, not fixed: edges' `sealed_self_sized`, a sealed region sized
+  by the varint at the head of its interior. Where that varint is
+  overlong, the backends give it width 0 and both walkers its 9 bytes,
+  so the tag after the region fits for the one and not the other -- OK
+  against BOUNDS, over a region all six say they cannot open. Its size
+  is read out of ciphertext as though it were plaintext; neither answer
+  is one a reader of sealed bytes can rely on. Found in the second pass;
+  the harness skips a struct's verdict where both refuse to open its
+  region.
 
 Held in `test/unit/test_the_walk_bounds_what_a_count_declares.py` and the
 `static-pad` case of `test_both_walkers_read_what_the_backends_check.py`.

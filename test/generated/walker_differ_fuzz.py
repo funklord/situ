@@ -18,10 +18,12 @@ atheris instruments `walker/` and nothing else, imported before anything
 that would import it uninstrumented. A difference raises, which atheris
 reports with the input saved; libFuzzer's `-max_total_time` bounds a run.
 
-One divergence is accepted and skipped (26.1142's record): a run's count
-where the walk and the reader both refuse the struct, since the run's last
-element is then one cut short at the frame's end and a count in a refused
-message is not a contract either side owes.
+Two divergences are accepted and skipped (26.1142's record): a run's
+count where the walk and the reader both refuse the struct, since the run's
+last element is then one cut short at the frame's end and a count in a
+refused message is not a contract either side owes; and the verdict of a
+struct whose sealed region both say they cannot open, whose size is then
+read out of ciphertext as though it were plaintext.
 """
 
 from __future__ import annotations
@@ -113,10 +115,16 @@ def one(data: bytes) -> None:
 		return mine is not None and mine != "validate 0" \
 			and mine == said.get((where, "validate"))
 
+	def unopened(where: str) -> bool:
+		return any(section == where and " refused=1 " in line
+		           and said.get((section, member)) == line
+		           for (section, member), line in walked.items())
+
 	bad = [(key, walked[key], said[key])
 	       for key in sorted(walked.keys() & said.keys())
 	       if walked[key] != said[key]
-	       and not (" count=" in walked[key] and refused(key[0]))]
+	       and not (" count=" in walked[key] and refused(key[0]))
+	       and not (key[1] == "validate" and unopened(key[0]))]
 	unanswered = sorted(key for key in said if key[1].endswith(".sum")
 	                    and key not in walked)
 	if bad or unanswered:
