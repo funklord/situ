@@ -9743,6 +9743,20 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1163 The walkers ask what follows a variant before its nested arm
+
+26.1152's open difference, `edges.hands_on_arms`: where a variant cannot
+be measured the four backends hold the fixed members after it to the
+frame arm by arm (26.779) before a single nested arm's own check, and
+answered BOUNDS where both walkers, validating that arm first, answered
+VERSION from an error arm inside it. Both walkers now ask, before
+validating a nested struct arm, that the arm plus the fixed members after
+the variant fit the frame (`_fixed_tail_bits`, `fixed_tail_bits`, the
+image's twin of `traverse.fixed_tail_bytes`); a run in an arm keeps its
+own order, elements first. Both differentials on `edges` ran clean for
+two minutes each after it. Held in `test_walker_c.py`
+(`test_the_tail_after_a_variant_is_asked_before_its_arm`).
+
 ### 26.1162 An indexed region is not held to its own reach in the C walker
 
 `make fuzz-walker-c-differ`, sqlite: a leaf page of no cells whose eight
@@ -9918,9 +9932,7 @@ measured (an arm holds a run of variable records) they hold the members
 after it to the frame arm by arm (26.779), BEFORE a single nested arm's
 own check. Both walkers validate that nested arm in member order first
 and answer VERSION. Both refuse the message; the order is the
-backends' and the walkers would need to know when a variant is
-unmeasurable to follow it. Until then the target stops on `edges`, and
-the other 61 schemas are run with it left out.
+backends', and the walkers follow it since 26.1163.
 
 ### 26.1153 A rule over a signed 64-bit let orders signed in the dissector
 

@@ -1731,6 +1731,18 @@ def _validate_here(image: Image, view: View, struct_index: int,
 					floor = image.structs[inner_struct].size_min_bits
 					if floor != NONE and wide * BITS_PER_BYTE < floor:
 						return fail(ERR_BOUNDS, arm)
+					# What follows the variant, before the arm's own
+					# checks, as the four order it: a variant they cannot
+					# measure has the fixed members after it held to the
+					# frame arm by arm (26.779) before a nested arm is
+					# validated, so `edges.hands_on_arms` with `after`
+					# past the frame is BOUNDS there, and was VERSION here
+					# from an error arm inside the arm (26.1163).
+					trailing = _fixed_tail_bits(image, view.struct, index)
+					if trailing is not None and \
+							(at + wide) * BITS_PER_BYTE + trailing \
+							> view.limit * BITS_PER_BYTE:
+						return fail(ERR_BOUNDS, index)
 					# Not to the frame's end where the variant states
 					# its size: that is the arm's window (26.1040).
 					ends = (view.limit if image.structs[inner_struct].to_the_end
@@ -2426,6 +2438,23 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 				and value not in image.enum_values.get(against, set()):
 			return ERR_CONSTRAINT
 	return OK
+
+
+def _fixed_tail_bits(image: Image, struct: int, index: int) -> int | None:
+	"""How many bits the struct's own members after `index` take, where
+	every one is fixed-size -- `traverse.fixed_tail_bytes`, which is what
+	the backends hold to the frame after a variant (26.779) -- or None."""
+	members = [one for one in image.members(image.structs[struct])
+	           if image.region_owner.get(one, one) == one]
+	if index not in members:
+		return None
+	bits = 0
+	for one in members[members.index(index) + 1:]:
+		placement = image.placements[one]
+		if not placement.fixed or placement.size_bits == NONE:
+			return None
+		bits += placement.size_bits
+	return bits
 
 
 def _arm_validates(image: Image, view: View, index: int,

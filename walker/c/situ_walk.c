@@ -5746,6 +5746,33 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
  * Measured through the variant MEMBER rather than the arm, because an arm is
  * not in the struct's member chain -- asking for an arm's offset refuses.
  */
+/* How many bits the struct's own members after `index` take, where every
+ * one is fixed-size: `traverse.fixed_tail_bytes`, which is what the four
+ * hold to the frame after a variant (26.779). 0 where one is not. */
+static int fixed_tail_bits(const situ_walk_image *image, uint32_t shape,
+                           uint32_t index, uint64_t *out)
+{
+	uint32_t first = 0u, count = 0u;
+	uint64_t bits  = 0u;
+
+	if (situ_walk_members(image, shape, &first, &count) != SITU_WALK_OK
+	    || index < first || index - first >= count) {
+		return 0;
+	}
+	for (uint32_t one = index + 1u; one < first + count; one++) {
+		situ_walk_placement held;
+
+		if (situ_walk_placement_at(image, one, &held) != SITU_WALK_OK
+		    || (held.flags & SITU_WALK_SIZE_FIXED) == 0u
+		    || held.size_bits == SITU_WALK_NONE) {
+			return 0;
+		}
+		bits += held.size_bits;
+	}
+	*out = bits;
+	return 1;
+}
+
 static situ_walk_err arm_validates(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t index,
@@ -5901,6 +5928,25 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		record(why, index, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
+	}
+	/* What follows the variant, before a single nested arm's own checks,
+	 * as the four order it: a variant they cannot measure has the fixed
+	 * members after it held to the frame arm by arm (26.779) before that
+	 * arm is validated, so `edges.hands_on_arms` with `after` past the
+	 * frame is BOUNDS there, and was VERSION here from an error arm inside
+	 * the arm (26.1163). Runs keep their own order: elements first. */
+	if (arm_type != SITU_WALK_NONE && arm.size_code == SITU_WALK_NONE
+	    && arm.array_count == SITU_WALK_NONE
+	    && arm.repeat_code == SITU_WALK_NONE
+	    && delimiter_rules(image, chosen) == NULL) {
+		uint64_t trailing = 0u;
+
+		if (fixed_tail_bits(image, shape, index, &trailing)
+		    && (uint64_t)at + wide + trailing > (uint64_t)len * 8u) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
 	}
 
 	/* A VARIANT THAT STATES ITS SIZE frames its arm (26.1040): a run in

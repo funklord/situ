@@ -1192,6 +1192,32 @@ def test_an_indexed_region_is_not_held_to_its_own_reach(
 		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
 
 
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_tail_after_a_variant_is_asked_before_its_arm(
+		tmp_path: Path) -> None:
+	"""`edges.hands_on_arms`: arm 1's `negotiated` ends on an inner
+	`default: error`, and `after` lies past the frame. The four backends
+	hold the fixed members after an unmeasurable variant to the frame
+	before validating a nested arm (26.779) and answer BOUNDS; both walkers
+	answered VERSION (26.1163, found by `make fuzz-walker-c-differ`). With
+	`after` present all six say VERSION."""
+	from situc.cli import analyse
+	from situc.parser import parse
+
+	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
+	blob  = pack(parse(source), resolved)[0]
+	named = load(pack(parse(source), resolved, metadata=True)[0])
+	shape = next(index for index in range(len(named.structs))
+	             if named.struct_name(index) == "hands_on_arms")
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for message, want in (("0101010000a6010000", "1"),
+	                      ("0101010000a601000000", "3"),
+	                      ("0101010000a6010101", "1")):
+		data = bytes.fromhex(message)
+		assert python_verdict(blob, data, shape) == want, message
+		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;
