@@ -168,3 +168,29 @@ def test_a_run_of_structs_lists_where_each_element_is() -> None:
 	assert shown["chunks"]["elements"][1] == {"offset": 33, "length": 22}
 	assert shown["signature"]["elements"] is None
 
+
+ARM = """target buffer;
+endian big;
+struct inner { u8 n; u8 name[n]; u8 flag; }
+struct outer {
+	u8  kind;
+	u16 len;
+	variant body[len] switch (kind) { case 7: inner one; default: error; }
+	u8  end;
+}
+"""
+
+
+def test_a_selected_arm_opens_and_its_variant_length_follows() -> None:
+	"""A sized variant whose selected arm is one struct opens as that arm,
+	framed by the variant -- the same shape as a `[holds]` run -- and a run
+	grown in it moves the arm's own count and the variant's length."""
+	document = open_document(_image(ARM),
+	                         bytearray(bytes.fromhex("070004026869" "01ee")),
+	                         "outer")
+	names = [f.name for f in document.fields()]
+	inner = document.open_nested(names.index("body"))
+	assert (inner.name, inner.at, inner.limit) == ("inner", 3, 7)
+	inner.set("name", b"hello")
+	assert bytes(document.buffer) \
+		== bytes.fromhex("070007" "05" "68656c6c6f" "01ee")

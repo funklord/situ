@@ -9677,7 +9677,10 @@ elements (`Field.elements`, `(offset, length)` in the buffer, where the
 run's own walk places them), and the JSON's `nested` carries them. The
 Qt window opens `--open chunks:1`, and a double click on a run of
 several asks which, each named by where it is; the curses TUI asks for
-the element's number. Held in `test/unit/test_a_run_grows_inside_a_window.py`
+the element's number. And a sized variant whose selected arm is one
+struct opens as that arm, framed by the variant -- the shape of a
+`[holds]` run -- so a run grown in it moves the arm's count and the
+variant's length together. Held in `test/unit/test_a_run_grows_inside_a_window.py`
 and `test_the_qt_window_edits_as_the_cli_does.py`, the latter growing the
 second chunk's text through the window.
 
@@ -9760,9 +9763,10 @@ the struct it holds, framed by the run, which is 26.1115's other refusal
 -- "two fields at once": `outer { u16 len; u8 body[len] [holds = inner];
 }` with `inner { u8 n; u8 name[n]; ... }` grows `name` by moving `inner.n`
 and `outer.len` both. Not yet: another window open on an enclosing struct
-keeps its old length until reopened, and a variant's arm does not open as
-a nested document. Held in `test/unit/test_a_run_grows_inside_a_window.py`
-and `test_the_qt_window_edits_as_the_cli_does.py`.
+keeps its old length until reopened, and so does one opened on a sibling
+after the edit, whose offset moved. Held in
+`test/unit/test_a_run_grows_inside_a_window.py` and
+`test_the_qt_window_edits_as_the_cli_does.py`.
 
 ### 26.1140 The bytes a tag covers are asked of the members in them
 

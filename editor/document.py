@@ -236,8 +236,14 @@ class Document:
 			                 f"open it with --struct {name} --offset {at} "
 			                 "and --arg")
 		limit = None if field.size is None else at + field.size
+		# By the row's name among ALL the struct's own members: a variant,
+		# whose selected arm opens here, is not one `_members` writes to.
+		slot = next(index for index in
+		            self.image.members(self.image.structs[self.struct])
+		            if (self.image.name_of(index).rpartition(".")[2]
+		                or self.image.name_of(index)) == field.name)
 		return Document(self.image, self.buffer, chosen, at, limit,
-		                parent=self, slot=self._members()[field.name])
+		                parent=self, slot=slot)
 
 	def open_element(self, index: int, which: int) -> "Document":
 		"""Element `which` of the run of structs in field `index`, as a
@@ -1352,9 +1358,17 @@ class Document:
 		# and the note carries the answer, which is what a nested struct's
 		# row already does.
 		chose = image.name_of(arm).rpartition(".")[2] or image.name_of(arm)
+		# An arm that is ONE struct opens as it, framed by the variant
+		# (26.1144): a sized variant's arm is the shape behind an outer
+		# length, as a `[holds]` run is.
+		held = image.placements[arm]
+		opens = (None if held.type_struct == NONE or at is None
+		         or held.array_count != NONE or held.size_code != NONE
+		         or held.repeat_code != NONE
+		         else (image.struct_name(held.type_struct), self.at + at))
 		return Field(local, at, wide, None,
 		             f"the arm `{chose}` is the one present"
-		             + (f"; {note}" if note else ""))
+		             + (f"; {note}" if note else ""), nested=opens)
 
 	def relations(self) -> list[tuple[str, str, str]]:
 		"""Which cross-message relations this document could be half of.
