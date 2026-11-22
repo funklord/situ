@@ -407,3 +407,61 @@ def test_a_window_follows_a_resize_made_in_another(window_binary: Path,
 	want = (png(b"A\x00eleven", b"Z\x00twelve") if first == "chunks:2"
 	        else png(b"Z\x00twelve", b"B\x00two"))
 	assert (tmp_path / "g.png").read_bytes() == want
+
+
+def _png_chunk(kind: bytes, data: bytes, crc: int | None = None) -> bytes:
+	import struct
+	import zlib
+	return struct.pack(">I", len(data)) + kind + data + struct.pack(
+		">I", zlib.crc32(kind + data) if crc is None else crc)
+
+
+def _png_of(*middle: bytes) -> bytes:
+	return bytes.fromhex("89504e470d0a1a0a") \
+		+ _png_chunk(b"IHDR", bytes(13)) + b"".join(middle) \
+		+ _png_chunk(b"IEND", b"")
+
+
+def test_the_window_inserts_and_removes_an_element(window_binary: Path,
+		tmp_path: Path) -> None:
+	"""Edit > Insert Element writes what `--insert` writes, its CRC computed
+	(26.1147); a window open on the chunk after the insert follows it, so
+	its write lands in its own chunk, now one further on."""
+	(tmp_path / "f.png").write_bytes(_png_of(_png_chunk(b"tEXt", b"A\x00a")))
+	window = _window(window_binary, "--struct", "png_file",
+	                 "--open", "chunks:1",
+	                 "--insert", "@0:chunks:1="
+	                 + _png_chunk(b"tEXt", b"N\x00new", crc=0).hex(),
+	                 "--set-bytes", "@1:data=" + b"A\x00again".hex(),
+	                 "--out", str(tmp_path / "g.png"),
+	                 str(ROOT / "example" / "png" / "png.situ"),
+	                 str(tmp_path / "f.png"))
+	assert window.returncode == 0, window.stderr
+	assert (tmp_path / "g.png").read_bytes() == _png_of(
+		_png_chunk(b"tEXt", b"N\x00new"), _png_chunk(b"tEXt", b"A\x00again"))
+
+	window = _window(window_binary, "--struct", "png_file",
+	                 "--open", "chunks:2", "--remove", "@0:chunks:1",
+	                 "--set-bytes", "@1:data=" + b"B\x00b".hex(),
+	                 "--out", str(tmp_path / "h.png"),
+	                 str(ROOT / "example" / "png" / "png.situ"),
+	                 str(tmp_path / "g.png"))
+	assert window.returncode == 0, window.stderr
+	assert (tmp_path / "h.png").read_bytes() \
+		== _png_of(_png_chunk(b"tEXt", b"B\x00b"))
+
+
+def test_a_window_on_a_removed_element_refuses(window_binary: Path,
+		tmp_path: Path) -> None:
+	"""The chunk a window stood on is gone: nothing it could write to is
+	its own, so it refuses until reopened rather than writing into the
+	chunk that moved up into its place (26.1146, 26.1147)."""
+	(tmp_path / "f.png").write_bytes(_png_of(_png_chunk(b"tEXt", b"A\x00a"),
+	                                         _png_chunk(b"tEXt", b"B\x00b")))
+	window = _window(window_binary, "--struct", "png_file",
+	                 "--open", "chunks:1", "--remove", "@0:chunks:1",
+	                 "--set-bytes", "@1:data=" + b"C\x00c".hex(),
+	                 str(ROOT / "example" / "png" / "png.situ"),
+	                 str(tmp_path / "f.png"))
+	assert window.returncode != 0
+	assert "reopen it" in window.stderr

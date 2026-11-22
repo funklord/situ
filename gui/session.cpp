@@ -150,12 +150,26 @@ namespace {
 // around it. False where it meets the field so that two of those are
 // possible -- an empty field at its edge may be its first or last member
 // or its neighbour's -- or crosses it, which no nesting does (26.1146).
-bool follow(qint64 &offset, qint64 &length, qint64 start, qint64 end,
-            qint64 delta)
+//
+// `element` is set where the write put an element into a run of structs
+// or took one out (26.1147): [start, end) is then the element's place --
+// empty for one put in -- and a frame over that struct is an element of
+// the run, so one starting where an element went in is the element that
+// was there, now after it, and one over exactly the element taken out
+// has nothing left to show.
+bool follow(qint64 &offset, qint64 &length, const QString &structure,
+            qint64 start, qint64 end, qint64 delta, const QString &element)
 {
 	const bool rest = length < 0;
 	if (offset == 0 && rest)
 		return true;	// the whole file
+	const bool sibling = !element.isEmpty() && structure == element;
+	if (sibling && offset == start) {
+		if (start != end)
+			return false;	// the element taken out
+		offset += delta;
+		return true;
+	}
 	const qint64 stop = rest ? std::numeric_limits<qint64>::max()
 	                         : offset + length;
 	const bool empty = start == end;
@@ -187,7 +201,8 @@ bool session::catch_up()
 		const resize &moved = (*resizes_)[seen_resizes_];
 		bool followed = moved.exact
 		                && follow(options_.offset, options_.length,
-		                          moved.start, moved.end, moved.delta);
+		                          options_.structure, moved.start, moved.end,
+		                          moved.delta, moved.element);
 		for (QString &window : options_.within) {
 			QStringList parts = window.split(QLatin1Char(':'));
 			if (parts.size() != 3) {
@@ -196,8 +211,9 @@ bool session::catch_up()
 			}
 			qint64 offset = parts[1].toLongLong();
 			qint64 length = parts[2].isEmpty() ? -1 : parts[2].toLongLong();
-			followed = followed && follow(offset, length, moved.start,
-			                              moved.end, moved.delta);
+			followed = followed && follow(offset, length, parts[0],
+			                              moved.start, moved.end,
+			                              moved.delta, moved.element);
 			parts[1] = QString::number(offset);
 			parts[2] = length < 0 ? QString() : QString::number(length);
 			window = parts.join(QLatin1Char(':'));
@@ -295,30 +311,70 @@ bool session::span_of(const QString &field, qint64 *start, qint64 *size) const
 
 bool session::set(const QString &field, const QString &text)
 {
+	// `--put`: the CLI reads the text the way the field shows it, hex or a
+	// number, so the window does not decide which (26.1113).
+	return write(field, {QStringLiteral("--put"),
+	                     field + QLatin1Char('=') + text.trimmed()});
+}
+
+bool session::insert(const QString &field, int which, const QString &hex)
+{
+	return write(field, {QStringLiteral("--insert"),
+	                     field + QLatin1Char(':') + QString::number(which)
+	                     + QLatin1Char('=') + hex.trimmed()}, which, true);
+}
+
+bool session::remove(const QString &field, int which)
+{
+	return write(field, {QStringLiteral("--remove"),
+	                     field + QLatin1Char(':') + QString::number(which)},
+	             which, false);
+}
+
+bool session::write(const QString &field, const QStringList &edit,
+                    int which, bool adding)
+{
 	// Into a second file, renamed over the first only once the CLI has
 	// accepted the write: a refused edit leaves the working bytes exactly
 	// as they were, which is what the CLI's own all-or-nothing promises.
-	// A window over PART of the file, framed before a write elsewhere
-	// changed the file's length, may name the wrong bytes: a chunk window
-	// opened after the one grown still holds the old offset, and a write
-	// through it would land inside its neighbour (26.1145).
 	// A window framed before a write elsewhere moved bytes follows the
-	// move first, and reads where its field now is (26.1146); one that
-	// cannot follow refuses, as every one did before.
+	// move first (26.1146) -- a write through its old offset would land
+	// in its neighbour (26.1145) -- and one that cannot follow refuses.
 	if (seen_resizes_ != resizes_->size() && !refresh())
 		return false;
 	qint64 start = 0;
 	qint64 old_size = 0;
 	const bool spanned = span_of(field, &start, &old_size);
+	// An element in or out: the log names its place, not the run's, so a
+	// window on another element can tell which side of it it stood.
+	qint64 place = start;
+	qint64 place_end = start + old_size;
+	QString element;
+	if (which >= 0 && spanned) {
+		for (const QJsonValue &value : document_.value(QStringLiteral("fields"))
+		                               .toArray()) {
+			const QJsonObject one = value.toObject();
+			if (one.value(QStringLiteral("name")).toString() != field)
+				continue;
+			element = one.value(QStringLiteral("nested")).toObject()
+			          .value(QStringLiteral("struct")).toString();
+			const QJsonArray spans
+			    = one.value(QStringLiteral("elements")).toArray();
+			if (which < spans.size()) {
+				const QJsonObject at = spans[which].toObject();
+				place = at.value(QStringLiteral("offset")).toInteger();
+				place_end = adding ? place : place
+				            + at.value(QStringLiteral("length")).toInteger();
+			} else {
+				place = place_end = start + old_size;
+			}
+		}
+	}
 	const qint64 before = QFileInfo(work_).size();
 	const QString next = scratch_->filePath(QStringLiteral("next.bin"));
 	QFile::remove(next);
 	QStringList arguments = common_arguments();
-	// `--put`: the CLI reads the text the way the field shows it, hex or a
-	// number, so the window does not decide which (26.1113).
-	arguments << QStringLiteral("--put")
-	          << field + QLatin1Char('=') + text.trimmed()
-	          << QStringLiteral("--format") << QStringLiteral("json")
+	arguments << edit << QStringLiteral("--format") << QStringLiteral("json")
 	          << QStringLiteral("--out") << next << image_ << work_;
 	QByteArray printed;
 	if (!run(arguments, &printed))
@@ -339,7 +395,7 @@ bool session::set(const QString &field, const QString &text)
 	// This window followed its own frame, which `follow_frames` set; the
 	// others follow the log.
 	if (delta != 0) {
-		resizes_->push_back({start, start + old_size, delta, false});
+		resizes_->push_back({place, place_end, delta, false, element});
 		seen_resizes_ = resizes_->size();
 	}
 	if (!refresh())

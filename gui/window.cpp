@@ -14,6 +14,7 @@
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QLineEdit>
 #include <QJsonArray>
 #include <QLabel>
 #include <QMenuBar>
@@ -74,6 +75,15 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 	                this, [this] { save_as(); });
 	file->addSeparator();
 	file->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
+
+	// Edit: an element into or out of the run of structs on the current
+	// row -- a PNG chunk -- each asked for and then the CLI's to make
+	// (26.1147).
+	QMenu *edit = menuBar()->addMenu(tr("&Edit"));
+	edit->addAction(tr("&Insert Element..."), this,
+	                &edit_window::insert_dialog);
+	edit->addAction(tr("&Remove Element..."), this,
+	                &edit_window::remove_dialog);
 
 	// Help > About, where hydra, beerssh and fuzzypickles keep theirs: who
 	// wrote it and which build this is.
@@ -254,6 +264,91 @@ void edit_window::edited(QTableWidgetItem *item)
 	emit hub_->changed();
 	table_->setCurrentCell(row, value_column);
 	say(said);
+}
+
+// The run of structs on `row`, and how many elements it holds: false where
+// the row is not one.
+bool edit_window::elements_of(int row, QString *field, int *count) const
+{
+	const QTableWidgetItem *name = table_->item(row, name_column);
+	if (name == nullptr || name->data(Qt::UserRole).isNull())
+		return false;
+	const QVariant elements = name->data(Qt::UserRole).toMap()
+	    .value(QStringLiteral("elements"));
+	if (elements.isNull())
+		return false;
+	*field = name->text();
+	*count = int(elements.toList().size());
+	return true;
+}
+
+void edit_window::insert_dialog()
+{
+	QString field;
+	int count = 0;
+	if (!elements_of(table_->currentRow(), &field, &count)) {
+		say(tr("select a run of structs to insert an element into"));
+		return;
+	}
+	bool chosen = false;
+	const int which = QInputDialog::getInt(
+	    this, tr("Insert an element"),
+	    tr("`%1` holds %2 elements; the new one goes in at:")
+	        .arg(field).arg(count),
+	    count, 0, count, 1, &chosen);
+	if (!chosen)
+		return;
+	const QString hex = QInputDialog::getText(
+	    this, tr("Insert an element"),
+	    tr("Its bytes, in hex -- a checksum situ computes is computed:"),
+	    QLineEdit::Normal, QString(), &chosen);
+	if (chosen)
+		insert_element(field, which, hex);
+}
+
+void edit_window::remove_dialog()
+{
+	QString field;
+	int count = 0;
+	if (!elements_of(table_->currentRow(), &field, &count) || count == 0) {
+		say(tr("select a run of structs with an element to remove"));
+		return;
+	}
+	bool chosen = false;
+	const int which = QInputDialog::getInt(
+	    this, tr("Remove an element"),
+	    tr("`%1` holds %2 elements; remove number:").arg(field).arg(count),
+	    0, 0, count - 1, 1, &chosen);
+	if (chosen)
+		remove_element(field, which);
+}
+
+bool edit_window::insert_element(const QString &field, int which,
+                                 const QString &hex)
+{
+	const bool done = session_.insert(field, which, hex);
+	spliced(field, done);
+	return done;
+}
+
+bool edit_window::remove_element(const QString &field, int which)
+{
+	const bool done = session_.remove(field, which);
+	spliced(field, done);
+	return done;
+}
+
+void edit_window::spliced(const QString &field, bool done)
+{
+	if (!done) {
+		say(tr("refused: %1").arg(session_.error()));
+		return;
+	}
+	say(session_.notes().isEmpty()
+	    ? tr("%1 changed").arg(field)
+	    : session_.notes().join(QStringLiteral("; ")));
+	// Every window over these bytes re-reads them, this one included.
+	emit hub_->changed();
 }
 
 void edit_window::reload()

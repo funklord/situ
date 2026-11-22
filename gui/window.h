@@ -66,6 +66,12 @@ public:
 	// struct, has no such element, or the CLI refuses to open it.
 	edit_window *open_field(const QString &which);
 
+	// Puts `hex` into the run of structs `field` as element `which`, or
+	// takes element `which` out, as Edit > Insert and Remove do after
+	// asking. False with the reason in `error()` (26.1147).
+	bool insert_element(const QString &field, int which, const QString &hex);
+	bool remove_element(const QString &field, int which);
+
 protected:
 	void closeEvent(QCloseEvent *event) override;
 
@@ -75,6 +81,10 @@ private:
 	void reload();
 	void populate();
 	void edited(QTableWidgetItem *item);
+	bool elements_of(int row, QString *field, int *count) const;
+	void insert_dialog();
+	void remove_dialog();
+	void spliced(const QString &field, bool done);
 	void open_dialog();
 	bool save();
 	bool save_as();

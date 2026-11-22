@@ -354,7 +354,10 @@ arguments it wants rather than defaulting one, because a view built on a
 guessed block size reads the wrong bytes confidently.
 
 All three edit. `--set name=value` writes a number and `--set-bytes
-name=hex` writes a run, where the schema permits it; in the terminal, Enter
+name=hex` writes a run, where the schema permits it, and `--insert
+chunks:1=hex` and `--remove chunks:1` put an element into a run of structs
+or take one out -- the count that sizes it, and the new element's CRC,
+following, as Edit > Insert Element does in the window; in the terminal, Enter
 on a field does the same (or opens a nested struct) and `w` writes `--out`, and in the window the value
 column is editable on exactly the rows the schema lets anybody write, with
 what each write would cost beside it, and a nested struct opens in a

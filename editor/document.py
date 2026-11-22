@@ -268,6 +268,64 @@ class Document:
 		return Document(self.image, self.buffer, chosen, at, at + size,
 		                parent=self, slot=slot)
 
+	def insert(self, name: str, which: int, value: bytes) -> list[str]:
+		"""Put `value` into the run of structs `name` as element `which`,
+		the ones from there on after it -- `which` equal to the count
+		appends. A PNG gains a chunk, a TLV list an option (26.1147)."""
+		return self._splice_element(name, which, value)
+
+	def remove(self, name: str, which: int) -> list[str]:
+		"""Take element `which` out of the run of structs `name`."""
+		return self._splice_element(name, which, None)
+
+	def _splice_element(self, name: str, which: int,
+			value: bytes | None) -> list[str]:
+		"""The run's bytes with one element added or taken away, written
+		as `set` writes a run at a new length: measured by the walk, the
+		field that sizes it moved -- by the bytes or by one element --
+		and a message that conformed still conforming. A new element's
+		own tags are then recomputed where situ computes them, as a write
+		to a covered member recomputes them."""
+		slot = self._members().get(name)
+		if slot is None:
+			raise Refused(f"no member named `{name}` in `{self.name}`")
+		if self.image.placements[slot].type_struct == NONE:
+			raise Refused(f"`{name}` is not a run of structs")
+		spans = report._run_elements(self.view(), slot)
+		held = self._extents().get(self.image.name_of(slot))
+		if spans is None or held is None:
+			raise Refused(f"`{name}` is not a run whose elements this "
+			              f"walk can place")
+		start = self.at + held[0] // BITS_PER_BYTE
+		end = start + held[1] // BITS_PER_BYTE
+		run = bytes(self.buffer[start:end])
+		if value is None:
+			if not 0 <= which < len(spans):
+				raise Refused(f"`{name}` has {len(spans)} element(s)")
+			at, size = spans[which]
+			grown = run[:at - start] + run[at - start + size:]
+			return self.set(name, grown, elements=-1)
+		if not 0 <= which <= len(spans):
+			raise Refused(f"`{name}` has {len(spans)} element(s); an "
+			              f"element goes in at 0 to {len(spans)}")
+		at = spans[which][0] if which < len(spans) else end
+		grown = run[:at - start] + value + run[at - start:]
+		notes = self.set(name, grown, elements=1)
+		# ITS OWN TAGS, as `set` keeps a covered member's: a CRC is
+		# read-only, so nobody can write one by hand, and the editor that
+		# keeps a chunk's CRC current when its data grows keeps it current
+		# when the chunk arrives. Walked again, so the element is where
+		# the walk now puts it.
+		index = next(number for number, field in enumerate(self.fields())
+		             if field.name == name)
+		added = self.open_element(index, which)
+		for member in self.image.members(self.image.structs[added.struct]):
+			if self.image.capability_of(member, "auth") == "Covered":
+				short = self.image.name_of(member).rpartition(".")[2]
+				notes.extend(note for note in added._recompute(short, member)
+				             if note not in notes)
+		return notes
+
 	@property
 	def verdict(self) -> tuple[str, str] | None:
 		"""What `validate` says about the whole message (26.595).
@@ -639,7 +697,8 @@ class Document:
 			found[name.rpartition(".")[2] or name] = index
 		return found
 
-	def set(self, name: str, value: int | bytes) -> list[str]:
+	def set(self, name: str, value: int | bytes,
+			elements: int = 0) -> list[str]:
 		"""Store a value, if the schema permits it. Returns what it cost.
 
 		Three refusals and one warning, in that order, because they are
@@ -710,7 +769,7 @@ class Document:
 		if isinstance(value, bytes):
 			held = self._extents().get(self.image.name_of(index))
 			if held is not None and held[1] != len(value) * BITS_PER_BYTE:
-				return self._resize(name, index, value, held)
+				return self._resize(name, index, value, held, elements)
 
 		candidate = Document(self.image, bytearray(self.buffer), self.struct,
 		                     self.at, self.limit)
@@ -735,7 +794,7 @@ class Document:
 		return []
 
 	def _resize(self, name: str, index: int, value: bytes,
-			held: tuple[int, int]) -> list[str]:
+			held: tuple[int, int], elements: int = 0) -> list[str]:
 		"""A byte run written at a new length: the first slice of 0034's
 		shifting write (26.1115).
 
@@ -750,15 +809,12 @@ class Document:
 		give a consistent message are refused as ambiguous rather than one
 		picked.
 
-		Two things this does not do, and refuses rather than gets wrong:
-
-		- **A window inside a larger message.** A parent's length, an outer
-		  frame, an offset table elsewhere in the buffer -- 12.3's
-		  invalidation model is what would find and move them, and it is not
-		  built. So the document must be the whole buffer.
-		- **Two fields at once** -- a run sized by one field inside a
-		  struct framed by another. The walk then disagrees with every
-		  single candidate and the refusal names what moved.
+		A window inside a larger message goes to `_resize_through`, which
+		measures every level of the chain it was opened down (26.1141); a
+		window opened on its own is refused, since what frames it cannot
+		be seen. `elements` is a step a caller knows and the bytes do not
+		give: one element added to a run of structs of no one size
+		(26.1147).
 		"""
 		if self.at != 0 or (self.limit is not None
 		                    and self.limit != len(self.buffer)):
@@ -768,7 +824,7 @@ class Document:
 					f"document over the whole buffer, or one opened from "
 					f"its parent -- a window opened on its own has a parent "
 					f"whose lengths would go stale (0034, 12.3)")
-			return self._resize_through(name, index, value, held)
+			return self._resize_through(name, index, value, held, elements)
 
 		start, bits = held
 		at = self.at + start // BITS_PER_BYTE
@@ -794,6 +850,14 @@ class Document:
 		was_ok = self.verdict is not None and self.verdict[0] == "ok"
 		broke: list[str] = []		# why a layout that fit did not conform
 
+		def readable(read: dict[str, int | bytes]) -> bool:
+			"""The run reads back as written -- where it reads at all. A run
+			of structs has no value to read, only elements, so for it the
+			walk's extents and the verdict above are the whole answer
+			(26.1147)."""
+			return read.get(local) == value if local in values \
+				else local not in read
+
 		def holds(candidate: "Document", moved: str | None) -> bool:
 			"""The walk moved exactly the run's tail by `delta`, the run
 			reads back as written, every other member reads the same, and
@@ -810,7 +874,7 @@ class Document:
 					broke.append(verdict[1])
 				return False
 			return self._shifted_by(before, after, start, delta, here) \
-				and read.get(local) == value and all(
+				and readable(read) and all(
 					read.get(key) == held_value
 					for key, held_value in values.items()
 					if key not in (local, moved))
@@ -832,6 +896,10 @@ class Document:
 		steps = [delta]
 		if element > 1 and delta % element == 0:
 			steps.append(delta // element)
+		# Elements a caller added or took away, which a run of structs of
+		# no one size cannot be counted by from its bytes (26.1147).
+		if elements and elements not in steps:
+			steps.append(elements)
 
 		# What each other member must read as afterwards: the same.
 		passing: list[tuple[str, Document, int]] = []
@@ -889,7 +957,7 @@ class Document:
 		return notes
 
 	def _resize_through(self, name: str, index: int, value: bytes,
-			held: tuple[int, int]) -> list[str]:
+			held: tuple[int, int], elements: int = 0) -> list[str]:
 		"""`_resize` in a window opened from its parent (26.1141).
 
 		The same measured search, at every level from this window out to
@@ -949,6 +1017,8 @@ class Document:
 			steps = [delta]
 			if depth == 0 and element > 1 and delta % element == 0:
 				steps.append(delta // element)
+			if depth == 0 and elements and elements not in steps:
+				steps.append(elements)
 			options: list[tuple[int, int] | None] = [None]
 			for other in image.members(image.structs[doc.struct]):
 				if other == grows:
@@ -1000,7 +1070,8 @@ class Document:
 				if not self._shifted_by(before, after, begins, delta,
 				                        image.name_of(grows)):
 					return None
-				if depth == 0 and read.get(local) != value:
+				if depth == 0 and (read.get(local) != value
+				                   if local in values else local in read):
 					return None
 				skip = {short(grows)} | ({short(moved[0])} if moved else set())
 				if any(read.get(key) != was for key, was in values.items()

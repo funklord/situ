@@ -27,6 +27,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <vector>
 #include <unistd.h>
@@ -231,6 +232,14 @@ int main(int argc, char **argv)
 	const QCommandLineOption set_bytes(QStringLiteral("set-bytes"),
 	    QStringLiteral("store a byte run, as the CLI's --set-bytes"),
 	    QStringLiteral("NAME=HEX"));
+	const QCommandLineOption insert(QStringLiteral("insert"),
+	    QStringLiteral("put an element into a run of structs, as Edit > "
+	                   "Insert Element does; edits apply in the order given"),
+	    QStringLiteral("NAME:N=HEX"));
+	const QCommandLineOption remove(QStringLiteral("remove"),
+	    QStringLiteral("take an element out of a run of structs, as Edit "
+	                   "> Remove Element does"),
+	    QStringLiteral("NAME:N"));
 	const QCommandLineOption out(QStringLiteral("out"),
 	    QStringLiteral("where Save writes; the message opened is never "
 	                   "overwritten unless it is named here"),
@@ -263,7 +272,7 @@ int main(int argc, char **argv)
 	                   "unknown -- what the window follows -- and exit"));
 	parser.addOption(scheme_option);
 	parser.addOptions({structure, offset, length, argument, hex, set,
-	                   set_bytes, out, open_field, no_ui, keys_option,
+	                   set_bytes, insert, remove, out, open_field, no_ui, keys_option,
 	                   tui_option,
 	                   gui_option, snapshot});
 	parser.process(application);
@@ -322,8 +331,25 @@ int main(int argc, char **argv)
 		opened.push_back(here);
 	}
 
-	// The CLI applies every --set, then every --set-bytes; so does this.
+	// `@N:` names the window, counted as --open opened them from 0, the
+	// first: a write in one and then another is how a window learns that
+	// bytes moved under it (26.1146).
 	QString why;
+	const auto window_of = [&](QString *name) -> edit_window * {
+		if (!name->startsWith(QLatin1Char('@')))
+			return here;
+		const qsizetype colon = name->indexOf(QLatin1Char(':'));
+		bool number = false;
+		const qsizetype which = name->mid(1, colon - 1).toLongLong(&number);
+		if (colon < 0 || !number || which < 0
+		    || which >= qsizetype(opened.size())) {
+			why = QStringLiteral("`%1` names no window").arg(*name);
+			return nullptr;
+		}
+		*name = name->mid(colon + 1);
+		return opened[std::size_t(which)];
+	};
+
 	const auto apply = [&](const QStringList &assignments) {
 		for (const QString &assignment : assignments) {
 			const qsizetype equals = assignment.indexOf(QLatin1Char('='));
@@ -332,29 +358,63 @@ int main(int argc, char **argv)
 				      .arg(assignment);
 				return false;
 			}
-			// `@N:` names the window, counted as --open opened them
-			// from 0, the first: a write in one and then another is
-			// how a window learns that bytes moved under it (26.1146).
-			edit_window *in = here;
 			QString name = assignment.left(equals).trimmed();
-			if (name.startsWith(QLatin1Char('@'))) {
-				const qsizetype colon = name.indexOf(QLatin1Char(':'));
-				bool number = false;
-				const qsizetype which = name.mid(1, colon - 1).toLongLong(&number);
-				if (colon < 0 || !number || which < 0
-				    || which >= qsizetype(opened.size())) {
-					why = QStringLiteral("`%1` names no window").arg(name);
-					return false;
-				}
-				in = opened[std::size_t(which)];
-				name = name.mid(colon + 1);
-			}
-			if (!type_into(*in, name, assignment.mid(equals + 1), &why))
+			edit_window *in = window_of(&name);
+			if (in == nullptr
+			    || !type_into(*in, name, assignment.mid(equals + 1), &why))
 				return false;
 		}
 		return true;
 	};
-	if (!apply(parser.values(set)) || !apply(parser.values(set_bytes))) {
+	// NAME:N, with what follows `=` the element's bytes for --insert.
+	const auto splice = [&](const QStringList &edits, bool adding) {
+		for (const QString &edit : edits) {
+			QString target = edit.section(QLatin1Char('='), 0, 0).trimmed();
+			edit_window *in = window_of(&target);
+			if (in == nullptr)
+				return false;
+			const qsizetype colon = target.lastIndexOf(QLatin1Char(':'));
+			bool number = false;
+			const int which = target.mid(colon + 1).toInt(&number);
+			if (colon <= 0 || !number || (adding && !edit.contains('='))) {
+				why = QStringLiteral("`%1` is not NAME:N%2")
+				      .arg(edit, adding ? QStringLiteral("=HEX") : QString());
+				return false;
+			}
+			const QString field = target.left(colon);
+			const bool done = adding
+			    ? in->insert_element(field, which,
+			                         edit.section(QLatin1Char('='), 1))
+			    : in->remove_element(field, which);
+			if (!done) {
+				why = in->error();
+				return false;
+			}
+		}
+		return true;
+	};
+	// In the order given, so a write can follow an insert -- the CLI's
+	// own order (every --set, then --set-bytes, --insert, --remove) where
+	// they are given in it, as every test gives them.
+	bool applied = true;
+	std::map<QString, qsizetype> taken;
+	for (const QString &option : parser.optionNames()) {
+		const QStringList all = parser.values(option);
+		const qsizetype n = taken[option]++;
+		if (n >= all.size())
+			continue;
+		const QStringList one{all[n]};
+		if (option == set.names().first()
+		    || option == set_bytes.names().first())
+			applied = apply(one);
+		else if (option == insert.names().first())
+			applied = splice(one, true);
+		else if (option == remove.names().first())
+			applied = splice(one, false);
+		if (!applied)
+			break;
+	}
+	if (!applied) {
 		std::fprintf(stderr, "situ-edit-gui: %s\n", qPrintable(why));
 		if (parser.isSet(no_ui) || parser.isSet(snapshot))
 			return 1;

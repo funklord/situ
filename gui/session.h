@@ -55,6 +55,12 @@ public:
 	// write and `notes()` says what it cost; on refusal nothing changes.
 	bool set(const QString &field, const QString &text);
 
+	// Puts `hex` into the run of structs `field` as element `which`, or
+	// takes element `which` out -- the CLI's `--insert` and `--remove`
+	// (26.1147) -- with what `set` promises about a refusal.
+	bool insert(const QString &field, int which, const QString &hex);
+	bool remove(const QString &field, int which);
+
 	// Copies the working bytes to `path`.
 	bool save(const QString &path);
 
@@ -73,6 +79,8 @@ public:
 
 private:
 	bool run(const QStringList &extra, QByteArray *out);
+	bool write(const QString &field, const QStringList &edit,
+	           int which = -1, bool adding = false);
 	QStringList common_arguments() const;
 	void follow_frames(const QJsonObject &after);
 
@@ -101,6 +109,10 @@ private:
 		qint64 end;	// where it ended before the write
 		qint64 delta;	// how many bytes the file grew by
 		bool   exact;
+		// Where an element went into a run of structs or came out of
+		// one, the elements' struct, and [start, end) is the element's
+		// place rather than the run's (26.1147).
+		QString element;
 	};
 	bool catch_up();
 	bool span_of(const QString &field, qint64 *start, qint64 *size) const;

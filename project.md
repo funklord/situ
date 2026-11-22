@@ -166,6 +166,9 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   in a whole file.
 - Run 13: a window over part of the file follows a resize made in another
   rather than refusing (26.1146).
+- Run 13: `--insert NAME:N=HEX` and `--remove NAME:N` put an element into a
+  run of structs or take one out -- a PNG chunk -- its count and its new
+  tags following (26.1147).
 
 **Run 9 (2026-11-21), from fuzznet's inbox:**
 
@@ -433,9 +436,9 @@ without huge dependencies kept, and the pertinent code shared:
   across every format in one pass; magic(5) and shared-mime-info exports
   from the same declaration.
 - The shifting write's first slice (26.1115): a byte run takes a new
-  length, the scalar sizing it follows, a covered CRC is recomputed. Left:
-  a window inside a larger message (needs 12.3's invalidation model to
-  move the parent's lengths), and two fields at once.
+  length, the scalar sizing it follows, a covered CRC is recomputed. A
+  window inside a larger message and two fields at once followed
+  (26.1141), and a run of structs gaining or losing an element (26.1147).
 - From claude-guidelines (inbox 20261120T1219Z, against add80c9a): the
   window lacks what every GUI here carries (harmonization.md *GUI: Qt
   Widgets*, c921a5c): a copyright line in `--version` and an About window
@@ -9668,6 +9671,36 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1147 A run of structs gains or loses an element
+
+A byte run could be written at a new length (26.1115) and an element of a
+run of structs opened and edited (26.1144), but the run could not grow by
+an element: no frontend could give a PNG a chunk or take one away. A run
+of structs written whole at a new length was refused too, because the
+read-back after the splice asked for the run's value and a run of
+structs has none -- the walk's extents and the verdict are the whole
+answer for it now. `Document.insert(name, n, bytes)` and `remove(name,
+n)` splice one element at where the run's walk places element `n`, and
+write the run as any run at a new length is written; a run counted in
+elements of no one size moves its count by one, a step its bytes alone
+could not give, so the splice passes it. A new element's own tags are
+then recomputed, as a write to a covered member's are: a PNG chunk's CRC
+is read-only, nobody can write one by hand, and the editor keeping it
+current when the data grows keeps it current when the chunk arrives.
+The CLI takes `--insert NAME:N=HEX` and `--remove NAME:N`, and the Qt
+window's Edit menu the same, asked for on the selected run. Its log of
+resizes (26.1146) records an element's place rather than the run's, with
+the elements' struct: a window on the element where one went in is that
+element, now after it, and a window on exactly the element taken out
+refuses until reopened -- a run written whole would leave every element
+window inside the field, which no frame rule can place. The headless
+driver applies its edits in the order given, so a write can follow an
+insert. Held in `test/unit/test_a_run_gains_an_element.py` -- a PNG
+chunk in and out, a counted run, a run inside a window opened from its
+parent (its frame moves by the bytes), and the refusals -- and in the Qt
+suite, where the second window's write lands in its own chunk and a
+window on a removed chunk refuses.
 
 ### 26.1146 A window follows a resize made in another
 

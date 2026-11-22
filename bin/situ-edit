@@ -69,6 +69,14 @@ except ImportError as _why:			# pragma: no cover - a layout fault
 	raise SystemExit(1)
 
 
+def _element(where: str, said: str) -> tuple[str, int]:
+	"""`NAME:N` as the member's name and the element's number."""
+	name, sep, number = where.rpartition(":")
+	if not sep or not name or not number.isdigit():
+		raise Refused(f"`{said}` does not name an element as NAME:N")
+	return name.strip(), int(number)
+
+
 def _window(text: str) -> tuple[str | None, int, int | None]:
 	"""`STRUCT:OFFSET:LENGTH` from `--within`, either end empty."""
 	struct, sep, rest = text.partition(":")
@@ -165,6 +173,17 @@ def build_parser() -> argparse.ArgumentParser:
 	                         "hex for a byte run, a number otherwise -- "
 	                         "what the TUI and the window send for a typed "
 	                         "cell. Applied after --set and --set-bytes")
+	parser.add_argument("--insert", action="append", default=[],
+	                    metavar="NAME:N=HEX", dest="inserts",
+	                    help="put HEX into the run of structs NAME as "
+	                         "element N, moving the field that sizes the "
+	                         "run; N equal to the count appends. Applied "
+	                         "after --put")
+	parser.add_argument("--remove", action="append", default=[],
+	                    metavar="NAME:N", dest="removals",
+	                    help="take element N out of the run of structs "
+	                         "NAME, moving the field that sizes it. "
+	                         "Applied after --insert")
 	parser.add_argument("--out", type=Path, default=None,
 	                    help="write the edited message here. Without it "
 	                         "nothing is written anywhere: an edit is shown "
@@ -263,6 +282,18 @@ def main() -> int:
 			if not sep:
 				raise Refused(f"`--put {typed}` is not `name=text`")
 			notes.extend(view.put(document, name.strip(), text))
+		for typed in args.inserts:
+			where, sep, text = typed.partition("=")
+			name, which = _element(where, f"--insert {typed}")
+			try:
+				value = bytes.fromhex(text)
+			except ValueError:
+				raise Refused(f"`--insert {typed}`: `{text}` is not "
+				              f"hex") from None
+			notes.extend(document.insert(name, which, value))
+		for typed in args.removals:
+			name, which = _element(typed, f"--remove {typed}")
+			notes.extend(document.remove(name, which))
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
