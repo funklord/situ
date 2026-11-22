@@ -274,6 +274,13 @@ typedef struct {
 	const uint8_t *registry_strings;
 	uint32_t       registry_strings_len;
 
+	/* What `[trim]` removes, per member: rows of a placement index and one
+	 * byte (`SECTION_WHITESPACE`). NULL where the image carries none, and
+	 * a member with no row trims space and tab (26.1137). */
+	const uint8_t *whitespace;
+	uint32_t       whitespace_count;
+	uint32_t       whitespace_stride;
+
 	/* The arguments this walk was acquired with (decision 0050), in the
 	 * order the schema declares its `parameter` members. `arg_count` is
 	 * what says how many there are; NULL and zero both mean none, and a

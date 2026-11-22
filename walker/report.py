@@ -20,12 +20,15 @@ while rendering nothing is the failure mode that has to be impossible.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping, Sequence
 
 from walker import vm
 from walker.image import (FRAME_CAP, LITTLE, NONE, REMAINING, Image, Tag,
                           _string_at)
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
+                         OWS, TRIMMED, trim_span as _trim_span,
+                         bcd_valid,
                          varint_admissible,
                          says_little,
                          Unsupplied, View, child_args, frame_end,
@@ -285,56 +288,11 @@ def _element(view: View, index: int, at: int) -> int:
 
 
 #: `image_placement.text_flags`
-MINIMAL, TRIMMED, CASE_INSENSITIVE = 1, 2, 4
+MINIMAL, CASE_INSENSITIVE = 1, 4
 #: 8 is BCD, which this file has no question for. 16 is `scaled`
 #: (0056): the digits may carry a point and an exponent, and the value
 #: is a significand and a power of ten rather than an integer.
 SCALED = 16
-
-#: What `[trim]` removes where the image carries no set: HTTP's OWS and
-#: SIP's LWS, and deliberately not `isspace`, which is locale dependent and
-#: includes CR, LF, VT and FF -- three of which are framing in the protocols
-#: this default is for.
-#:
-#: A default rather than the answer, and the comment below said why while
-#: this was the answer: a schema states its set with `whitespace`, the image
-#: carries it, and this is what an image written before that section means.
-OWS = (0x20, 0x09)
-
-
-def _trim_span(view: View, index: int, content: int) -> tuple[int, int]:
-	"""Where a delimited member's value starts inside its span, and how long.
-
-	`[trim]` says whitespace at either end is framing rather than value. The
-	member's *span* is unchanged -- the bytes are still there and still
-	partition the struct -- and only what is handed to a caller shrinks,
-	which is why this is applied to the answer and not to the extent. C says
-	the same thing in two accessors, `situ_trim_start` shifting the pointer
-	and `situ_trim_len` shortening the length.
-
-	Both numbers, because a length alone cannot say which bytes: the probe
-	wants the second and an owned value wants the span. One derivation, since
-	a second copy of "what does `[trim]` remove" is how two readers of one
-	attribute start disagreeing.
-	"""
-	placement = view.image.placements[index]
-	if not placement.text_flags & TRIMMED:
-		return 0, content
-	start = view.at + offset_bits(view, index) // 8
-	data  = view.buffer[start:start + content]
-	# The MEMBER's set: `whitespace` is per file and an imported struct is
-	# written against its own file's. `OWS` where the image carries no row,
-	# which is a member the schema did not trim or an image written before
-	# the section was keyed this way.
-	removes = view.image.whitespace.get(index, OWS)
-	head    = 0
-	while head < len(data) and data[head] in removes:
-		head += 1
-	tail = len(data)
-	while tail > head and data[tail - 1] in removes:
-		tail -= 1
-	return head, tail - head
-
 
 def _trimmed(view: View, index: int, content: int) -> int:
 	"""The reported length, with `[trim]` applied."""
@@ -528,7 +486,7 @@ def _covered_span(view: View, first: int, last: int,
 		end = (offset_bits(view, tail) // BITS_PER_BYTE
 		       + size_bits(view, tail) // BITS_PER_BYTE)
 	if end < start or view.at + end > view.limit \
-			or _covered_overruns(view, first, last):
+			or _covered_overruns(view, first, last, end):
 		raise Refused("the covered span is not all in the frame")
 	return start, end
 
@@ -568,7 +526,7 @@ def _covered(image: Image, view: View, index: int, local: str) -> list[str]:
 	return [f"{local}.covered {first}+{end - first}"]
 
 
-def _covered_overruns(view: View, first: int, last: int) -> bool:
+def _covered_overruns(view: View, first: int, last: int, end: int) -> bool:
 	"""Whether a member between `first` and `last` declares more than the
 	frame holds.
 
@@ -580,13 +538,23 @@ def _covered_overruns(view: View, first: int, last: int) -> bool:
 	when the walkers were first handed TCP's pseudo-header and four backends
 	refused what both walkers summed. A member this walk cannot place is
 	not asked here; the span's own end check covers what follows it.
+
+	Nor is one that starts at or past the span's `end` (view-relative
+	bytes): `first..last` are placement indices, and a region's members are
+	numbered after the struct's own, so the range runs through members that
+	are not in the span at all -- packet's own `tag`, missing from a frame
+	that ends where the sealed body does, made a span wholly in the frame
+	`refused` while every backend answered it (26.1140).
 	"""
 	for index in range(first, last + 1):
 		try:
-			end = offset_bits(view, index) + size_bits(view, index)
+			at = offset_bits(view, index)
+			reach = at + size_bits(view, index)
 		except Refused:
 			continue
-		if view.at + (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE > view.limit:
+		if at // BITS_PER_BYTE >= end:
+			continue
+		if view.at + (reach + BITS_PER_BYTE - 1) // BITS_PER_BYTE > view.limit:
 			return True
 	return False
 
@@ -1109,18 +1077,35 @@ def _read_for_relation(view: View, index: int) -> int:
 	return read_scalar(view, index)
 
 
-#: How many structs this `validate` is inside. Nothing measures a `[holds]`
-#: run's interior, so nothing else stops a cycle through one, and the walk
-#: reaches here again through a run's elements with no parameter to carry
-#: this (26.898). The C walker's `depth`, and the same ceiling.
-_descent = [0]
+class _Walk(threading.local):
+	"""One `validate`'s own state, PER THREAD (26.1136).
 
-#: What this `validate` has found clean: a struct, the frame it was given, and
-#: how deep and with what arguments. A variant asks its arm twice, once as a
-#: nested member held to its own reach and once as the selected arm in the
-#: frame around it, so each level cost two of the level below (26.909). A clean
-#: answer alone, since a refusal ends the walk, and only for one call.
-_clean: set[tuple[int, int, int, int, tuple[tuple[int, int], ...]]] = set()
+	`descent`: how many structs this `validate` is inside. Nothing measures
+	a `[holds]` run's interior, so nothing else stops a cycle through one,
+	and the walk reaches here again through a run's elements with no
+	parameter to carry this (26.898). The C walker's `depth`, and the same
+	ceiling.
+
+	`clean`: what this `validate` has found clean -- the image, the buffer,
+	a struct, the frame it was given, and how deep and with what arguments.
+	A variant asks its arm twice, once as a nested member held to its own
+	reach and once as the selected arm in the frame around it, so each
+	level cost two of the level below (26.909). A clean answer alone, since
+	a refusal ends the walk, and only for one call.
+
+	Both were module globals keyed by neither image nor buffer, so a walk
+	in one thread moved another's depth and could hand it a struct some
+	other schema's walk had found clean: replaying six schemas' corpora in
+	six threads, one protobuf message the walker refuses read as valid.
+	"""
+
+	def __init__(self) -> None:
+		self.descent = 0
+		self.clean: set[tuple[int, int, int, int, int, int,
+		                      tuple[tuple[int, int], ...]]] = set()
+
+
+_walk = _Walk()
 
 
 def _nesting_within(view: View, depth: int = 0) -> None:
@@ -1166,26 +1151,27 @@ def _nesting_within(view: View, depth: int = 0) -> None:
 def _validate(image: Image, view: View, struct_index: int,
 		found: list[tuple[int, int]] | None = None) -> int | None:
 	"""`_validate_here`, refused past the ceiling as the C walker refuses."""
-	if _descent[0] > _ceiling(image, struct_index):
+	walk = _walk
+	if walk.descent > _ceiling(image, struct_index):
 		return None
-	if _descent[0] == 0:
-		_clean.clear()
-	asked = (struct_index, view.at, view.limit, _descent[0],
-	         tuple(sorted(view.args.items())))
-	if asked in _clean:
+	if walk.descent == 0:
+		walk.clean.clear()
+	asked = (id(image), id(view.buffer), struct_index, view.at, view.limit,
+	         walk.descent, tuple(sorted(view.args.items())))
+	if asked in walk.clean:
 		return OK
 	if image.holds and struct_index in image.depths:
 		try:
 			_nesting_within(view)
 		except TooDeep:
 			return None
-	_descent[0] += 1
+	walk.descent += 1
 	try:
 		verdict = _validate_here(image, view, struct_index, found)
 	finally:
-		_descent[0] -= 1
+		walk.descent -= 1
 	if verdict == OK:
-		_clean.add(asked)
+		walk.clean.add(asked)
 	return verdict
 
 
@@ -1751,6 +1737,17 @@ def _validate_here(image: Image, view: View, struct_index: int,
 						inner_struct)
 					if verdict:
 						return verdict
+
+		# A nibble above nine, which the getter decodes regardless and so
+		# only a check can see -- the backends ask it after the member's
+		# enum and before its bounds, whether or not it has any. Neither
+		# walker asked: DS1307's `year` holding 0xff was clean here and in
+		# C's walk while all four refused it (26.1138).
+		try:
+			if not bcd_valid(view, index):
+				return fail(ERR_CONSTRAINT, index)
+		except Refused:
+			return fail(ERR_BOUNDS, index)
 
 		held = image.constraints.get(index)
 		if not held:
@@ -2534,7 +2531,10 @@ def _arm_validates(image: Image, view: View, index: int,
 		limit = min(limit, view.at + (at + size_bits(view, index)) // 8)
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, limit,
 	             child_args(view, chosen))
-	return _validate(image, inner, arm_type) or OK
+	# Its verdict as it is: None is "cannot say", and `or OK` read it as a
+	# pass -- an arm past this walker's ceiling (26.1043's rule, which this
+	# path predated) validated clean, unjudged (26.1136).
+	return _validate(image, inner, arm_type)
 
 
 def _elements_validate(view: View, index: int,

@@ -9643,6 +9643,17 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1140 The bytes a tag covers are asked of the members in them
+
+Same replay, `packet`: a frame ending where the sealed body ends, with no
+room for the tag, covers 4 to 191 -- all in the frame -- and C answered
+`tag.covered 4+187` where the walker said `refused`. The check that every
+declared length in the span fits (26.1058) walked placement indices
+`first..last`, and a region's members are numbered after the struct's own,
+so the range ran through packet's own `tag` and asked it to fit. Both
+walkers now skip a member starting at or past the span's end. Held in
+`test/unit/test_both_walkers_read_what_the_backends_check.py`.
+
 ### 26.1139 A pad at a known offset is checked over all its bytes
 
 Same replay, `test/schema/padded.situ`: `u8 one; pad_to(4); u32 word;`
@@ -9658,6 +9669,46 @@ static pad there too, and the three count its `size_bits`. Of the corpus
 only `padded`'s generated code moves. Held in
 `test/unit/test_a_static_pad_is_all_its_bytes.py`, which fails on the old
 backends; both walkers were right.
+
+### 26.1138 Both walkers ask a packed-decimal nibble above nine
+
+Same replay, `rtc`: DS1307's `year` holding `0xff`. The four backends'
+`validate` asks `bcd_valid` of every BCD member after its enum and before
+its bounds; the getter decodes whatever the nibbles hold (26.222), so only
+that check can see one above nine. Neither walker asked, and `year` has
+no bound, so the reading was clean in both. The Python walk's read is
+split so the stored bits are reachable (`_stored_at`, `bcd_valid`); the C
+walker re-reads them with the decode off (`bcd_stored_ok`).
+
+### 26.1137 Both walkers trim a delimited text number
+
+Same replay, `json`: `number` is `scaled i64 value before ... [trim]`, and
+`\r1`, ` 1` and `1 ` were CONSTRAINT in both walkers where all four
+backends read 1. `digits_of` parsed the scan's span untrimmed; the trim
+rule lived in `report.py` for the listing alone. It moves to `walk.py`
+(`trim_span`, `OWS`, `TRIMMED`) and `digits_of` applies it. The C walker
+skipped the image's whitespace table by design ("a member that needs one
+is declined where it is reached") and then parsed the digits anyway; it
+reads the table now (`whitespace` on the image, `trims`), a member with no
+row trimming space and tab as the runtime does.
+
+### 26.1136 The walk's validate state is per thread, and "cannot say" is not a pass
+
+The replay ran six schemas in six threads, and one protobuf message the
+walker refuses on its own read as valid there -- not reproducible alone or
+in three further threaded runs. `report._validate` kept its depth and its
+found-clean set as module globals, the second keyed by neither image nor
+buffer, so one thread's walk moved another's depth and could hand it a
+struct another schema's walk had found clean. They are a `threading.local`
+now, and the clean key names the image and the buffer. Building a
+deterministic test found a second fault the first had been hiding behind:
+`_arm_validates` returned `_validate(...) or OK`, so an arm the walk
+cannot judge -- past its ceiling -- read as a pass (26.1043's rule, which
+that line predated). Held in
+`test/unit/test_a_walk_in_one_thread_leaves_another_alone.py`: one thread
+parked six structs down a CBOR tag chain, a second validating a chain of
+two; it fails with the state shared and passed on the old code only
+through the `or OK`.
 
 ### 26.1135 A varint cut short ahead of a descent is no nesting
 

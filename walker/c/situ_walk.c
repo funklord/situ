@@ -381,9 +381,14 @@ static situ_walk_err read_sections(situ_walk_image *out,
 			out->strings     = image + offset;
 			out->strings_len = items * stride;
 		} else if (kind == TAG_WHITESPACE) {
-			/* Known, and not read by this walker: a member that needs one
-			 * of these is declined where it is reached, as it always was.
-			 * Not an unknown tag, so the rule below does not apply. */
+			/* What `[trim]` removes, read where a trimmed text number is
+			 * parsed (26.1137). */
+			if (stride < 5u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->whitespace        = image + offset;
+			out->whitespace_count  = items;
+			out->whitespace_stride = stride;
 		} else if (!spare) {
 			return SITU_WALK_UNSUPPORTED;	/* critical, and not known here */
 		}
@@ -4001,13 +4006,35 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 #define TEXT_BCD 8u
 
 /* `text_flags` value 2 on a fixed-width text number: `[padded]` (26.948).
- * The same bit is `[trim]` on a delimited member, and neither walker reads
- * that one; wellformed refuses each attribute in the other's place, so one
- * bit says both. The digits stop at the first NUL or space and every byte
+ * The same bit is `[trim]` on a delimited member, read with `trims` below;
+ * wellformed refuses each attribute in the other's place, so one bit says
+ * both. The digits stop at the first NUL or space and every byte
  * after them to the width must be one too -- `runtime/c/situ.h`'s
  * `situ_parse_uint_padded`, answered as a digit count. A field that is all
  * padding is zero, as there; a malformed padding answers UINT32_MAX. */
 #define TEXT_PADDED 2u
+
+/* Whether `[trim]` on member `index` removes `byte`: the member's own rows
+ * where it has any, else space and tab -- the Python walk's `trim_span` and
+ * the runtime's `situ_trim_start`, one rule (26.1137). */
+static int trims(const situ_walk_image *image, uint32_t index, uint8_t byte)
+{
+	int      rows = 0;
+	uint32_t i;
+
+	for (i = 0u; image->whitespace != NULL && i < image->whitespace_count;
+	     i++) {
+		const uint8_t *row = image->whitespace
+		                     + (size_t)i * image->whitespace_stride;
+		if (u32_at(row) == index) {
+			rows = 1;
+			if (row[4] == byte) {
+				return 1;
+			}
+		}
+	}
+	return !rows && (byte == (uint8_t)' ' || byte == (uint8_t)'\t');
+}
 
 static uint32_t padded_digits(const uint8_t *data, uint32_t len)
 {
@@ -4243,6 +4270,22 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		if (at > len || width > len - at) {
 			return SITU_WALK_BOUNDS;
 		}
+		/* `[trim]`, the same bit on a delimited member: the digits are
+		 * what is left once the member's whitespace is off both ends, as
+		 * the backends' `situ_trim_start` and `situ_trim_len` hand them.
+		 * Parsed untrimmed, JSON's ` 1` was CONSTRAINT here where all four
+		 * read 1 (26.1137). */
+		if ((held.text_flags & TEXT_PADDED) != 0u
+		                && delimiter_rules(image, index) != NULL) {
+			while (width > 0u && trims(image, index, message[at])) {
+				at++;
+				width--;
+			}
+			while (width > 0u
+			       && trims(image, index, message[at + width - 1u])) {
+				width--;
+			}
+		}
 		if ((held.text_flags & TEXT_SCALED) != 0u) {
 			return parse_scaled(message + at, width,
 			                    (held.flags & FLAG_SIGNED) != 0u, out);
@@ -4363,6 +4406,51 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		}
 		return read_at(message, len, &held, offset, width, out);
 	}
+}
+
+/* Whether a packed-decimal member's nibbles are all digits: `situ_bcd_valid`
+ * over the STORED bits, which `read_at` decodes whatever they hold (26.222)
+ * and so cannot report. The backends ask it in `validate`, after the
+ * member's enum and before its bounds; neither walker did, so DS1307's
+ * `year` holding 0xff was clean here while all four refused it (26.1138).
+ * `*ok` is 1 for a member that is not packed decimal. */
+static situ_walk_err bcd_stored_ok(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t depth, int *ok)
+{
+	situ_walk_placement held;
+	uint32_t            offset = 0u;
+	uint32_t            width;
+	uint64_t            stored = 0u;
+	uint32_t            digit;
+	situ_walk_err       err = situ_walk_placement_at(image, index, &held);
+
+	*ok = 1;
+	if (err != SITU_WALK_OK || (held.text_flags & TEXT_BCD) == 0u) {
+		return err;
+	}
+	err = offset_bits_deep(image, message, len, shape, index, depth, &offset);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	width = held.size_bits;
+	err = content_bits_deep(image, message, len, shape, index, depth, &width);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	held.text_flags = (uint8_t)(held.text_flags & ~TEXT_BCD);
+	held.flags = (uint8_t)(held.flags & ~FLAG_SIGNED);
+	err = read_at(message, len, &held, offset, width, &stored);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	for (digit = 0u; digit < held.radix_digits && digit < 16u; digit++) {
+		if (((stored >> (4u * digit)) & 0xFu) > 9u) {
+			*ok = 0;
+		}
+	}
+	return SITU_WALK_OK;
 }
 
 /* `situ_walk_eval` with a tag in scope, for a `tlv` selector. Declared here
@@ -7878,6 +7966,27 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 		}
 
+		/* A nibble above nine, whether or not the member has a row: the
+		 * getter decodes regardless, so only this can see it (26.1138). */
+		{
+			int digits_ok = 1;
+
+			err = bcd_stored_ok(image, message, len, shape, index, depth,
+			                    &digits_ok);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			if (!digits_ok) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
+
 		for (uint32_t c = 0u; c < rows; c++) {
 			const uint8_t *row   = checks + c * image->constraint_stride;
 			const int64_t  want  = i64_at(row + 4);
@@ -9009,13 +9118,20 @@ situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
 	 * `_covered` asks (26.1058): TCP's options can run past the frame while
 	 * the `remaining` payload after them is placed back inside it, so the
 	 * last member's end is not the question. A member this walk cannot
-	 * place is skipped; the span's end above covers what follows it. */
+	 * place is skipped; the span's end above covers what follows it. So is
+	 * one starting at or past the span's end: `first..last` are placement
+	 * indices, a region's members are numbered after the struct's own, and
+	 * the range ran through packet's own `tag`, missing from a frame that
+	 * ends where the sealed body does (26.1140). */
 	for (uint32_t i = first; !before && i <= last; i++) {
 		uint32_t at_bits = 0u, wide_bits = 0u;
 		if (situ_walk_offset_bits(image, message, len, shape, i, &at_bits)
 		                != SITU_WALK_OK
 		                || situ_walk_size_bits(image, message, len, shape, i,
 		                                       &wide_bits) != SITU_WALK_OK) {
+			continue;
+		}
+		if (at_bits / 8u >= hi) {
 			continue;
 		}
 		if (((uint64_t)at_bits + wide_bits + 7u) / 8u > len) {

@@ -1291,6 +1291,13 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	at a different offset, and two spellings of "how do these bits become a
 	number" is how a backend and its own run accessor once disagreed.
 	"""
+	return _decoded(_stored_at(view, index, start, width),
+	                view.image.placements[index])
+
+
+def _stored_at(view: View, index: int, start: int, width: int) -> int:
+	"""`_read_at` before packed decimal is decoded: the bits as stored,
+	which is where a nibble above nine can still be seen (26.1138)."""
 	placement = view.image.placements[index]
 	end = start + width
 	if view.at * BITS_PER_BYTE + end > view.limit * BITS_PER_BYTE:
@@ -1299,8 +1306,8 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	if start % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
 		first = view.at + start // BITS_PER_BYTE
 		raw   = view.buffer[first:first + width // BITS_PER_BYTE]
-		return _decoded(_signed(int.from_bytes(raw, _order(view, index)), width,
-		                        placement.signed), placement)
+		return _signed(int.from_bytes(raw, _order(view, index)), width,
+		               placement.signed)
 
 	# Bit-packed: gather the bytes the value touches and shift it out. The
 	# block covers whole bytes, so the value sits `after` bits from its end.
@@ -1321,7 +1328,26 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 		                 width)
 	else:
 		bits = (block >> (last * BITS_PER_BYTE - end)) & ((1 << width) - 1)
-	return _decoded(_signed(bits, width, placement.signed), placement)
+	return _signed(bits, width, placement.signed)
+
+
+def bcd_valid(view: View, index: int) -> bool:
+	"""Whether a packed-decimal member's nibbles are all digits.
+
+	The backends' `bcd_valid`, asked where they ask it -- in `validate`,
+	after the member's enum and before its bounds -- because the getter
+	decodes whatever the nibbles hold (see `_decoded`) and cannot report
+	one above nine. Neither walker asked, so DS1307's `year` holding 0xff
+	validated clean here while all four refused it (26.1138). True for a
+	member that is not packed decimal.
+	"""
+	placement = view.image.placements[index]
+	if not placement.text_flags & BCD:
+		return True
+	stored = _stored_at(view, index, offset_bits(view, index),
+	                    content_bits(view, index))
+	return all((stored >> (4 * digit)) & 0xF <= 9
+	           for digit in range(placement.radix_digits or 0))
 
 
 def marker_order(view: View) -> Literal["little", "big"]:
@@ -1427,9 +1453,60 @@ def _bits_lsb(block: int, span: int, skip: int, width: int) -> int:
 
 
 #: `text_flags` value 2 on a fixed-width text number: `[padded]` (26.948).
-#: The same bit is `[trim]` on a delimited member, which no walker reads;
+#: The same bit is `[trim]` on a delimited member (`TRIMMED` below);
 #: wellformed refuses each attribute in the other's place.
 TEXT_PADDED = 2
+
+#: The same bit on a DELIMITED member: `[trim]`.
+TRIMMED = TEXT_PADDED
+
+#: What `[trim]` removes where the image carries no set: HTTP's OWS and
+#: SIP's LWS, and deliberately not `isspace`, which is locale dependent and
+#: includes CR, LF, VT and FF -- three of which are framing in the protocols
+#: this default is for.
+#:
+#: A default rather than the answer, and the comment below said why while
+#: this was the answer: a schema states its set with `whitespace`, the image
+#: carries it, and this is what an image written before that section means.
+OWS = (0x20, 0x09)
+
+
+def trim_span(view: View, index: int, content: int) -> tuple[int, int]:
+	"""Where a delimited member's value starts inside its span, and how long.
+
+	`[trim]` says whitespace at either end is framing rather than value. The
+	member's *span* is unchanged -- the bytes are still there and still
+	partition the struct -- and only what is handed to a caller shrinks,
+	which is why this is applied to the answer and not to the extent. C says
+	the same thing in two accessors, `situ_trim_start` shifting the pointer
+	and `situ_trim_len` shortening the length.
+
+	Both numbers, because a length alone cannot say which bytes: the probe
+	wants the second and an owned value wants the span. One derivation, since
+	a second copy of "what does `[trim]` remove" is how two readers of one
+	attribute start disagreeing -- and `digits_of` is the second reader:
+	it parsed a trimmed text number untrimmed, so JSON's `1` after a
+	space or a CR was no number to this walk while all four backends and
+	the C walker read 1 (26.1137).
+	"""
+	placement = view.image.placements[index]
+	if not placement.text_flags & TRIMMED:
+		return 0, content
+	start = view.at + offset_bits(view, index) // 8
+	data  = view.buffer[start:start + content]
+	# The MEMBER's set: `whitespace` is per file and an imported struct is
+	# written against its own file's. `OWS` where the image carries no row,
+	# which is a member the schema did not trim or an image written before
+	# the section was keyed this way.
+	removes = view.image.whitespace.get(index, OWS)
+	head    = 0
+	while head < len(data) and data[head] in removes:
+		head += 1
+	tail = len(data)
+	while tail > head and data[tail - 1] in removes:
+		tail -= 1
+	return head, tail - head
+
 
 #: `text_flags` bit 3: the value is packed decimal, a digit per nibble.
 BCD = 1 << 3
@@ -2093,6 +2170,9 @@ def digits_of(view: View, index: int) -> bytes:
 	else:
 		content = content_bits(view, index) // BITS_PER_BYTE
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	if index in view.image.delimiters:
+		head, content = trim_span(view, index, content)
+		start += head
 	data  = bytes(view.buffer[start:start + content])
 	if index not in view.image.delimiters \
 			and view.image.placements[index].text_flags & TEXT_PADDED:
