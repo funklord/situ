@@ -278,6 +278,11 @@ def as_json(document: Document) -> str:
 				               else {"struct": field.nested[0],
 				                     "offset": field.nested[1],
 				                     "length": field.size}),
+				# Each element of a run of structs, where the field is one,
+				# as `nested` names the run framed whole (26.1144).
+				"elements":   (None if field.elements is None
+				               else [{"offset": at, "length": size}
+				                     for at, size in field.elements]),
 			}
 			for field in document.fields()
 		],

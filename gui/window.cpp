@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QLabel>
 #include <QMenuBar>
@@ -98,12 +99,36 @@ edit_window::edit_window(QWidget *parent, document_hub *hub)
 
 	connect(table_, &QTableWidget::itemChanged, this, &edit_window::edited);
 	// A double click on a nested struct opens it; on a writable value it
-	// edits, which the table does itself.
+	// edits, which the table does itself. On a run of several structs it
+	// asks which element, each named by where it is (26.1144).
 	connect(table_, &QTableWidget::cellDoubleClicked, this,
 	        [this](int row, int) {
 		const QTableWidgetItem *name = table_->item(row, name_column);
-		if (name != nullptr && !name->data(Qt::UserRole).isNull())
+		if (name == nullptr || name->data(Qt::UserRole).isNull())
+			return;
+		const QVariantList elements = name->data(Qt::UserRole).toMap()
+		    .value(QStringLiteral("elements")).toList();
+		if (elements.size() < 2) {
 			open_field(name->text());
+			return;
+		}
+		QStringList choices;
+		for (qsizetype i = 0; i < elements.size(); ++i) {
+			const QVariantMap one = elements[i].toMap();
+			choices << tr("%1: at %2, %3 bytes")
+			           .arg(i)
+			           .arg(one.value(QStringLiteral("offset")).toLongLong())
+			           .arg(one.value(QStringLiteral("length")).toLongLong());
+		}
+		bool chosen = false;
+		const QString picked = QInputDialog::getItem(
+		    this, tr("Open an element"),
+		    tr("`%1` holds %2 elements; open which?")
+		        .arg(name->text()).arg(elements.size()),
+		    choices, 0, false, &chosen);
+		if (chosen)
+			open_field(name->text() + QLatin1Char(':')
+			           + picked.section(QLatin1Char(':'), 0, 0));
 	});
 	setWindowTitle(QStringLiteral("situ-edit-gui"));
 	resize(820, 560);
@@ -178,7 +203,12 @@ void edit_window::populate()
 		const QJsonValue nested = fields[at].toObject()
 		                          .value(QStringLiteral("nested"));
 		if (nested.isObject()) {
-			named->setData(Qt::UserRole, nested.toObject().toVariantMap());
+			// With the run's elements beside it, where the field is a run
+			// of structs: what `name:N` and the double click choose from.
+			QVariantMap opens = nested.toObject().toVariantMap();
+			opens[QStringLiteral("elements")] = fields[at].toObject()
+			    .value(QStringLiteral("elements")).toVariant();
+			named->setData(Qt::UserRole, opens);
 			named->setToolTip(tr("Double-click to open the nested `%1`")
 			                  .arg(nested.toObject()
 			                       .value(QStringLiteral("struct"))
@@ -235,8 +265,22 @@ void edit_window::reload()
 	populate();
 }
 
-edit_window *edit_window::open_field(const QString &field)
+edit_window *edit_window::open_field(const QString &which)
 {
+	// `name:N` is element N of a run of structs, where the JSON lists the
+	// elements: opening the run whole reads its first, and a PNG's `tEXt`
+	// after IHDR was reachable from no frontend (26.1144).
+	QString field = which;
+	int element = -1;
+	const qsizetype colon = which.lastIndexOf(QLatin1Char(':'));
+	if (colon > 0) {
+		bool number = false;
+		const int n = which.mid(colon + 1).toInt(&number);
+		if (number && n >= 0) {
+			field = which.left(colon);
+			element = n;
+		}
+	}
 	for (int row = 0; row < table_->rowCount(); ++row) {
 		const QTableWidgetItem *name = table_->item(row, name_column);
 		if (name->text() != field)
@@ -246,10 +290,23 @@ edit_window *edit_window::open_field(const QString &field)
 			say(tr("`%1` is not a nested struct").arg(field));
 			return nullptr;
 		}
+		QVariantMap opened = nested.toMap();
+		if (element >= 0) {
+			const QVariantList elements
+			    = opened.value(QStringLiteral("elements")).toList();
+			if (element >= elements.size()) {
+				say(tr("`%1` has %n element(s)", nullptr,
+				       int(elements.size())).arg(field));
+				return nullptr;
+			}
+			const QVariantMap one = elements[element].toMap();
+			opened[QStringLiteral("offset")] = one.value(QStringLiteral("offset"));
+			opened[QStringLiteral("length")] = one.value(QStringLiteral("length"));
+		}
 		auto *child = new edit_window(this, hub_);
 		child->setAttribute(Qt::WA_DeleteOnClose);
 		if (!child->open_nested(session_,
-		                        QJsonObject::fromVariantMap(nested.toMap()),
+		                        QJsonObject::fromVariantMap(opened),
 		                        out_)) {
 			say(tr("cannot open `%1`: %2").arg(field, child->error()));
 			delete child;

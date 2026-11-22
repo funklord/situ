@@ -165,8 +165,24 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 			assert owner is not None
 			field = document.fields()[owner]
 			if field.nested is not None:
+				# A run of several structs asks which element (26.1144):
+				# opened whole it reads only the first.
+				which = None
+				if field.elements is not None and len(field.elements) > 1:
+					typed = _prompt(screen, f"which of {field.name}'s "
+					                f"{len(field.elements)} elements (0-"
+					                f"{len(field.elements) - 1}): ")
+					if typed is None or not typed.strip():
+						status = "unchanged"
+						continue
+					try:
+						which = int(typed.strip())
+					except ValueError:
+						status = f"`{typed.strip()}` is not an element number"
+						continue
 				try:
-					inner = document.open_nested(owner)
+					inner = (document.open_nested(owner) if which is None
+					         else document.open_element(owner, which))
 				except (Refused, Unsupplied) as why:
 					status = f"cannot open it: {why}"
 					continue

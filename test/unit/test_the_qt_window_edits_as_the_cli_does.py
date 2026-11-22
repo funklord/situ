@@ -194,6 +194,8 @@ def test_the_json_names_a_nested_struct_as_data(tmp_path: Path) -> None:
 	fields = {one["name"]: one for one in json.loads(done.stdout)["fields"]}
 	assert fields["in"]["nested"] == {"struct": "inner", "offset": 1,
 	                                  "length": 3}
+	# One struct, not a run of them (26.1144).
+	assert fields["in"]["elements"] is None
 	assert fields["tag"]["nested"] is None
 
 
@@ -339,3 +341,31 @@ def test_a_run_grows_in_a_nested_window(window_binary: Path,
 	assert window.returncode == 0, window.stderr
 	assert (tmp_path / "q.bin").read_bytes() \
 		== bytes.fromhex("0703" "787978" "01ee")
+
+
+def test_an_element_of_a_run_opens_and_grows(window_binary: Path,
+		tmp_path: Path) -> None:
+	"""`--open chunks:1` is the second chunk of a PNG, which double-clicking
+	`chunks` offers by where each element is: opening the run whole read
+	IHDR alone (26.1144). Its text grown there moves the chunk's length
+	and CRC, as the CLI does with `--within` (26.1141)."""
+	import struct
+	import zlib
+
+	def chunk(kind: bytes, data: bytes) -> bytes:
+		return struct.pack(">I", len(data)) + kind + data \
+			+ struct.pack(">I", zlib.crc32(kind + data))
+
+	def png(text: bytes) -> bytes:
+		return bytes.fromhex("89504e470d0a1a0a") + chunk(b"IHDR", bytes(13)) \
+			+ chunk(b"tEXt", text) + chunk(b"IEND", b"")
+
+	(tmp_path / "f.png").write_bytes(png(b"Comment\x00hi"))
+	window = _window(window_binary, "--struct", "png_file",
+	                 "--open", "chunks:1",
+	                 "--set-bytes", "data=" + b"Comment\x00hello".hex(),
+	                 "--out", str(tmp_path / "g.png"),
+	                 str(ROOT / "example" / "png" / "png.situ"),
+	                 str(tmp_path / "f.png"))
+	assert window.returncode == 0, window.stderr
+	assert (tmp_path / "g.png").read_bytes() == png(b"Comment\x00hello")

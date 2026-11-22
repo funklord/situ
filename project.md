@@ -159,9 +159,11 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   (26.1142). The corpora through the C walker's verdict against the
   Python walker's: one more, an indexed region validated as one element
   (26.1143).
-- The editor: a run grows inside a window opened from its parent, a run's
-  elements open one by one, and the CLI and the Qt window carry the chain
-  (`--within`, 26.1141) -- a PNG `tEXt` chunk edited in a whole file.
+- The editor: a run grows inside a window opened from its parent, and the
+  CLI and the Qt window carry the chain (`--within`, 26.1141); a `[holds]`
+  run opens as its struct, so two lengths move at once; and every frontend
+  opens a run's elements one by one (26.1144) -- a PNG `tEXt` chunk edited
+  in a whole file.
 
 **Run 9 (2026-11-21), from fuzznet's inbox:**
 
@@ -9664,6 +9666,20 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 ### 26.1117 A checksum over an image, part by part
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
+
+### 26.1144 Every frontend opens an element of a run of structs
+
+A run of structs opened as nested was framed whole, and read its first
+element: a PNG file's `chunks` gave IHDR, and the `tEXt` after it --
+the chunk 26.1141 grows -- was reachable from the command line by
+`--offset` alone and from neither window. Each such field now names its
+elements (`Field.elements`, `(offset, length)` in the buffer, where the
+run's own walk places them), and the JSON's `nested` carries them. The
+Qt window opens `--open chunks:1`, and a double click on a run of
+several asks which, each named by where it is; the curses TUI asks for
+the element's number. Held in `test/unit/test_a_run_grows_inside_a_window.py`
+and `test_the_qt_window_edits_as_the_cli_does.py`, the latter growing the
+second chunk's text through the window.
 
 ### 26.1143 The C walker does not validate an indexed region as one element
 

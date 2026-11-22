@@ -95,6 +95,12 @@ class Field:
 	#: frontend that opens it on a click rather than asking somebody to
 	#: retype it.
 	nested: tuple[str, int] | None = None
+	#: Each element of a run of structs, `(offset, length)` in the BUFFER,
+	#: as the run's own walk places them -- `nested` opens the run framed
+	#: whole, which reads its first element, and a PNG's `tEXt` chunk after
+	#: IHDR was reachable from no frontend (26.1144). None for a member
+	#: that is not such a run.
+	elements: tuple[tuple[int, int], ...] | None = None
 	#: Where a member that is not whole bytes sits, in BITS from the view's
 	#: start, and how many it takes -- None for a whole-byte member, which
 	#: `offset` and `size` already say exactly. Byte numbers alone put
@@ -368,6 +374,7 @@ class Document:
 		for index in image.members(image.structs[self.struct]):
 			placement   = image.placements[index]
 			opens: tuple[str, int] | None = None
+			elements: tuple[tuple[int, int], ...] | None = None
 
 			# A VARIANT, WHICH THE EDITOR SHOWED NOTHING OF (26.595). The
 			# filter below keeps FIELD and RESERVED, so a variant was
@@ -533,6 +540,10 @@ class Document:
 				# chunk's `data` at 8 would send the reader to the
 				# signature.
 				opens  = (image.struct_name(held_struct), self.at + at)
+				if placement.type_struct != NONE:
+					spans = report._run_elements(view, index)
+					if spans is not None:
+						elements = tuple(spans)
 				nested = (f"a nested `{opens[0]}`; "
 				          f"open it with --offset {opens[1]}")
 				# APPENDED, like every other note on this row. It assigned,
@@ -550,6 +561,7 @@ class Document:
 				       else f"refused: {because}"
 
 			rows.append(Field(local, at, wide, value, note,
+			                  elements = elements,
 			                  mutate  = image.capability_of(index, "mutate"),
 			                  auth    = image.capability_of(index, "auth"),
 			                  secrecy = image.capability_of(index, "secrecy"),

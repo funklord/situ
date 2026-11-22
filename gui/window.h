@@ -60,10 +60,11 @@ public:
 	// Save to `--out` without a dialog. False with the reason in `error()`.
 	bool write_out();
 
-	// Opens the nested struct in the row named `field` in a window of its
-	// own over the same bytes -- what a double click does. Null where that
-	// row is not a nested struct or the CLI refuses to open it.
-	edit_window *open_field(const QString &field);
+	// Opens the nested struct in the row named `which` in a window of its
+	// own over the same bytes -- what a double click does; `name:N` opens
+	// element N of a run of structs. Null where that row is not a nested
+	// struct, has no such element, or the CLI refuses to open it.
+	edit_window *open_field(const QString &which);
 
 protected:
 	void closeEvent(QCloseEvent *event) override;

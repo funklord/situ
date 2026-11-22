@@ -152,3 +152,19 @@ def test_two_fields_move_a_run_inside_an_outer_length() -> None:
 		== bytes.fromhex("070007" "05" "68656c6c6f" "01ee")
 	assert any("`outer.len` moved by +3" in note for note in notes), notes
 	assert document.verdict is not None and document.verdict[0] == "ok"
+
+
+def test_a_run_of_structs_lists_where_each_element_is() -> None:
+	"""The field and its JSON name each element by offset and length, so a
+	frontend can open the one it wants (26.1144)."""
+	from editor.text import as_json
+	image = _image((ROOT / "example" / "png" / "png.situ")
+	               .read_text(encoding="utf-8"))
+	document = open_document(image, bytearray(_png(b"Comment\x00hi")),
+	                         "png_file")
+	chunks = {f.name: f for f in document.fields()}["chunks"]
+	assert chunks.elements == ((8, 25), (33, 22), (55, 12))
+	shown = {f["name"]: f for f in json.loads(as_json(document))["fields"]}
+	assert shown["chunks"]["elements"][1] == {"offset": 33, "length": 22}
+	assert shown["signature"]["elements"] is None
+

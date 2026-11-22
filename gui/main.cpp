@@ -236,8 +236,9 @@ int main(int argc, char **argv)
 	    QStringLiteral("FILE"));
 	const QCommandLineOption open_field(QStringLiteral("open"),
 	    QStringLiteral("open the nested struct in this field in its own "
-	                   "window, as a double click does; repeat to go deeper, "
-	                   "and --set applies in the last"),
+	                   "window, as a double click does -- FIELD:N for element "
+	                   "N of a run of structs; repeat to go deeper, and "
+	                   "--set applies in the last"),
 	    QStringLiteral("FIELD"));
 	const QCommandLineOption no_ui(QStringLiteral("no-ui"),
 	    QStringLiteral("apply --set/--set-bytes through the window, print "
