@@ -9688,10 +9688,13 @@ negative-length clamp made the script empty. The same cast sat in the
 `[min]`, `[max]`, `[must_eq]` and `must_be_one` comparisons, so `u64 x
 [max = 1000]` holding 2^64 - 1 passed and `[min = 5]` refused it, in a
 member's checks and in a variant arm's -- where the four backends,
-asked the same five messages, each answer as `walk.py` does. An unsigned value past
-INT64_MAX now saturates where an expression loads it (and where an
-element-relative load does), and the comparisons read the value by the
-member's own signedness. Held in `test_walker_c.py`
+asked the same five messages, each answer as `walk.py` does. A length
+program that is one unsigned field and nothing else now reads past
+INT64_MAX as INT64_MAX, and the comparisons read the value by the
+member's own signedness. The first version saturated where an expression
+LOADS a field, and the gate caught it: inside a larger program the bits
+are what count, and `popcount(present)` over bit 63 counted 63
+(`test_popcount_counts_a_bitmap.py`). Held in `test_walker_c.py`
 (`test_a_length_past_int64_is_past_the_frame_not_negative`,
 `test_a_u64_past_int64_is_held_to_its_bounds_as_unsigned`), each failing
 on the old walker. Two differences the replay shows are not faults: a

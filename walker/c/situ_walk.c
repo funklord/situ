@@ -1979,10 +1979,7 @@ static situ_walk_err read_based(const situ_walk_image *image,
 			return err;
 		}
 	}
-	/* Past INT64_MAX an unsigned value is that large, not negative, as
-	 * `ctx_load` holds it (26.1148). */
-	*out = (held.flags & FLAG_SIGNED) == 0u && value > (uint64_t)INT64_MAX
-	       ? INT64_MAX : (int64_t)value;
+	*out = (int64_t)value;
 	return SITU_WALK_OK;
 }
 
@@ -2231,18 +2228,6 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		                && digits_out_of_domain(ctx->image, index, &held,
 		                                        value)) {
 			*out = 0;
-			return SITU_WALK_OK;
-		}
-		/* And an UNSIGNED value past INT64_MAX is that large, not negative:
-		 * a compact size of 2^63 cast to `int64_t` read below zero, which a
-		 * length reads as nothing, so bitcoin's `script[script_length]` over
-		 * `ff 00000000ffffffff` was empty and the message accepted, where
-		 * `walk.py` and the four backends measure it past the frame and
-		 * refuse it (26.1148). Saturated, it is past any frame here too. */
-		if (situ_walk_placement_at(ctx->image, index, &held) == SITU_WALK_OK
-		                && (held.flags & SITU_WALK_SIGNED) == 0u
-		                && value > (uint64_t)INT64_MAX) {
-			*out = INT64_MAX;
 			return SITU_WALK_OK;
 		}
 	}
@@ -8621,6 +8606,25 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_MALFORMED;
 			}
 			*out = stack[0];
+			/* A program that is one UNSIGNED field and nothing else is that
+			 * field's value, and past INT64_MAX that value is large, not
+			 * negative: a compact size of 2^63 read below zero, a length
+			 * reads that as nothing, and bitcoin's `script[script_length]`
+			 * over `ff 00000000ffffffff` was empty and the message
+			 * accepted, where `walk.py` and the four backends measure it
+			 * past the frame (26.1148). Here and not where the field is
+			 * loaded: inside a larger program the bits are what count --
+			 * `popcount(present)` over bit 63 is 1, which saturating the
+			 * load made 63. */
+			if (*out < 0 && pc == at + 6u && image->code[at] == OP_FIELD) {
+				situ_walk_placement held;
+
+				if (situ_walk_placement_at(image, u32_at(image->code + at + 1u),
+				                           &held) == SITU_WALK_OK
+				    && (held.flags & FLAG_SIGNED) == 0u) {
+					*out = INT64_MAX;
+				}
+			}
 			return SITU_WALK_OK;
 		}
 
