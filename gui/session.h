@@ -29,6 +29,10 @@ struct open_options {
 	qint64      length = -1;	// --length, -1 for the rest of the file
 	bool        hex = false;	// --hex: the message file holds hex
 	QStringList arguments;	// --arg, in order
+	// --within STRUCT:OFFSET:LENGTH, the windows this one was opened inside,
+	// outermost first: what lets a byte run change length in a nested
+	// struct, moving what frames it (26.1141).
+	QStringList within;
 };
 
 class session {
@@ -69,6 +73,7 @@ public:
 private:
 	bool run(const QStringList &extra, QByteArray *out);
 	QStringList common_arguments() const;
+	void follow_frames(const QJsonObject &after);
 
 	// Shared with every session opened nested in this one: the scratch
 	// directory the working bytes live in, and whether they have changed

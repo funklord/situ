@@ -10,7 +10,9 @@ a file zlib agrees with; and a run of a run's elements is reachable, which
 """
 from __future__ import annotations
 
+import json
 import struct
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -86,3 +88,42 @@ def test_a_derived_frame_that_cannot_follow_refuses_the_write() -> None:
 	with pytest.raises(Refused, match="needs what frames it to move"):
 		inner.set("name", b"hello")
 	assert bytes(document.buffer) == held
+
+
+def _cli(*args: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run([sys.executable, str(ROOT / "bin" / "situ-edit"),
+	                       *args], capture_output=True, text=True, cwd=ROOT)
+
+
+def test_the_command_line_follows_the_windows_it_is_given(
+		tmp_path: Path) -> None:
+	"""`--within` carries the chain a frontend opened one window per nested
+	struct down; the JSON says where each window's frame is afterwards, so
+	the frontend can follow."""
+	before = _png(b"Comment\x00hi")
+	(tmp_path / "f.png").write_bytes(before)
+	at = len(SIGNATURE) + 12 + 13
+	done = _cli(str(ROOT / "example" / "png" / "png.situ"),
+	            str(tmp_path / "f.png"), "--struct", "chunk",
+	            "--offset", str(at), "--length", str(12 + 10),
+	            "--within", "png_file:0:",
+	            "--set-bytes", "data=" + b"Comment\x00hello world".hex(),
+	            "--format", "json", "--out", str(tmp_path / "g.png"))
+	assert done.returncode == 0, done.stderr
+	assert (tmp_path / "g.png").read_bytes() == _png(b"Comment\x00hello world")
+	said = json.loads(done.stdout)
+	assert (said["at"], said["bytes"]) == (at, 12 + 19)
+	assert said["within"] == [{"struct": "png_file", "at": 0,
+	                           "bytes": len(_png(b"Comment\x00hello world"))}]
+
+
+def test_without_the_chain_the_command_line_still_refuses(
+		tmp_path: Path) -> None:
+	(tmp_path / "f.png").write_bytes(_png(b"Comment\x00hi"))
+	at = len(SIGNATURE) + 12 + 13
+	done = _cli(str(ROOT / "example" / "png" / "png.situ"),
+	            str(tmp_path / "f.png"), "--struct", "chunk",
+	            "--offset", str(at), "--length", str(22),
+	            "--set-bytes", "data=" + b"Comment\x00hello".hex())
+	assert done.returncode == 1
+	assert "opened from its parent" in done.stderr

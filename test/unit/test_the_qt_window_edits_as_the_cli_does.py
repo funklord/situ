@@ -313,3 +313,29 @@ def test_the_window_follows_a_dark_desktop(window_binary: Path,
 	                            capture_output=True, text=True, timeout=60,
 	                            env=environment)
 	assert overridden.stdout.strip() == environment["SITU_THEME"]
+
+
+GROWN = """target buffer;
+endian big;
+struct inner { u8 n; u8 name[n]; u8 flag; }
+struct outer { u8 kind; inner body; u8 end; }
+"""
+
+
+def test_a_run_grows_in_a_nested_window(window_binary: Path,
+		tmp_path: Path) -> None:
+	"""A byte run written longer in a nested window: the window names the
+	window it was opened inside (`--within`), so the CLI can move `n` and
+	what follows, and the window follows its own frame afterwards -- the
+	second write lands where the first left the bytes (26.1141)."""
+	(tmp_path / "s.situ").write_text(GROWN, encoding="ascii")
+	(tmp_path / "m.bin").write_bytes(bytes.fromhex("07026869" "01ee"))
+
+	window = _window(window_binary, "--struct", "outer", "--open", "body",
+	                 "--set-bytes", "name=68656c6c6f",
+	                 "--set-bytes", "name=787978",
+	                 "--out", str(tmp_path / "q.bin"),
+	                 str(tmp_path / "s.situ"), str(tmp_path / "m.bin"))
+	assert window.returncode == 0, window.stderr
+	assert (tmp_path / "q.bin").read_bytes() \
+		== bytes.fromhex("0703" "787978" "01ee")

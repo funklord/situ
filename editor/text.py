@@ -167,6 +167,16 @@ def render_rows(document: Document) -> list[tuple[str, int | None]]:
 	return lines
 
 
+def _ancestors(document: Document) -> list[Document]:
+	"""The documents `document` was opened down, outermost first."""
+	found: list[Document] = []
+	held = document.parent
+	while held is not None:
+		found.insert(0, held)
+		held = held.parent
+	return found
+
+
 def as_json(document: Document) -> str:
 	"""The document as structured data, for a frontend that is not Python.
 
@@ -194,6 +204,14 @@ def as_json(document: Document) -> str:
 		# answer (26.582). Both frontends get it: wiring one and not the
 		# other is the mistake 26.581 recorded.
 		"measured": document.measured,
+		# THE WINDOWS BEHIND THIS ONE, outermost first, as `--within` gave
+		# them and as an edit left them: a run grown in this window moves
+		# each one's frame by as much, and a frontend holding their
+		# lengths has to follow (26.1141). Empty for a document opened on
+		# its own.
+		"within": [{"struct": outer.name, "at": outer.at,
+		            "bytes": outer.extent}
+		           for outer in _ancestors(document)],
 		# THE VERDICT, which the text header has carried since 26.595 and
 		# this never did -- so the window, which reads only this, could not
 		# say a message was refused over a check that blames no member. The

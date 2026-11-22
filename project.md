@@ -9691,13 +9691,18 @@ grown inside the whole file moves the chunk's `length`, recomputes its
 CRC, and leaves bytes zlib agrees with. A derived frame that cannot
 follow (`invariant total == size(body)`) still refuses the write.
 
-Not yet: the `situ-edit` CLI, and the window that drives it, open a
-nested struct as a stand-alone window (`--struct --offset --length`), so
-they carry no chain and still refuse; a chain over the CLI needs the
-window to say where it was opened from. A `[holds]` run and a variant's
-arm are not openable as nested documents at all, so the two-field case
-behind an outer length is reached only through a plain nested member.
-Held in `test/unit/test_a_run_grows_inside_a_window.py`.
+Over the process boundary: the window opens a nested struct as a
+`situ-edit --struct --offset --length` of its own, so the CLI takes the
+windows it was opened inside as `--within STRUCT:OFFSET:LENGTH`, outermost
+first (`open_within` finds each slot by containment), and its JSON says
+each one's frame afterwards (`within`). The window passes its chain and
+follows its own frame and its chain's from the response, so a second
+write lands where the first left the bytes. Not yet: another window open
+on an enclosing struct keeps its old length until reopened, and a
+`[holds]` run and a variant's arm are not openable as nested documents,
+so the two-field case behind an outer length is reached only through a
+plain nested member. Held in `test/unit/test_a_run_grows_inside_a_window.py`
+and `test_the_qt_window_edits_as_the_cli_does.py`.
 
 ### 26.1140 The bytes a tag covers are asked of the members in them
 

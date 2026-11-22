@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
 #include <QStandardPaths>
@@ -111,7 +112,28 @@ QStringList session::common_arguments() const
 		          << QString::number(options_.length);
 	for (const QString &argument : options_.arguments)
 		arguments << QStringLiteral("--arg") << argument;
+	for (const QString &window : options_.within)
+		arguments << QStringLiteral("--within") << window;
 	return arguments;
+}
+
+// After a write, where every window's frame is now: a run grown in this
+// one moved its own length and each enclosing window's by as much, and
+// the next call must name the frames as they are (26.1141). A window
+// framed by the rest of the file keeps saying so.
+void session::follow_frames(const QJsonObject &after)
+{
+	if (options_.length >= 0 && after.contains(QStringLiteral("bytes")))
+		options_.length = after.value(QStringLiteral("bytes")).toInteger();
+	const QJsonArray outer = after.value(QStringLiteral("within")).toArray();
+	for (qsizetype i = 0; i < options_.within.size() && i < outer.size(); i++) {
+		QStringList parts = options_.within[i].split(QLatin1Char(':'));
+		if (parts.size() != 3 || parts[2].isEmpty())
+			continue;
+		parts[2] = QString::number(outer[i].toObject()
+		                           .value(QStringLiteral("bytes")).toInteger());
+		options_.within[i] = parts.join(QLatin1Char(':'));
+	}
 }
 
 bool session::run(const QStringList &extra, QByteArray *out)
@@ -182,9 +204,10 @@ bool session::set(const QString &field, const QString &text)
 	// number, so the window does not decide which (26.1113).
 	arguments << QStringLiteral("--put")
 	          << field + QLatin1Char('=') + text.trimmed()
+	          << QStringLiteral("--format") << QStringLiteral("json")
 	          << QStringLiteral("--out") << next << image_ << work_;
-	QByteArray ignored;
-	if (!run(arguments, &ignored))
+	QByteArray printed;
+	if (!run(arguments, &printed))
 		return false;
 	// The CLI prints "not written" only without --out; anything else it
 	// said is what the write cost.
@@ -195,6 +218,9 @@ bool session::set(const QString &field, const QString &text)
 		return false;
 	}
 	*modified_ = true;
+	const QJsonDocument after = QJsonDocument::fromJson(printed);
+	if (after.isObject())
+		follow_frames(after.object());
 	if (!refresh())
 		return false;
 	notes_ = cost;
@@ -220,7 +246,15 @@ bool session::save(const QString &path)
 bool session::open_nested(const session &parent, const QString &structure,
                           qint64 offset, qint64 length)
 {
+	// The parent's own window joins the chain this one was opened down,
+	// so a write here can find what frames it (26.1141).
+	const open_options &above = parent.options_;
+	QStringList within = above.within;
+	within << above.structure + QLatin1Char(':')
+	          + QString::number(above.offset) + QLatin1Char(':')
+	          + (above.length >= 0 ? QString::number(above.length) : QString());
 	options_           = parent.options_;
+	options_.within    = within;
 	options_.structure = structure;
 	options_.offset    = offset;
 	options_.length    = length;

@@ -1548,3 +1548,46 @@ def open_document(image_bytes: bytes, message: Bytes,
 		raise Refused(f"struct `{image.struct_name(chosen)}`: {why}") from None
 
 	return document
+
+
+def open_within(window: Document,
+		ancestors: Sequence[tuple[str | None, int, int | None]]) -> None:
+	"""Give `window` the chain of documents it was opened down (26.1141).
+
+	`ancestors` are `(struct, at, length)`, outermost first, the first over
+	the whole buffer -- what a frontend that opens one window per nested
+	struct knows of the windows behind it, and all the command line can
+	carry. Each is opened over `window`'s own buffer, so an edit through the
+	window is in all of them, and the member of each that holds the next is
+	found by containment: the one whose extent covers the next window.
+	A struct of `None` is the first, as `open_document` takes it.
+	"""
+	image = window.image
+	names = [image.struct_name(i) for i in range(len(image.structs))]
+	chain: list[Document] = []
+	for struct, at, length in ancestors:
+		if struct is not None and struct not in names:
+			raise Refused(f"--within names no struct `{struct}`")
+		chain.append(Document(image, window.buffer,
+		                      0 if struct is None else names.index(struct),
+		                      at, None if length is None else at + length))
+	chain.append(window)
+	for outer, inner in zip(chain, chain[1:]):
+		end = len(outer.buffer) if inner.limit is None else inner.limit
+		holds = [index for index in image.members(image.structs[outer.struct])
+		         if image.placements[index].type_struct != NONE]
+		found = None
+		for index, where in ((index, outer._extents().get(image.name_of(index)))
+		                     for index in holds):
+			if where is None:
+				continue
+			start = outer.at + where[0] // BITS_PER_BYTE
+			stop = start + where[1] // BITS_PER_BYTE
+			if start <= inner.at and end <= stop:
+				found = index
+				break
+		if found is None:
+			raise Refused(f"no member of `{outer.name}` at {outer.at} holds "
+			              f"the `{inner.name}` at {inner.at}")
+		inner.parent = outer
+		inner.slot = found

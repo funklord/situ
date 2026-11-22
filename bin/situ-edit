@@ -55,7 +55,7 @@ if _root is not None and str(_root) not in sys.path:
 	sys.path.insert(0, str(_root))
 
 try:
-	from editor.document import Document		# noqa: E402
+	from editor.document import Document, open_within	# noqa: E402
 	from editor import view	# noqa: E402
 	from editor.text import apply_edits, as_json, open_from, render	# noqa: E402
 	from walker.walk import Refused, Unsupplied	# noqa: E402
@@ -67,6 +67,20 @@ except ImportError as _why:			# pragma: no cover - a layout fault
 		"       <prefix>/lib/walker. Run it from situ's source tree, or\n"
 		"       `make install` and run the installed copy.\n")
 	raise SystemExit(1)
+
+
+def _window(text: str) -> tuple[str | None, int, int | None]:
+	"""`STRUCT:OFFSET:LENGTH` from `--within`, either end empty."""
+	struct, sep, rest = text.partition(":")
+	offset, sep2, length = rest.partition(":")
+	try:
+		if not (sep and sep2):
+			raise ValueError
+		return (struct or None, int(offset, 0),
+		        int(length, 0) if length else None)
+	except ValueError:
+		raise Refused(f"`--within {text}` is not STRUCT:OFFSET:LENGTH") \
+			from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +107,18 @@ def build_parser() -> argparse.ArgumentParser:
 	                         "of the frame stops, so a self-sizing struct "
 	                         "needs no length and one framed by its caller "
 	                         "does")
+	# THE WINDOWS BEHIND THIS ONE (26.1141). A frontend opening one window
+	# per nested struct knows the chain it was opened down and this tool
+	# does not, and a run grown in a window moves what frames it -- a PNG
+	# chunk's `length`, and whatever frames the chunk. Outermost first,
+	# the first over the whole file.
+	parser.add_argument("--within", action="append", default=[],
+	                    metavar="STRUCT:OFFSET:LENGTH",
+	                    help="a window this one was opened inside, outermost "
+	                         "first and the first over the whole file; "
+	                         "STRUCT empty for the first struct, LENGTH empty "
+	                         "for the rest of the file. With them a byte run "
+	                         "may change length inside a nested struct")
 	# A RELATION IS OVER TWO MESSAGES (26.95), so it takes a second file.
 	# `walker.report.relate` has existed since 26.95 with no caller outside
 	# its own tests, and 0034 names this tool as what a read-only editor is
@@ -221,6 +247,13 @@ def main() -> int:
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
+
+	if args.within:
+		try:
+			open_within(document, [_window(one) for one in args.within])
+		except Refused as why:
+			print(f"situ-edit: {why}", file=sys.stderr)
+			return 1
 
 	try:
 		notes = apply_edits(document, args.assignments,
