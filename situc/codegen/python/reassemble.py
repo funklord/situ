@@ -57,6 +57,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	expires = (_read(view, _path(held, "expires"))
 	           if _attr(held, "expires") is not None else None)
 	name  = py_name(held.name)
+	per      = per_cap(schema, held, resolved)
+	per_most = per[2] if per is not None else None
 	return [
 		"",
 		f"class {name}_table:",
@@ -69,18 +71,26 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tMESSAGES = {messages}",
 		f"\tCAPACITY = {capacity}",
 		f"\tTIMEOUT  = {timeout}",
+		*([f"\tPER_MAX  = {per_most}"] if per_most is not None else []),
 		"",
-		"\t__slots__ = (\"_live\", \"messages\", \"capacity\", \"timeout\")",
+		"\t__slots__ = (\"_live\", \"messages\", \"capacity\", \"timeout\""
+		+ (", \"per_max\")" if per_most is not None else ")"),
 		"",
 		"\tdef __init__(self, messages: int | None = None,",
-		"\t\t\tcapacity: int | None = None, timeout: int | None = None) -> None:",
+		"\t\t\tcapacity: int | None = None, timeout: int | None = None"
+		+ (",\n\t\t\tper_max: int | None = None" if per_most is not None else "")
+		+ ") -> None:",
 		'\t\t"""The schema\'s bounds, or smaller ones (fuzznet, inbox',
 		"\t\t20261122T1804Z, as C's `_init_in`); BoundsError for zero or one",
 		'\t\tabove the schema\'s."""',
 		"\t\tself.messages = self.MESSAGES if messages is None else messages",
 		"\t\tself.capacity = self.CAPACITY if capacity is None else capacity",
 		"\t\tself.timeout  = self.TIMEOUT if timeout is None else timeout",
+		*(["\t\tself.per_max  = self.PER_MAX if per_max is None else per_max"]
+		  if per_most is not None else []),
 		"\t\tfor said, most in ((self.messages, self.MESSAGES),",
+		*(["\t\t                   (self.per_max, self.PER_MAX),"]
+		  if per_most is not None else []),
 		"\t\t                   (self.capacity, self.CAPACITY),",
 		"\t\t                   (self.timeout, self.TIMEOUT)):",
 		"\t\t\tif not 0 < said <= most:",
@@ -204,15 +214,15 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 	cap = per_cap(schema, held, resolved)
 	if cap is None:
 		return []
-	start, width, most = cap
+	start, width, _ = cap
 	part = (f"(({{key}} >> {start}) & {(1 << width) - 1:#x})" if layout.packed
 	        else f"{{key}}[{start}:{start + width}]")
 	return [
 		f"\t\t\tif sum(1 for held in self._live"
 		f" if {part.format(key='held')} == {part.format(key='raw')})"
-		f" >= {most}:",
+		" >= self.per_max:",
 		"\t\t\t\traise BoundsError(\"one sender holds as many messages as"
-		f" `per_max` allows\", {most})",
+		" `per_max` allows\", self.per_max)",
 	]
 
 

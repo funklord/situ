@@ -1130,6 +1130,10 @@ _CAPPED_AND_NOT: list[str] = []
 BOUNDED = SMALL.replace("messages = 2", "messages = 4").replace(
 	"bytes = 64", "bytes = 256").replace("timeout = 3000", "timeout = 6000")
 
+#: BOUNDED capped at three messages a sender, to be given one at init.
+PER_BOUNDED = BOUNDED.replace("messages = 4", "per = f.h.sender, per_max = 3, "
+                              "messages = 4")
+
 #: Where each driver makes its table, and the same at SMALL's bounds.
 _AT_INIT = {
 	"c": ("situ_pieces_init(&t, &store);",
@@ -1149,11 +1153,27 @@ _AT_INIT = {
 _PLAIN: list[str] = []
 
 
+#: The same, with one message a sender given at init.
+_PER_AT_INIT = {
+	"c": "store.marks, 1u) != SITU_OK",
+	"python": "pieces_table(2, 32, 3000, 1)",
+	"rust": "with_bounds(2, 32, 3000, 1)",
+	"cpp": "bounds(2u, 32u, 3000u, 1u)",
+}
+
+
 def _driver(source: str, backend: str, schema: str) -> str:
-	if schema is not BOUNDED:
+	if schema is not BOUNDED and schema is not PER_BOUNDED:
 		return source
 	old, new = _AT_INIT[backend]
 	assert source.count(old) == 1, (backend, old)
+	if schema is PER_BOUNDED:
+		bare = {"c": "store.marks) != SITU_OK",
+		        "python": "pieces_table(2, 32, 3000)",
+		        "rust": "with_bounds(2, 32, 3000)",
+		        "cpp": "bounds(2u, 32u, 3000u)"}[backend]
+		assert new.count(bare) == 1, (backend, bare)
+		new = new.replace(bare, _PER_AT_INIT[backend])
 	return source.replace(old, new)
 
 
@@ -1211,7 +1231,11 @@ def _adversarial_stream(seed: int, steps: int,
 	# numbers as maxima, SMALL's given at init -- the answers must be
 	# SMALL's plain run's, byte for byte.
 	BOUNDED,
-], ids=["plain", "per", "expires", "bounded"])
+	# `per_max` at init too (fuzznet, 2026-11-22: one schema, tables of 8
+	# a sender and of 1): the schema says 3, the table is given 1, and the
+	# answers must be the `per` run's.
+	PER_BOUNDED,
+], ids=["plain", "per", "expires", "bounded", "per-bounded"])
 def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		schema: str) -> None:
 	"""The four tables were written from one set of rules and held to
@@ -1284,7 +1308,10 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		_PLAIN.append(said["c"])
 	if schema is BOUNDED and _PLAIN:
 		assert said["c"] == _PLAIN[0], "the bounds given at init are not SMALL's"
-	if "per_max" in schema:
+	if schema is PER_BOUNDED:
+		assert len(_CAPPED_AND_NOT) == 2
+		assert said["c"] == _CAPPED_AND_NOT[1], "per_max at init is not 1"
+	elif "per_max" in schema:
 		# The cap bites: a second message from one sender is refused where
 		# a free slot would have taken it. Measured against the uncapped
 		# table's answers over the same stream, which it must change.
@@ -1477,5 +1504,64 @@ def test_a_piece_opened_by_the_caller_joins_its_message(tmp_path: Path) -> None:
 	ran = subprocess.run(
 		[sys.executable, "-c", PARTS_PY.replace(
 			"RUNTIME", repr(str(ROOT / "runtime" / "python")))],
+		cwd=out, capture_output=True, text=True, timeout=120)
+	assert ran.stdout.strip() == "python ok", ran.stderr
+
+
+PER_INIT_C = r"""#include <stdio.h>
+#include "r_reassemble.h"
+
+#define CHECK(c) do { if (!(c)) { printf("FAIL %d: %s\n", __LINE__, #c); fail = 1; } } while (0)
+
+static situ_pieces_t t;
+static situ_pieces_store_t store;
+
+int main(void)
+{
+	int fail = 0;
+	CHECK(SITU_PIECES_PER_MAX == 2u);
+	CHECK(situ_pieces_init_in(&t, 4u, 1024u, 3000u, store.slot, store.bytes,
+	                          store.marks, 0u) == SITU_ERR_BOUNDS);
+	CHECK(situ_pieces_init_in(&t, 4u, 1024u, 3000u, store.slot, store.bytes,
+	                          store.marks, 3u) == SITU_ERR_BOUNDS);
+	CHECK(situ_pieces_init_in(&t, 4u, 1024u, 3000u, store.slot, store.bytes,
+	                          store.marks, 1u) == SITU_OK && t.per_max == 1u);
+	situ_pieces_init(&t, &store);
+	CHECK(t.per_max == 2u);
+	printf(fail ? "FAILED\n" : "PER PASS\n");
+	return fail;
+}
+"""
+
+
+def test_per_max_is_given_at_init_too(tmp_path: Path) -> None:
+	"""fuzznet (2026-11-22): one schema, tables of 8 messages a sender and
+	of 1, so `per_max` is a bound `_init_in` takes like the others -- the
+	schema's its maximum and `_init`'s value, zero refused."""
+	capped = SCHEMA.replace("messages = 4", "per = f.h.sender, per_max = 2, "
+	                        "messages = 4")
+	assert "PER PASS" in _run(tmp_path, capped, PER_INIT_C, "r")
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "python", "--layer", "converse", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	ran = subprocess.run(
+		[sys.executable, "-c", "\n".join([
+			"import sys",
+			f"sys.path[:0] = ['.', {str(ROOT / 'runtime' / 'python')!r}]",
+			"from situ_runtime import BoundsError",
+			"import r_reassemble",
+			"T = r_reassemble.pieces_table",
+			"assert T.PER_MAX == 2 and T().per_max == 2",
+			"assert T(per_max=1).per_max == 1",
+			"for most in (0, 3):",
+			"\ttry:",
+			"\t\tT(per_max=most)",
+			"\t\traise SystemExit(f'per_max {most} was taken')",
+			"\texcept BoundsError:",
+			"\t\tpass",
+			"print('python ok')"])],
 		cwd=out, capture_output=True, text=True, timeout=120)
 	assert ran.stdout.strip() == "python ok", ran.stderr

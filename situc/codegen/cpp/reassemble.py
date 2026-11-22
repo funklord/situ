@@ -51,7 +51,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 	cap = per_cap(schema, held, resolved)
 	if cap is None:
 		return []
-	start, width, most = cap
+	start, width, _ = cap
 	if layout.packed:
 		mask = f"UINT64_C({(1 << width) - 1:#x})"
 		same = (f"((slot_[i].key >> {start}u) & {mask}) == "
@@ -69,7 +69,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\t\t\tsame_part++;",
 		"\t\t\t\t}",
 		"\t\t\t}",
-		f"\t\t\tif (same_part >= {most}u) {{",
+		"\t\t\tif (same_part >= per_max_) {",
 		"\t\t\t\treturn ::situ::rt::err::bounds;",
 		"\t\t\t}",
 	]
@@ -122,6 +122,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	                         if _attr(held, "expires") is not None
 	                         else ([], None))
 	name = c_name(held.name)
+	per      = per_cap(schema, held, resolved)
+	per_most = per[2] if per is not None else None
 	key_decl = ("std::uint64_t key;" if layout.packed
 	            else f"std::uint8_t  key[{layout.total_bytes}u];")
 	same = ("slot_[i].key == key" if layout.packed else
@@ -151,6 +153,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tstatic constexpr std::uint32_t messages = {messages}u;",
 		f"\tstatic constexpr std::uint32_t capacity = {capacity}u;",
 		f"\tstatic constexpr std::uint32_t timeout  = {timeout}u;",
+		*([f"\tstatic constexpr std::uint32_t per_max  = {per_most}u;"]
+		  if per_most is not None else []),
 		"",
 		f"\t{name}_table() noexcept",
 		"\t{",
@@ -163,16 +167,21 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t *  inbox 20261122T1804Z, as C's `_init_in`); drops what is held.",
 		"\t *  `err::bounds` for zero or one above the schema's. */",
 		"\t[[nodiscard]] ::situ::rt::err bounds(std::uint32_t most_messages,",
-		"\t\tstd::uint32_t most_bytes, std::uint32_t most_time) noexcept",
+		"\t\tstd::uint32_t most_bytes, std::uint32_t most_time"
+		+ (", std::uint32_t most_per" if per_most is not None else "")
+		+ ") noexcept",
 		"\t{",
 		"\t\tif (most_messages == 0u || most_messages > messages",
 		"\t\t    || most_bytes == 0u || most_bytes > capacity",
+		*(["\t\t    || most_per == 0u || most_per > per_max"]
+		  if per_most is not None else []),
 		"\t\t    || most_time == 0u || most_time > timeout) {",
 		"\t\t\treturn ::situ::rt::err::bounds;",
 		"\t\t}",
 		"\t\tmessages_ = most_messages;",
 		"\t\tcapacity_ = most_bytes;",
 		"\t\ttimeout_  = most_time;",
+		*(["\t\tper_max_  = most_per;"] if per_most is not None else []),
 		"\t\tfor (std::uint32_t i = 0u; i < messages; i++) {",
 		"\t\t\tslot_[i].live = false;",
 		"\t\t}",
@@ -418,6 +427,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\tstd::uint32_t messages_ = messages;\t// the bounds in force",
 		"\tstd::uint32_t capacity_ = capacity;",
 		"\tstd::uint32_t timeout_  = timeout;",
+		*(["\tstd::uint32_t per_max_  = per_max;"] if per_most is not None else []),
 		"\tslot         slot_[messages];",
 		"\tstd::uint8_t bytes_[messages][capacity];",
 		f"\tstd::uint8_t marks_[messages][{marks}u];",

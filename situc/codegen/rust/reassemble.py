@@ -37,7 +37,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 	cap = per_cap(schema, held, resolved)
 	if cap is None:
 		return []
-	start, width, most = cap
+	start, width, _ = cap
 	if layout.packed:
 		mask = f"{(1 << width) - 1:#x}u64"
 		same = (f"((m.key >> {start}) & {mask}) == ((key >> {start}) & {mask})")
@@ -46,7 +46,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 		        f"key[{start}..{start + width}]")
 	return [
 		"\t\t\t\tif self.slot.iter().filter(|m| m.live && "
-		f"{same}).count() >= {most} {{",
+		f"{same}).count() >= self.per_max {{",
 		"\t\t\t\t\treturn Err(Error::Bounds);",
 		"\t\t\t\t}",
 	]
@@ -84,6 +84,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	key_type = "u64" if layout.packed else f"[u8; {layout.total_bytes}]"
 	empty_key = "0" if layout.packed else f"[0u8; {layout.total_bytes}]"
 	name = _pascal(held.name)
+	per      = per_cap(schema, held, resolved)
+	per_most = per[2] if per is not None else None
 	return [
 		f"/// One message in flight for `{held.name}`.",
 		"#[derive(Clone, Copy)]",
@@ -113,6 +115,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\tmessages: usize,",
 		"\tcapacity: usize,",
 		"\ttimeout: u32,",
+		*(["\tper_max: usize,"] if per_most is not None else []),
 		"}",
 		"",
 		f"impl Default for {name}Table {{",
@@ -125,6 +128,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tpub const MESSAGES: usize = {messages};",
 		f"\tpub const CAPACITY: usize = {capacity};",
 		f"\tpub const TIMEOUT: u32 = {timeout};",
+		*([f"\tpub const PER_MAX: usize = {per_most};"]
+		  if per_most is not None else []),
 		"",
 		"\tpub fn new() -> Self {",
 		f"\t\tconst EMPTY: {name}Slot = {name}Slot {{",
@@ -139,15 +144,19 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\tmessages: Self::MESSAGES,",
 		"\t\t\tcapacity: Self::CAPACITY,",
 		"\t\t\ttimeout: Self::TIMEOUT,",
+		*(["\t\t\tper_max: Self::PER_MAX,"] if per_most is not None else []),
 		"\t\t}",
 		"\t}",
 		"",
 		"\t/// Smaller bounds than the schema's (fuzznet, inbox 20261122T1804Z,",
 		"\t/// as C's `_init_in`); `Bounds` for zero or one above the schema's.",
-		"\tpub fn with_bounds(messages: usize, capacity: usize, timeout: u32)",
+		"\tpub fn with_bounds(messages: usize, capacity: usize, timeout: u32"
+		+ (", per_max: usize)" if per_most is not None else ")"),
 		"\t\t-> Result<Self> {",
 		"\t\tif messages == 0 || messages > Self::MESSAGES || capacity == 0",
 		"\t\t\t|| capacity > Self::CAPACITY || timeout == 0",
+		*(["\t\t\t|| per_max == 0 || per_max > Self::PER_MAX"]
+		  if per_most is not None else []),
 		"\t\t\t|| timeout > Self::TIMEOUT {",
 		"\t\t\treturn Err(Error::Bounds);",
 		"\t\t}",
@@ -155,6 +164,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\tt.messages = messages;",
 		"\t\tt.capacity = capacity;",
 		"\t\tt.timeout = timeout;",
+		*(["\t\tt.per_max = per_max;"] if per_most is not None else []),
 		"\t\tOk(t)",
 		"\t}",
 		"",

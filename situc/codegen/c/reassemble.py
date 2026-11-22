@@ -179,7 +179,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 	cap = per_cap(schema, held, resolved)
 	if cap is None:
 		return []
-	start, width, most = cap
+	start, width, _ = cap
 	if layout.packed:
 		mask = (1 << width) - 1
 		same = (f"((t->slot[i].key >> {start}u) & UINT64_C({mask:#x})) == "
@@ -188,7 +188,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 		same = (f"memcmp(&t->slot[i].key[{start}u], &key[{start}u], "
 		        f"{width}u) == 0")
 	return [
-		f"\t\t/* `per {_path(held, 'per')}`: at most {most} messages a"
+		f"\t\t/* `per {_path(held, 'per')}`: at most `per_max` messages a"
 		" value (fuzznet,",
 		"\t\t * inbox 20261122T1804Z). */",
 		"\t\tuint32_t same_part = 0u;",
@@ -197,7 +197,7 @@ def _per_lines(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\t\tsame_part++;",
 		"\t\t\t}",
 		"\t\t}",
-		f"\t\tif (same_part >= {most}u) {{",
+		"\t\tif (same_part >= t->per_max) {",
 		"\t\t\treturn SITU_ERR_BOUNDS;",
 		"\t\t}",
 	]
@@ -255,6 +255,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	p_index, p_count, p_expires = "index", "count", "deadline"
 	key_param = ("uint64_t key" if layout.packed else "const uint8_t *key")
 	name_pad  = " " * len(name)
+	# `per_max` given at init too, the schema's its maximum (fuzznet: one
+	# schema, tables of 8 a sender and of 1).
+	per = per_cap(schema, held, resolved)
+	per_most = per[2] if per is not None else None
 
 	return [
 		f"/* `{held.name}`: one message from up to `{upper}_MESSAGES` in "
@@ -275,6 +279,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"#define {upper}_MESSAGES {messages}u",
 		f"#define {upper}_CAPACITY {capacity}u",
 		f"#define {upper}_TIMEOUT  {timeout}u",
+		*([f"#define {upper}_PER_MAX  {per_most}u"]
+		  if per_most is not None else []),
 		"/* The memory `_init_in` wants for `messages` slots of `capacity`"
 		" bytes. */",
 		f"#define {upper}_BYTES_FOR(messages, capacity) "
@@ -298,6 +304,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\tuint32_t capacity;",
 		"\tuint32_t timeout;",
 		"\tuint32_t marks_per;\t/* a slot's bytes of marks */",
+		*(["\tuint32_t per_max;\t/* messages one `per` value holds */"]
+		  if per_most is not None else []),
 		f"\t{name}_slot_t *slot;",
 		"\tuint8_t *bytes;",
 		"\tuint8_t *marks;",
@@ -312,16 +320,22 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"/** A table of smaller bounds than the schema's, in the caller's"
 		" memory:",
 		" *  `slot` holds `messages` slots, `bytes` `_BYTES_FOR` and `marks`",
-		" *  `_MARKS_FOR` bytes. SITU_ERR_BOUNDS for a zero bound or one above",
+		" *  `_MARKS_FOR` bytes"
+		+ (", `per_max` messages a `per` value" if per_most is not None
+		   else "")
+		+ ". SITU_ERR_BOUNDS for a zero bound or one above",
 		" *  the schema's, which the generated code was written to. */",
 		f"static inline situ_err_t {name}_init_in({name}_t *t,"
 		" uint32_t messages,",
 		"\t\tuint32_t capacity, uint32_t timeout,"
 		f" {name}_slot_t *slot,",
-		"\t\tuint8_t *bytes, uint8_t *marks)",
+		"\t\tuint8_t *bytes, uint8_t *marks"
+		+ (", uint32_t per_max)" if per_most is not None else ")"),
 		"{",
 		f"\tif (messages == 0u || messages > {upper}_MESSAGES",
 		f"\t    || capacity == 0u || capacity > {upper}_CAPACITY",
+		*([f"\t    || per_max == 0u || per_max > {upper}_PER_MAX"]
+		  if per_most is not None else []),
 		f"\t    || timeout == 0u || timeout > {upper}_TIMEOUT) {{",
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
@@ -329,6 +343,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\tt->capacity = capacity;",
 		"\tt->timeout  = timeout;",
 		"\tt->marks_per = (capacity + 7u) / 8u;",
+		*(["\tt->per_max = per_max;"] if per_most is not None else []),
 		"\tt->slot  = slot;",
 		"\tt->bytes = bytes;",
 		"\tt->marks = marks;",
@@ -343,7 +358,9 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"{",
 		f"\t(void){name}_init_in(t, {upper}_MESSAGES, {upper}_CAPACITY,",
 		f"\t               {name_pad}{upper}_TIMEOUT, store->slot,"
-		" store->bytes, store->marks);",
+		" store->bytes, store->marks"
+		+ (f",\n\t               {name_pad}{upper}_PER_MAX);"
+		   if per_most is not None else ");"),
 		"}",
 		"",
 		f"static inline int {name}_marked(const {name}_t *t, uint32_t s,"

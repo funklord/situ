@@ -1436,7 +1436,9 @@ def _reassembly_harnesses(schema: ast.Schema, resolved: ResolvedSchema,
 			f"		(void){table}_init_in(&t, ({table.upper()}_MESSAGES + 1u) / 2u,",
 			f"		        {' ' * len(table)}({table.upper()}_CAPACITY + 1u) / 2u,"
 			f" {table.upper()}_TIMEOUT,",
-			f"		        {' ' * len(table)}store.slot, store.bytes, store.marks);",
+			f"		        {' ' * len(table)}store.slot, store.bytes, store.marks"
+			+ (f",\n		        {' ' * len(table)}({table.upper()}_PER_MAX + 1u) / 2u);"
+			   if reassemble.per_cap(schema, held, resolved) is not None else ");"),
 			"	} else {",
 			f"		{table}_init(&t, &store);",
 			"	}",
