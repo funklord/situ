@@ -16,6 +16,8 @@ types, which is the shape `traverse.py` already exists to prevent.
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol
 
@@ -220,7 +222,7 @@ def bound(struct: "ResolvedStruct", expr: ast.Expr,
 
 
 def bound_widening(struct: "ResolvedStruct", against: "Placement",
-		expr: ast.Expr) -> Exception | None:
+		expr: ast.Expr, arms: Collection[str] = ()) -> Exception | None:
 	"""Refuse a bound whose comparison has no correct spelling, or None.
 
 	The same rule `relation._widen` applies, and for the same reason: every
@@ -234,6 +236,12 @@ def bound_widening(struct: "ResolvedStruct", against: "Placement",
 	Relations refused this from the start. Bounds widened without carrying the
 	rule across, and a caveat written in a message is not a guard in the
 	compiler.
+
+	`arms` are the members of the bounded member's own enum. A bare name
+	that is one of them AND a sibling reads the sibling (26.1094), and the
+	refusal says so: fuzznet wrote `type [must_eq = base]` meaning the arm,
+	met this refusal about a `u64` it never meant to compare, and found the
+	qualified spelling by trial (inbox 20261122T0921Z, 26.1150).
 	"""
 	from situc.diagnostics import error
 
@@ -261,7 +269,13 @@ def bound_widening(struct: "ResolvedStruct", against: "Placement",
 		         "maximum would arrive negative and the test would answer the "
 		         "opposite of the truth",
 		         f"`{wide[0].path}` is the operand that does not fit",
-		         "a relation refuses the same comparison for the same reason"],
+		         "a relation refuses the same comparison for the same reason",
+		         *(f"`{name}` reads the member `{name}` of `{struct.name}`, "
+		           f"which shadows the arm of `{against.type_name}` of that "
+		           f"name; write `{against.type_name}.{name}` for the arm"
+		           for name in sorted({path.partition(".")[2] or path
+		                               for path in paths_in(expr)}
+		                              & set(arms)))],
 	)
 
 

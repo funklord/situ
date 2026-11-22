@@ -14904,7 +14904,9 @@ class Emitter:
 				rendered = bound_expression(struct, attr.value, self)
 				if rendered is None:
 					raise bound_refusal(struct, attr.value, why) from why
-				too_wide = bound_widening(struct, placement, attr.value)
+				too_wide = bound_widening(
+					struct, placement, attr.value,
+					self.resolved.layout.env.enums.get(placement.type_name, {}))
 				if too_wide is not None:
 					raise too_wide from why
 				shown  = attr.value.span.text()

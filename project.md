@@ -9712,6 +9712,28 @@ byte order and `walk.py` reads big-endian -- no frontend reads a pad's
 value. A struct with no members gave the verdict driver nothing to
 print, a harness artifact.
 
+### 26.1150 A sibling that shadows an arm is not the arm in `wire --check`
+
+From fuzznet (inbox 20261122T0921Z, against b7f7840c): its
+`node/reconcile.situ` had `fzn_reconcile_type type [must_eq = base]`
+beside `u64 base [min = 1]`, meaning the arm (8). By 26.1094's rule a
+scalar sibling keeps a bare name, so every backend read the field and
+refused the bound for comparing a 64-bit unsigned value; `wire` published
+`must_eq=base`, and `wire --check` against a contract saying `must_eq = 8`
+called the two identical -- 26.1095's arm-by-value comparison mapped the
+name to the arm without asking whether a sibling shadowed it. So a schema
+passed `wire --check` that did not build, and would, with a `u32` sibling,
+have built a check of the field under a contract about the arm. Two
+changes: the comparison resolves a bare name to an arm only where no
+scalar member of that side's struct has the name, so the pair is now
+breaking, as the backends' reading is; and the widening refusal names the
+shadowing and the spelling that means the arm (`write kind.base for the
+arm`). The rule itself stays: refusing the overlap would reverse
+26.1094's "a sibling keeps it", which schemas reading a sibling rely on;
+fuzznet now writes `fzn_reconcile_type.base`. Held in
+`test_a_wire_bound_by_arm_is_its_value.py` (failing on the old
+comparison) and `test_a_shadowed_arm_is_named.py`, in all four backends.
+
 ### 26.1149 A variant has no scalar value in the C walker either
 
 Same replay, CBOR: `any_array.form` over `80` read 128 -- the selected

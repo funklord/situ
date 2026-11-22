@@ -2073,9 +2073,19 @@ def _compare_facts(where: str, name: str, was: set[str],
 	# constraint -- fuzznet's unchanged `spool/message` reported four
 	# breaking findings (26.1095). Each side's own enum table, which the
 	# signature carries.
+	# But not an arm a scalar SIBLING shadows: by 26.1094's own rule the
+	# bound then reads the sibling, as the four backends build it, and
+	# taking the name for the arm called fuzznet's `type [must_eq = base]`
+	# -- `base` a `u64` beside it -- the same contract as `must_eq = 8`
+	# (inbox 20261122T0921Z, 26.1150).
 	old_arms, new_arms = _ARMS
-	was = {_by_value(fact, old_arms.get(types[0], {})) for fact in was}
-	now = {_by_value(fact, new_arms.get(types[1], {})) for fact in now}
+	struct = where.partition("[")[0]
+	old_own = {arm: value for arm, value in old_arms.get(types[0], {}).items()
+	           if arm not in _scalar_siblings(0, struct)}
+	new_own = {arm: value for arm, value in new_arms.get(types[1], {}).items()
+	           if arm not in _scalar_siblings(1, struct)}
+	was = {_by_value(fact, old_own) for fact in was}
+	now = {_by_value(fact, new_own) for fact in now}
 	findings = []
 	moved    = {fact for fact in (now - was) | (was - now)
 	            if _is_interpretation(fact)}
@@ -2109,6 +2119,23 @@ def _compare_facts(where: str, name: str, was: set[str],
 			"message a new sender legitimately produces"))
 
 	return findings
+
+
+def _scalar_siblings(side: int, struct: str) -> set[str]:
+	"""The members of `struct` on one side a bound may read as a value --
+	those whose type is neither a run nor a struct -- by name."""
+	lines = _STRUCT_LINES[side].get(struct, [])
+	names: set[str] = set()
+	for line in lines[1:]:
+		words = line.split()
+		if _is_annotation(line) or len(words) < 4 \
+				or not words[0].startswith("@"):
+			continue
+		kind = words[2]
+		if "[" in kind or kind in _STRUCT_LINES[side]:
+			continue
+		names.add(words[3])
+	return names
 
 
 def _by_value(fact: str, arms: dict[str, int] | None = None) -> str:
