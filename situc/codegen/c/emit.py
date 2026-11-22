@@ -5395,6 +5395,17 @@ class Emitter:
 			local  = c_name(self._local(struct, placement))
 			peer   = ident(self.prefix, target, "nesting")
 			handed = self._child_args(struct, placement)
+			# A varint cut short ahead of it leaves it unplaced: it would be
+			# read at the varint's own start, the same struct again, to the
+			# cap -- a lone CBOR `d9` "nested too deep" (26.1135).
+			cut = [ident(self.prefix, struct.name,
+			             c_name(self._local(struct, held)), "len")
+			       + "(view) == 0u"
+			       for held in traverse.cut_short_ahead(struct, placement)]
+			if cut:
+				lines.extend([f"\tif ({' || '.join(cut)}) {{",
+				              "\t\treturn deepest;",
+				              "\t}"])
 
 			if holds_of(placement) in cycle:
 				peer = ident(self.prefix, holds_of(placement) or "", "nesting")

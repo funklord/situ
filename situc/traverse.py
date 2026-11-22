@@ -2526,6 +2526,39 @@ def arm_members(struct: ResolvedStruct,
 	        for arm in variant.arm_cases]
 
 
+def cut_short_ahead(struct: ResolvedStruct,
+		placement: Placement) -> list[Placement]:
+	"""The single varints ahead of `placement` that leave it unplaced if cut.
+
+	A varint the frame ends inside has no length (`_len` answers zero, the
+	26.778 test), so whatever follows it is placed at the varint's own start.
+	The nesting probe descended there anyway: a lone CBOR `d9` is a tag
+	whose head wants two more bytes, its `content` landed back on the same
+	byte, read as another tag, and so on to the cap -- all four backends
+	called a one-byte message "nests deeper than the format allows" where
+	the walker said BOUNDS, which is what `validate` reaches once the probe
+	stops pretending the bytes are there (26.1135).
+
+	`placement` may be an arm's member, and then it is ahead of the
+	variant. A `[since]` member is asked about only where its version
+	carries it, as `validate` asks, and one placed by `at` is not in this
+	frame's sequence, so neither is named here; nor is anything ahead of a
+	member placed by `at`, which is reached from the message.
+	"""
+	if placement.located is not None:
+		return []
+	found: list[Placement] = []
+	for member in own_members(struct):
+		if member is placement or (member.kind == "variant" and any(
+				held is placement
+				for _, held in arm_members(struct, member))):
+			return found
+		if member.varint is not None and not is_varint_run(member) \
+				and not member.since and member.located is None:
+			found.append(member)
+	return []
+
+
 def arm_alignments(struct: ResolvedStruct,
 		variant: Placement) -> list[tuple[Arm, int]] | None:
 	"""Each arm's alignment, where a variant at a run-time offset only pads.

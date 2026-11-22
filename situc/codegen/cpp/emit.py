@@ -10890,6 +10890,14 @@ class Emitter:
 			target = placement.type_name or ""
 			name  = bare_name(local_name(struct, placement))
 			inner = f"::{self.namespace}::{self._struct_class(target)}"
+			# A varint cut short ahead of it leaves it unplaced (26.1135).
+			cut = [bare_name(local_name(struct, held)) + "_len() == 0u"
+			       for held in traverse.cut_short_ahead(struct, placement)
+			       if self._reads_varint(held)]
+			if cut:
+				lines.extend([f"\t\tif ({' || '.join(cut)}) {{",
+				              "\t\t\treturn deepest;",
+				              "\t\t}"])
 			if holds_of(placement) in cycle:
 				child = (f"::{self.namespace}::"
 				         f"{self._struct_class(holds_of(placement) or '')}")

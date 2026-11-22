@@ -9643,6 +9643,23 @@ Moved to `doc/decision/26.1115-a-run-at-a-new-length.md`.
 
 Moved to `doc/decision/26.1117-a-checksum-over-an-image.md`.
 
+### 26.1135 A varint cut short ahead of a descent is no nesting
+
+Same replay, `cbor`: a lone `d9` is a tag whose head wants two more bytes.
+`_len` answers zero for a varint the frame ends inside (26.778), so
+`content` was placed at the tag's own start, read as a tag again, and the
+nesting probe descended to its cap: all four backends refused one byte as
+"nests deeper than the format allows" (CONSTRAINT) where the walker said
+BOUNDS. A receiver telling an unfinished message from a malformed one
+would have dropped the first. The four-way replay could not see it --
+all four agreed. Each probe now returns before a descent that a cut-short
+single varint precedes (`traverse.cut_short_ahead`: own members ahead of
+it, or of its variant, not `[since]`, not placed by `at`). Of the corpus
+only cbor's generated code moves -- `tagged`'s head and `array`'s and
+`map`'s counts -- and a 70-deep tag chain is still too deep. Held in
+`test/unit/test_a_cut_varint_is_no_nesting.py`, which fails on the old
+code in all four.
+
 ### 26.1134 The walk gives a padded `minimal` varint no value
 
 The fuzz corpora replayed through the Python walker against C's differ

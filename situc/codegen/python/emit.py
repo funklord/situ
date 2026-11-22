@@ -7992,6 +7992,13 @@ class Emitter:
 		for placement, guard in self._recursive_members(struct, cycle):
 			name  = py_name(local_name(struct, placement)).replace(".", "_")
 			made, handed = self._child(struct, placement)
+			# A varint cut short ahead of it leaves it unplaced (26.1135).
+			cut = [f"self.{py_name(local_name(struct, held))}_len == 0"
+			       for held in traverse.cut_short_ahead(struct, placement)
+			       if self._reads_varint(held)]
+			if cut:
+				lines.extend([f"\t\tif {' or '.join(cut)}:",
+				              "\t\t\treturn deepest"])
 			if placement.located is not None:
 				# Placed by `at`: reached from the message, as `validate`
 				# reaches it, and a chain pointing outside it is no level --

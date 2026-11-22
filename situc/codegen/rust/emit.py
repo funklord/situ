@@ -11646,6 +11646,15 @@ class Emitter:
 			target = placement.type_name or ""
 			base  = c_name(local_name(struct, placement))
 			inner = _pascal(target)
+			# A varint cut short ahead of it leaves it unplaced (26.1135).
+			cut = ["self." + _ident(c_name(local_name(struct, held)) + "_len")
+			       + "() == 0"
+			       for held in traverse.cut_short_ahead(struct, placement)
+			       if self._reads_varint(held)]
+			if cut:
+				lines.extend([f"\t\tif {' || '.join(cut)} {{",
+				              "\t\t\treturn deepest;",
+				              "\t\t}"])
 			if placement.located is not None:
 				# The arm's own test refuses another arm with `Version`, so
 				# no guard is needed beside it -- and `if let ... &&` is not
