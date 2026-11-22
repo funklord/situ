@@ -4083,7 +4083,9 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
 
 	if (start_bits % 8u || width_bits % 8u) {
 		/* The last byte the value touches has to be in the frame. */
-		const uint32_t last = (start_bits + width_bits + 7u) / 8u;
+		/* In 64 bits: the guard above holds the sum to 32, and the
+		 * rounding could still carry it over (26.1161). */
+		const uint64_t last = ((uint64_t)start_bits + width_bits + 7u) / 8u;
 		if (last > len) {
 			return SITU_WALK_BOUNDS;
 		}
@@ -5890,7 +5892,12 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
-	if (at / 8u > len || (at + wide + 7u) / 8u > len) {
+	/* In 64 bits. wasm's `section` over `ff ff ff ff ff 01` hands its
+	 * default arm a size of 0x1FFFFFFF, a width of 0xFFFFFFF8 bits, and
+	 * in 32 the offset added to it wrapped to a few bytes that "fit": the
+	 * message was clean here and BOUNDS in the readers (26.1161, found by
+	 * `make fuzz-walker-c-differ`). */
+	if (at / 8u > len || ((uint64_t)at + wide + 7u) / 8u > len) {
 		record(why, index, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
@@ -5908,7 +5915,7 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 
 		if (situ_walk_placement_at(image, index, &variant) == SITU_WALK_OK
 		    && variant.size_code != SITU_WALK_NONE) {
-			len = (at + wide + 7u) / 8u;
+			len = (uint32_t)(((uint64_t)at + wide + 7u) / 8u);
 		}
 	}
 

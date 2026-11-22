@@ -9743,6 +9743,21 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1161 An arm's fit check in the C walker added its width in 32 bits
+
+`make fuzz-walker-c-differ` over the schemas after `edges`: wasm's
+`section` over `ff ff ff ff ff 01` -- an unknown id, so the default arm
+`other_body(size = size)`, and `size` a ULEB of 0x1FFFFFFF -- was clean in
+the C walker and BOUNDS in the readers and `walk.py`. The arm is
+0xFFFFFFF8 bits wide, under 2^32, and `arm_validates` added it to the
+arm's offset in 32 bits: the sum wrapped to a few bytes, which fit. The
+sizes either side were already refused, which is why nothing had met
+it. The check and the frame it sets are worked in 64 bits now, and so is
+the last-byte test of an unaligned read, whose guard held the sum to 32
+bits and left the rounding to carry it over. Held in `test_walker_c.py`
+(`test_an_arm_reaching_past_2_to_the_32_bits_is_past_the_frame`), failing
+on the old walker.
+
 ### 26.1160 `verify` decodes an `lzma` or `zlib` region and reads what it holds
 
 26.1158's step after. A coded region whose codec is `impl ... extern
@@ -9880,7 +9895,18 @@ struct. A copy of the harness with the walker's answer bent aborts at
 once, which is what says it compares something. Its first pass stopped
 at cpio on a leak in the driver itself -- a schema with nothing to write
 never freed its buffer, harmless in a process that exits -- now freed on
-both paths in `differ.py`; its second found 26.1154.
+both paths in `differ.py`; its second found 26.1154. Its later passes found
+26.1156, and one difference left OPEN: `edges`' `hands_on_arms` over
+`01 01 01 00 00 a6 01 00 00` -- arm 1's `negotiated` ends on an inner
+`default: error`, and the `after` that follows the variant is past the
+frame. The four backends answer BOUNDS: where a variant cannot be
+measured (an arm holds a run of variable records) they hold the members
+after it to the frame arm by arm (26.779), BEFORE a single nested arm's
+own check. Both walkers validate that nested arm in member order first
+and answer VERSION. Both refuse the message; the order is the
+backends' and the walkers would need to know when a variant is
+unmeasurable to follow it. Until then the target stops on `edges`, and
+the other 61 schemas are run with it left out.
 
 ### 26.1153 A rule over a signed 64-bit let orders signed in the dissector
 

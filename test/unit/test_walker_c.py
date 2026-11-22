@@ -1142,6 +1142,30 @@ def test_a_count_over_a_huge_unsigned_is_past_the_frame(
 		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
 
 
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_an_arm_reaching_past_2_to_the_32_bits_is_past_the_frame(
+		tmp_path: Path) -> None:
+	"""wasm's `section` over `ff ff ff ff ff 01`: the default arm's size is
+	0x1FFFFFFF, its width 0xFFFFFFF8 bits, and the arm's fit check added
+	the offset in 32 bits, wrapped, and passed a section reaching half a
+	gigabyte past a six-byte message (26.1161, found by `make
+	fuzz-walker-c-differ`). The sizes beside it were refused already."""
+	from situc.cli import analyse
+	from situc.parser import parse
+
+	source, resolved, _ = analyse(ROOT / "example" / "wasm" / "wasm.situ")
+	blob  = pack(parse(source), resolved)[0]
+	named = load(pack(parse(source), resolved, metadata=True)[0])
+	shape = next(index for index in range(len(named.structs))
+	             if named.struct_name(index) == "section")
+	drive = _build_driver(tmp_path, blob, VERDICT)
+	for message, want in (("ffffffffff01", "1"), ("ffffffff0f01", "1"),
+	                      ("ff7f" + "00" * 127, "0")):
+		data = bytes.fromhex(message)
+		assert python_verdict(blob, data, shape) == want, message
+		assert c_verdict(tmp_path, blob, data, shape, drive) == want, message
+
+
 _BITS_SCHEMA = """target buffer;
 endian big;
 bit_order BITORDER;
