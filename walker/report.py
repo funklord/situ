@@ -486,7 +486,7 @@ def _covered_span(view: View, first: int, last: int,
 		end = (offset_bits(view, tail) // BITS_PER_BYTE
 		       + size_bits(view, tail) // BITS_PER_BYTE)
 	if end < start or view.at + end > view.limit \
-			or _covered_overruns(view, first, last, end):
+			or _covered_overruns(view, first, last):
 		raise Refused("the covered span is not all in the frame")
 	return start, end
 
@@ -526,7 +526,7 @@ def _covered(image: Image, view: View, index: int, local: str) -> list[str]:
 	return [f"{local}.covered {first}+{end - first}"]
 
 
-def _covered_overruns(view: View, first: int, last: int, end: int) -> bool:
+def _covered_overruns(view: View, first: int, last: int) -> bool:
 	"""Whether a member between `first` and `last` declares more than the
 	frame holds.
 
@@ -539,22 +539,27 @@ def _covered_overruns(view: View, first: int, last: int, end: int) -> bool:
 	refused what both walkers summed. A member this walk cannot place is
 	not asked here; the span's own end check covers what follows it.
 
-	Nor is one that starts at or past the span's `end` (view-relative
-	bytes): `first..last` are placement indices, and a region's members are
-	numbered after the struct's own, so the range runs through members that
-	are not in the span at all -- packet's own `tag`, missing from a frame
-	that ends where the sealed body does, made a span wholly in the frame
-	`refused` while every backend answered it (26.1140).
+	Nor is one of the struct's OWN members after the span's last: `first..
+	last` are placement indices, and a region's members are numbered after
+	the struct's own, so where `last` is inside a region the range runs on
+	through own members the span does not reach -- packet's own `tag`,
+	missing from a frame that ends where the sealed body does, made a span
+	wholly in the frame `refused` while every backend answered it. The
+	span's last own member is `last`, or the region holding it (26.1140).
+	Not "a member starting at the span's end": TCP's options do, and are
+	the member this check exists for.
 	"""
+	image = view.image
+	own = set(image.members(image.structs[view.struct]))
+	tail = last if last in own else image.region_owner.get(last, last)
 	for index in range(first, last + 1):
+		if index in own and index > tail:
+			continue
 		try:
-			at = offset_bits(view, index)
-			reach = at + size_bits(view, index)
+			end = offset_bits(view, index) + size_bits(view, index)
 		except Refused:
 			continue
-		if at // BITS_PER_BYTE >= end:
-			continue
-		if view.at + (reach + BITS_PER_BYTE - 1) // BITS_PER_BYTE > view.limit:
+		if view.at + (end + BITS_PER_BYTE - 1) // BITS_PER_BYTE > view.limit:
 			return True
 	return False
 

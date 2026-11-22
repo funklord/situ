@@ -8334,6 +8334,26 @@ static const uint8_t *region_row(const situ_walk_image *image, uint32_t index)
 	return NULL;
 }
 
+/* The last OWN member a tag's span reaches: `last` where it is one of the
+ * struct's own members, else the region holding it -- `walk.py`'s
+ * `_covered_overruns` asks the same (26.1140). `last` where neither says. */
+static uint32_t own_tail(const situ_walk_image *image, uint32_t shape,
+                         uint32_t last)
+{
+	uint32_t       first = 0u, count = 0u;
+	const uint8_t *row;
+
+	if (situ_walk_members(image, shape, &first, &count) != SITU_WALK_OK
+	                || (last >= first && last - first < count)) {
+		return last;
+	}
+	row = region_row(image, last);
+	if (row == NULL || u32_at(row + 4) == SITU_WALK_NONE) {
+		return last;
+	}
+	return u32_at(row + 4);
+}
+
 situ_walk_err situ_walk_gate(const situ_walk_image *image, uint32_t index,
                              uint32_t *opened, uint32_t *refused)
 {
@@ -9119,19 +9139,26 @@ situ_walk_err situ_walk_sum_prefixed(const situ_walk_image *image,
 	 * the `remaining` payload after them is placed back inside it, so the
 	 * last member's end is not the question. A member this walk cannot
 	 * place is skipped; the span's end above covers what follows it. So is
-	 * one starting at or past the span's end: `first..last` are placement
-	 * indices, a region's members are numbered after the struct's own, and
-	 * the range ran through packet's own `tag`, missing from a frame that
-	 * ends where the sealed body does (26.1140). */
+	 * an OWN member after the span's last own one -- `last`, or the region
+	 * holding it: `first..last` are placement indices, a region's members
+	 * are numbered after the struct's own, and the range ran through
+	 * packet's own `tag`, missing from a frame that ends where the sealed
+	 * body does (26.1140). */
+	const uint32_t tail = own_tail(image, shape, last);
+	uint32_t own_first = 0u, own_count = 0u;
+	if (situ_walk_members(image, shape, &own_first, &own_count)
+	                != SITU_WALK_OK) {
+		own_count = 0u;
+	}
 	for (uint32_t i = first; !before && i <= last; i++) {
 		uint32_t at_bits = 0u, wide_bits = 0u;
+		if (i >= own_first && i - own_first < own_count && i > tail) {
+			continue;
+		}
 		if (situ_walk_offset_bits(image, message, len, shape, i, &at_bits)
 		                != SITU_WALK_OK
 		                || situ_walk_size_bits(image, message, len, shape, i,
 		                                       &wide_bits) != SITU_WALK_OK) {
-			continue;
-		}
-		if (at_bits / 8u >= hi) {
 			continue;
 		}
 		if (((uint64_t)at_bits + wide_bits + 7u) / 8u > len) {

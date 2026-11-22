@@ -14,7 +14,10 @@ differently; the C walker shared each fault but the last's cause.
   and a region's members are numbered after the struct's own, so the walk
   asking each member in the span to fit asked packet's own tag -- missing
   from a frame ending where the sealed body does -- and called a span
-  wholly in the frame refused.
+  wholly in the frame refused. The first fix skipped any member starting
+  at the span's end, which skipped TCP's options -- the member that check
+  exists for -- so the own members after the span's last own one are
+  what is skipped, and TCP's case is held beside packet's.
 """
 from __future__ import annotations
 
@@ -100,3 +103,17 @@ def test_a_span_in_the_frame_is_not_refused_for_the_tag_after_it() -> None:
 	at = lines.index("-- packet")
 	covered = [line for line in lines[at:] if ".covered" in line][0]
 	assert covered == f"tag.covered 4+{len(PACKET) - 4}", covered
+
+
+#: A TCP header whose data offset claims 32 bytes of options past a 20-byte
+#: frame: the covered span ends in the frame, its options do not (26.1058).
+TCP = bytes.fromhex("0200000000000000ffdddddddddddddddddd02cc")
+
+
+def test_a_member_running_past_the_frame_still_refuses_the_span() -> None:
+	schema = ROOT / "example" / "tcp" / "tcp.situ"
+	parsed = load_schema(schema)
+	image = load(packer.pack(parsed, resolve(parsed, solve(parsed)),
+	                         metadata=True)[0])
+	lines = report.listing(image, TCP).splitlines()
+	assert "checksum.covered refused" in lines, lines

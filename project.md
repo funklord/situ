@@ -9651,8 +9651,12 @@ room for the tag, covers 4 to 191 -- all in the frame -- and C answered
 declared length in the span fits (26.1058) walked placement indices
 `first..last`, and a region's members are numbered after the struct's own,
 so the range ran through packet's own `tag` and asked it to fit. Both
-walkers now skip a member starting at or past the span's end. Held in
-`test/unit/test_both_walkers_read_what_the_backends_check.py`.
+walkers now skip the struct's own members after the span's last own one
+-- `last`, or the region holding it. The first version skipped any member
+starting at or past the span's end, and the replay's second pass caught
+it at once: TCP's options start exactly there and run past the frame,
+and are the member 26.1058's check exists for. Held, TCP's case beside
+packet's, in `test/unit/test_both_walkers_read_what_the_backends_check.py`.
 
 ### 26.1139 A pad at a known offset is checked over all its bytes
 
