@@ -938,7 +938,7 @@ int main(void)
 			for (uint32_t i = 0u; i < length; i++)
 				printf("%02x", msg[i]);
 		}
-		putchar('\n');
+		printf(" w%u\n", (unsigned)t.why);
 		for (unsigned who = 1u; who <= 3u; who++) {
 			for (unsigned mid = 1u; mid <= 2u; mid++) {
 				uint8_t sender[8], key[12];
@@ -988,6 +988,7 @@ while at + 6 <= len(data):
 		out.append("A C")
 	except BoundsError:
 		out.append("A B")
+	out[-1] += f" w{t.why}"
 	for who in (1, 2, 3):
 		for mid in (1, 2):
 			key = r_converse.same_message_table.key(mid, bytes([who]) * 8)
@@ -1032,6 +1033,8 @@ fn main() {
 			Err(situ_rt::Error::Bounds) => out.push_str("A B\n"),
 			Err(_) => out.push_str("A ?\n"),
 		}
+		out.pop();
+		out.push_str(&format!(" w{}\n", t.why()));
 		for who in 1u8..=3 {
 			for mid in 1u64..=2 {
 				let key = r_converse::SameMessageTable::key(mid, &[who; 8]);
@@ -1092,7 +1095,7 @@ int main()
 			for (std::size_t i = 0; i < out.size(); i++)
 				std::printf("%02x", out[i]);
 		}
-		std::putchar('\n');
+		std::printf(" w%u\n", static_cast<unsigned>(t->why()));
 		for (unsigned who = 1u; who <= 3u; who++) {
 			for (unsigned mid = 1u; mid <= 2u; mid++) {
 				std::uint8_t sender[8], key[12];
@@ -1302,6 +1305,18 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 	# its key, and a key held by nothing, both met in the stream.
 	assert "F 1" in lines and "F 0" in lines
 	kinds = {line[:3] for line in lines if line.startswith("A ")}
+	# Why each refusal (fuzznet, 2026-11-22), the four agreeing below:
+	# every reason the plain stream can reach is reached, a resend with
+	# other bytes among them, and an answer taken or wanting more says
+	# none.
+	whys = {int(line.rsplit(" w", 1)[1]) for line in lines
+	        if line.startswith(("A C", "A B"))}
+	if schema is SMALL:
+		# Not INDEX (5): `index [max = chunks - 1]` refuses such a piece
+		# before the table; the parts test reaches it.
+		assert whys == {1, 3, 6, 7, 8, 9, 10}, sorted(whys)
+	assert all(line.endswith(" w0") for line in lines
+	           if line.startswith(("A O", "A T")))
 	assert kinds == {"A O", "A T", "A C", "A B"}, kinds
 	assert any(line.startswith("E ") and line != "E 0" for line in lines)
 	if schema is SMALL:
@@ -1403,9 +1418,40 @@ int main(void)
 	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"e", 1u,
 	                            12u, &out, &len) == SITU_OK);
 	CHECK(len == 5u && memcmp(out, "abcde", 5u) == 0);
-	/* What `_add` refuses, `_add_parts` refuses the same. */
+	/* What `_add` refuses, `_add_parts` refuses the same, and says why. */
 	CHECK(situ_pieces_add_parts(&t, key, 3u, 3u, (const uint8_t *)"x", 1u,
 	                            13u, &out, &len) == SITU_ERR_CONSTRAINT);
+	CHECK(t.why == SITU_PIECES_WHY_INDEX);
+	/* A resend is taken quietly; the same piece with other bytes is a
+	 * rewrite, refused as a conflict, the first bytes kept -- the
+	 * middle piece, and a parked last one. */
+	/* The last first: parked at the slot's end, the stride unknown. */
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"z", 1u,
+	                            14u, &out, &len) == SITU_ERR_TRUNCATED);
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"z", 1u,
+	                            14u, &out, &len) == SITU_ERR_TRUNCATED);
+	CHECK(t.why == SITU_PIECES_WHY_NONE);
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"y", 1u,
+	                            14u, &out, &len) == SITU_ERR_CONSTRAINT);
+	CHECK(t.why == SITU_PIECES_WHY_CONFLICT);
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"zz", 2u,
+	                            14u, &out, &len) == SITU_ERR_CONSTRAINT);
+	CHECK(t.why == SITU_PIECES_WHY_CONFLICT);
+	/* Then the stride, which moves it to its place: compared there. */
+	CHECK(situ_pieces_add_parts(&t, key, 0u, 3u, (const uint8_t *)"ab", 2u,
+	                            14u, &out, &len) == SITU_ERR_TRUNCATED);
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"y", 1u,
+	                            14u, &out, &len) == SITU_ERR_CONSTRAINT);
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"z", 1u,
+	                            14u, &out, &len) == SITU_ERR_TRUNCATED);
+	CHECK(situ_pieces_add_parts(&t, key, 0u, 3u, (const uint8_t *)"ab", 2u,
+	                            14u, &out, &len) == SITU_ERR_TRUNCATED);
+	CHECK(situ_pieces_add_parts(&t, key, 0u, 3u, (const uint8_t *)"aX", 2u,
+	                            14u, &out, &len) == SITU_ERR_CONSTRAINT);
+	CHECK(t.why == SITU_PIECES_WHY_CONFLICT);
+	CHECK(situ_pieces_add_parts(&t, key, 1u, 3u, (const uint8_t *)"cd", 2u,
+	                            15u, &out, &len) == SITU_OK);
+	CHECK(len == 5u && memcmp(out, "abcdz", 5u) == 0);
 	/* Bounds at init: the schema's are maxima, and zero is no bound. */
 	CHECK(situ_pieces_init_in(&t, 5u, 1024u, 3000u, store.slot, store.bytes,
 	                          store.marks) == SITU_ERR_BOUNDS);
