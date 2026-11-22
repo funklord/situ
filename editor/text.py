@@ -122,6 +122,37 @@ def apply_edits(document: Document, assignments: list[str],
 	return notes
 
 
+def element_of(where: str, said: str) -> tuple[str, int]:
+	"""`NAME:N` as the member's name and the element's number."""
+	name, sep, number = where.rpartition(":")
+	if not sep or not name.strip() or not number.strip().isdigit():
+		raise Refused(f"`{said}` does not name an element as NAME:N")
+	return name.strip(), int(number)
+
+
+def apply_splices(document: Document, inserts: list[str],
+		removals: list[str]) -> list[str]:
+	"""Every `--insert NAME:N=HEX`, then every `--remove NAME:N` (26.1147),
+	returning what each cost; in order, stopping at the first refusal, as
+	`apply_edits` does."""
+	notes: list[str] = []
+	for typed in inserts:
+		where, sep, text = typed.partition("=")
+		if not sep:
+			raise Refused(f"`--insert {typed}` is not `NAME:N=hex`")
+		name, which = element_of(where, f"--insert {typed}")
+		try:
+			value = bytes.fromhex(text.strip())
+		except ValueError:
+			raise Refused(f"`--insert {typed}`: `{text}` is not hex") \
+				from None
+		notes.extend(document.insert(name, which, value))
+	for typed in removals:
+		name, which = element_of(typed, f"--remove {typed}")
+		notes.extend(document.remove(name, which))
+	return notes
+
+
 def render(document: Document) -> list[str]:
 	"""The document as lines. Offsets and sizes in bytes, values as they are.
 

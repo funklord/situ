@@ -58,7 +58,8 @@ if _root is not None and str(_root) not in sys.path:
 try:
 	from editor.document import Document		# noqa: E402
 	from editor import view	# noqa: E402
-	from editor.text import apply_edits, open_from, render, render_rows	# noqa: E402
+	from editor.text import (apply_edits, apply_splices,	# noqa: E402
+	                         element_of, open_from, render, render_rows)
 	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
 	sys.stderr.write(
@@ -111,6 +112,9 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 	Enter on a NESTED struct opens it, over the same buffer -- `--struct`
 	and `--offset`, without leaving -- and `q` goes back out of it. An
 	edit in a nested struct is in the one buffer `w` writes.
+
+	`i` and `x` on a run of structs put an element in or take one out,
+	asking where and what -- `--insert` and `--remove` (26.1147).
 	"""
 	curses.curs_set(0)
 	cursor  = 0
@@ -140,7 +144,7 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 			               curses.A_REVERSE if chosen else curses.A_NORMAL)
 		screen.addnstr(height - 2, 0, status, width - 1, curses.A_BOLD)
 		screen.addnstr(height - 1, 0,
-		               "  up/down  Enter edit/open  w write"
+		               "  up/down  Enter edit/open  i/x insert/remove  w write"
 		               + (f" {out}" if out else " (needs --out)")
 		               + "  q back/quit", width - 1, curses.A_REVERSE)
 		screen.refresh()
@@ -203,6 +207,40 @@ def _draw(screen: "curses._CursesWindow", document: Document,
 				continue
 			unsaved = True
 			status  = "; ".join(notes) if notes else f"{name} set"
+		elif key in (ord("i"), ord("x")) and fields:
+			owner = lines[here][1]
+			assert owner is not None
+			field = document.fields()[owner]
+			if field.elements is None:
+				status = f"`{field.name}` is not a run of structs"
+				continue
+			count = len(field.elements)
+			adding = key == ord("i")
+			if not adding and count == 0:
+				status = f"`{field.name}` has no element to remove"
+				continue
+			typed = _prompt(screen, f"{'insert into' if adding else 'remove from'}"
+			                f" {field.name} at (0-{count if adding else count - 1}): ")
+			if typed is None or not typed.strip():
+				status = "unchanged"
+				continue
+			try:
+				name, which = element_of(f"{field.name}:{typed.strip()}",
+				                         typed.strip())
+				if adding:
+					raw = _prompt(screen, "its bytes (hex): ")
+					if raw is None or not raw.strip():
+						status = "unchanged"
+						continue
+					notes = apply_splices(document, [f"{name}:{which}={raw}"],
+					                      [])
+				else:
+					notes = apply_splices(document, [], [f"{name}:{which}"])
+			except Refused as why:
+				status = f"refused: {why}"
+				continue
+			unsaved = True
+			status  = "; ".join(notes) if notes else f"{field.name} changed"
 		elif key == ord("w"):
 			if out is None:
 				status = "not written; pass --out to keep it"
@@ -248,6 +286,12 @@ def main() -> int:
 	parser.add_argument("--set-bytes", action="append", default=[],
 	                    metavar="NAME=HEX", dest="byte_assignments",
 	                    help="store a byte run, at the length it has")
+	parser.add_argument("--insert", action="append", default=[],
+	                    metavar="NAME:N=HEX", dest="inserts",
+	                    help="put an element into a run of structs")
+	parser.add_argument("--remove", action="append", default=[],
+	                    metavar="NAME:N", dest="removals",
+	                    help="take an element out of a run of structs")
 	parser.add_argument("--out", type=Path, default=None,
 	                    help="where `w` writes the edited bytes; the "
 	                         "message opened is never overwritten unless "
@@ -277,6 +321,7 @@ def main() -> int:
 	try:
 		notes = apply_edits(document, args.assignments,
 		                    args.byte_assignments)
+		notes.extend(apply_splices(document, args.inserts, args.removals))
 	except Refused as why:
 		print(f"situ-edit-tui: {why}", file=sys.stderr)
 		return 1

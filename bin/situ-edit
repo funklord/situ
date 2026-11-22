@@ -57,7 +57,8 @@ if _root is not None and str(_root) not in sys.path:
 try:
 	from editor.document import Document, open_within	# noqa: E402
 	from editor import view	# noqa: E402
-	from editor.text import apply_edits, as_json, open_from, render	# noqa: E402
+	from editor.text import (apply_edits, apply_splices, as_json,	# noqa: E402
+	                         open_from, render)
 	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
 	sys.stderr.write(
@@ -67,14 +68,6 @@ except ImportError as _why:			# pragma: no cover - a layout fault
 		"       <prefix>/lib/walker. Run it from situ's source tree, or\n"
 		"       `make install` and run the installed copy.\n")
 	raise SystemExit(1)
-
-
-def _element(where: str, said: str) -> tuple[str, int]:
-	"""`NAME:N` as the member's name and the element's number."""
-	name, sep, number = where.rpartition(":")
-	if not sep or not name or not number.isdigit():
-		raise Refused(f"`{said}` does not name an element as NAME:N")
-	return name.strip(), int(number)
 
 
 def _window(text: str) -> tuple[str | None, int, int | None]:
@@ -282,18 +275,7 @@ def main() -> int:
 			if not sep:
 				raise Refused(f"`--put {typed}` is not `name=text`")
 			notes.extend(view.put(document, name.strip(), text))
-		for typed in args.inserts:
-			where, sep, text = typed.partition("=")
-			name, which = _element(where, f"--insert {typed}")
-			try:
-				value = bytes.fromhex(text)
-			except ValueError:
-				raise Refused(f"`--insert {typed}`: `{text}` is not "
-				              f"hex") from None
-			notes.extend(document.insert(name, which, value))
-		for typed in args.removals:
-			name, which = _element(typed, f"--remove {typed}")
-			notes.extend(document.remove(name, which))
+		notes.extend(apply_splices(document, args.inserts, args.removals))
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1

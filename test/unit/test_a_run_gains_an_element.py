@@ -138,3 +138,23 @@ def test_the_cli_inserts_and_removes(tmp_path: Path) -> None:
 		capture_output=True, text=True, timeout=120, cwd=ROOT)
 	assert run.returncode == 0, run.stderr
 	assert (tmp_path / "c.png").read_bytes() == _png()
+
+
+def test_the_tui_splices_as_the_cli_does(tmp_path: Path) -> None:
+	"""0034: nothing the TUI does is absent from the CLI, and the two give
+	the same bytes; `i` and `x` on its screen are these two flags asked
+	for interactively, through the same `apply_splices`."""
+	(tmp_path / "a.png").write_bytes(_png(_chunk(b"tEXt", b"A\x00b")))
+	edits = ("--insert", "chunks:2=" + _chunk(b"tEXt", b"C\x00d", crc=0).hex(),
+	         "--remove", "chunks:1")
+	for tool in ("situ-edit", "situ-edit-tui"):
+		run = subprocess.run(
+			[sys.executable, str(ROOT / "bin" / tool),
+			 *(("--no-ui",) if tool.endswith("tui") else ()),
+			 "--struct", "png_file", *edits,
+			 "--out", str(tmp_path / f"{tool}.png"), str(PNG),
+			 str(tmp_path / "a.png")],
+			capture_output=True, text=True, timeout=120, cwd=ROOT)
+		assert run.returncode == 0, run.stderr
+		assert (tmp_path / f"{tool}.png").read_bytes() \
+			== _png(_chunk(b"tEXt", b"C\x00d")), tool

@@ -9701,6 +9701,10 @@ chunk in and out, a counted run, a run inside a window opened from its
 parent (its frame moves by the bytes), and the refusals -- and in the Qt
 suite, where the second window's write lands in its own chunk and a
 window on a removed chunk refuses.
+The curses TUI takes `i` and `x` on a run, asking where and what, and
+`--insert`/`--remove` beside `--no-ui`, through the CLI's own
+`apply_splices`; a test holds its bytes to the CLI's, and its keys were
+driven once through a pseudo-terminal to the same file.
 
 ### 26.1146 A window follows a resize made in another
 

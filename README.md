@@ -357,7 +357,8 @@ All three edit. `--set name=value` writes a number and `--set-bytes
 name=hex` writes a run, where the schema permits it, and `--insert
 chunks:1=hex` and `--remove chunks:1` put an element into a run of structs
 or take one out -- the count that sizes it, and the new element's CRC,
-following, as Edit > Insert Element does in the window; in the terminal, Enter
+following, as Edit > Insert Element does in the window and `i` and `x`
+in the terminal; in the terminal, Enter
 on a field does the same (or opens a nested struct) and `w` writes `--out`, and in the window the value
 column is editable on exactly the rows the schema lets anybody write, with
 what each write would cost beside it, and a nested struct opens in a
