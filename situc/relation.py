@@ -790,6 +790,26 @@ def key_width(resolved: ResolvedSchema, bind: Read) -> int:
 	return 0
 
 
+def key_part(layout: "KeyLayout", path: str) -> tuple[int, int] | None:
+	"""Where the part of the key read from `path` -- the relation's FIRST
+	message, as `first.field` -- sits in the key, or None where no part is.
+
+	A packed key shifts each part in, so `(shift, width)` in bits, its
+	shift the widths of the parts after it; the exact-bytes key lays parts
+	in order, so `(offset, length)` in bytes. A reassembly's `per` cap
+	compares one part of two keys (fuzznet, inbox 20261122T1804Z).
+	"""
+	paths  = [chain[-1].path for chain, _ in layout.request]
+	widths = [width for _, width in layout.request]
+	if path not in paths:
+		return None
+	at = paths.index(path)
+	if layout.packed:
+		return sum(widths[at + 1:]), widths[at]
+	sizes = [(width + 7) // 8 for width in widths]
+	return sum(sizes[:at]), sizes[at]
+
+
 def key_layout(relation: ast.Relation,
 		resolved: ResolvedSchema) -> KeyLayout:
 	"""The reads that build each side's key, in declaration order.

@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.codegen.c.reassemble import (_attr, _number, _path, _relation,
+                                        per_cap,
                                         refusals)
 from situc.codegen.python.converse import _key, _key_bytes
 from situc.codegen.python.emit import py_name
-from situc.relation import key_layout
+from situc.relation import KeyLayout, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate"]
@@ -86,6 +87,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\traise BoundsError(\"more pieces than a slot holds bytes\", self.CAPACITY)",
 		"\t\tm = self._live.get(raw)",
 		"\t\tif m is None:",
+		*_per_lines(schema, held, resolved, layout),
 		"\t\t\tif len(self._live) >= self.MESSAGES:",
 		"\t\t\t\traise BoundsError(\"every slot is taken\", self.MESSAGES)",
 		"\t\t\tm = _message(count, now + self.TIMEOUT)",
@@ -157,6 +159,25 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\tfor key in gone:",
 		"\t\t\tdel self._live[key]",
 		"\t\treturn len(gone)",
+	]
+
+
+def _per_lines(schema: ast.Schema, held: ast.Reassemble,
+		resolved: ResolvedSchema, layout: KeyLayout) -> list[str]:
+	"""C's `per` cap: a new message refused where one value of the key
+	part already holds `per_max` (fuzznet, inbox 20261122T1804Z)."""
+	cap = per_cap(schema, held, resolved)
+	if cap is None:
+		return []
+	start, width, most = cap
+	part = (f"(({{key}} >> {start}) & {(1 << width) - 1:#x})" if layout.packed
+	        else f"{{key}}[{start}:{start + width}]")
+	return [
+		f"\t\t\tif sum(1 for held in self._live"
+		f" if {part.format(key='held')} == {part.format(key='raw')})"
+		f" >= {most}:",
+		"\t\t\t\traise BoundsError(\"one sender holds as many messages as"
+		f" `per_max` allows\", {most})",
 	]
 
 

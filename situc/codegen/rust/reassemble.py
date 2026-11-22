@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.codegen.c.reassemble import (_attr, _number, _path, _relation,
+                                        per_cap,
                                         refusals)
 from situc.codegen.rust.converse import _key, _key_bytes
 from situc.codegen.rust.emit import _ident, _pascal
-from situc.relation import key_layout
+from situc.relation import KeyLayout, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate"]
@@ -27,6 +28,28 @@ def _reach(root: str, path: str) -> str:
 	for step in parts[:-1]:
 		reached += f".{_ident(step)}()?"
 	return f"{reached}.{_ident(parts[-1])}()"
+
+
+def _per_lines(schema: ast.Schema, held: ast.Reassemble,
+		resolved: ResolvedSchema, layout: KeyLayout) -> list[str]:
+	"""C's `per` cap: a new message refused where one value of the key
+	part already holds `per_max` (fuzznet, inbox 20261122T1804Z)."""
+	cap = per_cap(schema, held, resolved)
+	if cap is None:
+		return []
+	start, width, most = cap
+	if layout.packed:
+		mask = f"{(1 << width) - 1:#x}u64"
+		same = (f"((m.key >> {start}) & {mask}) == ((key >> {start}) & {mask})")
+	else:
+		same = (f"m.key[{start}..{start + width}] == "
+		        f"key[{start}..{start + width}]")
+	return [
+		"\t\t\t\tif self.slot.iter().filter(|m| m.live && "
+		f"{same}).count() >= {most} {{",
+		"\t\t\t\t\treturn Err(Error::Bounds);",
+		"\t\t\t\t}",
+	]
 
 
 def _table(schema: ast.Schema, held: ast.Reassemble,
@@ -138,6 +161,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\tlet s = match self.slot.iter().position(|m| m.live && m.key == key) {",
 		"\t\t\tSome(s) => s,",
 		"\t\t\tNone => {",
+		*_per_lines(schema, held, resolved, layout),
 		"\t\t\t\tlet s = self.slot.iter().position(|m| !m.live)",
 		"\t\t\t\t\t.ok_or(Error::Bounds)?;",
 		f"\t\t\t\tself.slot[s] = {name}Slot {{",

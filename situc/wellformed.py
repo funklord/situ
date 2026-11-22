@@ -1913,8 +1913,32 @@ def check_reassemblies(schema: ast.Schema) -> None:
 				not in REPLAY_UNITS:
 			raise error(f"`unit` is one of {', '.join(sorted(REPLAY_UNITS))}",
 			            said["unit"].span, label="here")
+		# `per` and `per_max` (fuzznet, inbox 20261122T1804Z): how many
+		# messages one value of a key field may hold at once -- one sender
+		# opening messages it never finishes cannot take every slot.
+		if ("per" in said) != ("per_max" in said):
+			there = said.get("per") or said["per_max"]
+			raise error("`per` and `per_max` are stated together", there.span,
+			            label="here",
+			            notes=["`per` names the key field a cap is counted by,"
+			                   " and `per_max` how many messages one value of"
+			                   " it may hold at once"])
+		if "per" in said:
+			value = said["per"].value
+			paths = paths_in(value) if value is not None else []
+			if len(paths) != 1 or "." not in paths[0] \
+					or paths[0].split(".")[0] != held.param.name:
+				raise error(f"`per` names a field of `{held.param.name}`, as "
+				            f"`{held.param.name}.field`", said["per"].span,
+				            label="here")
+			most = getattr(said["per_max"].value, "value", None)
+			limit = getattr(said["messages"].value, "value", 0)
+			if not isinstance(most, int) or not 1 <= most <= limit:
+				raise error(f"`per_max` is a number from 1 to `messages`, "
+				            f"{limit}", said["per_max"].span, label="here")
 		unknown = sorted(set(said) - {"index", "count", "piece", "messages",
-		                              "bytes", "timeout", "unit"})
+		                              "bytes", "timeout", "unit", "per",
+		                              "per_max"})
 		if unknown:
 			raise error(f"unknown attribute `{unknown[0]}` on a reassembly",
 			            said[unknown[0]].span, label="here")

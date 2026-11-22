@@ -284,6 +284,29 @@ def test_a_place_is_a_field_of_the_datagram() -> None:
 		SCHEMA.replace("index = f.h.index", "index = 3"))
 
 
+def test_a_per_cap_is_stated_whole_and_of_the_key(tmp_path: Path) -> None:
+	"""`per` and `per_max` together, `per` a field of the datagram and
+	`per_max` at most `messages` (fuzznet, inbox 20261122T1804Z); and
+	`per` a part of the relation's key, since the table holds keys and a
+	cap by anything else would need a second value kept per slot."""
+	capped = SCHEMA.replace("messages = 4", "per = f.h.sender, per_max = 1, "
+	                        "messages = 4")
+	assert "stated together" in _refused(
+		capped.replace(", per_max = 1", ""))
+	assert "names a field of `f`" in _refused(
+		capped.replace("per = f.h.sender", "per = 3"))
+	assert "from 1 to `messages`" in _refused(
+		capped.replace("per_max = 1", "per_max = 9"))
+	(tmp_path / "r.situ").write_text(
+		capped.replace("per = f.h.sender", "per = f.h.index"),
+		encoding="ascii")
+	built = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "c", "--layer", "converse", "--out", str(tmp_path)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert "no part of `same_message`'s key" in built.stderr, built.stderr
+
+
 def _run(tmp_path: Path, schema: str, program: str, name: str,
 		sanitize: bool = False) -> str:
 	(tmp_path / f"{name}.situ").write_text(schema, encoding="ascii")
@@ -1094,6 +1117,11 @@ int main()
 """
 
 
+#: The C answers of the plain and the capped runs, in that order, so the
+#: second can show the cap changed something.
+_CAPPED_AND_NOT: list[str] = []
+
+
 def _adversarial_stream(seed: int, steps: int) -> bytes:
 	"""Pieces meant to collide: three senders, two message numbers, counts
 	that disagree with their message's, lengths off the stride and empty
@@ -1129,13 +1157,22 @@ def _adversarial_stream(seed: int, steps: int) -> bytes:
 
 @pytest.mark.skipif(COMPILER is None or CXX is None or RUSTC is None,
                     reason="needs C, C++ and Rust")
-def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema", [
+	SMALL,
+	# `per` (fuzznet, inbox 20261122T1804Z): one sender holds one message
+	# at a time, its DoS bound.
+	SMALL.replace("messages = 2", "per = f.h.sender, per_max = 1, "
+	              "messages = 2"),
+], ids=["plain", "per"])
+def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
+		schema: str) -> None:
 	"""The four tables were written from one set of rules and held to
 	valid, shuffled messages; a piece saying another count got past all
 	four alike. So: one stream of colliding, malformed and late pieces,
 	every answer of every backend compared -- what `add` said and gave,
-	what `missing` lists for every key, what `expire` dropped."""
-	(tmp_path / "r.situ").write_text(SMALL, encoding="ascii")
+	what `missing` lists for every key, what `expire` dropped, and what
+	`forget` found -- with a `per` cap and without."""
+	(tmp_path / "r.situ").write_text(schema, encoding="ascii")
 	runtime = ROOT / "runtime"
 	for target in ("c", "python", "rust", "cpp"):
 		done = subprocess.run(
@@ -1191,6 +1228,15 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path) -> None
 	kinds = {line[:3] for line in lines if line.startswith("A ")}
 	assert kinds == {"A O", "A T", "A C", "A B"}, kinds
 	assert any(line.startswith("E ") and line != "E 0" for line in lines)
+	if "per_max" in schema:
+		# The cap bites: a second message from one sender is refused where
+		# a free slot would have taken it. Measured against the uncapped
+		# table's answers over the same stream, which it must change.
+		_CAPPED_AND_NOT.append(said["c"])
+	else:
+		_CAPPED_AND_NOT.insert(0, said["c"])
+	if len(_CAPPED_AND_NOT) == 2:
+		assert _CAPPED_AND_NOT[0] != _CAPPED_AND_NOT[1]
 	for name in ("cpp", "rust", "python"):
 		other = said[name].splitlines()
 		first = next((at for at, (a, b) in enumerate(zip(lines, other))

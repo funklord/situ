@@ -33,7 +33,8 @@ from situc import __version__, ast
 from situc.codegen.c.converse import _key, _key_bytes
 from situc.codegen.c.names import c_name, header_guard, ident, macro
 from situc.codegen.c.relate import _binding, _local
-from situc.relation import Refused, key_layout, path_bindings, paths_in
+from situc.relation import (KeyLayout, Refused, key_layout, key_part,
+                             path_bindings, paths_in)
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate", "refusals"]
@@ -130,6 +131,30 @@ def _bytes_run(placement: object, path: str) -> None:
 		              f"piece carries")
 
 
+def per_cap(schema: ast.Schema, held: ast.Reassemble,
+		resolved: ResolvedSchema) -> tuple[int, int, int] | None:
+	"""`per = f.field, per_max = N`: where the part of the key `field` is
+	sits -- `relation.key_part`'s answer -- and N; None without a `per`.
+
+	The field must BE a part of the key: the table holds keys, so a cap
+	counted by anything else would have to keep a second value per slot,
+	and a field outside the key does not say which messages are one
+	sender's. Refused by name where it is not (fuzznet, inbox
+	20261122T1804Z)."""
+	if _attr(held, "per") is None:
+		return None
+	relation = _relation(schema, held)
+	path = _path(held, "per")
+	first = relation.params[0].name
+	part = key_part(key_layout(relation, resolved),
+	                first + path[len(held.param.name):])
+	if part is None:
+		raise Refused(f"`per` names `{path}`, which is no part of "
+		              f"`{held.relation}`'s key; a cap counts messages by a "
+		              f"part of the key the table holds")
+	return part[0], part[1], _number(held, "per_max")
+
+
 def refusals(schema: ast.Schema,
 		resolved: ResolvedSchema) -> list[tuple[str, str]]:
 	"""Every reassembly this backend cannot emit, and why."""
@@ -140,9 +165,41 @@ def refusals(schema: ast.Schema,
 			for key in ("index", "count"):
 				path_bindings(_path(held, key), held.param, resolved)
 			_piece(held, resolved, "situ")
+			per_cap(schema, held, resolved)
 		except Refused as why:
 			found.append((held.name, str(why)))
 	return found
+
+
+def _per_lines(schema: ast.Schema, held: ast.Reassemble,
+		resolved: ResolvedSchema, layout: KeyLayout, upper: str) -> list[str]:
+	"""A new message refused where one value of the `per` field already
+	holds `per_max` messages: one sender cannot take every slot."""
+	cap = per_cap(schema, held, resolved)
+	if cap is None:
+		return []
+	start, width, most = cap
+	if layout.packed:
+		mask = (1 << width) - 1
+		same = (f"((t->slot[i].key >> {start}u) & UINT64_C({mask:#x})) == "
+		        f"((key >> {start}u) & UINT64_C({mask:#x}))")
+	else:
+		same = (f"memcmp(&t->slot[i].key[{start}u], &key[{start}u], "
+		        f"{width}u) == 0")
+	return [
+		f"\t\t/* `per {_path(held, 'per')}`: at most {most} messages a"
+		" value (fuzznet,",
+		"\t\t * inbox 20261122T1804Z). */",
+		"\t\tuint32_t same_part = 0u;",
+		f"\t\tfor (uint32_t i = 0u; i < {upper}_MESSAGES; i++) {{",
+		f"\t\t\tif (t->slot[i].live != 0u && {same}) {{",
+		"\t\t\t\tsame_part++;",
+		"\t\t\t}",
+		"\t\t}",
+		f"\t\tif (same_part >= {most}u) {{",
+		"\t\t\treturn SITU_ERR_BOUNDS;",
+		"\t\t}",
+	]
 
 
 def _table(schema: ast.Schema, held: ast.Reassemble,
@@ -275,6 +332,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t}",
 		"\t}",
 		f"\tif (s == {upper}_MESSAGES) {{",
+		*_per_lines(schema, held, resolved, layout, upper),
 		f"\t\tfor (uint32_t i = 0u; i < {upper}_MESSAGES; i++) {{",
 		"\t\t\tif (t->slot[i].live == 0u) {",
 		"\t\t\t\ts = i;",

@@ -194,6 +194,9 @@ REPLAY_ATTRIBUTES = frozenset({
 #: the bounds on what is in flight. Each takes a value.
 REASSEMBLE_ATTRIBUTES = frozenset({
 	"index", "count", "piece", "messages", "bytes", "timeout",
+	# The cap one value of a key field holds (fuzznet, inbox
+	# 20261122T1804Z): `per = f.head.sender, per_max = 1`.
+	"per", "per_max",
 })
 
 #: An `identify`'s attributes (26.1124): the media type it answers with.

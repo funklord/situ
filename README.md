@@ -487,7 +487,10 @@ the relation's equalities say which pieces are one message, every piece but
 the last is one stride long, the stride is never taken from the last piece
 (whoever sends it would choose the layout), the bounds on what is held are
 stated rather than defaulted, and what is still missing comes back as ranges
-for a re-request. C writes the table today.
+for a re-request. `per = f.head.sender, per_max = 1` caps how many messages
+one value of a key field holds at once, so one sender opening messages it
+never finishes cannot take every slot, and a message the caller has given up
+on is forgotten by its key. All four backends write the table.
 
 ## The language
 

@@ -11,10 +11,11 @@ from __future__ import annotations
 from situc import __version__, ast
 from situc.codegen.c.names import c_name
 from situc.codegen.c.reassemble import (_attr, _number, _path, _relation,
+                                        per_cap,
                                         refusals)
 from situc.codegen.cpp.converse import _key, _key_bytes
 from situc.codegen.cpp.names import class_name
-from situc.relation import key_layout
+from situc.relation import KeyLayout, key_layout
 from situc.resolve import ResolvedSchema
 
 __all__ = ["generate"]
@@ -41,6 +42,37 @@ def _reach(resolved: ResolvedSchema, type_name: str, root: str, path: str,
 		]
 		source, struct = held, inner
 	return lines, f"{source}.{c_name(parts[-1])}()"
+
+
+def _per_lines(schema: ast.Schema, held: ast.Reassemble,
+		resolved: ResolvedSchema, layout: KeyLayout) -> list[str]:
+	"""C's `per` cap: a new message refused where one value of the key
+	part already holds `per_max` (fuzznet, inbox 20261122T1804Z)."""
+	cap = per_cap(schema, held, resolved)
+	if cap is None:
+		return []
+	start, width, most = cap
+	if layout.packed:
+		mask = f"UINT64_C({(1 << width) - 1:#x})"
+		same = (f"((slot_[i].key >> {start}u) & {mask}) == "
+		        f"((key >> {start}u) & {mask})")
+	else:
+		# A loop rather than `std::memcmp`: the header includes nothing
+		# but <cstdint>, as the key match above it already loops.
+		same = ("[&]() { for (std::uint32_t b = " f"{start}u; b < "
+		        f"{start + width}u; b++) {{ if (slot_[i].key[b] != key[b]) "
+		        "return false; } return true; }()")
+	return [
+		"\t\t\tstd::uint32_t same_part = 0u;",
+		"\t\t\tfor (std::uint32_t i = 0u; i < messages; i++) {",
+		f"\t\t\t\tif (slot_[i].live && {same}) {{",
+		"\t\t\t\t\tsame_part++;",
+		"\t\t\t\t}",
+		"\t\t\t}",
+		f"\t\t\tif (same_part >= {most}u) {{",
+		"\t\t\t\treturn ::situ::rt::err::bounds;",
+		"\t\t\t}",
+	]
 
 
 def _table(schema: ast.Schema, held: ast.Reassemble,
@@ -152,6 +184,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\t}",
 		"\t\t}",
 		"\t\tif (s == messages) {",
+		*_per_lines(schema, held, resolved, layout),
 		"\t\t\tfor (std::uint32_t i = 0u; i < messages; i++) {",
 		"\t\t\t\tif (!slot_[i].live) {",
 		"\t\t\t\t\ts = i;",
