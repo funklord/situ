@@ -180,7 +180,8 @@ OBJS_test_spans		:= $(GEN_DIR)/edges.o codec_impl.c
 .SECONDEXPANSION:
 
 .PHONY: all test clean generate fuzz fuzz-generated fuzz-cpp \
-	fuzz-walker fuzz-python fuzz-rust run-fuzz test-codec-san
+	fuzz-walker fuzz-walker-differ fuzz-python fuzz-rust run-fuzz \
+	test-codec-san
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 	$(CODEC_BINS)
@@ -632,6 +633,32 @@ fuzz-python: $(PY_FUZZ_UNITS)
 			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
 	done
 	@echo "no crash in $(words $(FUZZ_SCHEMAS)) Python harnesses"
+
+# And the Python WALKER against the generated Python reader, under atheris
+# with the walk instrumented (26.1142): every line both print about a member
+# compared, so a path through the walk that no generated reader takes is
+# driven too. A new corpus is seeded from the C one, each input's selector
+# byte dropped. Not in `fuzz`, as atheris is not packaged for Debian.
+WALK_DIFFER	:= $(foreach n,$(FUZZ_SCHEMAS),$(n)=$(SCHEMA_$(n)))
+
+fuzz-walker-differ:
+	@for pair in $(WALK_DIFFER); do \
+		n=$${pair%%=*}; schema=$${pair#*=}; \
+		corpus='$(FUZZ_DIR)'/corpus/wd_$$n; seed='$(FUZZ_DIR)'/corpus/$$n; \
+		if [ ! -d "$$corpus" ] && [ -d "$$seed" ]; then \
+			mkdir -p "$$corpus"; \
+			for f in "$$seed"/*; do \
+				[ -f "$$f" ] && tail -c +2 "$$f" > "$$corpus/$${f##*/}"; \
+			done; \
+		fi; \
+		mkdir -p "$$corpus"; \
+		echo "--- $$n, the walker against the Python reader ($(FUZZ_SECONDS)s)"; \
+		$(PYTHON) walker_differ_fuzz.py '$(REPO_ROOT)'/"$$schema" \
+			'$(FUZZ_DIR)'/wd_$$n -max_total_time=$(FUZZ_SECONDS) \
+			-timeout=20 -rss_limit_mb=3072 -print_final_stats=1 \
+			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
+	done
+	@echo "no difference in $(words $(FUZZ_SCHEMAS)) walker differentials"
 
 # And through the Rust accessors, under cargo-fuzz: `gen-fuzz --target rust`
 # puts libFuzzer's entry point behind `cfg(fuzzing)`, so each harness is a

@@ -143,6 +143,24 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 12 (2026-11-22), the walkers held to the backends by fuzzing:**
+
+- The fuzz corpora replayed through the Python walker against C's differ
+  (the four-way replay never asked the walkers): bitcoin's padded
+  `minimal` varint (26.1134), CBOR's lone `d9` -- all four backends called
+  one byte "too deep" through a cut-short varint (26.1135) -- a static pad
+  checked one byte of three, and a pad of none read the next member, in
+  all four (26.1139), and in the walkers `[trim]` on a text number, a BCD
+  nibble above nine, a tag's span asking a member outside it, and validate
+  state shared between threads with an `or OK` reading "cannot say" as a
+  pass (26.1136-26.1138, 26.1140). A second pass: every schema agrees.
+- A differential fuzzed over the walker itself, kept as `make
+  fuzz-walker-differ`: three more walker bounds and one accepted count
+  (26.1142).
+- The editor: a run grows inside a window opened from its parent, a run's
+  elements open one by one, and the CLI and the Qt window carry the chain
+  (`--within`, 26.1141) -- a PNG `tEXt` chunk edited in a whole file.
+
 **Run 9 (2026-11-21), from fuzznet's inbox:**
 
 - 20261120T2130Z, its review of 26.1122 (its sec 1325): behind the gate by
@@ -488,7 +506,9 @@ both walkers and the dissector. What a user cannot yet do is listed under
 - `situc map` does not describe a registry; its contract is in `wire`.
 - Coverage-guided fuzzing of the Rust and Python harnesses: built
   (26.1132), `make fuzz-python` and `make fuzz-rust`; atheris and
-  cargo-fuzz are user-level installs here (holder, 2026-11-21).
+  cargo-fuzz are user-level installs here (holder, 2026-11-21). And of
+  the Python walker against the Python reader, `make fuzz-walker-differ`
+  (26.1142).
 - Schema-driven storage for fuzznet (derived rows, 0070's storage notes)
   is fuzznet's to ask for; told via its inbox.
 - From openmlx4 (inbox 20261119T1237Z and T1253Z, against 75d34362).
@@ -9674,6 +9694,9 @@ before were guided by the generated code and could not reach these.
 
 Held in `test/unit/test_the_walk_bounds_what_a_count_declares.py` and the
 `static-pad` case of `test_both_walkers_read_what_the_backends_check.py`.
+The harness is kept as `make fuzz-walker-differ`
+(`test/generated/walker_differ_fuzz.py`), beside `fuzz-python` and, like
+it, outside `fuzz`.
 
 ### 26.1141 A run grows inside a window opened from its parent
 
