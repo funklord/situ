@@ -798,6 +798,12 @@ or to neither side, and this is that question one construct along. Without
 it `{"a":12.5}` hands the number arm `2.5`, because the `1` was spent
 choosing it (decision 0057).
 
+The peeked bytes are still the struct's own, so a struct whose arm may be
+empty cannot peek past its end: on a message where that arm is chosen the
+struct is zero bytes long, and the bytes the peek would read belong to
+whatever follows. Put the `peek` and the `variant` in the enclosing
+struct instead, where those bytes are in the frame.
+
 A `tlv` region describes a run of tag-length-value items by declaring the
 item grammar, which is what lets the compiler reason about a self-describing
 format without a parser being written for it:

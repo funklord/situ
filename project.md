@@ -9727,6 +9727,25 @@ read `switch (remaining)`'s selector as a placement, raising on every
 NTP message. They ask what the walk asks now; what remains is counts in
 messages both walkers refuse.
 
+### 26.1159 A peek in a struct whose arm may be empty, said in the README
+
+From openmlx4 (inbox 20261122T1430Z), recording its adoption: FS2's image
+CRC is `checksum u8 image_crc[2] covers(message) is mlx_crc16 [self_as =
+0xFFFF]` (its bb9e202), all nine NVIDIA images conform and a flipped byte
+only that CRC covers is a ChecksumError; BOOT3 is described with `peek`
+(854bd90). Its first shape, `struct fs2_boot3 { peek u32 first; variant
+boot switch (first) { case 1: chain_end ddr; ... default: fs2_boot2 code;
+} }`, was refused on an image without a BOOT3 -- "fs2_boot3 needs at least
+4 bytes; 0 given" -- and moving the peek and the variant into the
+enclosing struct worked. Reproduced: a nested struct's minimum counts its
+peek, and where the arm chosen is empty the bytes the peek reads are the
+next member's, which the struct does not own. That is 0057's rule (the
+peeked bytes are the struct's own), and the refusal stands; the README
+now says so beside `peek`, with the fix. Two smaller notes, kept open as
+asks rather than built: a `switch` on a peeked ENUM member is refused
+(its twelve section types are spelled as numbered cases), and a `case`
+takes one value.
+
 ### 26.1158 `verify` names a coded region whose contents it did not read
 
 From openmlx4 (inbox 20261122T1445Z): MFA's MAP section, xz-compressed,
