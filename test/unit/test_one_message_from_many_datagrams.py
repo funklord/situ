@@ -111,13 +111,14 @@ static situ_view_t frame(uint8_t who, uint32_t id, uint16_t index, uint16_t chun
 }
 
 static situ_pieces_t t;
+static situ_pieces_store_t store;
 
 int main(void)
 {
 	int fail = 0;
 	const uint8_t *out = NULL;
 	uint32_t len = 0;
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 
 	/* In order: two of the stride, then a shorter last. */
 	CHECK(situ_pieces_add(&t, frame(1, 7, 0, 3, "abcd", 4), 0u, &out, &len) == SITU_ERR_TRUNCATED);
@@ -143,7 +144,7 @@ int main(void)
 	CHECK(situ_pieces_add(&t, frame(4, 1, 2, 3, "abcde", 5), 0u, &out, &len) == SITU_ERR_CONSTRAINT);
 
 	/* Missing, as ranges: of ten, 0 1 5 held. */
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	CHECK(situ_pieces_add(&t, frame(5, 2, 0, 10, "aa", 2), 0u, &out, &len) == SITU_ERR_TRUNCATED);
 	CHECK(situ_pieces_add(&t, frame(5, 2, 1, 10, "bb", 2), 0u, &out, &len) == SITU_ERR_TRUNCATED);
 	CHECK(situ_pieces_add(&t, frame(5, 2, 5, 10, "ff", 2), 0u, &out, &len) == SITU_ERR_TRUNCATED);
@@ -168,11 +169,11 @@ int main(void)
 	static char big[600];
 	memset(big, 'x', sizeof big);
 	CHECK(situ_pieces_add(&t, frame(6, 3, 0, 2, big, 40), 0u, &out, &len) == SITU_ERR_TRUNCATED);
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	CHECK(situ_pieces_add(&t, frame(6, 3, 0, 30, "abcdefghijklmnopqrstuvwxyzabcdefghij", 36), 0u, &out, &len) == SITU_ERR_BOUNDS);
 
 	/* Every slot taken: the fifth message is refused, not evicted. */
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	for (uint8_t who = 0; who < 4; who++) {
 		CHECK(situ_pieces_add(&t, frame(who, 1, 0, 2, "ab", 2), 0u, &out, &len) == SITU_ERR_TRUNCATED);
 	}
@@ -204,6 +205,7 @@ static situ_view_t frame(uint32_t id, uint16_t index, uint16_t chunks, const uin
 	return v;
 }
 static situ_pieces_t t;
+static situ_pieces_store_t store;
 int main(void)
 {
 	srand(1);
@@ -217,7 +219,7 @@ int main(void)
 		for (uint16_t i = 0; i < count; i++) order[n++] = i;
 		for (uint32_t d = 0; d < 5u; d++) order[n++] = (uint16_t)(rand() % count);
 		for (uint32_t i = n - 1; i > 0; i--) { uint32_t j = (uint32_t)rand() % (i + 1); uint16_t x = order[i]; order[i] = order[j]; order[j] = x; }
-		situ_pieces_init(&t);
+		situ_pieces_init(&t, &store);
 		const uint8_t *out = NULL; uint32_t got = 0; int done = 0;
 		for (uint32_t i = 0; i < n && !done; i++) {
 			uint16_t ix = order[i];
@@ -238,6 +240,7 @@ SEALED_PROGRAM = r"""#include <stdio.h>
 #include "s_reassemble.h"
 static uint8_t buf[64];
 static situ_pieces_t t;
+static situ_pieces_store_t store;
 static situ_err_t add(uint16_t ix, uint16_t n, const char *p, uint16_t len, const uint8_t **out, uint32_t *got)
 {
 	situ_msg_t m; situ_view_t v; situ_sframe_sealed_t g;
@@ -252,7 +255,7 @@ static situ_err_t add(uint16_t ix, uint16_t n, const char *p, uint16_t len, cons
 int main(void)
 {
 	const uint8_t *out; uint32_t got;
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	int ok = add(1, 2, "yz", 2, &out, &got) == SITU_ERR_TRUNCATED
 	      && add(0, 2, "wxyz", 4, &out, &got) == SITU_OK && got == 6u && memcmp(out, "wxyzyz", 6) == 0;
 	puts(ok ? "sealed ok" : "sealed FAIL");
@@ -760,6 +763,7 @@ NO_COUNT_C = r"""
 #include <string.h>
 #include "r_reassemble.h"
 static situ_pieces_t t;
+static situ_pieces_store_t store;
 static uint8_t buf[64];
 static int add(uint16_t ix, uint16_t n, const char *body, const uint8_t **msg,
                uint32_t *length)
@@ -784,7 +788,7 @@ int main(void)
 {
 	const uint8_t *msg = NULL;
 	uint32_t length = 0u;
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	int a = add(0, 2, "ABCD", &msg, &length);
 	int b = add(1000, 1024, "WXYZ", &msg, &length);
 	int c = add(1, 2, "EF", &msg, &length);
@@ -904,11 +908,12 @@ DIFF_C = r"""
 #include "r_reassemble.h"
 #include "r_converse.h"
 static situ_pieces_t t;
+static situ_pieces_store_t store;
 static uint8_t buf[70000];
 int main(void)
 {
 	uint8_t head[6];
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	while (fread(head, 1, 6, stdin) == 6) {
 		const uint32_t len = (uint32_t)head[0] << 8 | head[1];
 		const uint32_t now = (uint32_t)head[2] << 24 | (uint32_t)head[3] << 16
@@ -1121,6 +1126,36 @@ int main()
 #: second can show the cap changed something.
 _CAPPED_AND_NOT: list[str] = []
 
+#: SMALL with every bound doubled, for a table given SMALL's at init.
+BOUNDED = SMALL.replace("messages = 2", "messages = 4").replace(
+	"bytes = 64", "bytes = 256").replace("timeout = 3000", "timeout = 6000")
+
+#: Where each driver makes its table, and the same at SMALL's bounds.
+_AT_INIT = {
+	"c": ("situ_pieces_init(&t, &store);",
+	      "if (situ_pieces_init_in(&t, 2u, 32u, 3000u, store.slot,"
+	      " store.bytes, store.marks) != SITU_OK) return 2;"),
+	"python": ("t = r_reassemble.pieces_table()",
+	           "t = r_reassemble.pieces_table(2, 32, 3000)"),
+	"rust": ("Box::new(r_reassemble::PiecesTable::new())",
+	         "Box::new(r_reassemble::PiecesTable::with_bounds(2, 32, 3000)"
+	         ".unwrap())"),
+	"cpp": ("auto *t = new ::situ::pieces_table();",
+	        "auto *t = new ::situ::pieces_table();\n\tif (!::situ::rt::ok("
+	        "t->bounds(2u, 32u, 3000u))) return 2;"),
+}
+
+#: The plain run's C answers, which the bounded run must repeat.
+_PLAIN: list[str] = []
+
+
+def _driver(source: str, backend: str, schema: str) -> str:
+	if schema is not BOUNDED:
+		return source
+	old, new = _AT_INIT[backend]
+	assert source.count(old) == 1, (backend, old)
+	return source.replace(old, new)
+
 
 def _adversarial_stream(seed: int, steps: int,
 		expiry: bool = False) -> bytes:
@@ -1172,7 +1207,11 @@ def _adversarial_stream(seed: int, steps: int,
 	# slot's, and a piece already past it is refused.
 	SMALL.replace("\tu16  chunks;\n", "\tu16  chunks;\n\tu32  until;\n")
 	     .replace("messages = 2", "expires = f.h.until, messages = 2"),
-], ids=["plain", "per", "expires"])
+	# Bounds at init (the same message, item 5): twice the schema's
+	# numbers as maxima, SMALL's given at init -- the answers must be
+	# SMALL's plain run's, byte for byte.
+	BOUNDED,
+], ids=["plain", "per", "expires", "bounded"])
 def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		schema: str) -> None:
 	"""The four tables were written from one set of rules and held to
@@ -1192,7 +1231,8 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 	stream = _adversarial_stream(1, 3000, expiry="expires =" in schema)
 	said: dict[str, str] = {}
 
-	(tmp_path / "d.c").write_text(DIFF_C, encoding="ascii")
+	(tmp_path / "d.c").write_text(_driver(DIFF_C, "c", schema),
+	                              encoding="ascii")
 	built = subprocess.run(
 		[COMPILER or "cc", "-std=c11", "-g", "-fsanitize=address,undefined",
 		 "-fno-sanitize-recover=all", f"-I{runtime / 'c'}",
@@ -1200,7 +1240,8 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		 str(tmp_path / "c" / "r.c"), str(runtime / "c" / "situ.c"), "-o",
 		 str(tmp_path / "dc")], capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
-	(tmp_path / "d.cpp").write_text(DIFF_CPP, encoding="ascii")
+	(tmp_path / "d.cpp").write_text(_driver(DIFF_CPP, "cpp", schema),
+	                                encoding="ascii")
 	built = subprocess.run(
 		[CXX or "c++", "-std=c++17", "-g", "-fsanitize=address,undefined",
 		 "-fno-sanitize-recover=all", f"-I{runtime / 'c'}",
@@ -1212,7 +1253,8 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 	(out / "situ_rt.rs").write_text(
 		(runtime / "rust" / "situ_rt.rs").read_text(encoding="ascii"),
 		encoding="ascii")
-	(out / "main.rs").write_text(DIFF_RS, encoding="ascii")
+	(out / "main.rs").write_text(_driver(DIFF_RS, "rust", schema),
+	                             encoding="ascii")
 	built = subprocess.run(
 		[RUSTC or "rustc", "--edition", "2021", "-o", str(tmp_path / "drs"),
 		 str(out / "main.rs")], capture_output=True, text=True)
@@ -1222,7 +1264,8 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 			("c", [str(tmp_path / "dc")], tmp_path),
 			("cpp", [str(tmp_path / "dcpp")], tmp_path),
 			("rust", [str(tmp_path / "drs")], tmp_path),
-			("python", [sys.executable, "-c", DIFF_PY.replace(
+			("python", [sys.executable, "-c", _driver(DIFF_PY, "python",
+			                                         schema).replace(
 				"RUNTIME", repr(str(runtime / "python")))], tmp_path / "python")):
 		ran = subprocess.run(command, input=stream, cwd=where,
 		                     capture_output=True, timeout=120)
@@ -1237,12 +1280,16 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 	kinds = {line[:3] for line in lines if line.startswith("A ")}
 	assert kinds == {"A O", "A T", "A C", "A B"}, kinds
 	assert any(line.startswith("E ") and line != "E 0" for line in lines)
+	if schema is SMALL:
+		_PLAIN.append(said["c"])
+	if schema is BOUNDED and _PLAIN:
+		assert said["c"] == _PLAIN[0], "the bounds given at init are not SMALL's"
 	if "per_max" in schema:
 		# The cap bites: a second message from one sender is refused where
 		# a free slot would have taken it. Measured against the uncapped
 		# table's answers over the same stream, which it must change.
 		_CAPPED_AND_NOT.append(said["c"])
-	else:
+	elif schema is SMALL:
 		_CAPPED_AND_NOT.insert(0, said["c"])
 	if len(_CAPPED_AND_NOT) == 2:
 		assert _CAPPED_AND_NOT[0] != _CAPPED_AND_NOT[1]
@@ -1309,6 +1356,7 @@ def test_a_piece_s_own_deadline_bounds_its_slot(tmp_path: Path) -> None:
 
 PARTS_C = PROGRAM.split("static situ_pieces_t t;")[0] + r"""
 static situ_pieces_t t;
+static situ_pieces_store_t store;
 
 int main(void)
 {
@@ -1316,7 +1364,7 @@ int main(void)
 	const uint8_t *out = NULL;
 	uint32_t len = 0;
 	uint8_t key[14], sender[8];
-	situ_pieces_init(&t);
+	situ_pieces_init(&t, &store);
 	memset(sender, 7, sizeof sender);
 	situ_conv_same_message_key(1u, 3u, sender, key);
 	/* The first piece opened by the caller, the second read by the
@@ -1331,6 +1379,36 @@ int main(void)
 	/* What `_add` refuses, `_add_parts` refuses the same. */
 	CHECK(situ_pieces_add_parts(&t, key, 3u, 3u, (const uint8_t *)"x", 1u,
 	                            13u, &out, &len) == SITU_ERR_CONSTRAINT);
+	/* Bounds at init: the schema's are maxima, and zero is no bound. */
+	CHECK(situ_pieces_init_in(&t, 5u, 1024u, 3000u, store.slot, store.bytes,
+	                          store.marks) == SITU_ERR_BOUNDS);
+	CHECK(situ_pieces_init_in(&t, 4u, 1025u, 3000u, store.slot, store.bytes,
+	                          store.marks) == SITU_ERR_BOUNDS);
+	CHECK(situ_pieces_init_in(&t, 4u, 1024u, 0u, store.slot, store.bytes,
+	                          store.marks) == SITU_ERR_BOUNDS);
+	/* One slot of eight bytes, in the caller's own small memory. */
+	{
+		situ_pieces_slot_t one[1];
+		uint8_t bytes[SITU_PIECES_BYTES_FOR(1u, 8u)];
+		uint8_t marks[SITU_PIECES_MARKS_FOR(1u, 8u)];
+		CHECK(situ_pieces_init_in(&t, 1u, 8u, 100u, one, bytes, marks) == SITU_OK);
+		CHECK(situ_pieces_add_parts(&t, key, 0u, 2u, (const uint8_t *)"abcd",
+		                            4u, 20u, &out, &len) == SITU_ERR_TRUNCATED);
+		key[0] ^= 1u;
+		CHECK(situ_pieces_add_parts(&t, key, 0u, 2u, (const uint8_t *)"abcd",
+		                            4u, 21u, &out, &len) == SITU_ERR_BOUNDS);
+		key[0] ^= 1u;
+		CHECK(situ_pieces_add_parts(&t, key, 1u, 2u, (const uint8_t *)"efghi",
+		                            5u, 22u, &out, &len) == SITU_ERR_CONSTRAINT);
+		CHECK(situ_pieces_add_parts(&t, key, 1u, 2u, (const uint8_t *)"ef",
+		                            2u, 22u, &out, &len) == SITU_OK);
+		CHECK(len == 6u && memcmp(out, "abcdef", 6u) == 0);
+		CHECK(situ_pieces_add_parts(&t, key, 0u, 2u, (const uint8_t *)"abcde",
+		                            5u, 30u, &out, &len) == SITU_ERR_BOUNDS);
+		CHECK(situ_pieces_add_parts(&t, key, 0u, 1u, (const uint8_t *)"x",
+		                            1u, 40u, &out, &len) == SITU_OK);
+		CHECK(situ_pieces_expire(&t, 140u) == 0u);
+	}
 	printf(fail ? "FAILED\n" : "PARTS PASS\n");
 	return fail;
 }
@@ -1340,7 +1418,7 @@ int main(void)
 PARTS_PY = r"""
 import sys
 sys.path[:0] = [".", RUNTIME]
-from situ_runtime import Message, ConstraintError
+from situ_runtime import Message, BoundsError, ConstraintError
 import r, r_converse, r_reassemble
 
 def frame(ix, n, body):
@@ -1357,6 +1435,25 @@ try:
 	t.add_parts(key, 3, 3, b"x", 13)
 	raise SystemExit("an index past its count was taken")
 except ConstraintError:
+	pass
+for bounds in ((5, 1024, 3000), (4, 1025, 3000), (4, 1024, 0)):
+	try:
+		r_reassemble.pieces_table(*bounds)
+		raise SystemExit(f"bounds {bounds} were taken")
+	except BoundsError:
+		pass
+small = r_reassemble.pieces_table(1, 8, 100)
+assert small.add_parts(key, 0, 2, b"abcd", 20) is None
+try:
+	small.add_parts(key[:-1] + b"\x00", 0, 2, b"abcd", 21)
+	raise SystemExit("a second message took the one slot")
+except BoundsError:
+	pass
+assert small.add_parts(key, 1, 2, b"ef", 22) == b"abcdef"
+try:
+	small.add_parts(key, 0, 2, b"abcde", 30)
+	raise SystemExit("a message past eight bytes was taken")
+except BoundsError:
 	pass
 print("python ok")
 """

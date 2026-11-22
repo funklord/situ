@@ -274,9 +274,12 @@ full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
   `chunk/reassembly.c` can move onto 26.1123's table -- a per-sender slot
   cap, forget by key, an add from parts already opened, a per-piece
   deadline, bounds at init, a 64-bit clock. `forget`, the per-sender cap
-  (`per`, `per_max`), a piece's own deadline (`expires`) and an add from
-  opened parts (`_add_parts`) are built in all four, and the clock needs
-  nothing; bounds at init are open, in 26.1123's record with fuzznet's spelling.
+  (`per`, `per_max`), a piece's own deadline (`expires`), an add from
+  opened parts (`_add_parts`) and bounds at init (C's `_init_in`, in the
+  caller's memory) are built in all four, and the clock needs nothing --
+  all six answered, in 26.1123's record with fuzznet's spelling. Nothing
+  is open here: fuzznet moves `chunk/reassembly.c` onto the table next,
+  and what it meets doing so comes back as a new message.
 - fuzznet's network list, where it stands: (1) reassembly, (2) matching
   after the tag and (3) the replay window are built in all four backends;
   (4) erasure coding it declined; (5) many peers is 26.1122's `peer`. (6)
