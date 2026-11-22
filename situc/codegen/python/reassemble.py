@@ -85,11 +85,24 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\t\tindex = int({index})",
 		f"\t\tcount = int({count})",
 		f"\t\tdata = bytes({data})",
+		*([f"\t\tdeadline = int({expires}) & 0xFFFFFFFF"] if expires else []),
+		"\t\treturn self.add_parts(raw, index, count, data, now"
+		+ (", deadline)" if expires else ")"),
+		"",
+		f"\tdef add_parts(self, raw: {'int' if layout.packed else 'bytes'},"
+		" index: int, count: int,",
+		"\t\t\tdata: bytes, now: int"
+		+ (", deadline: int" if expires else "") + ") -> bytes | None:",
+		'\t\t"""`add` from parts the caller has already read and verified: the',
+		"\t\tkey as the conversation table's `key(...)` builds it, the piece's",
+		"\t\tindex, count and bytes" + (", its own deadline" if expires else "")
+		+ " (fuzznet, inbox",
+		'\t\t20261122T1804Z). `add` reads these and calls it."""',
 		"\t\tif count == 0 or index >= count:",
 		"\t\t\traise ConstraintError(\"a piece's index is past its count\")",
 		"\t\tif count > self.CAPACITY:",
 		"\t\t\traise BoundsError(\"more pieces than a slot holds bytes\", self.CAPACITY)",
-		*([f"\t\tdeadline = int({expires}) & 0xFFFFFFFF",
+		*(["\t\tdeadline &= 0xFFFFFFFF",
 		   "\t\tif ((now - deadline) & 0xFFFFFFFF) < 0x80000000:",
 		   "\t\t\traise BoundsError(\"the piece is past its own deadline\","
 		   " deadline)"] if expires else []),

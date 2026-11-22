@@ -155,6 +155,21 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		*([f"\t\tlet deadline = {_reach(root, _path(held, 'expires'))} as u32;"]
 		  if _attr(held, "expires") is not None else []),
 		f"\t\tlet data: &[u8] = {data};",
+		"\t\tself.add_parts(key, index, count, data, now"
+		+ (", deadline)" if _attr(held, "expires") is not None else ")"),
+		"\t}",
+		"",
+		"\t/// `add` from parts the caller has already read and verified: the",
+		"\t/// key as the conversation table's `key(...)` builds it, the",
+		"\t/// piece's index, count and bytes"
+		+ (", and its own deadline" if _attr(held, "expires") is not None else "")
+		+ " (fuzznet, inbox",
+		"\t/// 20261122T1804Z). `add` reads these and calls it.",
+		f"\tpub fn add_parts(&mut self, key: {'u64' if layout.packed else key_type},"
+		" index: u32, count: u32,",
+		"\t\tdata: &[u8], now: u32"
+		+ (", deadline: u32" if _attr(held, "expires") is not None else "")
+		+ ") -> Result<Option<&[u8]>> {",
 		"\t\tlet len = data.len() as u32;",
 		"\t\tif count == 0 || index >= count {",
 		"\t\t\treturn Err(Error::Constraint);",

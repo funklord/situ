@@ -1305,3 +1305,80 @@ def test_a_piece_s_own_deadline_bounds_its_slot(tmp_path: Path) -> None:
 			"RUNTIME", repr(str(ROOT / "runtime" / "python")))],
 		cwd=out, capture_output=True, text=True, timeout=120)
 	assert ran.stdout.strip() == "python ok", ran.stderr
+
+
+PARTS_C = PROGRAM.split("static situ_pieces_t t;")[0] + r"""
+static situ_pieces_t t;
+
+int main(void)
+{
+	int fail = 0;
+	const uint8_t *out = NULL;
+	uint32_t len = 0;
+	uint8_t key[14], sender[8];
+	situ_pieces_init(&t);
+	memset(sender, 7, sizeof sender);
+	situ_conv_same_message_key(1u, 3u, sender, key);
+	/* The first piece opened by the caller, the second read by the
+	 * table, the third opened again: one message, keyed alike. */
+	CHECK(situ_pieces_add_parts(&t, key, 0u, 3u, (const uint8_t *)"ab", 2u,
+	                            10u, &out, &len) == SITU_ERR_TRUNCATED);
+	situ_view_t v = frame(7, 1u, 1u, 3u, "cd", 2u);
+	CHECK(situ_pieces_add(&t, v, 11u, &out, &len) == SITU_ERR_TRUNCATED);
+	CHECK(situ_pieces_add_parts(&t, key, 2u, 3u, (const uint8_t *)"e", 1u,
+	                            12u, &out, &len) == SITU_OK);
+	CHECK(len == 5u && memcmp(out, "abcde", 5u) == 0);
+	/* What `_add` refuses, `_add_parts` refuses the same. */
+	CHECK(situ_pieces_add_parts(&t, key, 3u, 3u, (const uint8_t *)"x", 1u,
+	                            13u, &out, &len) == SITU_ERR_CONSTRAINT);
+	printf(fail ? "FAILED\n" : "PARTS PASS\n");
+	return fail;
+}
+"""
+
+
+PARTS_PY = r"""
+import sys
+sys.path[:0] = [".", RUNTIME]
+from situ_runtime import Message, ConstraintError
+import r, r_converse, r_reassemble
+
+def frame(ix, n, body):
+	b = (bytes([7]) * 8 + (1).to_bytes(4, "big") + ix.to_bytes(2, "big")
+	     + n.to_bytes(2, "big") + len(body).to_bytes(2, "big") + body)
+	return r.piece_frame.at(Message(bytearray(b)), 0, len(b))
+
+key = r_converse.same_message_table.key(1, 3, bytes([7]) * 8)
+t = r_reassemble.pieces_table()
+assert t.add_parts(key, 0, 3, b"ab", 10) is None
+assert t.add(frame(1, 3, b"cd"), 11) is None
+assert t.add_parts(key, 2, 3, b"e", 12) == b"abcde"
+try:
+	t.add_parts(key, 3, 3, b"x", 13)
+	raise SystemExit("an index past its count was taken")
+except ConstraintError:
+	pass
+print("python ok")
+"""
+
+
+def test_a_piece_opened_by_the_caller_joins_its_message(tmp_path: Path) -> None:
+	"""`_add_parts` (fuzznet, inbox 20261122T1804Z): a caller that opens a
+	piece itself hands the table the key, index, count and bytes. Pieces
+	of one message through `_add` and `_add_parts` meet in one slot, so
+	the conversation table's key is the reassembly table's."""
+	assert "PARTS PASS" in _run(tmp_path, SCHEMA, PARTS_C.replace(
+		'#include "r_reassemble.h"',
+		'#include "r_converse.h"\n#include "r_reassemble.h"'), "r",
+		sanitize=True)
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "python", "--layer", "converse", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	ran = subprocess.run(
+		[sys.executable, "-c", PARTS_PY.replace(
+			"RUNTIME", repr(str(ROOT / "runtime" / "python")))],
+		cwd=out, capture_output=True, text=True, timeout=120)
+	assert ran.stdout.strip() == "python ok", ran.stderr
