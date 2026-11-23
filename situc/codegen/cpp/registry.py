@@ -84,6 +84,11 @@ def registry_class(schema: ast.Schema, decl: ast.RegistryDecl,
 		"\t};",
 		"",
 		f"\tstatic constexpr std::uint32_t count = {len(decl.entries)}u;",
+		"",
+		"\t/* Which type a cell is: an entry's `cell`, by name (26.1169). */",
+		*(f"\tstatic constexpr std::uint32_t cell_{c_name(type_name)} = "
+		  f"{index}u;" for index, type_name in enumerate(types)),
+		"",
 		"\tstatic inline const entry entries[count] = {",
 	]
 	for entry in decl.entries:
@@ -115,7 +120,7 @@ def registry_class(schema: ast.Schema, decl: ast.RegistryDecl,
 				_string(entry.summary),
 				f"{_number(entry, 'window') or 0}u",
 				*masks,
-				f"{types.index(entry.type_name)}u",
+				f"cell_{c_name(entry.type_name)}",
 			]) + "},")
 	lines += [
 		"\t};",

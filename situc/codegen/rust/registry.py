@@ -80,6 +80,10 @@ def registry_items(schema: ast.Schema, decl: ast.RegistryDecl,
 		f"pub struct {name};",
 		"",
 		f"impl {name} {{",
+		*(line for index, type_name in enumerate(types) for line in (
+			f"\t/// A cell of `{type_name}`: an entry's `cell`, by name"
+			" (26.1169).",
+			f"\tpub const CELL_{type_name.upper()}: u32 = {index};")),
 		f"\tpub const ENTRIES: &'static [{entry_t}] = &[",
 	]
 	for entry in decl.entries:
@@ -109,7 +113,7 @@ def registry_items(schema: ast.Schema, decl: ast.RegistryDecl,
 			fields.append(f"{policy.name}: " + (" | ".join(
 				f"{policy.name.upper()}_{word.upper()}" for word in words or [])
 				or "0"))
-		fields.append(f"cell: {types.index(entry.type_name)}")
+		fields.append(f"cell: {name}::CELL_{entry.type_name.upper()}")
 		lines.append(f"\t\t{entry_t} {{ {', '.join(fields)} }},")
 	lines += [
 		"\t];",

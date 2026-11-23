@@ -74,6 +74,10 @@ def registry_class(schema: ast.Schema, decl: ast.RegistryDecl,
 			"default", "unit", "summary", "window_ms", "cell",
 			*policies)),
 		"",
+		"\t# Which type a cell is: an entry's `cell`, by name (26.1169).",
+		*(f"\tCELL_{type_name.upper()} = {index}"
+		  for index, type_name in enumerate(types)),
+		"",
 		"\tENTRIES: tuple[\"Entry\", ...] = ()",
 		"",
 		"\t@staticmethod",
@@ -171,7 +175,7 @@ def registry_class(schema: ast.Schema, decl: ast.RegistryDecl,
 			f"unit={_literal(entry, 'unit')!r}",
 			f"summary={entry.summary!r}",
 			f"window_ms={_literal(entry, 'window') or 0!r}",
-			f"cell={types.index(entry.type_name)}",
+			f"cell={name}.CELL_{entry.type_name.upper()}",
 		]
 		for policy in schema.policies():
 			held = _attr(entry, policy.name)

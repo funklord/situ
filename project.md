@@ -9767,6 +9767,25 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1169 A registry names each cell type
+
+fuzznet (inbox 20261123T1218Z) builds its settings table from the
+generated registry rows, and an entry's `cell` was a bare number: the
+order a type is first used, so two rows swapped renumbered the types and
+a consumer mapping the number read a count as text. Each backend now
+names every type -- C `SITU_<REGISTRY>_CELL_<TYPE>`, C++ `cell_<type>`,
+Rust and Python `CELL_<TYPE>` -- and writes each row's `cell` as the
+name. The numbers keep their order, so nothing already mapped moves.
+Held in `test_a_registry_names_each_cell_type.py`, a swap of two rows
+among them.
+
+### 26.1168 A three-byte tlv length or tag is read whole
+
+C and C++ read a `u24` length prefix or tag as its first byte, where
+Rust and Python read three; built in 4cb44215, and found under openmlx4's
+report that 26.1167 answers. The walkers' image has no three-byte width,
+and both decline such a region.
+
 ### 26.1167 A known tlv value holds its type
 
 Moved to `doc/decision/26.1167-a-known-tlv-value-holds-its-type.md`.

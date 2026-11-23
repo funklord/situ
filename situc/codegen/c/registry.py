@@ -100,6 +100,13 @@ class Registry:
 			" * cell's bytes are a message of. */",
 			f"#define {count} {len(self.decl.entries)}u",
 			"",
+			# 26.1169: each cell type by name. The number is the order a
+			# type is first used, so two rows swapped renumbered them, and
+			# a consumer mapping the number read a count as text.
+			"/* Which type a cell is: an entry's `cell`, by name. */",
+			*(f"#define {macro(self.prefix, self.decl.name, 'cell', name)}"
+			  f" {index}u" for index, name in enumerate(self.types)),
+			"",
 			f"typedef struct {self.name('entry')} {{",
 			"\tconst char *key;        /* NUL-ended, as written */",
 			"\tuint32_t    key_len;",
@@ -200,7 +207,8 @@ class Registry:
 			*(f"\t\t.{c_name(policy.name)} = "
 			  f"{_policy_mask(entry, policy, self.prefix)},"
 			  for policy in self.schema.policies()),
-			f"\t\t.cell      = {self.types.index(entry.type_name)}u,",
+			f"\t\t.cell      = "
+			f"{macro(self.prefix, self.decl.name, 'cell', entry.type_name)},",
 			"\t},",
 		]
 
