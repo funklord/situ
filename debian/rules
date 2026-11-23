@@ -7,7 +7,7 @@
 	dh $@
 
 # The window as well (situ-edit-gui, its own binary package): `make gui`
-# builds it and vendor/qtty, and install-gui adds it beside situ-edit.
+# builds it and qtty, and install-gui adds it beside situ-edit.
 override_dh_auto_build:
 	dh_auto_build
 	$(MAKE) gui

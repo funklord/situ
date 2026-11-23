@@ -60,7 +60,7 @@ def _qmake() -> str | None:
 
 #: Whether the qtty half can be built: its submodule checked out. A tree
 #: without it builds the window alone, and the terminal tests skip saying so.
-QTTY = (ROOT / "vendor" / "qtty" / "qtty.pri").is_file()
+QTTY = (ROOT / "qtty" / "qtty.pri").is_file()
 
 
 @pytest.fixture(scope="session")
@@ -214,7 +214,7 @@ def _ntp_reply(tmp_path: Path) -> Path:
 	raise AssertionError("ntp.vectors has no server_reply")
 
 
-@pytest.mark.skipif(not QTTY, reason="vendor/qtty is not checked out")
+@pytest.mark.skipif(not QTTY, reason="qtty is not checked out")
 def test_the_window_on_a_terminal_shows_the_cli_rows(
 		window_binary: Path, tmp_path: Path) -> None:
 	"""The same window drawn by qtty (`--tui`), every row of it the CLI's:

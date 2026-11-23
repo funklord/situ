@@ -351,7 +351,8 @@ without huge dependencies kept, and the pertinent code shared:
 - `editor/view.py` decides every cell; the text table, the curses TUI and
   the window (through the JSON's `view`) all draw it. `situ-edit --put`
   is the one typed-value rule both interactive frontends send.
-- `situ-edit-gui` (renamed from `-qt`), qmake, `vendor/qtty` submodule:
+- `situ-edit-gui` (renamed from `-qt`), qmake, `qtty` submodule at the
+  root (moved from `vendor/qtty` 2026-11-23, as harmonization.md settled):
   `--tui` is the same window on a terminal; `make gui-example` opens it on
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
 - The holder's earlier question -- vendor qtty for the window? -- is
@@ -5982,7 +5983,7 @@ situ/
     text.py                   opening a document and rendering one as lines,
                               shared by the two frontends that want text
   gui/                        situ-edit-gui, the Qt Widgets frontend of 0034
-                              (qmake; --tui through vendor/qtty).
+                              (qmake; --tui through qtty/).
                               Drives `situ-edit --format json` and `--put`
                               across a process boundary and holds no editing
                               or display rule (26.1113); its own build

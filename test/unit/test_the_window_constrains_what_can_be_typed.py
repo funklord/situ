@@ -74,7 +74,7 @@ CASES = [
 ]
 
 DELIVERIES = ["qt", pytest.param("qtty", marks=pytest.mark.skipif(
-	not QTTY, reason="vendor/qtty is not checked out"))]
+	not QTTY, reason="qtty is not checked out"))]
 
 
 @pytest.fixture(scope="module")
@@ -112,7 +112,7 @@ def test_a_cell_takes_only_what_its_field_can_hold(
 	assert message.read_bytes() == MESSAGE
 
 
-@pytest.mark.skipif(not QTTY, reason="vendor/qtty is not checked out")
+@pytest.mark.skipif(not QTTY, reason="qtty is not checked out")
 def test_the_search_list_is_drawn_on_a_terminal(
 		window_binary: Path, files: tuple[Path, Path]) -> None:
 	"""The enum's completer list, open over the window, in the frame qtty

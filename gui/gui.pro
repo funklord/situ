@@ -3,7 +3,7 @@
 # (`--tui`).
 #
 # Built by the root Makefile's `make gui`, which hands qmake SITU_BUILD, the
-# directory the binary goes in, and, where vendor/qtty is checked out,
+# directory the binary goes in, and, where qtty is checked out,
 # QTTY_LIB_DIR, where it built libqtty.a. Not by a bare `make`: this is the
 # one part of situ with a third-party dependency, and `situc`, `situ-edit`
 # and the curses `situ-edit-tui` need Python and nothing else (0034).
@@ -41,7 +41,7 @@ DEFINES += SITU_VERSION=\\\"$$cat($$ROOT/VERSION, singleline)\\\"
 # without it situ-edit-gui is the window alone and says so when asked for
 # --tui, and the terminal frontend that needs nothing is situ-edit-tui.
 !isEmpty(QTTY_LIB_DIR):exists($$QTTY_LIB_DIR/libqtty.a) {
-	include($$ROOT/vendor/qtty/qtty.pri)
+	include($$ROOT/qtty/qtty.pri)
 	DEFINES += SITU_QTTY
 	LIBS += -L$$QTTY_LIB_DIR -lqtty
 	PRE_TARGETDEPS += $$QTTY_LIB_DIR/libqtty.a

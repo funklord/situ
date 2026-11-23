@@ -72,7 +72,7 @@ help:
 	@echo '  walk       the walker over an image: bin/situ-walk'
 	@echo '  walk-c     build the embedded walker: situ-walk-c (0035)'
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
-	@echo '  gui        build the Qt window: situ-edit-gui, --tui with vendor/qtty (0034)'
+	@echo '  gui        build the Qt window: situ-edit-gui, --tui with qtty (0034)'
 	@echo '  gui-example  open the window on an NTP reply (GUI_FLAGS=--tui on a terminal)'
 	@echo '  install-gui  install situ-edit-gui beside situ-edit (after install)'
 	@echo '  bench      what the offset cache costs, in all four backends'
@@ -170,18 +170,18 @@ lint: style-source
 bench:
 	$(PYTHON) tool/bench.py
 
-# situ-edit-gui, the Qt window of decision 0034, and with vendor/qtty the
+# situ-edit-gui, the Qt window of decision 0034, and with qtty the
 # same window on a terminal (`situ-edit-gui --tui`). Its own target, not
 # all's: it is the one part of situ with a third-party dependency, and the
 # terminal frontend that needs only Python is bin/situ-edit-tui. qmake, as
 # hull and netcfgd build theirs, out of the tree.
 #
-# vendor/qtty is fetched for `make gui` where it was never checked out, at
+# qtty is fetched for `make gui` where it was never checked out, at
 # the commit the gitlink names and no other. Without it -- no git, no
 # network -- the window is built alone and `make gui` says so, rather than
 # a build that quietly has no --tui.
 QMAKE       ?= qmake6
-QTTY_DIR     = vendor/qtty
+QTTY_DIR     = qtty
 QTTY_LIB     = $(BUILD_DIR)/qtty/lib/libqtty.a
 GUI_BIN      = $(BUILD_DIR)/situ-edit-gui
 GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h)

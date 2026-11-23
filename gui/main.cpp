@@ -180,7 +180,7 @@ int main(int argc, char **argv)
 	if (tui) {
 		std::fprintf(stderr, "situ-edit-gui: this build has no terminal "
 		             "frontend: it is compiled in where qtty is "
-		             "(vendor/qtty, `make gui` fetches it); situ-edit-tui "
+		             "(qtty, `make gui` fetches it); situ-edit-tui "
 		             "is the terminal frontend that needs only Python\n");
 		return 2;
 	}
