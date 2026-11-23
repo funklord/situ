@@ -73,6 +73,8 @@ PREFIXES = frozenset({
 #: rather than a prefix of one.
 SUFFIXES = frozenset({
 	"view",
+	# A timed member's unit and epoch, as constants beside it (26.1165).
+	"unit_num", "unit_den", "epoch",
 	# `bits` is the codec entry point over a span that is not whole bytes,
 	# and `covered_bits` the accessor that names such a span -- USB's
 	# eleven-bit token (26.373, 26.374).
