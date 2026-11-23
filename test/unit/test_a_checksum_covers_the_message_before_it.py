@@ -319,18 +319,25 @@ struct vpd_large_body {
 	u8   data[length] [holds = vpd_fields];
 }
 
-struct vpd_resource [allow_straddle] {
-	bit  is_large;
-	u4   item_high;
-	u3   item_low;
-	variant body switch (is_large) {
-		case 1:  vpd_large_body large;
-		default: u8 small_data[item_low];
+struct vpd_string {
+	u16  length;
+	u8   text[length];
+}
+
+// Only VPD-R (0x90) holds keyword fields; the identifier string (0x82) is
+// text. Saying every large resource held them was a looseness the readers
+// passed while a `| end` run could stop short of its frame (26.927).
+struct vpd_resource {
+	u8   tag;
+	variant body switch (tag) {
+		case 0x90: vpd_large_body large;
+		case 0x82: vpd_string     ident;
+		default:   u8 small_data[tag & 7];
 	}
 }
 
 struct vpd {
-	vpd_resource items[] while (is_large == 1 || item_high != 0x0F) max 32768;
+	vpd_resource items[] while (tag != 0x78) max 32768;
 }
 """
 
