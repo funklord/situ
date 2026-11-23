@@ -2747,11 +2747,15 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 							bits[quarter * 8:quarter * 8 + 8], "little",
 							signed=True), CHECK_CHARS + quarter)))
 
-			# A run a terminator ends, as for one outside an arm (26.926).
+			# A run a terminator ends, as for one outside an arm (26.926),
+			# and a `| end` run's row carrying 1, as there (26.927).
 			if (placement.delimiters or placement.repeat_while is not None) \
 					and placement.type_name in resolved.structs \
-					and traverse.must_end(placement):
-				arm_checks.append((at, _struct.pack("<IqBxxx", at, 0, 7)))
+					and traverse.asks_its_end(placement):
+				arm_checks.append((at, _struct.pack(
+					"<IqBxxx", at,
+					1 if placement.repeat_while is not None
+					and placement.repeat_or_end else 0, 7)))
 
 			# A byte-run enum arm: one row per alternative, keyed by the
 			# arm's placement, exactly as a member's pinned run is written.

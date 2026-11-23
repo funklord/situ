@@ -9018,7 +9018,7 @@ class Emitter:
 		element = self.resolved.structs.get(member.type_name or "")
 		# With no tail the walk is asked for the terminator alone (26.926).
 		ended = not tail
-		if ((ended and not must_end(member))
+		if ((ended and not asks_its_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None and not member.delimiters)
@@ -9071,7 +9071,10 @@ class Emitter:
 			"\t\t\tlet _ = n;",
 			*(["\t\t\tif !found"
 			   + ("" if member.repeat_cap is None
-			      else f" && n < {member.repeat_cap}") + " {",
+			      else f" && n < {member.repeat_cap}")
+			   # `| end`: reaching the frame's end ended it too (26.927).
+			   + (" && at < self.bytes.len()" if member.repeat_or_end else "")
+			   + " {",
 			   "\t\t\t\treturn Err(Error::Constraint);",
 			   "\t\t\t}"] if ended else [
 				f"\t\t\tif situ_rt::remaining(self.bytes.len(), at) < {tail} {{",

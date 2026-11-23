@@ -8781,7 +8781,7 @@ class Emitter:
 		element = self.resolved.structs.get(member.type_name or "")
 		# With no tail the walk is asked for the terminator alone (26.926).
 		ended = not tail
-		if ((ended and not must_end(member))
+		if ((ended and not asks_its_end(member))
 				or element is None
 				or not is_struct_run(self.resolved.structs, member)
 				or (member.repeat_while is None and not member.delimiters)
@@ -8833,7 +8833,10 @@ class Emitter:
 			*after,
 			*([f"\t\t\tif not {at}_ended"
 			   + ("" if member.repeat_cap is None
-			      else f" and {n} < {member.repeat_cap}") + ":",
+			      else f" and {n} < {member.repeat_cap}")
+			   # `| end`: reaching the frame's end ended it too (26.927).
+			   + (f" and {at} < self._len" if member.repeat_or_end else "")
+			   + ":",
 			   "\t\t\t\traise ConstraintError(",
 			   f'\t\t\t\t\t"{member.path} does not end:'
 			   ' the frame stops first")'] if ended else [

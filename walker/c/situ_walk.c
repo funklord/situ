@@ -6086,6 +6086,14 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 			if (arm.repeat_code != SITU_WALK_NONE) {
 				err = while_walk(image, message, len, shape, chosen, depth,
 				                 &count, &bytes, &ended);
+				/* A row of 1 is `| end`: reaching the frame's end ended
+				 * the run as well (26.927). */
+				if (err == SITU_WALK_OK && !ended
+				                && i64_at(&checks[c * image->constraint_stride
+				                                  + 4u]) == 1
+				                && at / 8u + bytes >= len) {
+					ended = 1;
+				}
 			} else {
 				err = record_run_walk(image, message, len, shape, chosen,
 				                      depth, &count, &bytes, &took);

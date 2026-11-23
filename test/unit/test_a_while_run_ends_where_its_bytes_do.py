@@ -83,3 +83,50 @@ def test_both_walkers_agree(tmp_path: Path, cond: str, packet: str,
 	said  = python_verdict(blob, data, shape)
 	assert (said == "0") == valid, (packet, said)
 	assert c_verdict(tmp_path, blob, data, shape) == said, packet
+
+
+ARM = """target buffer;
+endian big;
+struct w { u8 n [max = 3]; u8 b[n]; }
+struct s {
+	u8 k;
+	variant body switch (k) {
+		case 1:  w ws[] while (1) | end;
+		default: error;
+	}
+}
+"""
+
+#: The member path's verdicts, behind a discriminant.
+ARM_CASES = [("0101aa", True), ("0101aa02bbcc", True), ("0101aa05", False),
+             ("0101aa09bb", False)]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+@pytest.mark.parametrize(("packet", "valid"), ARM_CASES)
+def test_an_arm_s_run_ends_at_its_frame_too(tmp_path: Path, packet: str,
+                                            valid: bool) -> None:
+	"""The arm's run kept the old answer after 4e684a0c, as its amendment
+	said: junk after its last element passed in all four."""
+	source = tmp_path / "unit.situ"
+	source.write_text(ARM, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	said = {name: fourway.answers(argv, bytes.fromhex(packet), tmp_path)
+	        .split("-- s\n")[1].split("\n-- ")[0]
+	        for name, argv in command.items()}
+	assert len(set(said.values())) == 1, said
+	assert ("validate 0" in said["c"]) == valid, said["c"]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+@pytest.mark.parametrize(("packet", "valid"), ARM_CASES)
+def test_both_walkers_agree_in_an_arm(tmp_path: Path, packet: str,
+                                      valid: bool) -> None:
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	blob  = packed_text(ARM)
+	shape = shape_named_text(ARM, "s")
+	data  = bytes.fromhex(packet)
+	said  = python_verdict(blob, data, shape)
+	assert said == "cannot-say" or (said == "0") == valid, (packet, said)
+	assert c_verdict(tmp_path, blob, data, shape) == said, packet

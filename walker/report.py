@@ -2583,8 +2583,11 @@ def _arm_validates(image: Image, view: View, index: int,
 	# validated through the run's own walk now (26.790).
 	if run.repeat_code != NONE or chosen in image.delimiters:
 		# And a frame that stops before its terminator cut it short (26.926).
-		if any(check == TERMINATED for check, _ in image.constraints.get(chosen, ())) \
-				and not record_run_ended(view, chosen):
+		ends = next((against for check, against
+		             in image.constraints.get(chosen, ())
+		             if check == TERMINATED), None)
+		if ends is not None and not record_run_ended(view, chosen) \
+				and not (ends == 1 and while_run_reaches_end(view, chosen)):
 			return ERR_CONSTRAINT
 		return _elements_validate(view, chosen,
 		                          _run_elements(view, chosen, at))
