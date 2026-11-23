@@ -71,6 +71,7 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		fmt: str = "ascii") -> str:
 	"""The whole schema as a document."""
 	lines = _preamble(basename, fmt)
+	lines.extend(_vocabulary(schema, fmt))
 
 	for name in sorted(resolved.structs):
 		struct = resolved.structs[name]
@@ -121,11 +122,92 @@ def _struct(struct: ResolvedStruct, fmt: str) -> list[str]:
 		lines.append("")
 
 	for entry in struct.entries:
-		if entry.placement.tlv_grammar is not None \
-				and "." not in local_name(struct, entry.placement):
+		if "." in local_name(struct, entry.placement):
+			continue
+		if entry.placement.tlv_grammar is not None:
 			lines.extend(_tlv_items(struct, entry.placement, fmt))
 			lines.append("")
+		if entry.placement.kind == "variant" and entry.placement.arm_cases:
+			lines.extend(_arms(struct, entry.placement, fmt))
+			lines.append("")
 	return lines
+
+
+def _grid(headers: tuple[str, ...], rows: Sequence[tuple[str, ...]],
+		fmt: str) -> list[str]:
+	"""A table, in markdown or as aligned columns."""
+	if fmt == "markdown":
+		return (["| " + " | ".join(headers) + " |",
+		         "|" + "|".join(["---"] * len(headers)) + "|"]
+		        + ["| " + " | ".join(row) + " |" for row in rows])
+	widths = [max(len(headers[i]), *(len(row[i]) for row in rows))
+	          for i in range(len(headers))]
+	return [line.rstrip() for line in
+	        ["  ".join(headers[i].ljust(widths[i])
+	                   for i in range(len(headers))),
+	         "  ".join("-" * widths[i] for i in range(len(headers))),
+	         *("  ".join(row[i].ljust(widths[i])
+	                     for i in range(len(headers))) for row in rows)]]
+
+
+def _vocabulary(schema: ast.Schema, fmt: str) -> list[str]:
+	"""Each enum's values and each token set's spellings.
+
+	The field table names a member's type -- `kind`, `greeting` -- and the
+	values that type admits were nowhere in the document, so a reader met
+	`k  1 byte  kind` and could not say what 2 means.
+	"""
+	lines: list[str] = []
+	for decl in schema.enums():
+		backing = decl.backing.name if decl.backing is not None else "?"
+		if decl.width is not None:
+			backing = f"{backing}[{decl.width}]"
+		heading = f"enum {decl.name} : {backing}"
+		lines.extend([f"## {heading}", ""] if fmt == "markdown"
+		             else [heading, "-" * len(heading), ""])
+		lines.extend(_grid(("Name", "Value"),
+		                   [(one.name, expr_to_source(one.value))
+		                    for one in decl.members], fmt))
+		lines.extend(["", ("Any other value is accepted and kept."
+		                   if decl.effective_default is ast.EnumDefault.PASS
+		                   else "Any other value is refused."), ""])
+	for tokens in schema.token_sets():
+		heading = f"tokens {tokens.name}"
+		lines.extend([f"## {heading}", ""] if fmt == "markdown"
+		             else [heading, "-" * len(heading), ""])
+		lines.extend(_grid(("Name", "Spelling"),
+		                   [(one.name, expr_to_source(one.value))
+		                    for one in tokens.members], fmt))
+		lines.extend(["", ("Spelled in any case. " if tokens.case_insensitive
+		                   else "")
+		              + ("Any other spelling is accepted."
+		                 if tokens.effective_default is ast.EnumDefault.PASS
+		                 else "Any other spelling is refused."), ""])
+	return lines
+
+
+def _arms(struct: ResolvedStruct, variant: Placement, fmt: str) -> list[str]:
+	"""Which member each value of a variant's discriminant selects.
+
+	The field table says `body  by k  variant`, and which bytes follow for
+	which `k` was in no part of the document.
+	"""
+	by_path = {held.path: held for held in struct.layout.placements}
+	rows = []
+	for arm in variant.arm_cases:
+		case = (arm.source or str(arm.value)) if arm.value is not None \
+			else "other"
+		held = by_path.get(arm.member or "")
+		if held is not None:
+			member = held.path[len(variant.path) + 1:] or held.name
+			rows.append((case, member, held.type_name or "-", _size(held)))
+		elif arm.opaque:
+			rows.append((case, "-", "bytes", "the rest"))
+		else:
+			rows.append((case, "-", "refused", "-"))
+	name = local_name(struct, variant)
+	return [f"Arms of `{name}`, by `{variant.discriminant}`:", "",
+	        *_grid(("Case", "Member", "Type", "Size"), rows, fmt)]
 
 
 def _rule_text(rule: ValueRule) -> str:
@@ -199,21 +281,7 @@ def _tlv_items(struct: ResolvedStruct, placement: Placement,
 	rows = [(str(known.tag), known.name, value(known),
 	         "once at most" if known.tag in once else "yes")
 	        for known in grammar.known]
-	lines.append("")
-	if fmt == "markdown":
-		lines.extend(["| " + " | ".join(headers) + " |",
-		              "|" + "|".join(["---"] * len(headers)) + "|"])
-		lines.extend("| " + " | ".join(row) + " |" for row in rows)
-		return lines
-	widths = [max(len(headers[i]), max(len(row[i]) for row in rows))
-	          for i in range(len(headers))]
-	lines.append("  ".join(headers[i].ljust(widths[i])
-	                       for i in range(len(headers))).rstrip())
-	lines.append("  ".join("-" * widths[i] for i in range(len(headers))))
-	lines.extend("  ".join(row[i].ljust(widths[i])
-	                       for i in range(len(headers))).rstrip()
-	             for row in rows)
-	return lines
+	return [*lines, "", *_grid(headers, rows, fmt)]
 
 
 def _messages(schema: ast.Schema, struct: ResolvedStruct,

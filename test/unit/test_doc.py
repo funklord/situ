@@ -519,3 +519,44 @@ def test_a_tlv_region_lists_how_its_items_read_and_the_tags_it_knows(
 		assert row is not None and value in row, (name, text)
 		# `duplicate_tags` defaults to an error: each known tag once.
 		assert "once at most" in row, row
+
+
+VOCABULARY = """tokens greeting [case_insensitive] { hello = "HELLO", hi = "HI", default = pass, }
+enum kind : u8 { a = 1, b = 2, }
+struct s {
+	greeting g until " " max 8;
+	kind k;
+	variant body switch (k) {
+		case kind.a: u8 x;
+		case kind.b: u16 y;
+		default: error;
+	}
+}
+"""
+
+
+def _row(text: str, *cells: str) -> bool:
+	return any(all(cell in line.split() for cell in cells)
+	           for line in text.splitlines())
+
+
+def test_an_enum_s_values_and_a_token_set_s_spellings_are_listed() -> None:
+	"""The field table names `kind` and `greeting`, and what either admits
+	was in no part of the document."""
+	text = emit(VOCABULARY)
+	assert "enum kind : u8" in text
+	assert _row(text, "a", "1") and _row(text, "b", "2")
+	assert "Any other value is refused." in text
+	assert "tokens greeting" in text
+	assert _row(text, "hello", '"HELLO"') and _row(text, "hi", '"HI"')
+	assert "Spelled in any case. Any other spelling is accepted." in text
+
+
+def test_a_variant_lists_what_each_case_selects() -> None:
+	"""`body  by k  variant` said nothing of which bytes follow for which
+	`k`; `default: error` is a case too, one that selects nothing."""
+	text = emit(VOCABULARY)
+	assert "Arms of `body`, by `k`:" in text
+	assert _row(text, "kind.a", "x", "u8", "1", "byte")
+	assert _row(text, "kind.b", "y", "u16", "2", "bytes")
+	assert _row(text, "other", "-", "refused")
