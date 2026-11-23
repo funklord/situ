@@ -23,12 +23,13 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from situc import ast
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, KnownTag, Placement, ValueRule
 from situc.invariant import paths_in
 from situc.names import render_delimiter
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	element_bytes, indexed_elements, is_own_member, local_name, own_members,
+	tlv_single_tags,
 )
 from situc.unparse import expr_to_source
 from situc import __version__
@@ -118,6 +119,100 @@ def _struct(struct: ResolvedStruct, fmt: str) -> list[str]:
 	if regions:
 		lines.extend(regions)
 		lines.append("")
+
+	for entry in struct.entries:
+		if entry.placement.tlv_grammar is not None \
+				and "." not in local_name(struct, entry.placement):
+			lines.extend(_tlv_items(struct, entry.placement, fmt))
+			lines.append("")
+	return lines
+
+
+def _rule_text(rule: ValueRule) -> str:
+	"""How far one value rule says a value reaches, in words."""
+	if rule.kind == "fixed":
+		return _bytes(rule.size or 0)
+	if rule.kind == "prefixed":
+		return f"a {rule.length_type} length, then that many bytes"
+	if rule.kind == "self_delimiting":
+		return "a value that ends itself"
+	if rule.kind == "computed":
+		return ("bytes as the tag says: "
+		        + (expr_to_source(rule.value) if rule.value else "?"))
+	return "refused"
+
+
+def _tlv_items(struct: ResolvedStruct, placement: Placement,
+		fmt: str) -> list[str]:
+	"""A tlv region's items: how each is read, and the tags it knows.
+
+	The field table gives the region one row and no size, which is all a
+	partition of the struct can say about it -- and a reader writing an
+	encoder from this document needs the tag, how a value is sized, what
+	a tag it does not know does, and each known tag's name and type
+	(26.1167). None of it was anywhere in the output.
+	"""
+	grammar = placement.tlv_grammar
+	if grammar is None:
+		return []
+	name = local_name(struct, placement)
+	tag  = placement.tlv_tag_varint or (
+		f"u{placement.tlv_tag_bits}" if placement.tlv_tag_bits else "tag")
+	said = [f"Items of `{name}`: a {tag} tag"]
+	if grammar.tag_decode:
+		said.append("decoded as " + ", ".join(
+			f"{part.name} = {part.source}" for part in grammar.tag_decode))
+	if grammar.length_type is not None and not grammar.rules:
+		said.append(f"then a {grammar.length_type} length and that many "
+		            "bytes of value")
+	elif grammar.rules:
+		by = grammar.selector or "tag"
+		said.append(f"the value sized by `{by}`: " + "; ".join(
+			f"{'other' if rule.label is None else rule.label}: "
+			f"{_rule_text(rule)}" for rule in grammar.rules))
+	policies = []
+	if placement.tlv_unknown:
+		policies.append(f"an unknown tag: {placement.tlv_unknown}")
+	if placement.tlv_duplicates:
+		policies.append(f"a repeated tag: {placement.tlv_duplicates}")
+	if placement.tlv_ordered:
+		policies.append("tags in ascending order")
+	stated = "; ".join(policies)
+	lines = ["; ".join(said) + "." + (
+		f" {stated[:1].upper()}{stated[1:]}." if policies else "")]
+	if not grammar.known:
+		return lines
+
+	def value(known: KnownTag) -> str:
+		if known.type_name is None:
+			return "bytes"
+		if known.form == "run":
+			return f"a run of {known.type_name}"
+		if known.form == "number":
+			return f"one {known.type_name}, in as few bytes as it needs"
+		return known.type_name
+
+	# Once at most where `validate` refuses a second (26.740), as the
+	# region's policy and a tag's own `T[]` decide between them.
+	once    = set(tlv_single_tags(placement))
+	headers = ("Tag", "Name", "Value", "Repeats")
+	rows = [(str(known.tag), known.name, value(known),
+	         "once at most" if known.tag in once else "yes")
+	        for known in grammar.known]
+	lines.append("")
+	if fmt == "markdown":
+		lines.extend(["| " + " | ".join(headers) + " |",
+		              "|" + "|".join(["---"] * len(headers)) + "|"])
+		lines.extend("| " + " | ".join(row) + " |" for row in rows)
+		return lines
+	widths = [max(len(headers[i]), max(len(row[i]) for row in rows))
+	          for i in range(len(headers))]
+	lines.append("  ".join(headers[i].ljust(widths[i])
+	                       for i in range(len(headers))).rstrip())
+	lines.append("  ".join("-" * widths[i] for i in range(len(headers))))
+	lines.extend("  ".join(row[i].ljust(widths[i])
+	                       for i in range(len(headers))).rstrip()
+	             for row in rows)
 	return lines
 
 

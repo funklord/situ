@@ -485,3 +485,37 @@ def test_a_parameter_is_not_drawn_as_bytes() -> None:
 	assert not any("order" in line for line in diagram(text)), text
 	row = next(line for line in text.splitlines() if line.startswith("order"))
 	assert row.split()[1:3] == ["-", "argument"], row
+
+
+TLV = """struct tv { u8 day; u8 month [max = 12]; }
+struct opts {
+	tlv items (tag_type = u8, length_type = u8,
+	           known = { 1 : { name = date, type = tv },
+	                     2 : { name = words, type = u16, form = run },
+	                     3 : { name = port, type = u16, form = number },
+	                     4 : { name = note } },
+	           unknown = skip);
+}
+"""
+
+
+@pytest.mark.parametrize("fmt", ["ascii", "markdown"])
+def test_a_tlv_region_lists_how_its_items_read_and_the_tags_it_knows(
+		fmt: str) -> None:
+	"""The field table gave the region one row and no size; an encoder
+	written from the document needs the tag, how a value is sized, what an
+	unknown tag does, and each known tag's name and type (26.1167)."""
+	text = emit(TLV, fmt)
+	assert ("Items of `items`: a u8 tag; then a u8 length and that many "
+	        "bytes of value. An unknown tag: skip; a repeated tag: error.") \
+		in text, text
+	for tag, name, value in [("1", "date", "tv"),
+	                         ("2", "words", "a run of u16"),
+	                         ("3", "port", "one u16, in as few bytes as it needs"),
+	                         ("4", "note", "bytes")]:
+		row = next((line for line in text.splitlines()
+		            if line.lstrip("| ").startswith(f"{tag} ")
+		            and name in line), None)
+		assert row is not None and value in row, (name, text)
+		# `duplicate_tags` defaults to an error: each known tag once.
+		assert "once at most" in row, row
