@@ -1,3 +1,6 @@
 [submodule "vendor/qtty"]
 	path = qtty
 	url = https://github.com/funklord/qtty.git
+[submodule "qtkit"]
+	path = qtkit
+	url = https://github.com/funklord/qtkit.git

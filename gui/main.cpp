@@ -12,8 +12,9 @@
 // premise. The terminal frontend that needs nothing but Python is
 // `situ-edit-tui`; this one needs Qt, on a terminal as in a window.
 
-#include "desktop_scheme.h"
 #include "window.h"
+
+#include <qtkit/theme.h>
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -195,10 +196,12 @@ int main(int argc, char **argv)
 		Qtty::set_keyboard_conventions(true);
 	}
 #endif
-	// A dark desktop gets a dark window (desktop_scheme.h). Not on a
-	// terminal: there the terminal's own colours are what qtty draws with.
+	// A dark desktop gets a dark window, and follows the desktop when it
+	// changes (qtkit/theme.h); SITU_THEME, `dark` or `light`, overrides it.
+	// Not on a terminal: there the terminal's own colours are what qtty
+	// draws with.
 	if (!tui)
-		follow_desktop(application);
+		qtkit_follow_desktop(application, "SITU_THEME");
 	QApplication::setApplicationName(QStringLiteral("situ-edit-gui"));
 	// The launcher and the running window as one entry: X11 matches
 	// WM_CLASS against the .desktop's StartupWMClass, Wayland this name.
@@ -277,7 +280,8 @@ int main(int argc, char **argv)
 	                   gui_option, snapshot});
 	parser.process(application);
 	if (parser.isSet(scheme_option)) {
-		std::printf("%s\n", qPrintable(scheme_name(current_scheme())));
+		std::printf("%s\n", qPrintable(qtkit_scheme_name(
+		    qtkit_desktop_scheme("SITU_THEME"))));
 		return 0;
 	}
 

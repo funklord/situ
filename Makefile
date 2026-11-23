@@ -201,6 +201,30 @@ endif
 endif
 GUI_QTTY = $(if $(wildcard $(QTTY_DIR)/qtty.pri),$(QTTY_LIB))
 
+# qtkit, the Qt Widgets pieces the GUIs share (its theme here), fetched as
+# qtty is -- at the commit the gitlink names -- and REQUIRED: the window
+# has no theme without it, so where it cannot be fetched `make gui` stops
+# and says why, rather than building something else.
+QTKIT_DIR    = qtkit
+ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
+ifeq ($(wildcard $(QTKIT_DIR)/qtkit.pri),)
+QTKIT_FETCH := $(shell \
+	if ! command -v git >/dev/null 2>&1; then \
+		echo "make: $(QTKIT_DIR)/ is empty and git is not installed." >&2; \
+	elif [ -z "$$(git rev-parse --git-common-dir 2>/dev/null)" ]; then \
+		echo "make: $(QTKIT_DIR)/ is empty and this is not a git checkout." >&2; \
+	else \
+		echo "make: fetching the $(QTKIT_DIR) submodule" >&2; \
+		git submodule update --init $(QTKIT_DIR) >&2; \
+	fi)
+endif
+ifeq ($(wildcard $(QTKIT_DIR)/qtkit.pri),)
+$(error $(QTKIT_DIR)/ is not checked out and could not be fetched; the window needs it: git submodule update --init $(QTKIT_DIR))
+endif
+endif
+GUI_SOURCES += $(wildcard $(QTKIT_DIR)/src/*.cpp $(QTKIT_DIR)/src/*.h \
+                          $(QTKIT_DIR)/include/qtkit/*.h)
+
 gui: $(GUI_BIN)
 	@$(if $(GUI_QTTY),:,echo 'gui: built without qtty ($(QTTY_DIR) is not checked out): no --tui' >&2)
 
@@ -218,7 +242,7 @@ $(QTTY_LIB): $(BUILD_DIR)/qtty/Makefile FORCE
 FORCE:
 
 # Written again only when the project, or whether qtty is there, changes.
-$(BUILD_DIR)/gui/Makefile: gui/gui.pro $(GUI_QTTY)
+$(BUILD_DIR)/gui/Makefile: gui/gui.pro $(QTKIT_DIR)/qtkit.pri $(GUI_QTTY)
 	@mkdir -p '$(@D)'
 	cd '$(@D)' && $(QMAKE) '$(CURDIR)/gui/gui.pro' \
 	    SITU_BUILD='$(abspath $(BUILD_DIR))' \

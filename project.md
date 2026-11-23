@@ -427,10 +427,11 @@ without huge dependencies kept, and the pertinent code shared:
   taking the run as bytes and a length, as a nested member is, would do.
   Minor: dropping `max` from such a run widened the message's bound to
   unbounded, said only as one line among the breaking ones.
-- situ-edit-gui's dark-desktop detection (`gui/desktop_scheme`) is a copy
-  of snurra's; the guidelines (2026-11-20) now name `qtkit`'s
-  `qtkit_follow_desktop` as the shared one, vendored as a submodule. Move
-  onto it.
+- Done 2026-11-23: situ-edit-gui's dark-desktop detection, a copy of
+  snurra's in `gui/desktop_scheme`, is qtkit's now (`qtkit/` at the root,
+  `qtkit_follow_desktop` with `SITU_THEME` as its override; claude-
+  guidelines inbox 20261123T1226Z). It also follows a change of desktop
+  scheme while running, which the copy did not.
 - File identification: the first tier is built (26.1124) -- `identify`,
   `situc identify`, `--magic`, `--mime` (shared-mime-info), `--c` (the
   one-pass matcher), and the named text heuristics `utf8`, `ascii`, `csv`,

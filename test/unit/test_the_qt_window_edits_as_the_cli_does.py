@@ -297,7 +297,7 @@ def test_the_window_follows_a_dark_desktop(window_binary: Path,
 		want: str) -> None:
 	"""harmonization.md's GUI list: a dark palette on a dark desktop. On TDE
 	Qt alone hands a program a light palette, so the desktop's own file is
-	asked before the palette is (desktop_scheme.h); `--scheme` says what
+	asked before the palette is (qtkit/theme.h); `--scheme` says what
 	the window follows. The files are this machine's measured dialects."""
 	(tmp_path / path).parent.mkdir(parents=True)
 	(tmp_path / path).write_text(text, encoding="ascii")

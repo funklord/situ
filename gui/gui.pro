@@ -48,15 +48,21 @@ DEFINES += SITU_VERSION=\\\"$$cat($$ROOT/VERSION, singleline)\\\"
 	QT += dbus
 }
 
+# qtkit: the Qt Widgets pieces the GUIs share, vendored at the root
+# (harmonization.md). The theme is its, and replaced this window's own
+# desktop_scheme.cpp, which was one of the five copies it was gathered
+# from. QtDBus before the include, or qtkit sees none and leaves the
+# freedesktop portal out.
+QT += dbus
+include($$ROOT/qtkit/qtkit.pri)
+
 SOURCES += \
 	cell_editor.cpp \
-	desktop_scheme.cpp \
 	main.cpp \
 	session.cpp \
 	window.cpp
 
 HEADERS += \
 	cell_editor.h \
-	desktop_scheme.h \
 	session.h \
 	window.h
