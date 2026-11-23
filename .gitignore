@@ -23,6 +23,9 @@ debian/debhelper-build-stamp
 .fmake/
 /libsitu.a
 /situ-walk-c
+# The self-check header fmake.toml's [generate.situ_check] writes beside
+# the tests; make writes it under build/.
+/test/generated/situ_check.h
 
 # Harness state: worktrees, and a session's own working notes. The
 # directory is already here untracked, and these trees depend on `git

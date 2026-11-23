@@ -23,13 +23,22 @@ sources = ["runtime/c/situ.c"]
 [target.c]
 name = "situ-walk-c"
 
-# Nothing here configures the generated C suite, and none is needed. fmake
-# understands .situ: it runs situc for a schema when some source includes
-# the header that schema would write, and it runs both of the commands
-# whose output is the schema's own code -- `build` and `gen-derived`. All
-# twelve test programs build and pass under `fmake test`.
+# The generated C suite needs one thing configured. fmake understands
+# .situ: it runs situc for a schema when some source includes the header
+# that schema would write, and it runs both of the commands whose output is
+# the schema's own code -- `build` and `gen-derived`. What it cannot see is
+# `situ_check.h`, which every test program includes since 5b49be91 and
+# which test/generated/Makefile writes from situc/codegen/c/selfcheck.py;
+# the stanza below is that rule, written beside the tests so their quoted
+# include finds it with no -I (from fmake, situ inbox 20261123T2001Z).
+# With it all twelve build and pass under `fmake test`.
 #
 # The Python suite and the Makefile's double compilation, checked and
 # released, are not attempted and are not configuration. `make check` is
 # still what has to pass before a commit.
 # See README, "Building and testing".
+
+[generate.situ_check]
+command = "python3 -c 'import sys; from situc.codegen.c.selfcheck import header; sys.stdout.write(header())' > test/generated/situ_check.h"
+inputs  = ["situc/codegen/c/selfcheck.py"]
+outputs = ["test/generated/situ_check.h"]
