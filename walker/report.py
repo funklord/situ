@@ -2593,9 +2593,13 @@ def _arm_validates(image: Image, view: View, index: int,
 		                          _run_elements(view, chosen, at))
 	# A variant stating its size is the arm's window (26.1040): `remaining`
 	# inside it ends where the variant does, as in the four backends.
-	limit = view.limit
-	if image.placements[index].size_code != NONE:
-		limit = min(limit, view.at + (at + size_bits(view, index)) // 8)
+	# And one that states none is its struct's own extent, measured above
+	# as the variant's size: the window a nested member gets (26.577) and
+	# the one the C walker hands an arm. The rest of the parent's frame
+	# was handed instead, so a `while ... | end` run in the arm's struct
+	# met the parent's trailing bytes as junk, and this answered BOUNDS
+	# for `01 01 43 2c 33 63` where the other five readers answer OK.
+	limit = min(view.limit, view.at + (at + wide) // 8)
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, limit,
 	             child_args(view, chosen))
 	# Its verdict as it is: None is "cannot say", and `or OK` read it as a

@@ -130,3 +130,48 @@ def test_both_walkers_agree_in_an_arm(tmp_path: Path, packet: str,
 	said  = python_verdict(blob, data, shape)
 	assert said == "cannot-say" or (said == "0") == valid, (packet, said)
 	assert c_verdict(tmp_path, blob, data, shape) == said, packet
+
+
+HELD = """target buffer;
+endian big;
+struct w { u8 n [max = 3]; u8 b[n]; }
+struct inr { w ws[] while (n != 0) | end; }
+struct s {
+	u8 k;
+	variant body switch (k) {
+		case 1:  inr x;
+		default: error;
+	}
+}
+"""
+
+#: A struct in an arm ends where its run does: an element the frame does
+#: not hold ends `inr`'s run, `inr` measures what it read, and what
+#: follows is outside `s`. Only a run cut inside its first element is
+#: short.
+HELD_CASES = [("0101432c3363", True), ("0101430033", True),
+              ("010143", True), ("0101", False)]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+@pytest.mark.parametrize(("packet", "valid"), HELD_CASES)
+def test_a_struct_in_an_arm_is_framed_by_its_extent(tmp_path: Path,
+                                                    packet: str,
+                                                    valid: bool) -> None:
+	"""The Python walker handed the arm's struct the rest of the parent's
+	frame, so the run met `s`'s trailing bytes as junk and answered BOUNDS
+	where the four and the C walker answer OK."""
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	source = tmp_path / "unit.situ"
+	source.write_text(HELD, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	said = fourway.answers(command["c"], bytes.fromhex(packet), tmp_path)
+	assert ("validate 0" in said.split("-- s\n")[1].split("\n-- ")[0]) \
+		== valid, said
+	blob  = packed_text(HELD)
+	shape = shape_named_text(HELD, "s")
+	data  = bytes.fromhex(packet)
+	walked = python_verdict(blob, data, shape)
+	assert (walked == "0") == valid, walked
+	assert c_verdict(tmp_path, blob, data, shape) == walked
