@@ -47,6 +47,10 @@ NONCES  = [0, 1, 3, 4, 0, 5, 0]
 #: NO_EXPIRY when the caller says one is required and OK when it does not;
 #: a stated one is OK either way.
 CALLER  = [6, 0, 0]
+#: The caller's horizon (fuzznet, inbox 20261123T1215Z): with `max_ahead`
+#: 500 at 1000, an expiry of 1600 is HORIZON and 1400 OK; a horizon of
+#: 1001, past the schema's 1000, is refused as BOUNDS (1).
+HORIZONS = [4, 0, 1]
 
 C_DRIVER = r"""
 #include <stdio.h>
@@ -69,10 +73,10 @@ int main(void)
 {
 	static situ_w_t w;
 	static situ_n_slot_t slots[4];
-	situ_n_t n = {slots, 4};
-	situ_n_t small = {slots, 3};
+	situ_n_t n = {slots, 4, 0};
+	situ_n_t small = {slots, 3, 0};
 	static situ_z_slot_t zslots[1];
-	situ_z_t z = {zslots, 1};
+	situ_z_t z = {zslots, 1, 0};
 	printf("w");
 	situ_w_record(&w, at(10, 0, 0), &v); printf(" %d", v);
 	situ_w_record(&w, at(10, 0, 0), &v); printf(" %d", v);
@@ -97,6 +101,16 @@ int main(void)
 	situ_z_check(&z, at(0, 9, 0), 1000, 1, &v); printf(" %d", v);
 	situ_z_check(&z, at(0, 9, 0), 1000, 0, &v); printf(" %d", v);
 	situ_z_check(&z, at(0, 9, 1500), 1000, 1, &v); printf(" %d", v);
+	printf("\nh");
+	{
+		static situ_n_slot_t hslots[4];
+		situ_n_t h = {hslots, 4, 500};
+		situ_n_t past = {hslots, 4, 1001};
+		situ_n_check(&h, at(0, 50, 1600), 1000, &v); printf(" %d", v);
+		situ_n_check(&h, at(0, 50, 1400), 1000, &v); printf(" %d", v);
+		printf(" %d", situ_n_check(&past, at(0, 50, 1400), 1000, &v)
+		              == SITU_ERR_BOUNDS);
+	}
 	printf("\n");
 	return 0;
 }
@@ -135,6 +149,12 @@ int main()
 	(void)zz.check(at(0,9,0),1000,true,v); std::printf(" %d", int(v));
 	(void)zz.check(at(0,9,0),1000,false,v); std::printf(" %d", int(v));
 	(void)zz.check(at(0,9,1500),1000,true,v); std::printf(" %d", int(v));
+	n h; n::slot hslots[4] = {}; h.slots = hslots; h.count = 4; h.max_ahead = 500;
+	std::printf("\nh");
+	(void)h.check(at(0,50,1600),1000,v); std::printf(" %d", int(v));
+	(void)h.check(at(0,50,1400),1000,v); std::printf(" %d", int(v));
+	h.max_ahead = 1001;
+	std::printf(" %d", int(h.check(at(0,50,1400),1000,v) == ::situ::rt::err::bounds));
 	std::printf("\n");
 }
 """
@@ -148,7 +168,7 @@ fn bytes(seq: u32, nonce: u64, exp: u64) -> Vec<u8> {
 }
 fn main() {
 	let mut table = [(0u64, 0u64); 4];
-	let mut w = W::default(); let mut n = N { slots: &mut table }; let mut out = vec![];
+	let mut w = W::default(); let mut n = N { slots: &mut table, max_ahead: 0 }; let mut out = vec![];
 	for (seq, check) in [(10, false), (10, false), (12, false), (11, true), (200, false), (136, false), (137, false)] {
 		let b = bytes(seq, 0, 0); let f = rp::F::new(&b).unwrap();
 		out.push(if check { w.check(&f) } else { w.record(&f) }.unwrap() as i32);
@@ -161,12 +181,22 @@ fn main() {
 	for i in 0..3 { let b = bytes(0, 20 + i, 1900); let f = rp::F::new(&b).unwrap(); n.record(&f, 1000).unwrap(); }
 	for (exp, now) in [(1900u64, 1000u64), (2600, 2000)] { let b = bytes(0, 30, exp); let f = rp::F::new(&b).unwrap(); out.push(n.record(&f, now).unwrap() as i32); }
 	println!("n {:?}", out); out.clear();
-	let mut zt = [(0u64, 0u64); 1]; let z = Z { slots: &mut zt };
+	let mut zt = [(0u64, 0u64); 1]; let z = Z { slots: &mut zt, max_ahead: 0 };
 	for (exp, required) in [(0u64, true), (0, false), (1500, true)] {
 		let b = bytes(0, 9, exp); let f = rp::F::new(&b).unwrap();
 		out.push(z.check(&f, 1000, required).unwrap() as i32);
 	}
-	println!("z {:?}", out);
+	println!("z {:?}", out); out.clear();
+	let mut ht = [(0u64, 0u64); 4];
+	let mut h = N { slots: &mut ht, max_ahead: 500 };
+	for exp in [1600u64, 1400] {
+		let b = bytes(0, 50, exp); let f = rp::F::new(&b).unwrap();
+		out.push(h.check(&f, 1000).unwrap() as i32);
+	}
+	h.max_ahead = 1001;
+	let b = bytes(0, 50, 1400); let f = rp::F::new(&b).unwrap();
+	out.push(matches!(h.check(&f, 1000), Err(situ_rt::Error::Bounds)) as i32);
+	println!("h {:?}", out);
 }
 """
 
@@ -247,6 +277,11 @@ def test_python(tmp_path: Path) -> None:
 		assert [z.check(at(0, 9, 0), 1000, True),
 		        z.check(at(0, 9, 0), 1000, False),
 		        z.check(at(0, 9, 1500), 1000, True)] == CALLER
+		h = replay.N(4, 500)
+		said = [h.check(at(0, 50, 1600), 1000), h.check(at(0, 50, 1400), 1000)]
+		with pytest.raises(ValueError):
+			replay.N(4, 1001)
+		assert said + [1] == HORIZONS
 	finally:
 		del sys.path[:2]
 		for name in ("rp", "rp_replay"):
@@ -265,7 +300,8 @@ def test_c(tmp_path: Path) -> None:
 	assert built.returncode == 0, built.stderr
 	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
 	                     text=True, timeout=60)
-	assert _numbers(ran.stdout) == [COUNTER, NONCES, [1], CALLER], ran.stdout
+	assert _numbers(ran.stdout) == [COUNTER, NONCES, [1], CALLER,
+	                                HORIZONS], ran.stdout
 
 
 @pytest.mark.skipif(shutil.which("g++") is None, reason="no C++ compiler")
@@ -281,7 +317,8 @@ def test_cpp(tmp_path: Path) -> None:
 	assert built.returncode == 0, built.stderr
 	ran = subprocess.run([str(tmp_path / "t")], capture_output=True,
 	                     text=True, timeout=60)
-	assert _numbers(ran.stdout) == [COUNTER, NONCES, CALLER], ran.stdout
+	assert _numbers(ran.stdout) == [COUNTER, NONCES, CALLER, HORIZONS], \
+		ran.stdout
 
 
 @pytest.mark.skipif(shutil.which("rustc") is None, reason="no Rust compiler")
@@ -298,4 +335,5 @@ def test_rust(tmp_path: Path) -> None:
 	                     text=True, timeout=60)
 	lines = [line.replace("[", "").replace("]", "").replace(",", "")
 	         for line in ran.stdout.splitlines()]
-	assert _numbers("\n".join(lines)) == [COUNTER, NONCES, CALLER], ran.stdout
+	assert _numbers("\n".join(lines)) == [COUNTER, NONCES, CALLER,
+	                                      HORIZONS], ran.stdout
