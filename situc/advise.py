@@ -802,6 +802,93 @@ def _find_short_nonces(resolved: ResolvedSchema) -> list[Suggestion]:
 	return found
 
 
+#: The year a time field must reach to be left alone, as seconds since
+#: 1970. Fixed rather than "a century from now", so the advice a schema
+#: gets does not depend on the day it is asked; 2200 clears every 64-bit
+#: count and no 32-bit count of seconds or finer.
+TIME_HORIZON = 7258118400
+
+#: Seconds from 1970 to each named epoch, on the POSIX count; `caller`
+#: is absent, its clock having no date to run out at.
+EPOCH_SECONDS = {"unix": 0, "ntp": -2208988800, "gps": 315964800,
+                 "tai": -378691200}
+
+
+def _find_expiring_times(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""An instant whose field runs out before `TIME_HORIZON` (26.1165).
+
+	`[time = s, epoch = unix]` on an `i32` is the year 2038, and on NTP's
+	`u32` it is 2036; both are arithmetic on the field and the unit, which
+	is what a schema stating its time now gives. A clock the caller keeps
+	has no date and may wrap on purpose, a duration is a span rather than
+	a date, and a unit the message chooses is not known here, so all three
+	are left alone.
+	"""
+	from datetime import datetime, timezone
+	from situc.timespec import spec_of
+	found = []
+	env = resolved.layout.env
+	for struct in resolved.structs.values():
+		for entry in own_entries(struct):
+			placement = entry.placement
+			scalar    = placement.scalar
+			if placement.kind != "field" or scalar is None \
+					or scalar.is_bit_packed or scalar.is_fixed_point \
+					or placement.radix is not None \
+					or placement.array_count is not None \
+					or scalar.bits >= 64:
+				continue
+			try:
+				spec = spec_of(placement.attrs, env)
+			except Exception:
+				continue
+			if spec is None or spec.kind != "time" or spec.scale \
+					or spec.calendar or spec.epoch == "caller":
+				continue
+			if spec.epoch in EPOCH_SECONDS:
+				start = EPOCH_SECONDS[spec.epoch or ""]
+			else:
+				start = int(datetime.strptime(spec.epoch or "",
+				                              "%Y-%m-%dT%H:%M:%SZ")
+				            .replace(tzinfo=timezone.utc).timestamp())
+			def last_of(bits: int) -> int:
+				most = (1 << (bits - 1)) - 1 if scalar.signed \
+					else (1 << bits) - 1
+				return start + most * spec.numerator // spec.denominator
+			last = last_of(scalar.bits)
+			if last >= TIME_HORIZON:
+				continue
+			# The narrowest whole-number width that clears the horizon:
+			# `u16` days need `u32`, not 64 bits.
+			bits  = next(one for one in (16, 32, 64)
+			             if one > scalar.bits
+			             and (last_of(one) >= TIME_HORIZON or one == 64))
+			wide  = scalar.bits // BITS_PER_BYTE
+			grows = 0 if placement.parameter \
+				else (bits - scalar.bits) // BITS_PER_BYTE
+			when  = datetime.fromtimestamp(last, timezone.utc) \
+				.strftime("%Y-%m-%dT%H:%M:%SZ")
+			kind  = f"{'i' if scalar.signed else 'u'}{bits}"
+			found.append(Suggestion(
+				rule    = "widen-a-time-that-runs-out",
+				subject = placement.path,
+				span    = placement.span,
+				summary = f"widen this {wide}-byte time to {kind}",
+				detail  = (f"`{placement.path}` counts {spec.unit()} from "
+				           f"{spec.epoch} in {scalar.bits} "
+				           f"{'signed ' if scalar.signed else ''}bits, and "
+				           f"its last instant is {when}"),
+				cost    = Cost(typical=grows, worst=grows,
+				               basis="on every message" if grows
+				                     else "a `parameter` is not on the wire"),
+				yields  = f"{spec.unit()} from {spec.epoch} in {kind}, past "
+				          "the year 2200",
+				rank    = 14,
+				weight  = TIME_HORIZON - last,
+			))
+	return found
+
+
 def _find_unnamed_nonces(resolved: ResolvedSchema) -> list[Suggestion]:
 	"""A codec that takes a nonce, over a region that names none.
 
@@ -1332,6 +1419,7 @@ CATALOG: tuple[Rule, ...] = (
 	Rule("widen-a-short-tag",	11, _find_short_tags),
 	Rule("widen-a-short-nonce",	12, _find_short_nonces),
 	Rule("name-the-nonce",		13, _find_unnamed_nonces),
+	Rule("widen-a-time-that-runs-out",	14, _find_expiring_times),
 )
 
 

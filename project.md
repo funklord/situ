@@ -5026,6 +5026,7 @@ case.
 | widen a short tag | a tag under 8 bytes no codec size or `[truncated]` speaks for | a guess passes once in 2^64 tries rather than 2^(8 x width) |
 | widen a short nonce | a nonce under 8 bytes under a codec stating no `nonce_bytes` | 2^64 messages under one key before a nonce repeats |
 | name a region's nonce | a codec stating `nonce_bytes`, over a region naming no `nonce =` | the width held to the codec, the ordering checked, the nonce in the wire signature |
+| widen a time that runs out | an instant of a fixed unit on a dated epoch whose field ends before 2200 (`i32` Unix seconds, NTP's `u32`) | the field reaches past 2200, at the narrowest width that does; a `caller` clock and a duration are left alone (26.1165) |
 
 Three of those triggers are not decidable from a schema and are implemented as
 what the compiler can actually supply:

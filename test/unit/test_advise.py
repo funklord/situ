@@ -391,6 +391,7 @@ def test_every_catalog_rule_is_exercised() -> None:
 		"group-covered-regions",
 		# Below, with what each must stay quiet about.
 		"widen-a-short-tag", "widen-a-short-nonce", "name-the-nonce",
+		"widen-a-time-that-runs-out",
 	}
 	assert {rule.name for rule in advise.CATALOG} == tested
 
@@ -1148,6 +1149,9 @@ struct large { u8 y[10]; }
 		        " u32 seq; }\n",
 		 BITS + "struct s { u8 urgent; u1 ack; u2 prio; reserved u5;"
 		        " u32 seq; }\n"),
+		("widen-a-time-that-runs-out",
+		 "struct s { i32 at [time = s, epoch = unix]; u32 seq; }",
+		 "struct s { i64 at [time = s, epoch = unix]; u32 seq; }"),
 	]
 
 	def smallest_frame(body: str) -> int:
@@ -1588,3 +1592,43 @@ def test_a_codec_s_nonce_is_asked_for_by_name() -> None:
 def test_a_named_nonce_or_a_codec_taking_none_is_left_alone(body: str) -> None:
 	"""A cipher may take no nonce, and a silent codec has not said it does."""
 	assert by_rule(SIZED + body, "name-the-nonce") == []
+
+
+# -- a time that runs out (26.1165) ------------------------------------------
+
+
+@pytest.mark.parametrize(("field", "kind", "last"), [
+	("i32 at [time = s, epoch = unix]", "i64", "2038-01-19T03:14:07Z"),
+	("u32 at [time = s, epoch = ntp]", "u64", "2036-02-07T06:28:15Z"),
+	("u16 at [time = d, epoch = \"2000-01-01\"]", "u32",
+	 "2179-06-06T00:00:00Z"),
+])
+def test_a_time_says_the_instant_it_runs_out(field: str, kind: str,
+                                             last: str) -> None:
+	"""The year 2038 and NTP's era rollover, as arithmetic on the field and
+	the unit the schema states; the narrowest width past 2200 is asked
+	for, so `u16` days become `u32` and not 64 bits."""
+	found = only(f"struct s {{ {field}; }}", "widen-a-time-that-runs-out")
+	assert last in found.detail, found.detail
+	assert found.summary.endswith(kind), found.summary
+
+
+@pytest.mark.parametrize("field", [
+	"u64 at [time = ms, epoch = unix]",
+	"u32 at [time = min, epoch = unix]",
+	"u32 at [time = ms, epoch = caller]",
+	"u32 at [duration = s]",
+	"u32 at",
+])
+def test_a_time_that_lasts_or_has_no_date_is_left_alone(field: str) -> None:
+	"""Past 2200; a clock only the caller keeps, which may wrap on purpose;
+	a span rather than a date; a number stating no time."""
+	assert by_rule(f"struct s {{ {field}; }}",
+	               "widen-a-time-that-runs-out") == []
+
+
+def test_a_widened_time_is_left_alone() -> None:
+	"""The advice taken: `i64` seconds reach past the horizon, and the rule
+	says nothing more."""
+	assert by_rule("struct s { i64 at [time = s, epoch = unix]; }",
+	               "widen-a-time-that-runs-out") == []
