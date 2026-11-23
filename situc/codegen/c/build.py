@@ -520,7 +520,7 @@ def _minimal_run(placement: Placement) -> bool:
 	whose digits would need a leading zero is then refused by the validate
 	after; this read every `[minimal]` one as delimited, and the builder
 	generation of all four backends died on `delimiters[0]`."""
-	return placement.radix_minimal and bool(placement.delimiters)
+	return bool(placement.radix_rules & 1) and bool(placement.delimiters)
 
 
 def _radix_refusal(placement: Placement) -> str | None:
@@ -2397,7 +2397,7 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 		return [
 			f"\t/* {local}: {part.digits} digit(s) at radix {part.radix}, "
 			+ ("no leading zero, so a shorter value is refused. */"
-			   if part.placement.radix_minimal
+			   if part.placement.radix_rules & 1
 			   else "leading zeros and all. */"),
 			*_room(f"{part.digits}u"),
 			f"\tif ({formatter}({OUT} + {AT}, {part.digits}u, "
@@ -2406,7 +2406,7 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 			*(_lower_case(part.radix or 10, f"{part.digits}u", "\t")
-			  if part.placement.radix_minimal else []),
+			  if part.placement.radix_rules & 2 else []),
 			f"\t{AT} += {part.digits}u;",
 		]
 
@@ -2447,7 +2447,8 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 		f"\t\t                     ({widest}){value}) != 0) {{",
 		"\t\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t\t}",
-		*_lower_case(part.radix or 10, DIGITS, "\t\t"),
+		*(_lower_case(part.radix or 10, DIGITS, "\t\t")
+		  if part.placement.radix_rules & 2 else []),
 		f"\t\t{AT} += {DIGITS};",
 		f"\t\t{OUT}[{AT}] = 0x{ending:02X}u;",
 		f"\t\t{AT} += 1u;",

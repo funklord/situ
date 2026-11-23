@@ -956,6 +956,54 @@ def digits_minimal(data: memoryview | bytes, radix: int) -> bool:
 	return radix <= 10 or not any(b"A"[0] <= byte <= b"F"[0] for byte in raw)
 
 
+#: The spelling rules `digits_spelled` takes (26.1166).
+SPELL_NO_ZERO, SPELL_LOWER, SPELL_UPPER = 1, 2, 4
+#: The sign spellings `parse_int_signs` admits beyond situ's own (26.1166).
+SIGN_PLUS, SIGN_NEG_ZERO = 1, 2
+
+
+def digits_spelled(data: memoryview | bytes, radix: int, rules: int) -> bool:
+	"""Whether digits follow the schema's spelling rules (26.1166): a
+	leading zero, an upper-case digit and a lower-case one, each refused
+	only where its bit is set. A leading `-` or `+` is skipped first."""
+	raw = bytes(data)
+	if raw[:1] in (b"-", b"+"):
+		raw = raw[1:]
+	if not raw:
+		return False
+	if rules & SPELL_NO_ZERO and len(raw) > 1 and raw[0:1] == b"0":
+		return False
+	if radix <= 10:
+		return True
+	if rules & SPELL_LOWER and any(0x41 <= byte <= 0x46 for byte in raw):
+		return False
+	return not (rules & SPELL_UPPER and any(0x61 <= byte <= 0x66
+	                                         for byte in raw))
+
+
+def parse_uint_plus(data: memoryview | bytes, radix: int,
+		limit: int) -> int | None:
+	"""`parse_uint`, with a leading `+` admitted (26.1166)."""
+	raw = bytes(data)
+	if len(raw) > 1 and raw[0:1] == b"+" and raw[1:2] not in (b"+", b"-"):
+		return parse_uint(raw[1:], radix, limit)
+	return parse_uint(data, radix, limit)
+
+
+def parse_int_signs(data: "memoryview | bytes", radix: int, low: int,
+		high: int, signs: int) -> int | None:
+	"""`parse_int`, admitting a leading `+` and `-0` where the schema says
+	so (26.1166)."""
+	raw = bytes(data)
+	if signs & SIGN_PLUS and len(raw) > 1 and raw[0:1] == b"+" \
+			and raw[1:2] not in (b"+", b"-"):
+		return parse_int(raw[1:], radix, low, high)
+	if signs & SIGN_NEG_ZERO and len(raw) > 1 and raw[0:1] == b"-" \
+			and set(raw[1:]) == {0x30}:
+		return 0
+	return parse_int(data, radix, low, high)
+
+
 def bcd_decode(packed: int, digits: int) -> int:
 	value = 0
 	for i in range(digits - 1, -1, -1):

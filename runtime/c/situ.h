@@ -1639,6 +1639,95 @@ static inline int situ_digits_minimal(const uint8_t *data, uint32_t len,
 	return 1;
 }
 
+/* Whether digits follow the schema's spelling rules (26.1166), each one
+ * rule: SITU_SPELL_NO_ZERO refuses a leading zero, SITU_SPELL_LOWER an
+ * upper-case digit, SITU_SPELL_UPPER a lower-case one. `[minimal]` is the
+ * first two, which `situ_digits_minimal` asks as one; this is for a
+ * schema that states them apart. A leading `-` or `+` is skipped first,
+ * as `situ_digits_minimal` skips the `-`.
+ */
+#define SITU_SPELL_NO_ZERO 1u
+#define SITU_SPELL_LOWER   2u
+#define SITU_SPELL_UPPER   4u
+
+static inline int situ_digits_spelled(const uint8_t *data, uint32_t len,
+        uint32_t radix, uint32_t rules)
+{
+	uint32_t i;
+
+	if (len > 0u && (data[0] == (uint8_t)'-' || data[0] == (uint8_t)'+')) {
+		data += 1;
+		len  -= 1u;
+	}
+	if (len == 0u) {
+		return 0;
+	}
+	if ((rules & SITU_SPELL_NO_ZERO) != 0u && len > 1u
+	                && data[0] == (uint8_t)'0') {
+		return 0;
+	}
+	if (radix > 10u) {
+		for (i = 0u; i < len; i++) {
+			if ((rules & SITU_SPELL_LOWER) != 0u
+			                && data[i] >= (uint8_t)'A'
+			                && data[i] <= (uint8_t)'F') {
+				return 0;
+			}
+			if ((rules & SITU_SPELL_UPPER) != 0u
+			                && data[i] >= (uint8_t)'a'
+			                && data[i] <= (uint8_t)'f') {
+				return 0;
+			}
+		}
+	}
+	return 1;
+}
+
+/* `situ_parse_uint`, with a leading `+` admitted where the schema says
+ * `[plus_sign]` (26.1166). `+` alone and `+-` are still refused. */
+static inline int situ_parse_uint_plus(const uint8_t *data, uint32_t len,
+        uint32_t radix, uint64_t max, uint64_t *out)
+{
+	if (len > 1u && data[0] == (uint8_t)'+'
+	                && data[1] != (uint8_t)'+' && data[1] != (uint8_t)'-') {
+		return situ_parse_uint(data + 1, len - 1u, radix, max, out);
+	}
+	return situ_parse_uint(data, len, radix, max, out);
+}
+
+/* `situ_parse_int`, with the sign spellings the schema admits beyond
+ * situ's own (26.1166): SITU_SIGN_PLUS a leading `+`, SITU_SIGN_NEG_ZERO
+ * `-0` (and `-00` where leading zeros are allowed) as zero. */
+#define SITU_SIGN_PLUS     1u
+#define SITU_SIGN_NEG_ZERO 2u
+
+static inline int situ_parse_int_signs(const uint8_t *data, uint32_t len,
+        uint32_t radix, int64_t min, int64_t max, uint32_t signs,
+        int64_t *out)
+{
+	if ((signs & SITU_SIGN_PLUS) != 0u && len > 1u
+	                && data[0] == (uint8_t)'+'
+	                && data[1] != (uint8_t)'+' && data[1] != (uint8_t)'-') {
+		return situ_parse_int(data + 1, len - 1u, radix, min, max, out);
+	}
+	if ((signs & SITU_SIGN_NEG_ZERO) != 0u && len > 1u
+	                && data[0] == (uint8_t)'-') {
+		uint32_t i;
+		int      zero = 1;
+
+		for (i = 1u; i < len; i++) {
+			if (data[i] != (uint8_t)'0') {
+				zero = 0;
+			}
+		}
+		if (zero) {
+			*out = 0;
+			return 0;
+		}
+	}
+	return situ_parse_int(data, len, radix, min, max, out);
+}
+
 static inline int situ_ascii_valid(const uint8_t *data, uint32_t len)
 {
 	uint32_t i;

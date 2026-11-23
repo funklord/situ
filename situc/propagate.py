@@ -340,7 +340,14 @@ def _is_loose_text_number(context: Context) -> bool:
 	shipped without using it.
 	"""
 	placement = context.placement
-	if placement.radix is None or placement.radix_minimal:
+	if placement.radix is None:
+		return False
+	# 26.1166: one spelling per value takes every rule -- no leading zero,
+	# a fixed case above radix ten, and no `+` or `-0` -- which is what
+	# `[minimal]` is.
+	rules = placement.radix_rules
+	if rules & 1 and ((placement.radix or 10) <= 10 or rules & 6) \
+			and not placement.radix_signs:
 		return False
 
 	# A fixed-width text number is canonical without asking. `007` is not a

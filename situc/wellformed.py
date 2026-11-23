@@ -73,6 +73,7 @@ def check(schema: ast.Schema) -> None:
 	check_struct_attribute_places(schema)
 	check_attribute_values(schema)
 	check_times(schema)
+	check_spellings(schema)
 	check_byte_run_equality(schema)
 	check_byte_enums(schema)
 	check_token_sets(schema)
@@ -3019,6 +3020,73 @@ STRUCT_ONLY_ATTRS = {
 }
 
 
+#: A text number's spelling rules (26.1166), each one rule.
+SPELLING_ATTRS = ("leading_zeros", "hex_case", "plus_sign", "negative_zero")
+
+
+def check_spellings(schema: ast.Schema) -> None:
+	"""Each spelling rule states a value that holds, on a number it can
+	rule on, and none contradicts `[minimal]` (26.1166). Where it may sit
+	is `check_attribute_places`'s question, asked before this."""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			said = {attr.name: attr for attr in getattr(member, "attrs", ())}
+			if not set(said) & set(SPELLING_ATTRS):
+				continue
+			for key, allowed in (("leading_zeros", ("refused", "allowed")),
+			                     ("hex_case", ("lower", "upper"))):
+				if key in said and getattr(said[key].value, "name",
+				                           None) not in allowed:
+					raise error(f"`{key}` is "
+					            f"{' or '.join(f'`{one}`' for one in allowed)}",
+					            said[key].span, label = "here")
+			for key in ("plus_sign", "negative_zero"):
+				if key in said and said[key].value is not None:
+					raise error(f"`[{key}]` takes no value", said[key].span,
+					            label = "here")
+			radix  = getattr(member, "radix", None) or 10
+			scalar = getattr(getattr(member, "type_ref", None), "scalar", None)
+			signed = scalar is not None and scalar.signed
+			if "hex_case" in said and radix <= 10:
+				raise error(f"`{getattr(member, 'name', '')}` is written in "
+				            f"radix {radix}, whose digits have no case",
+				            said["hex_case"].span, label = "here")
+			if "negative_zero" in said and not signed:
+				raise error(f"`{getattr(member, 'name', '')}` is unsigned, "
+				            "so it has no `-0` to admit",
+				            said["negative_zero"].span, label = "here")
+			if "plus_sign" in said and getattr(member, "until", None) is None \
+					and not _runs_to_the_end(member):
+				raise error("`[plus_sign]` is for a delimited number, or one "
+				            "run to the frame's end", said["plus_sign"].span,
+				            label = "here",
+				            notes = ["a width counts the sign's byte whether "
+				                     "or not it is written, so `+7` and `07` "
+				                     "would both fill two bytes -- situ "
+				                     "refuses rather than choosing (8.6.2)"])
+			minimal = said.get("minimal")
+			if minimal is None:
+				continue
+			loose = [key for key in ("plus_sign", "negative_zero")
+			         if key in said]
+			zeros = said.get("leading_zeros")
+			if zeros is not None \
+					and getattr(zeros.value, "name", None) == "allowed":
+				loose.insert(0, "leading_zeros = allowed")
+			if loose:
+				raise error(f"`[minimal]` and `[{loose[0]}]` contradict each "
+				            "other", minimal.span, label = "pick one",
+				            notes = ["`[minimal]` says a value has one "
+				                     "spelling, and the other admits a second "
+				                     "(26.1166)"])
+
+
+def _runs_to_the_end(member: ast.Member) -> bool:
+	"""`decimal u64 v[remaining]`: digits the frame's end stops."""
+	size = getattr(getattr(member, "array", None), "size", None)
+	return isinstance(size, ast.Remaining)
+
+
 def _counts(member: ast.Member) -> bool:
 	"""Whether a member is read as one number (26.1165): a scalar that is
 	not a lone bit, and an array only where its elements are the digits of
@@ -3114,6 +3182,12 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 	if attr.name == "minimal":
 		return None if getattr(member, "radix", None) is not None else (
 			"a radix-encoded number, whose leading zeros it forbids")
+
+	# 26.1166: a text number's spelling, one rule at a time.
+	if attr.name in SPELLING_ATTRS:
+		return None if getattr(member, "radix", None) is not None \
+			and not getattr(member, "scaled", False) else (
+			"an integer text number, whose spelling it rules on")
 
 	# 26.1165: a time is a count, so it sits on a member read as a number.
 	if attr.name in ("time", "duration", "epoch"):
@@ -3458,7 +3532,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 	"no_rmw", "truncated", "size", "trim", "case_insensitive",
 	"nul_terminated", "must_be_zero", "holds", "ascending", "chars",
-	"time", "duration", "epoch",
+	"time", "duration", "epoch", *SPELLING_ATTRS,
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here

@@ -748,3 +748,28 @@ def test_a_fixed_width_minimal_number_is_written_at_its_width(
 	said = four_say(schema, out, [], cases).splitlines()
 	assert [line.split()[-1] for line in said] == [
 		b"beef".hex(), "refused"], said
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_an_upper_case_minimal_number_is_written_in_upper_case(
+		tmp_path: Path) -> None:
+	"""`[minimal, hex_case = upper]` (26.1166): the one spelling is upper
+	case, so the builders leave the formatter's case as it is."""
+	schema = tmp_path / "upper_hex.situ"
+	schema.write_text(MINIMAL_HEX.replace("[minimal]",
+	                                      "[minimal, hex_case = upper]"),
+	                  encoding="ascii")
+	parsed   = load_schema(schema)
+	resolved = resolve(parsed, solve(parsed))
+	units    = plain_build.units(resolved, plain_build.shape(parsed, resolved))
+	assert len(units) == 1
+	cases: list[tuple[Unit, Given]] = []
+	for value in (0xff, 0xa):
+		given: Given = [(part, value if part.radix else b"")
+		                for part, _ in _given(_flat(units[0]), {})]
+		cases.append((units[0], given))
+	out = tmp_path / "out"
+	out.mkdir()
+	said = four_say(schema, out, [], cases).splitlines()
+	assert [line.split()[-1] for line in said] == [
+		b"FF,".hex(), b"A,".hex()], said

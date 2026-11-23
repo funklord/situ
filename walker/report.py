@@ -939,6 +939,26 @@ FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
 # itself; one number, said twice and held together here.
 assert TERMINATED == TERMINATED_ROW
 DIGITS_VALID, DIGITS_MINIMAL = 9, 10
+
+
+def spelled(digits: bytes, against: int) -> bool:
+	"""Whether digits follow their spelling row (26.1166): the radix in the
+	low byte, and above it the rules -- 1 no leading zero, 2 no upper-case
+	digit, 4 no lower-case one -- where none means `[minimal]`'s, 1 | 2.
+	`situ_digits_minimal` is what a row with no rules mirrors, skipping a
+	leading `-`, and `situ_digits_spelled` one with them, skipping a `-` or
+	a `+` -- so on `+07` the two name the check C names."""
+	radix, rules = against & 0xFF, against >> 8 or 3
+	if digits[:1] == b"-" or (against >> 8 and digits[:1] == b"+"):
+		digits = digits[1:]
+	if not digits:
+		return False
+	if rules & 1 and len(digits) > 1 and digits[0:1] == b"0":
+		return False
+	if radix > 10 and rules & 2 and any(0x41 <= one <= 0x46 for one in digits):
+		return False
+	return not (radix > 10 and rules & 4
+	            and any(0x61 <= one <= 0x66 for one in digits))
 NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
 PINNED_RUN = 14
 #: `[ascending]` (26.985): a run's keys each above the one before. Not an
@@ -1807,13 +1827,7 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			# is skipped before the question is asked, exactly as
 			# `situ_digits_minimal` skips it: `-042` is non-minimal for the
 			# same reason `042` is.
-			if digits[:1] == b"-":
-				digits = digits[1:]
-			if not digits:
-				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
-			if len(digits) > 1 and digits[0:1] == b"0":
-				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
-			if against > 10 and any(0x41 <= one <= 0x46 for one in digits):
+			if not spelled(digits, against):
 				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
 
 		for check, against in held:
@@ -2379,13 +2393,7 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 			digits = digits_of(view, chosen)
 		except Refused:
 			return ERR_CONSTRAINT
-		if digits[:1] == b"-":
-			digits = digits[1:]
-		if not digits:
-			return ERR_CONSTRAINT
-		if len(digits) > 1 and digits[0:1] == b"0":
-			return ERR_CONSTRAINT
-		if against > 10 and any(0x41 <= one <= 0x46 for one in digits):
+		if not spelled(digits, against):
 			return ERR_CONSTRAINT
 
 	for check, against in held:

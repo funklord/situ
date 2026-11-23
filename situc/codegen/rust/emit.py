@@ -144,6 +144,7 @@ from situc.traverse import (arm_remaining_strides,
 	tlv_single_tags,
 	tlv_typed_tags,
 	TypedTag,
+	spelling_check,
 	held_here,
 	holds_of,
 	walks_to_the_frame_end,
@@ -181,6 +182,7 @@ def _uint_parser(placement: Placement) -> str:
 	function has `parse_uint`'s signature, so only the name differs.
 	"""
 	return ("parse_uint_padded" if placement.radix_padded
+	        else "parse_uint_plus" if placement.radix_signs & 1
 	        else "parse_uint")
 
 
@@ -333,6 +335,19 @@ def _wide(scalar: ScalarType) -> str:
 	"""The 64-bit type that leaf bound takes, in the scalar's own domain."""
 	return "i64" if scalar.signed else "u64"
 
+
+
+def _spell(placement: Placement) -> str:
+	"""The runtime's spelling check for a text number (26.1166)."""
+	check = spelling_check(placement)
+	assert check is not None
+	return check[0]
+
+
+def _rules(placement: Placement) -> str:
+	"""`digits_spelled`'s rules argument, or nothing for `digits_minimal`."""
+	check = spelling_check(placement)
+	return "" if check is None or check[1] is None else f", {check[1]}"
 
 def _typed_check(typed: TypedTag, keyed: str) -> list[str]:
 	"""A known value held to its `type` (26.1167): a whole number of
@@ -5606,7 +5621,9 @@ class Emitter:
 			f"\t\tlet raw = {value};",
 			"",
 			(f"\t\tmatch situ_rt::parse_int(raw, {placement.radix},"
-			 f" {floor}, {limit}) {{" if signed_text else
+			 f" {floor}, {limit}) {{" if signed_text and not placement.radix_signs
+			 else f"\t\tmatch situ_rt::parse_int_signs(raw, {placement.radix},"
+			 f" {floor}, {limit}, {placement.radix_signs}) {{" if signed_text else
 			 f"\t\tmatch situ_rt::{_uint_parser(placement)}(raw, {placement.radix},"
 			 f" {limit}) {{"),
 			f"\t\t\tSome(value) => Ok(value as {rtype}),",
@@ -6503,12 +6520,12 @@ class Emitter:
 		span  = f"self.{_ident(base)}()"
 		spell = ([f"\t\t// `[minimal]`: one spelling per value.",
 		          f"\t\tif let Ok(_digits) = {span} {{",
-		          f"\t\t\tif !situ_rt::digits_minimal(_digits,"
-		          f" {placement.radix}) {{",
+		          f"\t\t\tif !situ_rt::{_spell(placement)}(_digits,"
+		          f" {placement.radix}{_rules(placement)}) {{",
 		          "\t\t\t\treturn Err(Error::Constraint);",
 		          "\t\t\t}",
 		          "\t\t}"]
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 		return [
 			*spell,
 			f"\t\tif let Ok(_digits) = {span} {{",
@@ -6671,12 +6688,12 @@ class Emitter:
 		          if placement.delimiters
 		          else f"self.{_ident(f'{base}_digits')}()")
 
-		if placement.radix_minimal:
+		if spelling_check(placement):
 			value = (f"situ_rt::trim({digits}, {self._trim_set(placement)})"
 			         if placement.trimmed
 			         else digits)
 			lines.extend([
-				f"\t\tif !situ_rt::digits_minimal({value}, {placement.radix}) {{",
+				f"\t\tif !situ_rt::{_spell(placement)}({value}, {placement.radix}{_rules(placement)}) {{",
 				"\t\t\treturn Err(Error::Constraint);",
 				"\t\t}",
 			])
@@ -8443,12 +8460,12 @@ class Emitter:
 
 		name  = c_name(local_name(struct, placement))
 		inner = self._attr_checks(struct, placement, f"{name}_parsed")
-		spell = ([f"\t\t\tif !situ_rt::digits_minimal("
+		spell = ([f"\t\t\tif !situ_rt::{_spell(placement)}("
 		          f"&self.bytes[{name}_at..{name}_at + {width}],"
-		          f" {placement.radix}) {{",
+		          f" {placement.radix}{_rules(placement)}) {{",
 		          "\t\t\t\treturn Err(Error::Constraint);",
 		          "\t\t\t}"]
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 
 		return [
 			f"\t\t// {placement.path}: checked where the discriminant",

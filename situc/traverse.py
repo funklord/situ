@@ -3068,6 +3068,23 @@ def tlv_single_tags(placement: Placement) -> tuple[int, ...]:
 	                     if not known.repeated}))
 
 
+def spelling_check(placement: Placement) -> tuple[str, int | None] | None:
+	"""A text number's spelling check (26.1166): the runtime function's
+	stem and the rules it takes, or None where nothing is refused.
+
+	`digits_minimal` wherever the rules are `[minimal]`'s -- no leading
+	zero, and lower case above radix ten -- so a schema written before
+	the rules came apart generates what it generated; `digits_spelled`,
+	with its rules, for any other combination."""
+	rules = placement.radix_rules
+	if not rules:
+		return None
+	radix = placement.radix or 10
+	if rules == 3 or (radix <= 10 and rules == 1):
+		return "digits_minimal", None
+	return "digits_spelled", rules
+
+
 @dataclass(frozen=True)
 class TypedTag:
 	"""A `known` tag whose value is a run of one type (26.1167)."""

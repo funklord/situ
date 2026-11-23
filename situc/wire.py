@@ -494,6 +494,20 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		facts.append("scaled")
 	if placement.radix_minimal:
 		facts.append("minimal")
+	# 26.1166: each spelling rule a reader holds the digits to, beyond what
+	# `minimal` already says; a peer spelling `+7` where this refuses it
+	# disagrees about the bytes.
+	rules = placement.radix_rules
+	if rules & 1 and not placement.radix_minimal:
+		facts.append("leading-zeros=refused")
+	if rules & 4:
+		facts.append("hex-case=upper")
+	elif rules & 2 and not placement.radix_minimal:
+		facts.append("hex-case=lower")
+	if placement.radix_signs & 1:
+		facts.append("plus-sign")
+	if placement.radix_signs & 2:
+		facts.append("negative-zero")
 	if placement.radix_padded:
 		# Where the digits end is part of what the bytes mean: `644` and a
 		# NUL is a number under `[padded]` and malformed without it.

@@ -1382,6 +1382,10 @@ value's domain rather than its width in the buffer, so `decimal i16 offset
 until ','` is a signed number whose text is one to six bytes and whose sign
 costs a byte a fixed width cannot pay -- the leading `-` is part of the
 digits, and `[minimal]` refuses a second spelling of the same value.
+Each rule `[minimal]` holds is also the schema's to state alone:
+`[leading_zeros = refused]`, `[hex_case = upper]` or `lower` for the one
+case above radix ten, and the two spellings situ otherwise refuses,
+`[plus_sign]` for `+7` and `[negative_zero]` for `-0` (26.1166).
 
 `scaled` is the fourth, and it reads a number that may carry a point and an
 exponent:

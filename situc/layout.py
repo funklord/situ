@@ -665,6 +665,14 @@ class Placement:
 	#: Without it "007" and "7" are the same number written two ways, which is
 	#: what `canonical` exists to report.
 	radix_minimal: bool		= False
+	#: The spelling rules a reader holds the digits to (26.1166), as the
+	#: runtime's `digits_spelled` takes them: 1 refuses a leading zero, 2
+	#: an upper-case digit, 4 a lower-case one. `[minimal]` is 1 | 2, or
+	#: 1 | 4 beside `hex_case = upper`.
+	radix_rules: int		= 0
+	#: The sign spellings admitted beyond situ's own (26.1166): 1 a
+	#: leading `+`, 2 a `-0`.
+	radix_signs: int		= 0
 	#: `[padded]` (26.948): the digits of a fixed-width text number may stop
 	#: short, at a NUL or a space, and every byte after them to the end of
 	#: the width is a NUL or a space. ustar's header is the case: `0000644`
@@ -2875,6 +2883,11 @@ class Solver:
 			from_end           = self._from_end(member, scalar),
 			parameter          = bool(getattr(member, "parameter", False)),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
+			radix_rules        = spelling_rules(member.attrs),
+			radix_signs        = ((1 if _has_attr(member.attrs, "plus_sign")
+			                       else 0)
+			                      | (2 if _has_attr(member.attrs,
+			                                        "negative_zero") else 0)),
 			radix_padded       = _has_attr(member.attrs, "padded"),
 			trimmed            = _has_attr(member.attrs, "trim"),
 			trim_set           = (_whitespace_of(self.schema, member.span)
@@ -4441,6 +4454,21 @@ def _side_effect(attrs: tuple[ast.Attr, ...], name: str) -> ast.SideEffect:
 		            f"{', '.join(sorted(SIDE_EFFECTS))}",
 		            attr.span, label="not a side effect")
 	return ast.SideEffect.NONE
+
+
+def spelling_rules(attrs: tuple[ast.Attr, ...]) -> int:
+	"""A text number's spelling rules as bits (26.1166): 1 no leading zero,
+	2 no upper-case digit, 4 no lower-case one."""
+	said = {attr.name: getattr(attr.value, "name", None) for attr in attrs}
+	rules = 0
+	if "minimal" in said or said.get("leading_zeros") == "refused":
+		rules |= 1
+	case = said.get("hex_case")
+	if case == "upper":
+		rules |= 4
+	elif case == "lower" or "minimal" in said:
+		rules |= 2
+	return rules
 
 
 def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:

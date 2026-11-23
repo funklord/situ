@@ -77,3 +77,139 @@ def test_every_form_takes_the_schemas_word(tmp_path: Path,
 		assert len(set(given.values())) == 1, (field, spelling, given)
 		accepted = "validate 0" in given["c"]
 		assert accepted == (strict if minimal else loose), (field, spelling)
+
+
+# -- 26.1166: the rules `[minimal]` tied together, one at a time ------------
+
+RULES = """target buffer;
+endian big;
+struct s {
+	decimal i32 a until "," [plus_sign, negative_zero];
+	decimal u32 b until "," [plus_sign];
+	hex u32     c until "," [hex_case = upper];
+	hex u32     d until "," [leading_zeros = refused];
+	hex u32     e until "," [minimal, hex_case = upper];
+	decimal i32 f until ",";
+	u8          r[remaining];
+}
+"""
+
+RULED = {"a": b"1", "b": b"1", "c": b"1", "d": b"1", "e": b"1", "f": b"1"}
+
+#: (field, spelling, accepted), worked by hand.
+RULE_CASES = [
+	("a", b"+7", True), ("a", b"-0", True), ("a", b"-00", True),
+	("a", b"+-7", False), ("a", b"+", False), ("a", b"-7", True),
+	("b", b"+7", True), ("b", b"+", False), ("b", b"-7", False),
+	("c", b"FF", True), ("c", b"ff", False), ("c", b"0FF", True),
+	("d", b"0ff", False), ("d", b"ff", True), ("d", b"FF", True),
+	("e", b"FF", True), ("e", b"ff", False), ("e", b"0F", False),
+	# The control: a signed number that says nothing refuses both, as
+	# before.
+	("f", b"+7", False), ("f", b"-0", False), ("f", b"-7", True),
+]
+
+
+def _ruled(field: str, spelling: bytes) -> bytes:
+	parts = dict(RULED, **{field: spelling})
+	return b",".join(parts[name] for name in "abcdef") + b","
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_each_rule_is_the_schemas(tmp_path: Path) -> None:
+	source = tmp_path / "unit.situ"
+	source.write_text(RULES, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	assert len(command) == 4
+	assert "validate 0" in fourway.answers(command["c"], _ruled("a", b"1"),
+	                                       tmp_path)
+	for field, spelling, accepted in RULE_CASES:
+		packet = _ruled(field, spelling)
+		given  = {name: fourway.answers(argv, packet, tmp_path)
+		          for name, argv in command.items()}
+		assert len(set(given.values())) == 1, (field, spelling, given)
+		assert ("validate 0" in given["c"]) == accepted, (field, spelling)
+
+
+@pytest.mark.parametrize(("member", "said"), [
+	('decimal u32 n until "," [hex_case = upper];', "have no case"),
+	('decimal u32 n until "," [negative_zero];', "unsigned"),
+	("decimal u32 n[3] [plus_sign];", "delimited number"),
+	('decimal i32 n until "," [minimal, plus_sign];', "contradict"),
+	('decimal i32 n until "," [minimal, negative_zero];', "contradict"),
+	('decimal u32 n until "," [minimal, leading_zeros = allowed];',
+	 "contradict"),
+	('hex u32 n until "," [hex_case = title];', "`lower` or `upper`"),
+	('decimal u32 n until "," [leading_zeros = sometimes];',
+	 "`refused` or `allowed`"),
+	("u32 n [plus_sign];", "means nothing here"),
+])
+def test_a_rule_that_cannot_hold_is_refused(member: str, said: str) -> None:
+	from situc.diagnostics import SituError
+	from situc.parser import parse_text
+	from situc.wellformed import check
+	text = ("target buffer;\nendian big;\nstruct s {\n\t" + member
+	        + "\n\tu8 r[remaining];\n}\n")
+	with pytest.raises(SituError) as caught:
+		check(parse_text(text, path="s.situ"))
+	assert said in str(caught.value)
+
+
+@pytest.mark.parametrize(("member", "canonical"), [
+	('decimal u32 n until "," [minimal];', True),
+	('decimal u32 n until "," [leading_zeros = refused];', True),
+	('hex u32 n until "," [leading_zeros = refused];', False),
+	('hex u32 n until "," [leading_zeros = refused, hex_case = upper];', True),
+	('decimal i32 n until "," [leading_zeros = refused, plus_sign];', False),
+	('decimal u32 n until ",";', False),
+])
+def test_the_map_follows_the_rules(member: str, canonical: bool) -> None:
+	"""One spelling per value takes every rule; any one left loose is a
+	second spelling, which is what `canonical` reports."""
+	from situc.capability import Axis
+	from situc.layout import solve
+	from situc.parser import parse_text
+	from situc.resolve import resolve
+	text = ("target buffer;\nendian big;\nstruct s {\n\t" + member
+	        + "\n\tu8 r[remaining];\n}\n")
+	schema   = parse_text(text, path="s.situ")
+	resolved = resolve(schema, solve(schema))
+	entry    = next(one for one in resolved.structs["s"].entries
+	                if one.placement.path == "s.n")
+	said = entry.vector.get(Axis.CANONICAL).base == "Canonical"
+	assert said == canonical, member
+
+
+CASED = """target buffer;
+endian big;
+struct s {
+	hex u32 c until "," [hex_case = upper];
+	hex u32 d until "," [leading_zeros = refused];
+	hex u32 e until "," [minimal, hex_case = upper];
+	decimal i32 f until "," [minimal];
+	u8      r[remaining];
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+def test_both_walkers_read_the_rules(tmp_path: Path) -> None:
+	"""The image's spelling row carries the rules above the radix, and
+	both walkers read it; `+07` under `[minimal]` names the spelling as C
+	does, skipping only the `-` there."""
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	blob  = packed_text(CASED)
+	shape = shape_named_text(CASED, "s")
+	plain = {"c": b"1", "d": b"1", "e": b"1", "f": b"1"}
+	cases = [("c", b"FF", True), ("c", b"ff", False), ("d", b"0ff", False),
+	         ("d", b"Ff", True), ("e", b"FF", True), ("e", b"ff", False),
+	         ("e", b"0F", False), ("f", b"-07", False), ("f", b"+7", False),
+	         ("f", b"-7", True)]
+	for field, spelling, accepted in cases:
+		parts  = dict(plain, **{field: spelling})
+		packet = b",".join(parts[name] for name in "cdef") + b","
+		said   = python_verdict(blob, packet, shape)
+		assert (said == "0") == accepted, (field, spelling, said)
+		assert c_verdict(tmp_path, blob, packet, shape) == said, \
+			(field, spelling)

@@ -150,6 +150,7 @@ from situc.traverse import (arm_remaining_strides,
 	tlv_single_tags,
 	tlv_typed_tags,
 	TypedTag,
+	spelling_check,
 	held_here,
 	holds_of,
 	walks_to_the_frame_end,
@@ -181,6 +182,19 @@ WORD_WIDTHS = (8, 16, 32, 64)
 
 
 
+
+def _spell(placement: Placement) -> str:
+	"""The runtime's spelling check for a text number (26.1166)."""
+	check = spelling_check(placement)
+	assert check is not None
+	return check[0]
+
+
+def _rules(placement: Placement) -> str:
+	"""`digits_spelled`'s rules argument, or nothing for `digits_minimal`."""
+	check = spelling_check(placement)
+	return "" if check is None or check[1] is None else f", {check[1]}u"
+
 def _uint_parser(placement: Placement) -> str:
 	"""The runtime's digit parse for this text number (26.948).
 
@@ -188,6 +202,7 @@ def _uint_parser(placement: Placement) -> str:
 	function has `situ_parse_uint`'s signature, so only the name differs.
 	"""
 	return ("situ_parse_uint_padded" if placement.radix_padded
+	        else "situ_parse_uint_plus" if placement.radix_signs & 1
 	        else "situ_parse_uint")
 
 
@@ -2526,10 +2541,12 @@ class Emitter:
 		# fixed-width sites in this backend stay unsigned by construction.
 		if scalar.signed:
 			held = "\t\tstd::int64_t value"
-			call = (f"situ_parse_int({value_at}, {name}_len(),"
-			        f" {placement.radix}u,"
+			signs = (f", {placement.radix_signs}u" if placement.radix_signs
+			         else "")
+			call = (f"situ_parse_int{'_signs' if signs else ''}({value_at},"
+			        f" {name}_len(), {placement.radix}u,"
 			        f" {_int64_literal(placement.radix_min)},"
-			        f" {_int64_literal(placement.radix_max)}, &value)")
+			        f" {_int64_literal(placement.radix_max)}{signs}, &value)")
 			span = f"{placement.radix_min}..{placement.radix_max}"
 		else:
 			held = "\t\tstd::uint64_t value"
@@ -11677,7 +11694,7 @@ class Emitter:
 		assert scalar is not None
 		lines: list[str] = []
 
-		if placement.radix_minimal:
+		if spelling_check(placement):
 			# The trimmed bytes, not `{name}()` -- for a text number that is
 			# the fallible getter and takes an out-parameter, so calling it
 			# here did not compile. The digits to check are the value's, which
@@ -11702,8 +11719,8 @@ class Emitter:
 			         else f"{placement.array_count}u")
 			lines.extend([
 				"\t\t/* `[minimal]`: one spelling per value. */",
-				f"\t\tif (!situ_digits_minimal({at}, {count},"
-				f" {placement.radix}u)) {{",
+				f"\t\tif (!situ_{_spell(placement)}({at}, {count},"
+				f" {placement.radix}u{_rules(placement)})) {{",
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
@@ -12356,11 +12373,11 @@ class Emitter:
 		name  = bare_name(local_name(struct, placement))
 		limit = placement.radix_max or 0
 		spell = ([f"\t\t/* `[minimal]`: one spelling per value. */",
-		          f"\t\tif (!situ_digits_minimal({at}, {count},"
-		          f" {placement.radix}u)) {{",
+		          f"\t\tif (!situ_{_spell(placement)}({at}, {count},"
+		          f" {placement.radix}u{_rules(placement)})) {{",
 		          "\t\t\treturn ::situ::rt::err::constraint;",
 		          "\t\t}"]
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 		return [
 			*spell,
 			f"\t\tstd::uint64_t {name}_parsed = 0;",
@@ -12415,11 +12432,11 @@ class Emitter:
 
 		name  = bare_name(local_name(struct, placement))
 		inner = self._attr_checks(struct, placement, f"{name}_parsed")
-		spell = ([f"\t\t\tif (!situ_digits_minimal(situ_base(raw_) + ({start}),"
-		          f" {width}u, {placement.radix}u)) {{",
+		spell = ([f"\t\t\tif (!situ_{_spell(placement)}(situ_base(raw_) + ({start}),"
+		          f" {width}u, {placement.radix}u{_rules(placement)})) {{",
 		          "\t\t\t\treturn ::situ::rt::err::constraint;",
 		          "\t\t\t}"]
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 
 		return [
 			f"\t\t/* {placement.path}: checked where the discriminant",

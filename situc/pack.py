@@ -1297,6 +1297,16 @@ def _measured(expr: ast.Expr, struct: ResolvedStruct,
 	return expr
 
 
+def _spelled(placement: Placement) -> int:
+	"""A text number's spelling row (26.1166): its radix, and above the low
+	byte the rules `digits_spelled` takes -- none for `[minimal]`'s, so an
+	image packed before the rules came apart reads the same."""
+	check = traverse.spelling_check(placement)
+	assert placement.radix is not None and check is not None
+	return placement.radix if check[1] is None \
+		else placement.radix | (check[1] << 8)
+
+
 def pack(schema: ast.Schema, resolved: ResolvedSchema,
          metadata: bool = False) -> tuple[bytes, Coverage]:
 	"""Emit the image for one resolved schema.
@@ -2189,9 +2199,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				if placement.scalar is None or placement.radix is None:
 					whole = False
 					continue
-				if placement.radix_minimal:
+				# 26.1166: a `+` or a `-0` admitted is a parse the walkers
+				# do not have, so they decline rather than refuse it.
+				if placement.radix_signs:
+					whole = False
+					continue
+				if traverse.spelling_check(placement):
 					constraints_blob += _struct.pack(
-						"<IqBxxx", at, placement.radix, 10)
+						"<IqBxxx", at, _spelled(placement), 10)
 				# `radix_max` and not the type's maximum, which is what the
 				# four backends have always checked here: `decimal u16
 				# code[3]` holds 0..999, and an image carrying 65535 made
@@ -2606,9 +2621,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# these would answer for a different reason.
 				if placement.radix is not None \
 						and placement.scalar is not None:
-					if placement.radix_minimal:
+					# 26.1166: a `+` or a `-0` admitted is a parse the walkers
+					# do not have, so they decline rather than refuse it.
+					if placement.radix_signs:
+						whole = False
+						continue
+					if traverse.spelling_check(placement):
 						constraints_blob += _struct.pack(
-							"<IqBxxx", at, placement.radix, 10)
+							"<IqBxxx", at, _spelled(placement), 10)
 					# The same, and the signed form's ceiling too. Both
 					# walkers derive the floor from this where the placement
 					# says signed, which is exact in two's complement and
@@ -2776,9 +2796,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# together until its named obstacle was answered.
 			if placement.delimiters and placement.radix is not None \
 					and placement.type_name not in resolved.structs:
-				if placement.radix_minimal:
+				# 26.1166: a `+` or a `-0` admitted is a parse the walkers
+				# do not have, so they decline rather than refuse it.
+				if placement.radix_signs:
+					whole = False
+					continue
+				if traverse.spelling_check(placement):
 					arm_checks.append((at, _struct.pack(
-						"<IqBxxx", at, placement.radix, 10)))
+						"<IqBxxx", at, _spelled(placement), 10)))
 				if placement.radix_max is None \
 						or not fits_q(placement.radix_max):
 					whole = False
@@ -2911,9 +2936,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				if placement.scalar is None or placement.radix is None:
 					whole = False
 					continue
-				if placement.radix_minimal:
+				# 26.1166: a `+` or a `-0` admitted is a parse the walkers
+				# do not have, so they decline rather than refuse it.
+				if placement.radix_signs:
+					whole = False
+					continue
+				if traverse.spelling_check(placement):
 					arm_checks.append((at, _struct.pack(
-						"<IqBxxx", at, placement.radix, 10)))
+						"<IqBxxx", at, _spelled(placement), 10)))
 				# `radix_max` rather than the type's maximum, for the
 				# member path's measured reason: `decimal u16 code[3]`
 				# holds 0..999, and an image carrying 65535 made the

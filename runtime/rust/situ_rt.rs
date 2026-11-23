@@ -877,6 +877,68 @@ pub fn digits_minimal(bytes: &[u8], radix: u32) -> bool {
 	radix <= 10 || !bytes.iter().any(|&b| (b'A'..=b'F').contains(&b))
 }
 
+/// Whether digits follow the schema's spelling rules (26.1166): `SPELL_NO_ZERO`
+/// refuses a leading zero, `SPELL_LOWER` an upper-case digit, `SPELL_UPPER` a
+/// lower-case one. A leading `-` or `+` is skipped first. C's
+/// `situ_digits_spelled` carries the reasoning.
+pub const SPELL_NO_ZERO: u32 = 1;
+/// See `SPELL_NO_ZERO`.
+pub const SPELL_LOWER: u32 = 2;
+/// See `SPELL_NO_ZERO`.
+pub const SPELL_UPPER: u32 = 4;
+
+/// See `SPELL_NO_ZERO`.
+#[inline]
+pub fn digits_spelled(bytes: &[u8], radix: u32, rules: u32) -> bool {
+	let bytes = match bytes.first() {
+		Some(&b'-') | Some(&b'+') => &bytes[1..],
+		_ => bytes,
+	};
+	if bytes.is_empty() {
+		return false;
+	}
+	if rules & SPELL_NO_ZERO != 0 && bytes.len() > 1 && bytes[0] == b'0' {
+		return false;
+	}
+	if radix <= 10 {
+		return true;
+	}
+	!bytes.iter().any(|&b| {
+		(rules & SPELL_LOWER != 0 && (b'A'..=b'F').contains(&b))
+			|| (rules & SPELL_UPPER != 0 && (b'a'..=b'f').contains(&b))
+	})
+}
+
+/// `parse_uint`, with a leading `+` admitted where the schema says
+/// `[plus_sign]` (26.1166). `+` alone and `+-` are still refused.
+#[inline]
+pub fn parse_uint_plus(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
+	if bytes.len() > 1 && bytes[0] == b'+' && bytes[1] != b'+' && bytes[1] != b'-' {
+		return parse_uint(&bytes[1..], radix, max);
+	}
+	parse_uint(bytes, radix, max)
+}
+
+/// The sign spellings `parse_int_signs` admits beyond situ's own (26.1166).
+pub const SIGN_PLUS: u32 = 1;
+/// See `SIGN_PLUS`.
+pub const SIGN_NEG_ZERO: u32 = 2;
+
+/// `parse_int`, admitting a leading `+` and `-0` where the schema says so.
+#[inline]
+pub fn parse_int_signs(bytes: &[u8], radix: u32, low: i64, high: i64,
+		signs: u32) -> Option<i64> {
+	if signs & SIGN_PLUS != 0 && bytes.len() > 1 && bytes[0] == b'+'
+			&& bytes[1] != b'+' && bytes[1] != b'-' {
+		return parse_int(&bytes[1..], radix, low, high);
+	}
+	if signs & SIGN_NEG_ZERO != 0 && bytes.len() > 1 && bytes[0] == b'-'
+			&& bytes[1..].iter().all(|&b| b == b'0') {
+		return Some(0);
+	}
+	parse_int(bytes, radix, low, high)
+}
+
 #[inline]
 pub fn ascii_valid(bytes: &[u8]) -> bool {
 	let mut i = 0;

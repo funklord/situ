@@ -59,7 +59,7 @@ def _bit_store(part: Part, value: str) -> list[str]:
 def _lower_case(part: Part, count: str, indent: str) -> list[str]:
 	"""`[minimal]`'s one spelling is lower case above radix ten, and the
 	formatter writes upper, so the builder refused its own `FF`."""
-	if not part.placement.radix_minimal or (part.radix or 10) <= 10:
+	if not part.placement.radix_rules & 2 or (part.radix or 10) <= 10:
 		return []
 	return [f"{indent}situ_out[situ_at..situ_at + {count}]"
 	        ".make_ascii_lowercase();"]

@@ -145,6 +145,7 @@ from situc.traverse import (arm_remaining_strides,
 	tlv_single_tags,
 	tlv_typed_tags,
 	TypedTag,
+	spelling_check,
 	held_here,
 	holds_of,
 	walks_to_the_frame_end,
@@ -179,6 +180,7 @@ def _uint_parser(placement: Placement) -> str:
 	function has `parse_uint`'s signature, so only the name differs.
 	"""
 	return ("parse_uint_padded" if placement.radix_padded
+	        else "parse_uint_plus" if placement.radix_signs & 1
 	        else "parse_uint")
 
 
@@ -667,10 +669,18 @@ class Emitter:
 			needed.append("parse_int")
 		if any(p.scaled for p in placements):
 			needed.append("parse_scaled")
-		if any(p.radix_minimal for p in placements):
-			needed.append("digits_minimal")
+		for stem in ("digits_minimal", "digits_spelled"):
+			if any((spelling_check(p) or ("", None))[0] == stem
+			       for p in placements):
+				needed.append(stem)
 		if any(p.radix_padded for p in placements):
 			needed.append("parse_uint_padded")
+		if any(p.radix is not None and p.radix_signs & 1
+		       and not (p.scalar and p.scalar.signed) for p in placements):
+			needed.append("parse_uint_plus")
+		if any(p.radix is not None and p.radix_signs
+		       and p.scalar and p.scalar.signed for p in placements):
+			needed.append("parse_int_signs")
 		if any(p.trimmed for p in placements):
 			needed.append("trim")
 		if any(p.case_insensitive for p in placements):
@@ -6252,7 +6262,11 @@ class Emitter:
 			return self._scaled_number(placement, name, scalar, raw)
 		if signed:
 			call = (f"parse_int({raw}, {placement.radix},"
-			        f" {placement.radix_min}, {placement.radix_max})")
+			        f" {placement.radix_min}, {placement.radix_max})"
+			        if not placement.radix_signs else
+			        f"parse_int_signs({raw}, {placement.radix},"
+			        f" {placement.radix_min}, {placement.radix_max},"
+			        f" {placement.radix_signs})")
 			span = f"{placement.radix_min}..{placement.radix_max}"
 		else:
 			call = f"{_uint_parser(placement)}({raw}, {placement.radix}, {limit})"
@@ -9930,7 +9944,7 @@ class Emitter:
 		if for_arm and placement.radix is not None:
 			return [*lines, *self._arm_digits(struct, placement)]
 
-		if placement.radix_minimal:
+		if spelling_check(placement):
 			# The *digits*, which is what the predicate reads. This passed
 			# `self.{name}` -- the parsed number -- and `bytes(6)` in Python is
 			# six zero bytes rather than the digit `6`, so the check was
@@ -9974,7 +9988,7 @@ class Emitter:
 
 		local = f"{name}_parsed"
 		spell = (self._minimal_check(placement, name, f"self.{name}")
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 		return [
 			*spell,
 			f"\t\t{local} = {_uint_parser(placement)}(self.{name},"
@@ -10175,10 +10189,12 @@ class Emitter:
 		this was passed `self.{name}`, the parsed number, and `bytes(6)` is
 		six zero bytes rather than the digit `6`.
 		"""
-		if not placement.radix_minimal:
+		check = spelling_check(placement)
+		if check is None:
 			return []
 		return [
-			f"\t\tif not digits_minimal({digits}, {placement.radix}):",
+			f"\t\tif not {check[0]}({digits}, {placement.radix}"
+			+ ("" if check[1] is None else f", {check[1]}") + "):",
 			"\t\t\traise ConstraintError(",
 			f'\t\t\t\t"{placement.path} is not the minimal spelling of '
 			'its value")',

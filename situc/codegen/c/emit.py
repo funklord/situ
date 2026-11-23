@@ -143,6 +143,7 @@ from situc.traverse import (arm_remaining_strides,
 	tlv_single_tags,
 	tlv_typed_tags,
 	TypedTag,
+	spelling_check,
 	walk_order,
 	held_here,
 	holds_of,
@@ -188,13 +189,37 @@ def _uint_parser(placement: Placement) -> str:
 	function has `situ_parse_uint`'s signature, so only the name differs.
 	"""
 	return ("situ_parse_uint_padded" if placement.radix_padded
+	        else "situ_parse_uint_plus" if placement.radix_signs & 1
 	        else "situ_parse_uint")
+
+
+def _int_parser(placement: Placement) -> str:
+	"""The signed parse: `situ_parse_int`, or `situ_parse_int_signs` where
+	the schema admits `+` or `-0` (26.1166), which takes them as `_signs`."""
+	return "situ_parse_int_signs" if placement.radix_signs else "situ_parse_int"
+
+
+def _signs(placement: Placement) -> str:
+	return f", {placement.radix_signs}u" if placement.radix_signs else ""
 
 
 def _reads_signed(placement: Placement) -> bool:
 	"""Whether a varint or a text number holds a signed value."""
 	return placement.varint_signed \
 		or (placement.scalar is not None and placement.scalar.signed)
+
+
+def _spell(placement: Placement) -> str:
+	"""The runtime's spelling check for a text number (26.1166)."""
+	check = spelling_check(placement)
+	assert check is not None
+	return check[0]
+
+
+def _rules(placement: Placement) -> str:
+	"""`digits_spelled`'s rules argument, or nothing for `digits_minimal`."""
+	check = spelling_check(placement)
+	return "" if check is None or check[1] is None else f", {check[1]}u"
 
 
 def _composed(width: int, little: bool, base: str = "situ_base(view)",
@@ -9072,9 +9097,10 @@ class Emitter:
 			said = (f"a significand outside {floor}..{limit}, and an exponent "
 			        "that does not fit an int32")
 		elif scalar.signed:
-			call = (f"\tif (situ_parse_int({ptr}(view), {length}(view), "
+			call = (f"\tif ({_int_parser(placement)}({ptr}(view), {length}(view), "
 			        f"{placement.radix}u, {self._int64_literal(floor)}, "
-			        f"{self._int64_literal(limit)}, &value) != 0) {{")
+			        f"{self._int64_literal(limit)}{_signs(placement)}, &value)"
+			        " != 0) {")
 			held = "\tint64_t value;"
 			said = f"outside {floor}..{limit}"
 		else:
@@ -11810,9 +11836,10 @@ class Emitter:
 			 "	uint64_t value = 0u;"),
 			"",
 			*guard,
-			((f"	(void)situ_parse_int({source[0]}, {source[1]},"
+			((f"	(void){_int_parser(placement)}({source[0]}, {source[1]},"
 			  f" {placement.radix}u, {self._int64_literal(placement.radix_min)},"
-			  f" {self._int64_literal(placement.radix_max)}, &value);") if signed_text else
+			  f" {self._int64_literal(placement.radix_max)}{_signs(placement)},"
+			  " &value);") if signed_text else
 			 (f"	(void){_uint_parser(placement)}({source[0]}, {source[1]},"
 			  f" {placement.radix}u, {limit}u, &value);")),
 			f"	return ({ctype})value;",
@@ -13276,12 +13303,12 @@ class Emitter:
 		         if placement.delimiters or placement.array_count is None
 		         else f"{placement.array_count}u")
 
-		if placement.radix_minimal:
+		if spelling_check(placement):
 			lines.extend([
 				"\t/* `[minimal]`: one spelling per value, so a leading zero",
 				"\t * is a second way to write a number that already has one. */",
-				f"\tif (!situ_digits_minimal({ptr}(view),",
-				f"\t\t\t{count}, {placement.radix}u)) {{",
+				f"\tif (!situ_{_spell(placement)}({ptr}(view),",
+				f"\t\t\t{count}, {placement.radix}u{_rules(placement)})) {{",
 				"\t\t return SITU_ERR_CONSTRAINT;",
 				"\t}",
 				"",
@@ -14685,11 +14712,11 @@ class Emitter:
 		ptr   = ident(self.prefix, struct.name, local, "ptr")
 		limit = placement.radix_max or 0
 		spell = ([f"\t/* `[minimal]`: one spelling per value. */",
-		          f"\tif (!situ_digits_minimal({local}_at, {local}_count,"
-		          f" {placement.radix}u)) {{",
+		          f"\tif (!situ_{_spell(placement)}({local}_at, {local}_count,"
+		          f" {placement.radix}u{_rules(placement)})) {{",
 		          "\t\treturn SITU_ERR_CONSTRAINT;",
 		          "\t}"]
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 		return [
 			"\t{",
 			f"\t\tconst uint8_t *{local}_at = NULL;",
@@ -14768,11 +14795,11 @@ class Emitter:
 		inner = self._attr_checks(struct, placement, f"{local}_parsed",
 		                          self.resolved.layout.env)
 		spell = ([f"\t\t/* `[minimal]`: one spelling per value. */",
-		          f"\t\tif (!situ_digits_minimal(situ_base(view) + ({start}),"
-		          f" {width}u, {placement.radix}u)) {{",
+		          f"\t\tif (!situ_{_spell(placement)}(situ_base(view) + ({start}),"
+		          f" {width}u, {placement.radix}u{_rules(placement)})) {{",
 		          "\t\t\treturn SITU_ERR_CONSTRAINT;",
 		          "\t\t}"]
-		         if placement.radix_minimal else [])
+		         if spelling_check(placement) else [])
 
 		return [
 			f"\t/* {placement.path}: checked where the discriminant selects",

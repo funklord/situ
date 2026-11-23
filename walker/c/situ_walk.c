@@ -4290,6 +4290,42 @@ static situ_walk_err digit_span(const situ_walk_image *image,
 
 /* The bytes `[minimal]` asks about: a delimited member's digits, as
  * `digit_span` finds them, and any other member's whole span as before. */
+/* Whether digits follow their spelling row (26.1166): the radix in the
+ * low byte, and above it the rules -- 1 no leading zero, 2 no upper-case
+ * digit, 4 no lower-case one -- where none means `[minimal]`'s, 1 | 2. A
+ * row with no rules mirrors `situ_digits_minimal`, skipping a leading `-`;
+ * one with them `situ_digits_spelled`, skipping a `-` or a `+`, so on `+07`
+ * the walk names the check C names. */
+static int spelled(const uint8_t *digits, uint32_t count, int64_t against)
+{
+	const uint64_t row   = (uint64_t)against;
+	const uint64_t radix = row & 0xFFu;
+	const uint64_t rules = (row >> 8) != 0u ? row >> 8 : 3u;
+
+	if (count > 0u && (digits[0] == (uint8_t)'-'
+	                   || ((row >> 8) != 0u && digits[0] == (uint8_t)'+'))) {
+		digits += 1;
+		count  -= 1u;
+	}
+	if (count == 0u) {
+		return 0;
+	}
+	if ((rules & 1u) != 0u && count > 1u && digits[0] == (uint8_t)'0') {
+		return 0;
+	}
+	for (uint32_t d = 0u; radix > 10u && d < count; d++) {
+		if ((rules & 2u) != 0u && digits[d] >= (uint8_t)'A'
+		                && digits[d] <= (uint8_t)'F') {
+			return 0;
+		}
+		if ((rules & 4u) != 0u && digits[d] >= (uint8_t)'a'
+		                && digits[d] <= (uint8_t)'f') {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 static situ_walk_err minimal_digits(const situ_walk_image *image,
                                     const uint8_t *message, uint32_t len,
                                     uint32_t shape, uint32_t index,
@@ -5686,23 +5722,7 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 				*verdict = SITU_WALK_CONSTRAINT;
 				return SITU_WALK_OK;
 			}
-			/* A leading `-` belongs to the spelling of a signed number
-			 * and is skipped before the question is asked, exactly as
-			 * `situ_digits_minimal` skips it. */
-			if (count_of > 0u && digits[0] == (uint8_t)'-') {
-				digits   += 1;
-				count_of -= 1u;
-			}
-			if (count_of == 0u
-			                || (count_of > 1u && digits[0] == (uint8_t)'0')) {
-				broken = 1;
-			}
-			for (uint32_t d = 0u; want > 10 && d < count_of; d++) {
-				if (digits[d] >= (uint8_t)'A'
-				                && digits[d] <= (uint8_t)'F') {
-					broken = 1;
-				}
-			}
+			broken = !spelled(digits, count_of, want);
 		}
 
 		if (broken) {
@@ -8295,22 +8315,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					*verdict = SITU_WALK_CONSTRAINT;
 					return SITU_WALK_OK;
 				}
-				/* A leading `-` belongs to the spelling of a signed
-				 * number and is skipped before the question is asked,
-				 * exactly as `situ_digits_minimal` skips it. */
-				if (count_of > 0u && digits[0] == (uint8_t)'-') {
-					digits   += 1;
-					count_of -= 1u;
-				}
-				if (count_of == 0u
-				                || (count_of > 1u && digits[0] == (uint8_t)'0')) {
-					broken = 1;
-				}
-				for (uint32_t d = 0u; want > 10 && d < count_of; d++) {
-					if (digits[d] >= (uint8_t)'A' && digits[d] <= (uint8_t)'F') {
-						broken = 1;
-					}
-				}
+				broken = !spelled(digits, count_of, want);
 			}
 
 			if (broken) {

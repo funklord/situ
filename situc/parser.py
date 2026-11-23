@@ -240,6 +240,9 @@ ATTRIBUTE_NAMES = frozenset({
 	"quoted", "escape",
 	# section 8.6.2: one spelling per value for a text number
 	"minimal",
+	# 26.1166: the rules `[minimal]` ties together, one at a time, and the
+	# two sign spellings situ refused whatever the schema said
+	"leading_zeros", "hex_case", "plus_sign", "negative_zero",
 	# 26.948: a fixed-width text number whose digits stop at a NUL or a
 	# space, the rest of the width being padding -- ustar's numbers
 	"padded",
@@ -318,7 +321,7 @@ VALUE_ATTRIBUTES = frozenset({
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "after", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds", "chars",
-	"time", "duration", "epoch",
+	"time", "duration", "epoch", "leading_zeros", "hex_case",
 })
 
 def _alignment_of(member: ast.Member | None) -> int | None:

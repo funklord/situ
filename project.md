@@ -9790,6 +9790,10 @@ and both decline such a region.
 
 Moved to `doc/decision/26.1167-a-known-tlv-value-holds-its-type.md`.
 
+### 26.1166 A text number's spelling, rule by rule
+
+Moved to `doc/decision/26.1166-a-text-numbers-spelling-rule-by-rule.md`.
+
 ### 26.1165 A field says what time it holds
 
 Moved to `doc/decision/26.1165-a-field-says-what-time-it-holds.md`.
