@@ -1225,7 +1225,10 @@ def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			f"(&msg, 0, {extent}u, &view), SITU_OK);",
 			"",
 			f"\tsitu_check_eq({getter}(view, &value), SITU_OK);",
-			f"\tsitu_check_eq(value, {digits});",
+			# The digits in the member's own base: `42` in hex is 66, and
+			# the check compared it with 42, so every hex text number's
+			# suite failed against a correct getter.
+			f"\tsitu_check_eq(value, {int(digits, placement.radix)}u);",
 		],
 		[f"/* {placement.path} is written as digits. The map calls it",
 		 "\t * TextConverted, which is a claim that the conversion happens --",

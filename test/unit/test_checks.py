@@ -828,3 +828,16 @@ def test_the_skipped_suite_still_compiles(tmp_path: Path) -> None:
 	assert run.returncode == 0, run.stdout + run.stderr
 	assert "check_plain_a_occupies_its_claimed_bytes" in run.stdout
 	assert "[  FAILED  ]" not in run.stdout
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize("base", ["hex", "octal", "decimal"])
+def test_a_text_number_s_digits_are_read_in_its_own_base(
+		tmp_path: Path, base: str) -> None:
+	"""The check writes `42` and compared the getter with 42 whatever the
+	base, so a hex text number's suite failed against a correct getter:
+	`0x42 != 0x2a`. No schema of the corpus has a hex one the checks
+	reach, which is how it lasted."""
+	result = build(tmp_path, f'struct s {{ {base} u32 v until "," max 8; }}')
+	assert result.returncode == 0, result.stdout
+	assert "reads_its_digits" in result.stdout
