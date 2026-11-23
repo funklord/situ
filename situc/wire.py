@@ -2361,6 +2361,34 @@ def _annotation_changed(name: str, key: str, was: str, now: str) -> Finding:
 			f"`{key}` {was} -> {now}; the table is where it was and every "
 			"element it reaches is somewhere else")
 
+	# A known tag's `form` (26.1167) decides only which values are
+	# accepted, never what one reads as: `form = run` added refuses a value
+	# that is no whole number of its type and reads every other exactly as
+	# before. openmlx4 adopting it was reported BREAKING by the line below.
+	# Added it narrows, removed it widens; `run` for `number` is neither,
+	# each accepting values the other refuses.
+	if " tlv known " in f" {key}":
+		def without_form(text: str) -> list[str]:
+			return [word for word in text.split()
+			        if not word.startswith("form=")]
+		def form_of(text: str) -> str | None:
+			return next((word[len("form="):] for word in text.split()
+			             if word.startswith("form=")), None)
+		if without_form(was) == without_form(now):
+			before, after = form_of(was), form_of(now)
+			if before is None and after is not None:
+				return Finding(
+					"backward", name,
+					f"`{key}` gains form={after}; every value it accepted "
+					"before reads the same, and a new receiver may refuse "
+					"one an old sender legitimately produces")
+			if before is not None and after is None:
+				return Finding(
+					"forward", name,
+					f"`{key}` drops form={before}; every value reads the "
+					"same, and an old receiver may refuse one a new sender "
+					"legitimately produces")
+
 	return Finding(
 		"breaking", name,
 		f"`{key}` {was} -> {now}; the bytes are where they were and are read "

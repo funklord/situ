@@ -150,3 +150,31 @@ def test_a_form_is_in_the_signature_and_refused_off_a_scalar() -> None:
 		           path="f.situ")
 	with pytest.raises(SituError, match="`run` or `number`"):
 		parse_text(FORMS.replace("form = run", "form = list"), path="f.situ")
+
+
+@pytest.mark.parametrize(("before", "after", "kind"), [
+	("type = u32 }", "type = u32, form = run }", "backward"),
+	("type = u32, form = run }", "type = u32 }", "forward"),
+	("type = u32, form = run }", "type = u32, form = number }", "breaking"),
+])
+def test_wire_check_calls_a_form_a_narrowing(before: str, after: str,
+                                             kind: str) -> None:
+	"""openmlx4 adopting `form = run` was reported BREAKING, "read as
+	something else", though no accepted value reads differently: adding a
+	form only refuses values accepted before, which is the `backward`
+	heading's sentence, and dropping one is its mirror. `run` for `number`
+	stays breaking, each accepting what the other refuses."""
+	from situc import wire
+	from situc.layout import solve
+	from situc.parser import parse_text
+	from situc.resolve import resolve
+	text = FORMS.replace("type = u32, form = run }", "TAG }")
+
+	def signature(spelled: str) -> str:
+		schema = parse_text(text.replace("TAG }", spelled), path="f.situ")
+		return wire.render(schema, resolve(schema, solve(schema)), "f.situ")
+
+	verdict = wire.compare(signature(before), signature(after))
+	kinds = {finding.kind for finding in verdict.findings
+	         if finding.kind != "format"}
+	assert kinds == {kind}, verdict.findings
