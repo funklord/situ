@@ -72,6 +72,7 @@ def check(schema: ast.Schema) -> None:
 	check_attribute_places(schema)
 	check_struct_attribute_places(schema)
 	check_attribute_values(schema)
+	check_times(schema)
 	check_byte_run_equality(schema)
 	check_byte_enums(schema)
 	check_token_sets(schema)
@@ -2973,6 +2974,35 @@ STRUCT_ONLY_ATTRS = {
 }
 
 
+def _counts(member: ast.Member) -> bool:
+	"""Whether a member is read as one number (26.1165): a scalar that is
+	not a lone bit, and an array only where its elements are the digits of
+	a text number."""
+	scalar = getattr(getattr(member, "type_ref", None), "scalar", None)
+	return (isinstance(member, ast.Field) and scalar is not None
+	        and scalar.kind is not ScalarKind.BIT
+	        and (member.array is None or member.radix is not None))
+
+
+def check_times(schema: ast.Schema) -> None:
+	"""A member's `time` or `duration` states a unit that holds, and an
+	instant its epoch (26.1165). Where it may sit is
+	`check_attribute_places`'s question, asked before this."""
+	from situc.expr import Env, evaluate
+	from situc.timespec import spec_of
+
+	consts: dict[str, int] = {}
+	for decl in schema.consts():
+		try:
+			consts[decl.name] = evaluate(decl.value, Env(consts=consts))
+		except SituError:
+			continue
+	env = Env(consts=consts)
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			spec_of(getattr(member, "attrs", ()), env)
+
+
 def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 		attr: ast.Attr, structs: frozenset[str] = frozenset(),
 		tokens: frozenset[str] = frozenset()) -> str | None:
@@ -3039,6 +3069,12 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 	if attr.name == "minimal":
 		return None if getattr(member, "radix", None) is not None else (
 			"a radix-encoded number, whose leading zeros it forbids")
+
+	# 26.1165: a time is a count, so it sits on a member read as a number.
+	if attr.name in ("time", "duration", "epoch"):
+		return None if _counts(member) else (
+			"a member read as one number -- an integer, a fixed-point or "
+			"floating value, or a text number -- whose count it gives a unit")
 
 	# 26.948: where a fixed width's digits may stop. A delimited number's
 	# digits already stop at its delimiter, a width the message states is
@@ -3377,6 +3413,7 @@ PLACED_ATTRS = (ACCESS_MODE_ATTRS | frozenset(STRUCT_ONLY_ATTRS) | frozenset({
 	"on_read", "on_write", "bit_order", "endian", "min", "max", "must_eq",
 	"no_rmw", "truncated", "size", "trim", "case_insensitive",
 	"nul_terminated", "must_be_zero", "holds", "ascending", "chars",
+	"time", "duration", "epoch",
 }))
 
 #: Attributes whose place is not yet settled, so that the hole is a list here

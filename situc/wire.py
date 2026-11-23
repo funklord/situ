@@ -38,6 +38,7 @@ from situc.diagnostics import SituError
 from situc.expr import Env, evaluate
 from situc.traverse import holds_of, own_members
 from situc.unparse import expr_to_source, kernel_to_source
+from situc.timespec import spec_of
 
 #: Bumped from 0, which 0041 kept because new facts on existing lines are
 #: what the fact list is for and a comparator ignores tokens it does not know.
@@ -463,6 +464,12 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		             f"..{placement.pad_bounds[1]}")
 	if placement.radix is not None:
 		facts.append(f"radix={placement.radix}")
+	# 26.1165: what time the count is. Two consumers reading `expires_at`
+	# in different units, or from different epochs, disagreed only as a
+	# horizon error; stated, the difference is a line here.
+	time = spec_of(placement.attrs, env)
+	if time is not None:
+		facts.append(time.render())
 	if placement.scaled:
 		# `scaled` and `decimal` both read base ten and do not read the
 		# same bytes: `12.5` is a number under one and malformed under the

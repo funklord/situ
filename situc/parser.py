@@ -245,6 +245,9 @@ ATTRIBUTE_NAMES = frozenset({
 	"padded",
 	# section 8.6.4: what a delimited value ignores
 	"trim", "case_insensitive",
+	# 26.1165: what time a member holds -- an instant counted from an
+	# epoch, or a duration -- in a unit both peers read off the schema
+	"time", "duration", "epoch",
 	# section 19.4: one file, more than one version of the protocol
 	"since", "version",
 	# 26.981: a struct its frame holds exactly, nothing after it
@@ -315,6 +318,7 @@ VALUE_ATTRIBUTES = frozenset({
 	"size", "version", "since", "max", "min", "limit", "depth", "bits", "align",
 	"retries", "timeout_ms", "resend_ms", "resend_part_ms", "retries_part", "after", "must_eq", "encoding", "endian", "bit_order",
 	"self_as", "tag_order", "on_read", "on_write", "holds", "chars",
+	"time", "duration", "epoch",
 })
 
 def _alignment_of(member: ast.Member | None) -> int | None:

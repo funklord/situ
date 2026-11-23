@@ -1,0 +1,183 @@
+"""What time a member holds: `[time = UNIT, epoch = EPOCH]` or
+`[duration = UNIT]` (26.1165).
+
+A unit is a base unit multiplied or divided by whole numbers -- `ns`,
+`s / 1024`, `s / (1 << 32)`, `ns * 100` -- kept as a reduced fraction of
+a second (or of a month, for the two calendar units), so two spellings
+of one unit are one unit to everything that compares them. The leftmost
+term is always the base unit, which is what lets a factor be any
+whole-number expression without the unit's name being read as one.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from math import gcd
+
+from situc import ast
+from situc.diagnostics import SituError, error
+from situc.expr import Env, evaluate
+
+#: Every base unit, as (numerator, denominator) of its scale's own unit: a
+#: second for the eleven fixed ones, a month for the calendar two.
+FIXED_UNITS: dict[str, tuple[int, int]] = {
+	"ps": (1, 10 ** 12), "ns": (1, 10 ** 9), "us": (1, 10 ** 6),
+	"ms": (1, 1000), "s": (1, 1), "min": (60, 1), "h": (3600, 1),
+	"d": (86400, 1), "week": (604800, 1),
+}
+CALENDAR_UNITS: dict[str, tuple[int, int]] = {"month": (1, 1), "year": (12, 1)}
+BASE_UNITS = {**FIXED_UNITS, **CALENDAR_UNITS}
+
+#: The named epochs, each with the time scale it counts in. The scale is
+#: what decides whether two instants a day apart are 86400 seconds apart,
+#: and a date alone cannot say it, so a name carries one.
+EPOCHS: dict[str, str] = {
+	"unix":   "POSIX: UTC from 1970-01-01T00:00:00Z, leap seconds not counted",
+	"ntp":    "UTC from 1900-01-01T00:00:00Z, leap seconds not counted",
+	"gps":    "GPS from 1980-01-06T00:00:00Z, continuous",
+	"tai":    "TAI from 1958-01-01T00:00:00, continuous",
+	"caller": "the caller's own clock, with no civil meaning",
+}
+#: The epochs whose scale has no months: a continuous count, or none.
+NO_CALENDAR = frozenset({"gps", "tai", "caller"})
+
+TIME_ATTRIBUTES = frozenset({"time", "duration", "epoch"})
+
+_DATE = re.compile(r"\A(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})Z)?\Z")
+
+
+@dataclass(frozen=True)
+class TimeSpec:
+	#: "time" for an instant, "duration" for an interval.
+	kind: str
+	#: The unit as a reduced fraction of a second, or of a month where
+	#: `calendar` is set.
+	numerator: int
+	denominator: int
+	calendar: bool
+	#: A name from EPOCHS, or a date normalised to `YYYY-MM-DDTHH:MM:SSZ`;
+	#: None for a duration.
+	epoch: str | None
+
+	def unit(self) -> str:
+		"""The unit as `wire` writes it: a base unit's name where the
+		fraction is one, else `N/Ds` (`N/Dmonth`)."""
+		table = CALENDAR_UNITS if self.calendar else FIXED_UNITS
+		for name, value in table.items():
+			if value == (self.numerator, self.denominator):
+				return name
+		scale = "month" if self.calendar else "s"
+		if self.denominator == 1:
+			return f"{self.numerator}{scale}"
+		return f"{self.numerator}/{self.denominator}{scale}"
+
+	def render(self) -> str:
+		if self.kind == "duration":
+			return f"duration={self.unit()}"
+		return f"time={self.unit()}@{self.epoch}"
+
+
+def _factor(expr: ast.Expr, env: Env) -> int:
+	try:
+		value = evaluate(expr, env)
+	except SituError as exc:
+		exc.diagnostic.notes.append(
+			"a unit's factor is a whole number the schema states; one read "
+			"from the message or handed in by the caller is 26.1165's "
+			"step 4")
+		raise
+	if value <= 0:
+		raise error("a unit's factor is a positive whole number", expr.span,
+		            label = f"this is {value}")
+	return value
+
+
+def _unit(expr: ast.Expr, env: Env) -> tuple[int, int, bool]:
+	if isinstance(expr, ast.NameRef):
+		base = BASE_UNITS.get(expr.name)
+		if base is None:
+			raise error(f"`{expr.name}` is not a unit", expr.span,
+			            label = "here",
+			            notes = ["a unit is one of "
+			                     f"{', '.join(BASE_UNITS)}, multiplied or "
+			                     "divided by whole numbers: `s / 90000`, "
+			                     "`ns * 100`"])
+		return base[0], base[1], expr.name in CALENDAR_UNITS
+	if isinstance(expr, ast.Binary) and expr.op in ("*", "/"):
+		numerator, denominator, calendar = _unit(expr.left, env)
+		factor = _factor(expr.right, env)
+		if expr.op == "*":
+			numerator *= factor
+		else:
+			denominator *= factor
+		common = gcd(numerator, denominator)
+		return numerator // common, denominator // common, calendar
+	raise error("a unit is a base unit, multiplied or divided by whole "
+	            "numbers", expr.span, label = "here",
+	            notes = ["the base unit comes first: `s / 1024`, not "
+	                     "`1024 / s`"])
+
+
+def _epoch(attr: ast.Attr) -> str:
+	value = attr.value
+	if isinstance(value, ast.NameRef) and value.name in EPOCHS:
+		return value.name
+	if isinstance(value, ast.StringLiteral):
+		match = _DATE.match(value.value)
+		if match is not None:
+			year, month, day, hour, minute, second = (
+				int(one) for one in match.groups(default="0"))
+			try:
+				when: datetime | None = datetime(year, month, day, hour,
+				                                 minute, second,
+				                                 tzinfo=timezone.utc)
+			except ValueError:
+				when = None
+			if when is not None:
+				return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+	raise error("`epoch` is one of "
+	            f"{', '.join(EPOCHS)}, or a date", attr.span, label = "here",
+	            notes = ['a date is "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SSZ", '
+	                     "counted on the POSIX scale",
+	                     "`caller` is a clock only the caller keeps, such as "
+	                     "a monotonic count"])
+
+
+def spec_of(attrs: tuple[ast.Attr, ...], env: Env) -> TimeSpec | None:
+	"""The member's time, or None where it states none; refused where what
+	it states cannot hold."""
+	said = {attr.name: attr for attr in attrs if attr.name in TIME_ATTRIBUTES}
+	if not said:
+		return None
+	if "time" in said and "duration" in said:
+		raise error("a member is a `time` or a `duration`, not both",
+		            said["duration"].span, label = "here",
+		            notes = ["`time` counts from an epoch, `duration` from "
+		                     "nothing"])
+	if "duration" in said and "epoch" in said:
+		raise error("a `duration` has no epoch", said["epoch"].span,
+		            label = "here",
+		            notes = ["an instant is `[time = UNIT, epoch = EPOCH]`"])
+	if "epoch" in said and "time" not in said:
+		raise error("an `epoch` belongs to a `time`", said["epoch"].span,
+		            label = "here",
+		            notes = ["`[time = ms, epoch = unix]`"])
+	kind = "time" if "time" in said else "duration"
+	if kind == "time" and "epoch" not in said:
+		raise error("a `time` states its `epoch`", said["time"].span,
+		            label = "`epoch` is missing",
+		            notes = ["an instant without an origin is the ambiguity "
+		                     "this exists to remove: `epoch = unix`, `ntp`, "
+		                     "`gps`, `tai`, `caller`, or a date"])
+	value = said[kind].value
+	if value is None:
+		raise error(f"`{kind}` needs a unit", said[kind].span, label = "here")
+	numerator, denominator, calendar = _unit(value, env)
+	epoch = _epoch(said["epoch"]) if kind == "time" else None
+	if calendar and epoch in NO_CALENDAR:
+		raise error(f"the `{epoch}` epoch has no calendar to count months in",
+		            said[kind].span, label = "a calendar unit",
+		            notes = [f"`{epoch}` is {EPOCHS[epoch or '']}"])
+	return TimeSpec(kind, numerator, denominator, calendar, epoch)

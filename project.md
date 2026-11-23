@@ -5863,6 +5863,9 @@ situ/
                               and which comparisons are expressible at all.
                               Shared so the four backends cannot disagree
                               about whether a schema compiles (26.95)
+    timespec.py               what time a member holds (26.1165): its unit as
+                              a reduced fraction of a second or a month, its
+                              epoch and the scale it counts in
     traverse.py               the struct walk every backend and artifact shares:
                               which entries are a struct's own members, which
                               bytes a placement occupies, and -- the part that
@@ -9752,6 +9755,10 @@ over bit 63 needs (the first version of 26.1148 broke exactly that). This
 replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
+
+### 26.1165 A field says what time it holds
+
+Moved to `doc/decision/26.1165-a-field-says-what-time-it-holds.md`.
 
 ### 26.1164 A sized arm's `[remaining]` run of fixed elements is whole elements
 
