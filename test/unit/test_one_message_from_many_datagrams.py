@@ -80,7 +80,7 @@ relation same_message(first: sframe, later: sframe) {
 }
 reassemble pieces(f: sframe) by same_message [
 	index = f.h.index, count = f.h.chunks, piece = f.sealed.payload,
-	messages = 2, bytes = 256, timeout = 100];
+	messages = 2, bytes = 256, timeout = 100, unit = ms];
 """
 
 PROGRAM = r"""#include <stdio.h>
@@ -282,6 +282,9 @@ def test_every_bound_is_stated() -> None:
 		SCHEMA.replace("messages = 4, ", ""))
 	assert "states no `timeout`" in _refused(
 		SCHEMA.replace("timeout = 3000, ", ""))
+	# The clock's unit too: `timeout` and an `expires` field count in it,
+	# and situ once read a missing one as milliseconds.
+	assert "states no `unit`" in _refused(SCHEMA.replace(", unit = ms", ""))
 
 
 def test_the_relation_is_one_of_this_schema() -> None:

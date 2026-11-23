@@ -243,8 +243,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	messages = _number(held, "messages")
 	total    = _number(held, "bytes")
 	timeout  = _number(held, "timeout")
-	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name",
-	                   None) or "ms"
+	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name")
 	capacity = total // messages
 	marks    = marks_per(held, capacity)
 	most     = count_most(held)

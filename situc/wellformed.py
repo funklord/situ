@@ -1885,7 +1885,8 @@ def check_reassemblies(schema: ast.Schema) -> None:
 				       "the relation's own `must`s, so both of its messages "
 				       "are the datagram the pieces arrive in"])
 		missing = [key for key in ("index", "count", "piece", "messages",
-		                           "bytes", "timeout") if key not in said]
+		                           "bytes", "timeout", "unit")
+		           if key not in said]
 		if missing:
 			raise error(
 				f"`{held.name}` states no `{missing[0]}`", where,
@@ -1893,7 +1894,11 @@ def check_reassemblies(schema: ast.Schema) -> None:
 				notes=["situ supplies no number for what is held in flight: "
 				       "it is what a sender who never finishes a message gets "
 				       "to spend"] if missing[0] in ("messages", "bytes",
-				                                     "timeout") else [])
+				                                     "timeout")
+				else ["`timeout` and any `expires` field count in the "
+				      "clock's unit, so it is stated where both peers read "
+				      "it, as a replay window's is: `unit = ms`"]
+				if missing[0] == "unit" else [])
 		for key in ("index", "count", "piece"):
 			value = said[key].value
 			paths = paths_in(value) if value is not None else []
@@ -1909,8 +1914,7 @@ def check_reassemblies(schema: ast.Schema) -> None:
 			if not isinstance(value, int) or not low <= value <= high:
 				raise error(f"`{key}` is a number from {low} to {high}",
 				            said[key].span, label="here")
-		if "unit" in said and getattr(said["unit"].value, "name", None) \
-				not in REPLAY_UNITS:
+		if getattr(said["unit"].value, "name", None) not in REPLAY_UNITS:
 			raise error(f"`unit` is one of {', '.join(sorted(REPLAY_UNITS))}",
 			            said["unit"].span, label="here")
 		# `per` and `per_max` (fuzznet, inbox 20261122T1804Z): how many

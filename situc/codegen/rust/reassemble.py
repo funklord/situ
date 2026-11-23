@@ -63,8 +63,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	timeout  = _number(held, "timeout")
 	marks    = marks_per(held, capacity)
 	most     = count_most(held)
-	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name",
-	                   None) or "ms"
+	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name")
 	piece    = _path(held, "piece").split(".")
 	struct   = resolved.structs[held.param.type_name]
 	sealed   = next((entry.placement for entry in struct.entries
