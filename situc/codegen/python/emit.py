@@ -26,6 +26,7 @@ import re
 import textwrap
 from dataclasses import dataclass, field
 
+from situc.timespec import timed_members
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
@@ -1143,6 +1144,7 @@ class Emitter:
 		lines = ["", f"class {name}(View):", *self._class_doc(struct)]
 		lines.extend(self._argument_declarations(struct))
 		lines.extend(self._acquire(struct))
+		lines.extend(self._time_constants(struct))
 		lines.extend(self._dirty_constants(struct))
 		lines.extend(self._offsets(struct))
 
@@ -1164,6 +1166,20 @@ class Emitter:
 		lines.extend(self._gates(struct))
 		lines.append("")
 		return lines
+
+	def _time_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""What each timed member counts in, and from when (26.1165): the
+		unit as a fraction of a second (or of a month), C's `_UNIT_NUM`
+		and `_UNIT_DEN` as one pair."""
+		lines: list[str] = []
+		for placement, spec in timed_members(self.schema, struct):
+			upper = py_name(placement.name).upper()
+			scale = "month" if spec.calendar else "second"
+			lines.append(f"\t{upper}_UNIT = ({spec.numerator}, "
+			             f"{spec.denominator})\t# of a {scale}")
+			if spec.epoch is not None:
+				lines.append(f"\t{upper}_EPOCH = {spec.epoch!r}")
+		return [*lines, ""] if lines else []
 
 	def _region_runs(self, struct: ResolvedStruct) -> list[str]:
 		"""A run of records inside a region, walked from out here.

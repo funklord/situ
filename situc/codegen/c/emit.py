@@ -26,6 +26,7 @@ from math import lcm
 
 from dataclasses import dataclass, field
 
+from situc.timespec import timed_members
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis, Value
@@ -2935,6 +2936,22 @@ class Emitter:
 			return []
 
 		local = c_name(self._local(struct, placement))
+		timed = next((spec for held, spec
+		              in timed_members(self.schema, struct)
+		              if held is placement), None)
+		if timed is not None:
+			# 26.1165: what the count is in, as a fraction of a second (or
+			# of a month), and from when -- the constants and not the
+			# conversion, for the reason `_SCALE` is one.
+			return [
+				f"#define {macro(self.prefix, struct.name, local, 'UNIT_NUM')} "
+				f"{timed.numerator}ull",
+				f"#define {macro(self.prefix, struct.name, local, 'UNIT_DEN')} "
+				f"{timed.denominator}ull\t/* of a "
+				f"{'month' if timed.calendar else 'second'} */",
+				*([f"#define {macro(self.prefix, struct.name, local, 'EPOCH')} "
+				   f"\"{timed.epoch}\""] if timed.epoch is not None else []),
+			]
 
 		if scalar.is_fixed_point:
 			return [

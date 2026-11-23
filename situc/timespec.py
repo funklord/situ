@@ -15,10 +15,15 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import gcd
+from typing import TYPE_CHECKING
 
 from situc import ast
 from situc.diagnostics import SituError, error
 from situc.expr import Env, evaluate
+
+if TYPE_CHECKING:
+	from situc.layout import Placement
+	from situc.resolve import ResolvedStruct
 
 #: Every base unit, as (numerator, denominator) of its scale's own unit: a
 #: second for the eleven fixed ones, a month for the calendar two.
@@ -284,3 +289,25 @@ def constant_env(schema: ast.Schema) -> Env:
 		except SituError:
 			continue
 	return Env(consts=consts)
+
+
+def timed_members(schema: ast.Schema,
+                  struct: "ResolvedStruct") -> list[tuple["Placement", TimeSpec]]:
+	"""A struct's own members that state a time of a fixed unit, with it:
+	what each reader writes as constants beside the member (26.1165 step
+	5). A unit read from the message or the caller (step 4) has no
+	constant to write, and a conversion is left to the caller, as a fixed
+	point's scale is: the arithmetic needs a type situ cannot choose for
+	an embedded target."""
+	from situc.traverse import own_entries
+	env   = constant_env(schema)
+	found = []
+	for entry in own_entries(struct):
+		placement = entry.placement
+		if placement.kind != "field" \
+				or "." in placement.path[len(struct.name) + 1:]:
+			continue
+		spec = spec_of(placement.attrs, env)
+		if spec is not None and not spec.scale:
+			found.append((placement, spec))
+	return found

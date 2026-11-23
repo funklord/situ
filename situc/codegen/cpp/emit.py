@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from situc.timespec import timed_members
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
@@ -736,6 +737,22 @@ class Emitter:
 
 	# -- structs -------------------------------------------------------
 
+	def _time_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""What each timed member counts in, and from when (26.1165): C's
+		`_UNIT_NUM`, `_UNIT_DEN` and `_EPOCH`, as members."""
+		lines: list[str] = []
+		for placement, spec in timed_members(self.schema, struct):
+			name  = c_name(placement.name)
+			scale = "month" if spec.calendar else "second"
+			lines += [f"\tstatic constexpr std::uint64_t {name}_unit_num = "
+			          f"{spec.numerator}u;",
+			          f"\tstatic constexpr std::uint64_t {name}_unit_den = "
+			          f"{spec.denominator}u;\t// of a {scale}"]
+			if spec.epoch is not None:
+				lines.append(f"\tstatic constexpr const char *{name}_epoch = "
+				             f"\"{spec.epoch}\";")
+		return [*lines, ""] if lines else []
+
 	def _struct(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
 		name   = class_name(struct)
@@ -767,6 +784,7 @@ class Emitter:
 				f"\texplicit constexpr {name}(situ_view_t raw{args}) noexcept",
 				f"\t\t: ::situ::rt::view(raw){init} {{}}",
 			])
+		lines.extend(self._time_constants(struct))
 		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):

@@ -26,6 +26,7 @@ import re
 
 from dataclasses import dataclass, field
 
+from situc.timespec import timed_members
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
@@ -677,6 +678,21 @@ class Emitter:
 
 	# -- structs -------------------------------------------------------
 
+	def _time_constants(self, struct: ResolvedStruct) -> list[str]:
+		"""What each timed member counts in, and from when (26.1165)."""
+		lines: list[str] = []
+		for placement, spec in timed_members(self.schema, struct):
+			upper = c_name(placement.name).upper()
+			scale = "month" if spec.calendar else "second"
+			lines += [f"\t/// `{placement.name}` counts this fraction of a {scale}.",
+			          f"\tpub const {upper}_UNIT: (u64, u64) = "
+			          f"({spec.numerator}, {spec.denominator});"]
+			if spec.epoch is not None:
+				lines += [f"\t/// `{placement.name}` counts from this epoch.",
+				          f"\tpub const {upper}_EPOCH: &'static str = "
+				          f"\"{spec.epoch}\";"]
+		return lines
+
 	def _struct(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
 
@@ -736,6 +752,7 @@ class Emitter:
 			f"impl<'a> {name}<'a> {{",
 			(f"\tpub const SIZE: usize = {layout.size_bytes};" if fixed
 			 else f"\tpub const SIZE_MIN: usize = {layout.size_bytes};"),
+			*self._time_constants(struct),
 			"",
 			"\t/// The one bounds check. Everything below trusts it.",
 			"\t///",

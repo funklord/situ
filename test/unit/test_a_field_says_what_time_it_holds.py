@@ -9,6 +9,8 @@ consumers reading `expires_at` differently fail `wire --check` by name.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from situc import wire
@@ -295,3 +297,45 @@ def test_a_kernel_will_not_read_a_programmable_unit() -> None:
 	with pytest.raises(SituError) as caught:
 		check(parse_text(text, path="k.situ"))
 	assert "a clock counts a fixed unit" in str(caught.value)
+
+
+# -- step 5: each reader states the unit beside the member -------------------
+
+TIMED = """target buffer;
+endian big;
+struct f {
+	u64 expires_at [time = ms, epoch = unix];
+	u32 rtt [duration = s / 90000];
+	u8  term [duration = year];
+	u32 scale;
+	u64 tick [duration = ns * scale];
+}
+"""
+
+
+def test_each_reader_states_the_unit(tmp_path: Path) -> None:
+	"""Constants, not a conversion: the unit is exact and belongs beside the
+	member, and the arithmetic needs a type situ cannot choose -- the
+	reason a fixed point's `_SCALE` is a constant. A unit the message
+	chooses has none to state."""
+	import fourway
+	if not fourway.COMPLETE:
+		pytest.skip("needs all four toolchains")
+	source = tmp_path / "unit.situ"
+	source.write_text(TIMED, encoding="ascii")
+	assert len(fourway.build(tmp_path, source)) == 4
+	text = {path.suffix: path.read_text(encoding="ascii")
+	        for path in tmp_path.rglob("unit.*")
+	        if path.suffix in (".h", ".hpp", ".rs", ".py")}
+	assert "#define SITU_F_EXPIRES_AT_UNIT_NUM 1ull" in text[".h"]
+	assert "#define SITU_F_EXPIRES_AT_UNIT_DEN 1000ull" in text[".h"]
+	assert '#define SITU_F_EXPIRES_AT_EPOCH "unix"' in text[".h"]
+	assert "SITU_F_RTT_UNIT_DEN 90000ull" in text[".h"]
+	assert "SITU_F_RTT_EPOCH" not in text[".h"]
+	assert "SITU_F_TERM_UNIT_NUM 12ull" in text[".h"]
+	assert "SITU_F_TICK_UNIT" not in text[".h"]
+	assert "static constexpr std::uint64_t rtt_unit_den = 90000u;" \
+		in text[".hpp"]
+	assert "pub const EXPIRES_AT_UNIT: (u64, u64) = (1, 1000);" in text[".rs"]
+	assert "\tRTT_UNIT = (1, 90000)" in text[".py"]
+	assert "\tEXPIRES_AT_EPOCH = 'unix'" in text[".py"]
