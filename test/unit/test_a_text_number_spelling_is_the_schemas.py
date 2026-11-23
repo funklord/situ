@@ -221,3 +221,20 @@ def test_both_walkers_read_the_rules(tmp_path: Path) -> None:
 		assert (said == "0") == accepted, (field, spelling, said)
 		assert c_verdict(tmp_path, blob, packet, shape) == said, \
 			(field, spelling)
+
+
+def test_the_dissector_reads_a_plus_signed_length(tmp_path: Path) -> None:
+	"""The seventh reader: a length written `+3` under `[plus_sign]` places
+	the body as the four backends do. The dissector's own digit read
+	refused any byte that is not a digit, so the length read 0 there and
+	3 everywhere else. Offsets worked by hand."""
+	from test_dissector import LUA, dissect
+	if LUA is None:
+		pytest.skip("no Lua interpreter")
+	schema = tmp_path / "plus.situ"
+	schema.write_text("target buffer;\nendian big;\nstruct s {\n"
+	                  '\tdecimal u16 n until "," [plus_sign];\n'
+	                  "\tu8 body[n];\n\tu8 tail;\n}\n", encoding="ascii")
+	consumed, rows = dissect(tmp_path, schema, "s", b"+3,abcZ")
+	assert consumed == 7, rows
+	assert ("s.tail", 6, 1, "90") in rows, rows

@@ -327,11 +327,17 @@ DIGITS_HELPER = [
 	"-- reads a length field of a record a truncated packet may not carry, and",
 	"-- slicing the tvb for the digits raised out of Wireshark before anything",
 	"-- could ask how long the field was.",
-	"local function situ_digits(tvb, at, width, base)",
+	"--",
+	"-- `plus` is `[plus_sign]` (situ 26.1166): a leading `+` the schema",
+	"-- admits, skipped as the compiled readers skip it.",
+	"local function situ_digits(tvb, at, width, base, plus)",
 	"\tif at < 0 or at + width > tvb:len() then",
 	"\t\treturn 0",
 	"\tend",
 	"\tlocal text = tvb(at, width):string()",
+	"\tif plus and #text > 1 and text:sub(1, 1) == \"+\" then",
+	"\t\ttext = text:sub(2)",
+	"\tend",
 	"\tif #text == 0 then",
 	"\t\treturn 0",
 	"\tend",
@@ -3380,14 +3386,15 @@ def _read(placement: Placement, base: str) -> str | None:
 			# Scanned inline rather than declined: the parentheses truncate
 			# `situ_scan` to its first return, and the helper is emitted for
 			# any schema that has a delimiter to scan for.
+			plus = ", true" if placement.radix_signs & 1 else ""
 			if placement.delimiters:
 				return (f"situ_digits(tvb, {_at(base, first)}, "
 				        f"({_scan_call(placement, _at(base, first))}), "
-				        f"{placement.radix})")
+				        f"{placement.radix}{plus})")
 			helper = ("situ_digits_padded" if placement.radix_padded
 			          else "situ_digits")
 			return (f"{helper}(tvb, {_at(base, first)}, {count},"
-			        f" {placement.radix})")
+			        f" {placement.radix}{plus})")
 
 		if _host_order(placement):
 			return None		# no answer a capture can give
