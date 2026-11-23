@@ -114,6 +114,12 @@ def _can_own(placement: Placement, resolved: ResolvedSchema) -> bool:
 	if placement.radix_padded:
 		return False
 
+	# A fixed-width hex number's owned spelling is upper case (26.86), and
+	# `[minimal]`'s is lower: decode refused every message the reader took
+	# with a letter in it, and encode wrote the spelling the reader refuses.
+	if placement.radix_minimal and (placement.radix or 10) > 10:
+		return False
+
 	# `preserve` and `unknown` say the bits are somebody else's to keep. An
 	# owned struct drops them by construction -- it holds fields, not the
 	# buffer -- so the round-trip this mode promises cannot be made.

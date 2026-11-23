@@ -59,6 +59,20 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	        f" {held.size_bits}u, static_cast<std::uint64_t>({value}));"]
 
 
+def _lower_case(part: Part, count: str, indent: str) -> list[str]:
+	"""`[minimal]`'s one spelling is lower case above radix ten, and the
+	formatter writes upper, so the builder refused its own `FF`."""
+	if not part.placement.radix_minimal or (part.radix or 10) <= 10:
+		return []
+	return [f"{indent}for (std::uint32_t situ_k = 0; situ_k < {count}; "
+	        "++situ_k) {",
+	        f"{indent}\tstd::uint8_t &situ_d = situ_out[situ_at + situ_k];",
+	        f"{indent}\tif (situ_d >= 0x41u && situ_d <= 0x46u) {{",
+	        f"{indent}\t\tsitu_d = static_cast<std::uint8_t>(situ_d + 32u);",
+	        f"{indent}\t}}",
+	        f"{indent}}}"]
+
+
 def _digits(part: Part, value: str) -> list[str]:
 	"""A number written as text: `digits` wide, or as few as it needs.
 
@@ -76,6 +90,7 @@ def _digits(part: Part, value: str) -> list[str]:
 		        f"{part.radix}u,",
 		        f"\t\t\tstatic_cast<{widest}>({value})) != 0) {{",
 		        CONSTRAINT, "\t}",
+		        *_lower_case(part, f"{part.digits}u", "\t"),
 		        f"\tsitu_at += {part.digits}u;"]
 	held = f"static_cast<{widest}>({value})"
 	left = (f"{held} < 0 ? static_cast<std::uint64_t>(-({held} + 1)) + 1u"
@@ -98,6 +113,9 @@ def _digits(part: Part, value: str) -> list[str]:
 		f"{held}) != 0) {{",
 		"\t\t\treturn ::situ::rt::err::constraint;",
 		"\t\t}",
+		# `[minimal]` is lower case above radix ten and the formatter
+		# writes upper, so the builder refused its own `FF`.
+		*_lower_case(part, "situ_digits", "\t\t"),
 		"\t\tsitu_at += situ_digits;",
 		f"\t\tsitu_out[situ_at] = 0x{part.delimiter[0]:02X}u;",
 		"\t\tsitu_at += 1u;",

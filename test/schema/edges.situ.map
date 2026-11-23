@@ -678,6 +678,10 @@ struct messy size=3.. access=Sequential mutate=Shifting address=Unstable canonic
   messy.name                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   messy.value                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
 
+struct minimal_hex size=1.. access=Sequential mutate=Shifting address=Unstable repr=TextConverted
+  minimal_hex.value                      offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
+  minimal_hex.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
 struct mmc_command size=6 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   mmc_command.command                    offset=AbsoluteStatic(0x00) size=Fixed(5) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)
   mmc_command.index                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(crc)

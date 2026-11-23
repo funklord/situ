@@ -617,6 +617,10 @@ struct messy size=3..
   @0x0000   until:3a  u8         name  fold-case
   ~         until:0d0a u8         value  big trim=2009
 
+struct minimal_hex size=1..
+  @0x0000   until:2c  u32        value  radix=16 minimal cap=8
+  ~         0..       u8         rest  sized-by=remaining
+
 struct mmc_command size=6
   @0x0000   1         u8         index
   @0x0001   4         u32        argument  big

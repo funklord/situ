@@ -395,6 +395,15 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	return lines
 
 
+def _lower_case(part: Part, count: str) -> list[str]:
+	"""`[minimal]`'s one spelling is lower case above radix ten, and the
+	formatter writes upper, so the builder refused its own `FF`."""
+	if not part.placement.radix_minimal or (part.radix or 10) <= 10:
+		return []
+	return [f"\tsitu_out[situ_at:situ_at + {count}] = "
+	        f"bytes(situ_out[situ_at:situ_at + {count}]).lower()"]
+
+
 def _digits(part: Part, value: str) -> list[str]:
 	"""A number written as text: `digits` wide, or as few as it needs.
 
@@ -410,6 +419,7 @@ def _digits(part: Part, value: str) -> list[str]:
 		return [*_room(str(part.digits), path),
 		        f"\tif not {call}(situ_out, situ_at, {part.digits}, "
 		        f"{part.radix}, {value}):", refuse,
+		        *_lower_case(part, str(part.digits)),
 		        f"\tsitu_at += {part.digits}"]
 	return [
 		"\tsitu_digits = 1",
@@ -422,6 +432,9 @@ def _digits(part: Part, value: str) -> list[str]:
 		*_room("situ_digits + 1", path),
 		f"\tif not {call}(situ_out, situ_at, situ_digits, "
 		f"{part.radix}, {value}):", refuse,
+		# `[minimal]` is lower case above radix ten and the formatter
+		# writes upper, so the builder refused its own `FF`.
+		*_lower_case(part, "situ_digits"),
 		"\tsitu_at += situ_digits",
 		f"\tsitu_out[situ_at] = {part.delimiter[0]}",
 		"\tsitu_at += 1",

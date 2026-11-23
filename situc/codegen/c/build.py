@@ -513,6 +513,16 @@ def _digit_bytes(radix: int) -> frozenset[int]:
 	return frozenset(ord(digit) for digit in alphabet)
 
 
+def _minimal_run(placement: Placement) -> bool:
+	"""Whether a text number is written as few digits as its value needs,
+	then its delimiter. A `[minimal]` one with a width -- `hex u32 b[4]
+	[minimal]` -- is written at that width like any other, and a value
+	whose digits would need a leading zero is then refused by the validate
+	after; this read every `[minimal]` one as delimited, and the builder
+	generation of all four backends died on `delimiters[0]`."""
+	return placement.radix_minimal and bool(placement.delimiters)
+
+
 def _radix_refusal(placement: Placement) -> str | None:
 	"""Why this member's digits cannot be written, or None.
 
@@ -532,10 +542,7 @@ def _radix_refusal(placement: Placement) -> str | None:
 		# the conversion fault `f32 x[2]` had, in a second construct.
 		return "is scaled, so its digits carry a point the runtime does " \
 		       "not format"
-	if placement.radix_minimal:
-		# Zero delimiters is not checked here because the parser refuses it
-		# outright -- *`decimal n` has no end* -- so a branch for it would
-		# be unreachable by construction rather than merely unexercised.
+	if _minimal_run(placement):
 		if len(placement.delimiters) > 1:
 			# The schema names several bytes that may end the digits, so
 			# the writer would be choosing one, which is the invention
@@ -782,15 +789,15 @@ def _value_part(role: str, placement: Placement, local: str,
 	# A radix member's WIDTH is its digits, not its value's width: `decimal
 	# u32` is a u32 worth of value in up to ten bytes of wire. A minimal one
 	# has no fixed width at all, so it carries none.
-	assert placement.size_max_bits is not None or not placement.radix_minimal
+	run = _minimal_run(placement)
+	assert placement.size_max_bits is not None or not run
 	most = ((placement.size_max_bits or 0) // BITS_PER_BYTE
-	        if placement.radix_minimal else placement.array_count or 0)
+	        if run else placement.array_count or 0)
 	return Part(role, placement, local,
-	            0 if placement.radix_minimal else most,
+	            0 if run else most,
 	            sizes=sizes, radix=placement.radix,
-	            minimal=placement.radix_minimal,
-	            delimiter=(placement.delimiters[0]
-	                       if placement.radix_minimal else b""),
+	            minimal=run,
+	            delimiter=placement.delimiters[0] if run else b"",
 	            digits=most)
 
 
@@ -2389,13 +2396,17 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 	if not part.minimal:
 		return [
 			f"\t/* {local}: {part.digits} digit(s) at radix {part.radix}, "
-			"leading zeros and all. */",
+			+ ("no leading zero, so a shorter value is refused. */"
+			   if part.placement.radix_minimal
+			   else "leading zeros and all. */"),
 			*_room(f"{part.digits}u"),
 			f"\tif ({formatter}({OUT} + {AT}, {part.digits}u, "
 			f"{part.radix}u,",
 			f"\t                     ({widest}){value}) != 0) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
+			*(_lower_case(part.radix or 10, f"{part.digits}u", "\t")
+			  if part.placement.radix_minimal else []),
 			f"\t{AT} += {part.digits}u;",
 		]
 
@@ -2436,10 +2447,31 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 		f"\t\t                     ({widest}){value}) != 0) {{",
 		"\t\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t\t}",
+		*_lower_case(part.radix or 10, DIGITS, "\t\t"),
 		f"\t\t{AT} += {DIGITS};",
 		f"\t\t{OUT}[{AT}] = 0x{ending:02X}u;",
 		f"\t\t{AT} += 1u;",
 		"\t}",
+	]
+
+
+def _lower_case(radix: int, count: str, indent: str) -> list[str]:
+	"""`[minimal]`'s one spelling is lower case above radix ten, and
+	`situ_format_uint` writes upper: the builder wrote `FF`, its own
+	validate refused it, and every value with a digit past nine was a
+	CONSTRAINT error. Folded after the format, so the fixed-width form
+	without `[minimal]`, whose spelling is upper (26.86), is left alone."""
+	if radix <= 10:
+		return []
+	return [
+		f"{indent}{{",
+		f"{indent}\tuint32_t situ_k;",
+		"",
+		f"{indent}\tfor (situ_k = 0u; situ_k < {count}; situ_k++) {{",
+		f"{indent}\t\t{OUT}[{AT} + situ_k] = "
+		f"situ_ascii_fold({OUT}[{AT} + situ_k]);",
+		f"{indent}\t}}",
+		f"{indent}}}",
 	]
 
 

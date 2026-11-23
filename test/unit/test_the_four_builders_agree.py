@@ -678,3 +678,73 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 	if not units:
 		pytest.skip("no struct here is in the class")
 	four_say(schema, tmp_path, units, [])
+
+
+MINIMAL_HEX = """target buffer;
+endian big;
+struct minimal_hex {
+	hex u32  value until "," max 8  [minimal];
+	u8       rest[remaining];
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_a_minimal_hex_number_builds_its_letters(tmp_path: Path) -> None:
+	"""`[minimal]`'s one spelling is lower case above radix ten, and the
+	four builders formatted upper: each refused its own `FF` on the
+	validate after, so no value with a digit past nine could be built.
+	The comparison above never saw it -- a text number is handed `5 + at`,
+	one decimal digit, and a refusal is retried with other values until one
+	builds -- and four builders refusing alike agree. So the bytes are
+	pinned here: 255 is `ff,`, in all four."""
+	schema = tmp_path / "minimal_hex.situ"
+	schema.write_text(MINIMAL_HEX, encoding="ascii")
+	parsed   = load_schema(schema)
+	resolved = resolve(parsed, solve(parsed))
+	units    = plain_build.units(resolved, plain_build.shape(parsed, resolved))
+	assert len(units) == 1
+	cases: list[tuple[Unit, Given]] = []
+	for value in (0xff, 0xbadcafe, 0xa):
+		given: Given = [(part, value if part.radix else b"")
+		                for part, _ in _given(_flat(units[0]), {})]
+		cases.append((units[0], given))
+	out = tmp_path / "out"
+	out.mkdir()
+	said = four_say(schema, out, [], cases).splitlines()
+	assert [line.split()[-1] for line in said] == [
+		b"ff,".hex(), b"badcafe,".hex(), b"a,".hex()], said
+
+
+FIXED_MINIMAL_HEX = """target buffer;
+endian big;
+struct fixed_hex {
+	hex u32  value[4]  [minimal];
+	u8       rest[remaining];
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_a_fixed_width_minimal_number_is_written_at_its_width(
+		tmp_path: Path) -> None:
+	"""`hex u32 value[4] [minimal]` has no delimiter, and the builders
+	read every `[minimal]` number as delimited: generating one died on
+	`delimiters[0]` in all four. It is written at its width, lower case,
+	and a value that would need a leading zero is refused."""
+	schema = tmp_path / "fixed_hex.situ"
+	schema.write_text(FIXED_MINIMAL_HEX, encoding="ascii")
+	parsed   = load_schema(schema)
+	resolved = resolve(parsed, solve(parsed))
+	units    = plain_build.units(resolved, plain_build.shape(parsed, resolved))
+	assert len(units) == 1
+	cases: list[tuple[Unit, Given]] = []
+	for value in (0xbeef, 0xff):
+		given: Given = [(part, value if part.radix else b"")
+		                for part, _ in _given(_flat(units[0]), {})]
+		cases.append((units[0], given))
+	out = tmp_path / "out"
+	out.mkdir()
+	said = four_say(schema, out, [], cases).splitlines()
+	assert [line.split()[-1] for line in said] == [
+		b"beef".hex(), "refused"], said

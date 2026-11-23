@@ -56,6 +56,15 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	        f" {held.size_bits}, {str(msb).lower()}, {value} as u64);"]
 
 
+def _lower_case(part: Part, count: str, indent: str) -> list[str]:
+	"""`[minimal]`'s one spelling is lower case above radix ten, and the
+	formatter writes upper, so the builder refused its own `FF`."""
+	if not part.placement.radix_minimal or (part.radix or 10) <= 10:
+		return []
+	return [f"{indent}situ_out[situ_at..situ_at + {count}]"
+	        ".make_ascii_lowercase();"]
+
+
 def _digits(part: Part, value: str) -> list[str]:
 	"""A number written as text: `digits` wide, or as few as it needs.
 
@@ -79,6 +88,7 @@ def _digits(part: Part, value: str) -> list[str]:
 		return [*_room(str(part.digits)),
 		        f"\tif !{call}(&mut situ_out[situ_at..situ_at + {part.digits}],"
 		        f" {part.radix}, {bare}) {{", *refuse,
+		        *_lower_case(part, str(part.digits), "\t"),
 		        f"\tsitu_at += {part.digits};"]
 	left = f"{held}.unsigned_abs()" if signed else bare
 	return [
@@ -98,6 +108,9 @@ def _digits(part: Part, value: str) -> list[str]:
 		f" {part.radix}, {bare}) {{",
 		"\t\t\treturn Err(Error::Constraint);",
 		"\t\t}",
+		# `[minimal]` is lower case above radix ten and the formatter
+		# writes upper, so the builder refused its own `FF`.
+		*_lower_case(part, "situ_digits", "\t\t"),
 		"\t\tsitu_at += situ_digits;",
 		f"\t\tsitu_out[situ_at] = {part.delimiter[0]:#04x};",
 		"\t\tsitu_at += 1;",

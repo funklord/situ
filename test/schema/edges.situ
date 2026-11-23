@@ -2849,6 +2849,15 @@ struct duration_cell {
 	time_unit    unit[1];
 }
 
+// A `[minimal]` hexadecimal number, whose one spelling is lower case. The
+// four builders formatted it in upper case, refused their own `FF` on the
+// validate after, and so built no value with a digit past nine; no schema
+// in the corpus had one, so the four-builder comparison never asked.
+struct minimal_hex {
+	hex u32  value until "," max 8  [minimal];
+	u8       rest[remaining];
+}
+
 // A named value over a text number (26.1079): its value, and 0 where the
 // digits are not one of `u32` -- which both walkers took as the number.
 struct named_digits {
