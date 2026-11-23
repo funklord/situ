@@ -11,6 +11,7 @@ from __future__ import annotations
 from situc import __version__, ast
 from situc.codegen.c.names import c_name
 from situc.codegen.c.reassemble import (WHY, _attr, _number, _path,
+                                        count_most, marks_per,
                                         _relation, per_cap,
                                         refusals)
 from situc.codegen.cpp.converse import _key, _key_bytes
@@ -83,7 +84,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	messages = _number(held, "messages")
 	capacity = _number(held, "bytes") // messages
 	timeout  = _number(held, "timeout")
-	marks    = (capacity + 7) // 8
+	marks    = marks_per(held, capacity)
+	most     = count_most(held)
 	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name",
 	                   None) or "ms"
 	piece    = _path(held, "piece").split(".")
@@ -156,6 +158,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tstatic constexpr std::uint32_t timeout  = {timeout}u;",
 		*([f"\tstatic constexpr std::uint32_t per_max  = {per_most}u;"]
 		  if per_most is not None else []),
+		*([f"\tstatic constexpr std::uint32_t count_max = {most}u;"]
+		  if most is not None else []),
 		"\t/* Why `add` refused, `why()` after it (fuzznet, 2026-11-22): C's",
 		"\t * numbers. */",
 		*[f"\tstatic constexpr std::uint32_t why_{why.lower()} = {number}u;"
@@ -243,6 +247,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\twhy_ = why_too_large;",
 		"\t\t\treturn ::situ::rt::err::bounds;",
 		"\t\t}",
+		*(["\t\tif (count > count_max) {",
+		   "\t\t\twhy_ = why_too_large;",
+		   "\t\t\treturn ::situ::rt::err::bounds;",
+		   "\t\t}"] if most is not None else []),
 		*(["\t\tif (static_cast<std::int32_t>(now - deadline) >= 0) {",
 		   "\t\t\twhy_ = why_expired;",
 		   "\t\t\treturn ::situ::rt::err::bounds;",

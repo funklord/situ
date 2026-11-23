@@ -199,6 +199,9 @@ REASSEMBLE_ATTRIBUTES = frozenset({
 	"per", "per_max",
 	# A piece's own deadline: the first piece's bounds the slot it opens.
 	"expires",
+	# The most pieces a message has (fuzznet, 2026-11-23): the marks are
+	# sized by it rather than one bit a byte of capacity.
+	"count_max",
 })
 
 #: An `identify`'s attributes (26.1124): the media type it answers with.

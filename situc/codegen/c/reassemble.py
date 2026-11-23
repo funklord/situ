@@ -51,6 +51,18 @@ def _number(held: ast.Reassemble, name: str) -> int:
 	return value
 
 
+def count_most(held: ast.Reassemble) -> int | None:
+	"""`count_max = N`, the most pieces a message has; None unstated."""
+	return _number(held, "count_max") if _attr(held, "count_max") else None
+
+
+def marks_per(held: ast.Reassemble, capacity: int) -> int:
+	"""A slot's bytes of marks, a bit a piece: as many pieces as bytes, or
+	`count_max`'s where it states fewer (fuzznet, 2026-11-23)."""
+	most = count_most(held)
+	return (min(capacity, most if most is not None else capacity) + 7) // 8
+
+
 def _path(held: ast.Reassemble, name: str) -> str:
 	found = _attr(held, name)
 	assert found is not None and found.value is not None, (held.name, name)
@@ -234,7 +246,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name",
 	                   None) or "ms"
 	capacity = total // messages
-	marks    = (capacity + 7) // 8
+	marks    = marks_per(held, capacity)
+	most     = count_most(held)
 
 	reads: list[str] = []
 	local: dict[str, str] = {}
@@ -300,6 +313,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"#define {upper}_TIMEOUT  {timeout}u",
 		*([f"#define {upper}_PER_MAX  {per_most}u"]
 		  if per_most is not None else []),
+		*([f"#define {upper}_COUNT_MAX {most}u\t/* the most pieces a message has */"]
+		  if most is not None else []),
 		"/* Why `_add` refused, in `t->why` after any answer but SITU_OK and",
 		" * SITU_ERR_TRUNCATED, which leave it NONE (fuzznet, 2026-11-22). */",
 		*[f"#define {upper}_WHY_{why:<11} {number}u\t/* {says} */"
@@ -308,8 +323,14 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		" bytes. */",
 		f"#define {upper}_BYTES_FOR(messages, capacity) "
 		"((size_t)(messages) * (capacity))",
-		f"#define {upper}_MARKS_FOR(messages, capacity) "
-		"((size_t)(messages) * (((capacity) + 7u) / 8u))",
+		*([f"#define {upper}_MARKS_FOR(messages, capacity) "
+		   "((size_t)(messages) * (((capacity) + 7u) / 8u))"]
+		  if most is None else
+		  ["/* A mark a piece, at most `_COUNT_MAX` of them: `capacity` stays",
+		   " * an argument, as without `count_max`, and bounds it too. */",
+		   f"#define {upper}_MARKS_FOR(messages, capacity) "
+		   f"((size_t)(messages) * ((((capacity) < {upper}_COUNT_MAX ?"
+		   f" (capacity) : {upper}_COUNT_MAX) + 7u) / 8u))"]),
 		"typedef struct {",
 		f"\t{key_type};",
 		"\tuint32_t count;\t\t/* pieces in the message */",
@@ -366,7 +387,9 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\tt->messages = messages;",
 		"\tt->capacity = capacity;",
 		"\tt->timeout  = timeout;",
-		"\tt->marks_per = (capacity + 7u) / 8u;",
+		*(["\tt->marks_per = (capacity + 7u) / 8u;"] if most is None else
+		  [f"\tt->marks_per = ((capacity < {upper}_COUNT_MAX ? capacity"
+		   f" : {upper}_COUNT_MAX) + 7u) / 8u;"]),
 		"\tt->why       = 0u;",
 		*(["\tt->per_max = per_max;"] if per_most is not None else []),
 		"\tt->slot  = slot;",
@@ -416,6 +439,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\t\tt->why = {upper}_WHY_TOO_LARGE;",
 		"\t\treturn SITU_ERR_BOUNDS;\t/* a byte a piece at least */",
 		"\t}",
+		*([f"\tif ({p_count} > {upper}_COUNT_MAX) {{",
+		   f"\t\tt->why = {upper}_WHY_TOO_LARGE;",
+		   "\t\treturn SITU_ERR_BOUNDS;\t/* more pieces than it marks */",
+		   "\t}"] if most is not None else []),
 		*([f"\tif ((int32_t)(now - {p_expires}) >= 0) {{",
 		   f"\t\tt->why = {upper}_WHY_EXPIRED;",
 		   "\t\treturn SITU_ERR_BOUNDS;\t/* past its own deadline */",

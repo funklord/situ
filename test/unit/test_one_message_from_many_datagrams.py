@@ -1238,7 +1238,10 @@ def _adversarial_stream(seed: int, steps: int,
 	# a sender and of 1): the schema says 3, the table is given 1, and the
 	# answers must be the `per` run's.
 	PER_BOUNDED,
-], ids=["plain", "per", "expires", "bounded", "per-bounded"])
+	# `count_max` (fuzznet, 2026-11-23): a mark a piece rather than a byte;
+	# the stream's counts of 7 are refused, and the four agree on it.
+	SMALL.replace("messages = 2", "count_max = 6, messages = 2"),
+], ids=["plain", "per", "expires", "bounded", "per-bounded", "count-max"])
 def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		schema: str) -> None:
 	"""The four tables were written from one set of rules and held to
@@ -1323,6 +1326,8 @@ def test_four_tables_answer_alike_under_a_hostile_stream(tmp_path: Path,
 		_PLAIN.append(said["c"])
 	if schema is BOUNDED and _PLAIN:
 		assert said["c"] == _PLAIN[0], "the bounds given at init are not SMALL's"
+	if "count_max" in schema and _PLAIN:
+		assert said["c"] != _PLAIN[0], "count_max refused nothing"
 	if schema is PER_BOUNDED:
 		assert len(_CAPPED_AND_NOT) == 2
 		assert said["c"] == _CAPPED_AND_NOT[1], "per_max at init is not 1"
@@ -1633,6 +1638,99 @@ def test_per_max_is_given_at_init_too(tmp_path: Path) -> None:
 			"\t\traise SystemExit(f'per_max {most} was taken')",
 			"\texcept BoundsError:",
 			"\t\tpass",
+			"print('python ok')"])],
+		cwd=out, capture_output=True, text=True, timeout=120)
+	assert ran.stdout.strip() == "python ok", ran.stderr
+
+
+COUNTED = SCHEMA.replace("messages = 4", "count_max = 9, messages = 4")
+
+COUNT_C = r"""#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "r_converse.h"
+#include "r_reassemble.h"
+
+#define CHECK(c) do { if (!(c)) { printf("FAIL %d: %s\n", __LINE__, #c); fail = 1; } } while (0)
+
+static situ_pieces_t t;
+
+int main(void)
+{
+	int fail = 0;
+	const uint8_t *out = NULL;
+	uint32_t len = 0;
+	uint8_t key[14], sender[8];
+	/* A mark a piece: nine pieces are two bytes a slot, whatever the
+	 * capacity, and a capacity of fewer bytes bounds it further. */
+	CHECK(SITU_PIECES_COUNT_MAX == 9u);
+	CHECK(SITU_PIECES_MARKS_FOR(1u, 1024u) == 2u);
+	CHECK(SITU_PIECES_MARKS_FOR(4u, 1024u) == 8u);
+	CHECK(SITU_PIECES_MARKS_FOR(1u, 4u) == 1u);
+	CHECK(sizeof ((situ_pieces_store_t *)0)->marks == 8u);
+	/* One slot in exactly the memory the macros name, on the heap so
+	 * the sanitizer sees a mark written past it. */
+	situ_pieces_slot_t one[1];
+	uint8_t *bytes = malloc(SITU_PIECES_BYTES_FOR(1u, 16u));
+	uint8_t *marks = malloc(SITU_PIECES_MARKS_FOR(1u, 16u));
+	if (bytes == NULL || marks == NULL) return 2;
+	CHECK(situ_pieces_init_in(&t, 1u, 16u, 100u, one, bytes, marks) == SITU_OK);
+	memset(sender, 7, sizeof sender);
+	situ_conv_same_message_key(1u, 9u, sender, key);
+	/* The ninth piece's mark is the second byte's first bit. */
+	for (uint32_t i = 9u; i-- > 1u;) {
+		const uint8_t c = (uint8_t)('a' + i);
+		CHECK(situ_pieces_add_parts(&t, key, i, 9u, &c, 1u, 10u, &out,
+		                            &len) == SITU_ERR_TRUNCATED);
+	}
+	CHECK(situ_pieces_add_parts(&t, key, 0u, 9u, (const uint8_t *)"a", 1u,
+	                            10u, &out, &len) == SITU_OK);
+	CHECK(len == 9u && memcmp(out, "abcdefghi", 9u) == 0);
+	/* A tenth piece has no mark: refused as too large, before a slot. */
+	situ_conv_same_message_key(2u, 10u, sender, key);
+	CHECK(situ_pieces_add_parts(&t, key, 0u, 10u, (const uint8_t *)"a", 1u,
+	                            11u, &out, &len) == SITU_ERR_BOUNDS);
+	CHECK(t.why == SITU_PIECES_WHY_TOO_LARGE);
+	free(bytes);
+	free(marks);
+	printf(fail ? "FAILED\n" : "COUNT PASS\n");
+	return fail;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="needs a C compiler")
+def test_count_max_sizes_the_marks_by_pieces(tmp_path: Path) -> None:
+	"""`count_max` (fuzznet, 2026-11-23): its slots are 128 to 256 KiB and
+	a message at most 256 chunks, so a mark a byte of capacity spent 16 to
+	32 KiB a slot where 32 bytes do. A piece saying more is TOO_LARGE, and
+	a slot keeps a mark a piece -- in exact memory under the sanitizer."""
+	assert "from 1 to a slot's bytes" in _refused(
+		COUNTED.replace("count_max = 9", "count_max = 0"))
+	assert "from 1 to a slot's bytes" in _refused(
+		COUNTED.replace("count_max = 9", "count_max = 1025"))
+	assert "COUNT PASS" in _run(tmp_path, COUNTED, COUNT_C, "r",
+	                            sanitize=True)
+	out = tmp_path / "py"
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(tmp_path / "r.situ"),
+		 "--target", "python", "--layer", "converse", "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	ran = subprocess.run(
+		[sys.executable, "-c", "\n".join([
+			"import sys",
+			f"sys.path[:0] = ['.', {str(ROOT / 'runtime' / 'python')!r}]",
+			"from situ_runtime import BoundsError",
+			"import r_reassemble",
+			"t = r_reassemble.pieces_table()",
+			"assert t.COUNT_MAX == 9",
+			"try:",
+			"\tt.add_parts(b'k', 0, 10, b'a', 10)",
+			"\traise SystemExit('a tenth piece was taken')",
+			"except BoundsError:",
+			"\tassert t.why == t.WHY_TOO_LARGE",
+			"assert t.add_parts(b'k', 0, 9, b'a', 10) is None",
 			"print('python ok')"])],
 		cwd=out, capture_output=True, text=True, timeout=120)
 	assert ran.stdout.strip() == "python ok", ran.stderr

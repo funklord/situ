@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.codegen.c.reassemble import (WHY, _attr, _number, _path,
+                                        count_most, marks_per,
                                         _relation, per_cap,
                                         refusals)
 from situc.codegen.rust.converse import _key, _key_bytes
@@ -60,7 +61,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	messages = _number(held, "messages")
 	capacity = _number(held, "bytes") // messages
 	timeout  = _number(held, "timeout")
-	marks    = (capacity + 7) // 8
+	marks    = marks_per(held, capacity)
+	most     = count_most(held)
 	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name",
 	                   None) or "ms"
 	piece    = _path(held, "piece").split(".")
@@ -132,6 +134,8 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tpub const TIMEOUT: u32 = {timeout};",
 		*([f"\tpub const PER_MAX: usize = {per_most};"]
 		  if per_most is not None else []),
+		*([f"\tpub const COUNT_MAX: u32 = {most};"]
+		  if most is not None else []),
 		"\t// Why `add` refused, `why()` after it (fuzznet, 2026-11-22): C's numbers.",
 		*[f"\tpub const WHY_{why}: u32 = {number};"
 		  for number, (why, _) in enumerate(WHY)],
@@ -225,6 +229,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\t\tself.why = Self::WHY_TOO_LARGE;",
 		"\t\t\treturn Err(Error::Bounds);",
 		"\t\t}",
+		*(["\t\tif count > Self::COUNT_MAX {",
+		   "\t\t\tself.why = Self::WHY_TOO_LARGE;",
+		   "\t\t\treturn Err(Error::Bounds);",
+		   "\t\t}"] if most is not None else []),
 		*(["\t\tif (now.wrapping_sub(deadline) as i32) >= 0 {",
 		   "\t\t\tself.why = Self::WHY_EXPIRED;",
 		   "\t\t\treturn Err(Error::Bounds);",

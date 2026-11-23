@@ -490,7 +490,9 @@ stated rather than defaulted, and what is still missing comes back as ranges
 for a re-request. `per = f.head.sender, per_max = 1` caps how many messages
 one value of a key field holds at once, so one sender opening messages it
 never finishes cannot take every slot, and a message the caller has given up
-on is forgotten by its key. All four backends write the table.
+on is forgotten by its key. `count_max = 256` says a message has at most
+256 pieces, so a slot keeps a bit a piece rather than a bit a byte of its
+capacity. All four backends write the table.
 
 ## The language
 

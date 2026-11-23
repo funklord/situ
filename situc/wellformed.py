@@ -1936,6 +1936,19 @@ def check_reassemblies(schema: ast.Schema) -> None:
 			if not isinstance(most, int) or not 1 <= most <= limit:
 				raise error(f"`per_max` is a number from 1 to `messages`, "
 				            f"{limit}", said["per_max"].span, label="here")
+		# `count_max` (fuzznet, 2026-11-23): the most pieces one message
+		# has. Without it a piece may be a byte, so a slot keeps a mark a
+		# byte of capacity; with it, a mark a piece.
+		if "count_max" in said:
+			most = getattr(said["count_max"].value, "value", None)
+			room = (getattr(said["bytes"].value, "value", 0)
+			        // getattr(said["messages"].value, "value", 1))
+			if not isinstance(most, int) or not 1 <= most <= room:
+				raise error(f"`count_max` is a number from 1 to a slot's "
+				            f"bytes, {room}", said["count_max"].span,
+				            label="here",
+				            notes=["a piece holds a byte at least, so a slot "
+				                   "never holds more pieces than bytes"])
 		if "expires" in said:
 			value = said["expires"].value
 			paths = paths_in(value) if value is not None else []
@@ -1946,7 +1959,7 @@ def check_reassemblies(schema: ast.Schema) -> None:
 				            said["expires"].span, label="here")
 		unknown = sorted(set(said) - {"index", "count", "piece", "messages",
 		                              "bytes", "timeout", "unit", "per",
-		                              "per_max", "expires"})
+		                              "per_max", "expires", "count_max"})
 		if unknown:
 			raise error(f"unknown attribute `{unknown[0]}` on a reassembly",
 			            said[unknown[0]].span, label="here")

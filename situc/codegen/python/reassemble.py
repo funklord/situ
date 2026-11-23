@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.codegen.c.reassemble import (WHY, _attr, _number, _path,
+                                        count_most,
                                         _relation, per_cap,
                                         refusals)
 from situc.codegen.python.converse import _key, _key_bytes
@@ -59,6 +60,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	name  = py_name(held.name)
 	per      = per_cap(schema, held, resolved)
 	per_most = per[2] if per is not None else None
+	most     = count_most(held)
 	return [
 		"",
 		f"class {name}_table:",
@@ -72,6 +74,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		f"\tCAPACITY = {capacity}",
 		f"\tTIMEOUT  = {timeout}",
 		*([f"\tPER_MAX  = {per_most}"] if per_most is not None else []),
+		*([f"\tCOUNT_MAX = {most}"] if most is not None else []),
 		"\t# Why `add` refused, in `why` (fuzznet, 2026-11-22): C's numbers.",
 		*[f"\tWHY_{why} = {number}" for number, (why, _) in enumerate(WHY)],
 		"",
@@ -131,6 +134,10 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 		"\t\tif count > self.capacity:",
 		"\t\t\tself.why = self.WHY_TOO_LARGE",
 		"\t\t\traise BoundsError(\"more pieces than a slot holds bytes\", self.capacity)",
+		*(["\t\tif count > self.COUNT_MAX:",
+		   "\t\t\tself.why = self.WHY_TOO_LARGE",
+		   "\t\t\traise BoundsError(\"more pieces than `count_max`\", self.COUNT_MAX)"]
+		  if most is not None else []),
 		*(["\t\tdeadline &= 0xFFFFFFFF",
 		   "\t\tif ((now - deadline) & 0xFFFFFFFF) < 0x80000000:",
 		   "\t\t\tself.why = self.WHY_EXPIRED",
