@@ -464,6 +464,8 @@ def _tlv_grammar(region: ast.Tlv, depth: int) -> list[str]:
 			described += f" wire={tag.wire}"
 		if tag.type_name is not None:
 			described += f" type={tag.type_name}{'[]' if tag.repeated else ''}"
+		if tag.form is not None:
+			described += f" form={tag.form}"
 		lines.append(_indent(depth, described))
 
 	return lines

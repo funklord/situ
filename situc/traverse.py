@@ -3095,6 +3095,9 @@ class TypedTag:
 	#: The struct each element is, whose own checks hold of it; None for
 	#: a scalar, whose width is the whole of what it states.
 	struct: str | None
+	#: `form = number`: the value is one integer of at most this many
+	#: bytes, and not a run.
+	most: int | None = None
 
 
 def tlv_typed_tags(placement: Placement,
@@ -3127,7 +3130,18 @@ def tlv_typed_tags(placement: Placement,
 		# = u32` over a run of u32. Neither can be refused on the other's
 		# account, so a scalar is held to nothing here; gate g35 found the
 		# first reading's refusal in CoAP's committed vectors.
-		if lookup(known.type_name) is not None:
+		scalar = lookup(known.type_name)
+		if scalar is not None:
+			# Held only where the schema says which reading it means
+			# (`form`), and then exactly to that one.
+			width = scalar.bits // BITS_PER_BYTE
+			if known.form is None or scalar.bits % BITS_PER_BYTE \
+					or width == 0:
+				continue
+			if known.form == "number":
+				found.append(TypedTag(known.tag, width, None, most=width))
+			elif width > 1:
+				found.append(TypedTag(known.tag, width, None))
 			continue
 		inner = structs.get(known.type_name)
 		if inner is not None and inner.layout.is_fixed_size \

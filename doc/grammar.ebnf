@@ -407,7 +407,8 @@ known_tags	= "{" known_tag { "," known_tag } [ "," ] "}" ;
 known_tag	= digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
 known_attr	= "name" "=" ident
 	| "wire" "=" digits
-	| "type" "=" ident [ "[" "]" ] ;
+	| "type" "=" ident [ "[" "]" ]
+	| "form" "=" ( "run" | "number" ) ;
 
 (* Referenced by the productions above but never given in section 7. *)
 ref_list	= ident { "," ident } ;

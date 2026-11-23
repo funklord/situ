@@ -108,6 +108,8 @@ class KnownTag:
 	wire: int | None		= None
 	type_name: str | None		= None
 	repeated: bool			= False
+	#: `run` or `number` for a scalar `type` (26.1167), or None.
+	form: str | None		= None
 
 
 @dataclass(frozen=True)
@@ -4322,7 +4324,8 @@ def _tlv_grammar(member: ast.Tlv) -> TlvGrammar:
 		rules       = tuple(_value_rule(case) for case in
 		                    (member.value_size.cases if member.value_size else ())),
 		known       = tuple(KnownTag(tag.tag, tag.name, tag.wire, tag.type_name,
-		                             tag.repeated) for tag in member.known),
+		                             tag.repeated, tag.form)
+		                    for tag in member.known),
 		length_type = length.name if isinstance(length, ast.NameRef) else None,
 		identity    = member.identity_part(),
 	)

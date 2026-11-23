@@ -765,6 +765,10 @@ class KnownTag(Node):
 	type_name: str | None  = None
 	#: `type = u8[]` -- the value is a run of that type rather than one of it.
 	repeated: bool         = False
+	#: `form = run` or `form = number` (26.1167): which of the two readings
+	#: of a scalar `type` the schema means -- a whole number of it, or one
+	#: integer of at most its width. None holds the value to neither.
+	form: str | None       = None
 
 
 @dataclass(frozen=True)

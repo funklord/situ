@@ -2684,6 +2684,7 @@ class Parser:
 		wire: int | None = None
 		type_name: str | None = None
 		repeated = False
+		form: str | None = None
 
 		while not self.current.is_symbol("}"):
 			key = self.expect_ident("a known tag attribute")
@@ -2704,11 +2705,20 @@ class Parser:
 				if self.accept_symbol("[") is not None:
 					self.expect_symbol("]", "after `[` in a known tag type")
 					repeated = True
+			elif key.text == "form":
+				held = self.expect_ident("`run` or `number`")
+				if held.text not in ("run", "number"):
+					raise error(f"`form` is `run` or `number`, not "
+					            f"`{held.text}`", held.span, label = "here",
+					            notes = ["`run`: a whole number of the type; "
+					                     "`number`: one integer of at most "
+					                     "its width (26.1167)"])
+				form = held.text
 			else:
 				raise error(
 					f"unknown attribute `{key.text}` on a known tag",
 					key.span,
-					label = "not one of `name`, `wire`, `type`",
+					label = "not one of `name`, `wire`, `type`, `form`",
 				)
 
 			if self.accept_symbol(",") is None:
@@ -2726,7 +2736,14 @@ class Parser:
 				         " a tag without one cannot be reached by name"],
 			)
 
-		return ast.KnownTag(span, tag.value, name_text, wire, type_name, repeated)
+		if form is not None and (type_name is None or lookup(type_name) is None):
+			raise error(
+				"`form` is for a scalar `type`", span, label = "here",
+				notes = ["a struct `type` is a run of whole structs already; a "
+				         "scalar's is read two ways, which `form` chooses "
+				         "between (26.1167)"])
+		return ast.KnownTag(span, tag.value, name_text, wire, type_name,
+		                    repeated, form)
 
 	def _skip_balanced(self, opener: str, closer: str) -> None:
 		"""Consume a balanced group, keeping its span but not its structure."""

@@ -1148,7 +1148,8 @@ known_tags    = "{" known_tag { "," known_tag } [ "," ] "}" ;
 known_tag     = digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
 known_attr    = "name" "=" ident
               | "wire" "=" digits
-              | "type" "=" ident [ "[" "]" ] ;
+              | "type" "=" ident [ "[" "]" ]
+              | "form" "=" ( "run" | "number" ) ;
 
 (* Section 9.3. `base` says what an offset in the table is measured from.
    Absent means the region itself, which is the only choice bounded by the

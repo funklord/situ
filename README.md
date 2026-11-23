@@ -831,6 +831,11 @@ tlv fields (
 );
 ```
 
+A `known` value of a struct type is held to whole structs, each by its
+own checks; a scalar type is read two ways by real formats -- a run of it,
+or one integer of at most its width, as CoAP's uint options are -- so it is
+held only where `form = run` or `form = number` says which (26.1167).
+
 A value's extent is one of five things: a literal count,
 `self_delimiting` for a type that carries its own, `prefixed(T)` for a
 length that sits before the value on the wire, `error` for a wire type the

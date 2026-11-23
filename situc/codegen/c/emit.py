@@ -3365,6 +3365,11 @@ class Emitter:
 		"""A known value held to its `type` (26.1167): a whole number of
 		elements, each holding its struct's own checks."""
 		width = typed.element_bytes
+		if typed.most is not None:
+			return [f"\t\tif ({keyed} == {typed.tag}u"
+			        f" && item.value_len > {typed.most}u) {{",
+			        "\t\t\treturn SITU_ERR_CONSTRAINT;",
+			        "\t\t}"]
 		lines = [f"\t\tif ({keyed} == {typed.tag}u) {{",
 		         f"\t\t\tif (item.value_len % {width}u != 0u) {{",
 		         "\t\t\t\treturn SITU_ERR_CONSTRAINT;",

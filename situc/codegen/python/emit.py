@@ -162,6 +162,11 @@ def _typed_check(typed: TypedTag, keyed: str, name: str) -> list[str]:
 	"""A known value held to its `type` (26.1167): a whole number of
 	elements, each holding its struct's own checks."""
 	width = typed.element_bytes
+	if typed.most is not None:
+		return [f"\t\t\t\tif {keyed} == {typed.tag} and item.value_len > {typed.most}:",
+		        f'\t\t\t\t\traise ConstraintError(f"{name}: tag {typed.tag}'
+		        f"'s value is {{item.value_len}} bytes, a number of at most"
+		        f' {typed.most}")']
 	lines = [f"\t\t\t\tif {keyed} == {typed.tag}:",
 	         f"\t\t\t\t\tif item.value_len % {width}:",
 	         f'\t\t\t\t\t\traise ConstraintError(f"{name}: tag {typed.tag}'

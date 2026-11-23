@@ -966,6 +966,8 @@ def _known_tag(known: KnownTag) -> str:
 		parts.append(f"type={known.type_name}")
 	if known.repeated:
 		parts.append("repeated")
+	if known.form is not None:
+		parts.append(f"form={known.form}")
 	return " ".join(parts)
 
 

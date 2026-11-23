@@ -88,3 +88,65 @@ def test_the_walkers_decline_rather_than_pass(tmp_path: Path) -> None:
 		said = python_verdict(blob, data, shape)
 		assert said == "cannot-say", (label, said)
 		assert c_verdict(tmp_path, blob, data, shape) == said, label
+
+
+FORMS = """target buffer;
+endian big;
+struct options {
+	tlv tags (
+		tag_type = u8, length_type = u16,
+		known = {
+			3 : { name = devices, type = u32, form = run },
+			4 : { name = port,    type = u16, form = number },
+			5 : { name = loose,   type = u32 },
+		},
+		unknown = skip
+	);
+}
+"""
+
+#: (label, packet, valid): a scalar `type` is held only where `form` says
+#: which reading the schema means -- openmlx4's run of u32, or CoAP's
+#: integer of at most the width -- and not at all where it says neither.
+FORM_CASES = [
+	("a run of three u32", "03 000c" + "00" * 12, True),
+	("a run cut to two bytes", "03 0002 0000", False),
+	("a run of none", "03 0000", True),
+	("a number in one byte", "04 0001 05", True),
+	("a number in two bytes", "04 0002 0105", True),
+	("a number in three bytes", "04 0003 000105", False),
+	("a number in none", "04 0000", True),
+	("no form, two bytes of u32", "05 0002 0000", True),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_a_form_says_which_reading(tmp_path: Path) -> None:
+	source = tmp_path / "unit.situ"
+	source.write_text(FORMS, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	assert len(command) == 4
+	for label, packet, valid in FORM_CASES:
+		data  = bytes.fromhex(packet.replace(" ", ""))
+		given = {name: fourway.answers(argv, data, tmp_path)
+		         for name, argv in command.items()}
+		assert len(set(given.values())) == 1, (label, given)
+		assert ("validate 0" in given["c"]) == valid, (label, given["c"])
+
+
+def test_a_form_is_in_the_signature_and_refused_off_a_scalar() -> None:
+	from situc import wire
+	from situc.diagnostics import SituError
+	from situc.layout import solve
+	from situc.parser import parse_text
+	from situc.resolve import resolve
+	schema = parse_text(FORMS, path="f.situ")
+	text = wire.render(schema, resolve(schema, solve(schema)), "f.situ")
+	assert "devices type=u32 form=run" in text
+	assert "port type=u16 form=number" in text
+	with pytest.raises(SituError, match="for a scalar `type`"):
+		parse_text(SCHEMA.replace("type = build_time }",
+		                          "type = build_time, form = run }"),
+		           path="f.situ")
+	with pytest.raises(SituError, match="`run` or `number`"):
+		parse_text(FORMS.replace("form = run", "form = list"), path="f.situ")
