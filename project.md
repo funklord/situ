@@ -1846,6 +1846,17 @@ same word `varint_type` already uses for the same reason. Refusing them
 unasked would reject valid data, because most formats do permit `007`, so the
 loose reading is the default and the map says what it costs.
 
+**The choice is the schema's, and holds on every form** (the holder,
+through fuzznet, inbox 20261123T1050Z: "Shouldn't this be programmable
+in situ?"). Without `[minimal]`, a delimited, a `[remaining]`, a
+fixed-width, a hexadecimal and a signed number each accept `007`; with
+it each refuses, and hexadecimal refuses `FF` too. `+7` and `-0` are
+refused either way. All four backends, held by hand-worked verdicts in
+`test_a_text_number_spelling_is_the_schemas.py`. What is not yet the
+schema's: `[minimal]` ties two rules together (no leading zero, lower
+case), and the sign's two refusals are fixed -- 26.1166 takes them
+apart.
+
 **A signed text number is one optional `-` and then digits**, and that is the
 whole of the grammar. `decimal i32 offset until ","` reads `-42`; `+42` and
 `-0` are refused, each being a second spelling of a value that already has
