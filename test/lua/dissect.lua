@@ -62,6 +62,46 @@ function Range:le_uint()
 	return value
 end
 
+--- Signed, and the 64-bit forms, which `situ_time` reads a field's
+--- number through (26.1165). Wireshark's 64-bit forms hand back an
+--- `Int64` or a `UInt64`, whose `tonumber` is the Lua number; a table
+--- holding that one method is what the generated code asks of them.
+local function signed(value, length)
+	local limit = 2 ^ (8 * length)
+	if value >= limit / 2 then
+		return value - limit
+	end
+	return value
+end
+
+local function wide(value)
+	return { tonumber = function() return value end }
+end
+
+function Range:int()
+	return signed(self:uint(), self.length)
+end
+
+function Range:le_int()
+	return signed(self:le_uint(), self.length)
+end
+
+function Range:uint64()
+	return wide(self:uint())
+end
+
+function Range:le_uint64()
+	return wide(self:le_uint())
+end
+
+function Range:int64()
+	return wide(signed(self:uint(), self.length))
+end
+
+function Range:le_int64()
+	return wide(signed(self:le_uint(), self.length))
+end
+
 function Range:bytes()
 	return self.buffer:sub(self.offset + 1, self.offset + self.length)
 end
@@ -236,6 +276,12 @@ end
 --- A generated item is marked so in Wireshark's tree and is otherwise a row
 --- like any other; the mark changes nothing a test compares.
 function Tree:set_generated()
+	return self
+end
+
+--- Text appended to a row's label -- what time a field holds (26.1165) --
+--- changes no value a test compares.
+function Tree:append_text(text)
 	return self
 end
 

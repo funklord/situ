@@ -40,6 +40,7 @@ import re
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement, ValueRule
+from situc.timespec import TimeSpec
 from situc.relation import conversation_key
 from situc.names import (
 	UnknownName, expand_calls, lua_spelling, over_fields, render_delimiter,
@@ -205,6 +206,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	_message_setup(schema, resolved)
 	lines.extend(_conversation_setup(schema, resolved))
 
+	# Same rule: only where a member states what time it holds.
+	if any(_time_of(entry.placement) is not None
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(TIME_HELPER)
 	# Same rule: only where a number is written as digits.
 	if any(entry.placement.radix is not None
 	       for struct in resolved.structs.values()
@@ -545,6 +551,97 @@ LET64_HELPER = [
 	"\treturn situ_zero64",
 	"end",
 ]
+
+
+TIME_HELPER = [
+	"-- What time a field holds (26.1165), beside its number: an instant as",
+	"-- the date it names on its epoch's scale, a duration in seconds. The",
+	"-- number is the field's own; this only says what it means.",
+	"local function situ_time(item, range, little, signed, num, den, shift,",
+	"                         scale, digits)",
+	"\tlocal v",
+	"\tif range:len() > 4 then",
+	"\t\tlocal wide = little and (signed and range:le_int64() or range:le_uint64())",
+	"\t\t                    or (signed and range:int64() or range:uint64())",
+	"\t\tv = wide:tonumber()",
+	"\telse",
+	"\t\tv = little and (signed and range:le_int() or range:le_uint())",
+	"\t\t           or (signed and range:int() or range:uint())",
+	"\tend",
+	"\tlocal secs = v * num / den",
+	"\tif shift == nil then",
+	"\t\titem:append_text((\" (%.\" .. digits .. \"f s%s)\"):format(secs, scale))",
+	"\t\treturn item",
+	"\tend",
+	"\tlocal t = secs + shift",
+	"\tlocal whole = math.floor(t)",
+	"\tlocal ok, date = pcall(os.date, \"!%Y-%m-%d %H:%M:%S\", whole)",
+	"\tif not ok or date == nil then return item end",
+	"\tlocal frac = \"\"",
+	"\tif digits > 0 then",
+	"\t\tfrac = (\"%.\" .. digits .. \"f\"):format(t - whole):sub(2)",
+	"\tend",
+	"\titem:append_text(\" (\" .. date .. frac .. \" \" .. scale .. \")\")",
+	"\treturn item",
+	"end",
+	"",
+]
+
+#: Seconds from 1970-01-01 to each named epoch, on that epoch's own scale,
+#: and the scale's name as the dissector shows it.
+_EPOCH_SHIFT: dict[str, tuple[int, str]] = {
+	"unix": (0, "UTC"), "ntp": (-2208988800, "UTC"),
+	"gps": (315964800, "GPS"), "tai": (-378691200, "TAI"),
+}
+
+
+def _time_of(placement: Placement) -> "TimeSpec | None":
+	"""The time a whole-byte binary number states, where the dissector can
+	show it: a unit fixed in the schema, counted in seconds."""
+	from situc.expr import Env
+	from situc.timespec import spec_of
+	scalar = placement.scalar
+	if scalar is None or scalar.is_bit_packed or scalar.is_fixed_point \
+			or scalar.bits % BITS_PER_BYTE or scalar.bits > 64 \
+			or placement.radix is not None or placement.kind != "field" \
+			or placement.array_count is not None:
+		return None
+	try:
+		spec = spec_of(placement.attrs, Env(consts=dict(_CONSTS)))
+	except Exception:
+		return None
+	if spec is None or spec.scale or spec.calendar:
+		return None
+	return spec
+
+
+def _timed(placement: Placement, added: str, at: str, width: str,
+		little: str) -> str:
+	"""`added`, the call adding the member's row, with what time it holds
+	appended to the row (26.1165) where the member states one."""
+	from datetime import datetime, timezone
+	from math import ceil, log10
+	spec = _time_of(placement)
+	if spec is None:
+		return added
+	digits = (0 if spec.denominator <= spec.numerator
+	          else min(9, ceil(log10(spec.denominator / spec.numerator))))
+	signed = "true" if placement.scalar is not None \
+		and placement.scalar.signed else "false"
+	if spec.kind == "duration":
+		shift, scale = "nil", '""'
+	elif spec.epoch == "caller":
+		shift, scale = "nil", '" on the caller\'s clock"'
+	elif spec.epoch in _EPOCH_SHIFT:
+		value, name = _EPOCH_SHIFT[spec.epoch]
+		shift, scale = str(value), f'"{name}"'
+	else:
+		when = datetime.strptime(spec.epoch or "", "%Y-%m-%dT%H:%M:%SZ")
+		shift = str(int(when.replace(tzinfo=timezone.utc).timestamp()))
+		scale = '"UTC"'
+	return (f"situ_time({added}, tvb({at}, {width}), {little}, {signed}, "
+	        f"{spec.numerator}, {spec.denominator}, {shift}, {scale}, "
+	        f"{digits})")
 
 
 U64_HELPER = [
@@ -3048,12 +3145,14 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# Where a marker decides, the message does: the method is chosen as
 	# the member is shown (26.963).
 	opener = f"subtree:{add}("
+	order  = "true" if add == "add_le" else "false"
 	if placement.marker is not None and not (scalar is not None
 	                                         and scalar.is_bit_packed):
 		little = _little(placement)
 		if little is not None:
 			opener = (f"subtree[{little} and \"add_le\" or \"add\"]"
 			          "(subtree, ")
+			order  = f"({little})"
 	# A coded or sealed region the data sizes has no span, whatever its
 	# minimum is: `byte_span` answers with `size_bits`, which for one is
 	# the fixed part of its interior, and the member after it was placed
@@ -3081,7 +3180,9 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\t-- {placement.path}: {back} bytes from the end of the frame",
 			*note,
 			f"\tif tvb:len() >= {back} then",
-			f"\t\t{opener}{field}, tvb(tvb:len() - {back}, {wide}))",
+			"\t\t" + _timed(placement,
+			                 f"{opener}{field}, tvb(tvb:len() - {back}, {wide}))",
+			                 f"tvb:len() - {back}", str(wide), order),
 			"\tend",
 		]
 
@@ -3128,7 +3229,8 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			*note,
 			*seek,
 			f"\tif tvb:len() >= at + {width} then",
-			f"\t\t{opener}{field}, tvb(at, {width}))",
+			"\t\t" + _timed(placement, f"{opener}{field}, tvb(at, {width}))",
+			                 "at", str(width), order),
 			"\tend",
 			# A peeked member is SHOWN and not spent (0057): its lead is
 			# gone -- `seek` took it -- and its own byte belongs to whatever
@@ -3145,7 +3247,8 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	first, count = span
 	return [
 		*note,
-		f"\t{opener}{field}, tvb({first}, {count}))",
+		"\t" + _timed(placement, f"{opener}{field}, tvb({first}, {count}))",
+		              str(first), str(count), order),
 		# `peek` for the reason above. This branch appears to be
 		# unobservable rather than merely untested: a peeked member is
 		# always a discriminant, a variant either follows and assigns `at`
