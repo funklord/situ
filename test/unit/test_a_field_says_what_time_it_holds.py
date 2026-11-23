@@ -80,18 +80,24 @@ def _signature(member: str) -> str:
 	return wire.render(schema, resolve(schema, solve(schema)), "f.situ")
 
 
-@pytest.mark.parametrize("other", [
-	"u64 t [time = us, epoch = unix];",
-	"u64 t [time = ms, epoch = caller];",
-	"u64 t [duration = ms];",
-	"u64 t;",
+@pytest.mark.parametrize(("other", "kind"), [
+	("u64 t [time = us, epoch = unix];", "breaking"),
+	("u64 t [time = ms, epoch = caller];", "breaking"),
+	("u64 t [duration = ms];", "breaking"),
+	("u64 t;", "api"),
 ])
-def test_a_consumer_reading_it_otherwise_fails_the_check(other: str) -> None:
-	"""fuzznet's case: `expires_at` read in another unit, from another
-	epoch, as a duration, or with nothing said, is a breaking change."""
+def test_a_consumer_reading_it_otherwise_fails_the_check(other: str,
+                                                         kind: str) -> None:
+	"""fuzznet's case: `expires_at` read in another unit, from another epoch
+	or as a duration keeps every byte and changes every value's meaning, so
+	it is BREAKING -- the check called `s` -> `us` backward-compatible, as a
+	narrowing (its inbox 20261123T1801Z), and this test asked only that it
+	said something. Dropping the statement moves no byte and no value."""
 	before  = _signature("u64 t [time = ms, epoch = unix];")
 	verdict = wire.compare(before, _signature(other))
-	assert verdict.findings, other
+	kinds   = {finding.kind for finding in verdict.findings
+	           if finding.kind != "format"}
+	assert kinds == {kind}, (other, verdict.findings)
 
 
 def test_it_round_trips() -> None:

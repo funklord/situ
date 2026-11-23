@@ -2077,6 +2077,14 @@ INTERPRETATION = (
 )
 
 
+#: What time a member holds (26.1165): compared on its own, above.
+TIMED = ("time=", "duration=")
+
+#: Facts that admit a spelling rather than refuse one (26.1166), so that
+#: gaining one widens what a receiver accepts.
+ADMITS = frozenset({"plus-sign", "negative-zero"})
+
+
 def _is_interpretation(fact: str) -> bool:
 	return any(fact == key or fact.startswith(key) for key in INTERPRETATION)
 
@@ -2125,6 +2133,30 @@ def _compare_facts(where: str, name: str, was: set[str],
 	was = {_by_value(fact, old_own) for fact in was}
 	now = {_by_value(fact, new_own) for fact in now}
 	findings = []
+
+	# What time a member holds (26.1165). A changed unit, epoch or kind
+	# keeps every byte where it was and changes what every value means: an
+	# old receiver reads microseconds as an instant 31,000 years ahead.
+	# This called fuzznet's `s` -> `us` backward-compatible, as a narrowing
+	# (its inbox 20261123T1801Z). Stating a time where none was, or
+	# dropping one, moves nothing a peer reads.
+	timed_was = {fact for fact in was if fact.startswith(TIMED)}
+	timed_now = {fact for fact in now if fact.startswith(TIMED)}
+	if timed_was and timed_now and timed_was != timed_now:
+		return [Finding(
+			"breaking", where,
+			f"{name}: {' '.join(sorted(timed_was))} -> "
+			f"{' '.join(sorted(timed_now))}; the same bytes now count "
+			"another time")]
+	if timed_was != timed_now:
+		findings.append(Finding(
+			"api", where,
+			f"{name}: {' '.join(sorted(timed_was)) or 'no time'} -> "
+			f"{' '.join(sorted(timed_now)) or 'no time'}; what the value "
+			"means is stated or unstated, and no byte or value moves"))
+	was -= timed_was
+	now -= timed_now
+
 	moved    = {fact for fact in (now - was) | (was - now)
 	            if _is_interpretation(fact)}
 
@@ -2145,13 +2177,23 @@ def _compare_facts(where: str, name: str, was: set[str],
 		findings.append(_changed_constraint(where, name, key,
 		                                    dropped[key], added[key]))
 
+	# A fact that ADMITS a spelling (26.1166) runs the other way: gaining
+	# `plus-sign` is a loosening, which every other fact here is not.
 	for key in sorted(set(added) - set(dropped)):
 		findings.append(Finding(
+			"forward", where,
+			f"{name} gains `{added[key]}`; an old receiver may refuse a "
+			"message a new sender legitimately produces")
+			if key in ADMITS else Finding(
 			"backward", where,
 			f"{name} gains `{added[key]}`; a new receiver may refuse a message "
 			"an old sender legitimately produces"))
 	for key in sorted(set(dropped) - set(added)):
 		findings.append(Finding(
+			"backward", where,
+			f"{name} drops `{dropped[key]}`; a new receiver may refuse a "
+			"message an old sender legitimately produces")
+			if key in ADMITS else Finding(
 			"forward", where,
 			f"{name} drops `{dropped[key]}`; an old receiver may refuse a "
 			"message a new sender legitimately produces"))

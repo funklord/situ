@@ -270,3 +270,32 @@ def test_a_token_in_an_arm_is_checked_and_compiles(tmp_path: Path) -> None:
 		         for name, argv in command.items()}
 		assert len(set(given.values())) == 1, (packet, given)
 		assert ("validate 0" in given["c"]) == valid, (packet, given["c"])
+
+
+@pytest.mark.parametrize(("before", "after", "kind"), [
+	('decimal i32 n until ","', 'decimal i32 n until "," [plus_sign]',
+	 "forward"),
+	('decimal i32 n until "," [plus_sign]', 'decimal i32 n until ","',
+	 "backward"),
+	('hex u32 n until ","', 'hex u32 n until "," [hex_case = upper]',
+	 "backward"),
+])
+def test_wire_check_reads_a_rule_s_direction(before: str, after: str,
+                                             kind: str) -> None:
+	"""`[plus_sign]` ADMITS a spelling, so gaining it widens what a receiver
+	accepts -- the other way round from every other fact, which refuses."""
+	from situc import wire
+	from situc.layout import solve
+	from situc.parser import parse_text
+	from situc.resolve import resolve
+
+	def signature(member: str) -> str:
+		text = ("target buffer;\nendian big;\nstruct s {\n\t" + member
+		        + ";\n\tu8 r[remaining];\n}\n")
+		schema = parse_text(text, path="s.situ")
+		return wire.render(schema, resolve(schema, solve(schema)), "s.situ")
+
+	verdict = wire.compare(signature(before), signature(after))
+	kinds = {finding.kind for finding in verdict.findings
+	         if finding.kind != "format"}
+	assert kinds == {kind}, verdict.findings
