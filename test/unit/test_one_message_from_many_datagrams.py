@@ -159,6 +159,13 @@ int main(void)
 	n = situ_pieces_missing(&t, k, first, count, 8u, 2u);
 	CHECK(n == 4u && first[0] == 2u && count[0] == 2u && first[1] == 4u && count[1] == 1u
 	      && first[2] == 6u && count[2] == 2u && first[3] == 8u && count[3] == 2u);
+	/* A short array: the last range it holds runs on while it can, and
+	 * the walk stops only where another would open (fuzznet,
+	 * 2026-11-23, which once got {2, 1} here). */
+	n = situ_pieces_missing(&t, k, first, count, 1u, 100u);
+	CHECK(n == 1u && first[0] == 2u && count[0] == 3u);
+	n = situ_pieces_missing(&t, k, first, count, 2u, 3u);
+	CHECK(n == 2u && first[0] == 2u && count[0] == 3u && first[1] == 6u && count[1] == 3u);
 
 	/* Expiry, by the wrapping clock. */
 	CHECK(situ_pieces_expire(&t, 2999u) == 0u);
@@ -414,6 +421,8 @@ for ix in (0, 1, 5):
 key = r_converse.same_message_table.key(2, 10, bytes([5]) * 8)
 assert t.missing(key, 8, 100) == [(2, 3), (6, 4)]
 assert t.missing(key, 8, 2) == [(2, 2), (4, 1), (6, 2), (8, 2)]
+assert t.missing(key, 1, 100) == [(2, 3)]
+assert t.missing(key, 2, 3) == [(2, 3), (6, 3)]
 assert t.expire(2999) == 0 and t.expire(3000) == 1
 t = r_reassemble.pieces_table()
 for who in range(4):
@@ -945,7 +954,7 @@ int main(void)
 				uint32_t first[4], count[4];
 				memset(sender, (int)who, 8);
 				situ_conv_same_message_key(mid, sender, key);
-				const uint32_t n = situ_pieces_missing(&t, key, first, count, 4u, 2u);
+				const uint32_t n = situ_pieces_missing(&t, key, first, count, 2u, 3u);
 				printf("M");
 				for (uint32_t k = 0u; k < n; k++)
 					printf(" %u:%u", first[k], count[k]);
@@ -992,7 +1001,7 @@ while at + 6 <= len(data):
 	for who in (1, 2, 3):
 		for mid in (1, 2):
 			key = r_converse.same_message_table.key(mid, bytes([who]) * 8)
-			out.append("M" + "".join(f" {f}:{c}" for f, c in t.missing(key, 4, 2)))
+			out.append("M" + "".join(f" {f}:{c}" for f, c in t.missing(key, 2, 3)))
 	out.append(f"E {t.expire(now)}")
 	if now % 5 == 0:
 		key = r_converse.same_message_table.key(now % 2 + 1,
@@ -1038,8 +1047,8 @@ fn main() {
 		for who in 1u8..=3 {
 			for mid in 1u64..=2 {
 				let key = r_converse::SameMessageTable::key(mid, &[who; 8]);
-				let (mut first, mut count) = ([0u32; 4], [0u32; 4]);
-				let k = t.missing(&key, &mut first, &mut count, 2);
+				let (mut first, mut count) = ([0u32; 2], [0u32; 2]);
+				let k = t.missing(&key, &mut first, &mut count, 3);
 				out.push('M');
 				for i in 0..k { out.push_str(&format!(" {}:{}", first[i], count[i])); }
 				out.push('\n');
@@ -1102,7 +1111,7 @@ int main()
 				std::uint32_t first[4], count[4];
 				std::memset(sender, static_cast<int>(who), 8);
 				::situ::same_message_table::key(mid, sender, key);
-				const std::uint32_t k = t->missing(key, first, count, 4u, 2u);
+				const std::uint32_t k = t->missing(key, first, count, 2u, 3u);
 				std::printf("M");
 				for (std::uint32_t i = 0u; i < k; i++)
 					std::printf(" %u:%u", first[i], count[i]);
