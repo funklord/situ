@@ -12,7 +12,7 @@ from __future__ import annotations
 from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.replay import (VERDICTS, _attr, _number, _path, _word,
-                                    refusals)
+                                    nonce_bytes, refusals)
 from situc.resolve import ResolvedSchema
 
 
@@ -77,7 +77,7 @@ def _counter(replay: ast.Replay) -> list[str]:
 	]
 
 
-def _nonce(replay: ast.Replay, unit: str) -> list[str]:
+def _nonce(replay: ast.Replay, unit: str, width: int | None) -> list[str]:
 	least    = (_number(replay, "capacity")
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
@@ -87,6 +87,9 @@ def _nonce(replay: ast.Replay, unit: str) -> list[str]:
 	passed   = ", expiry_required" if rule == "caller" else ""
 	param    = replay.param.name
 	nonce    = _read(_path(replay, "nonce"))
+	# A nonce that is a byte run is compared by its bytes (fuzznet, inbox
+	# 20261123T1215Z).
+	kind     = "int" if width is None else "bytes"
 	expires  = _read(_path(replay, "expires"))
 	zero = ("\t\t\treturn NO_EXPIRY" if required else
 	        "\t\t\treturn NO_EXPIRY if expiry_required else OK"
@@ -110,13 +113,14 @@ def _nonce(replay: ast.Replay, unit: str) -> list[str]:
 		'\t\t\traise ValueError(f"a table of {count} is below {self.LEAST}")',
 		"\t\tif not 0 <= max_ahead <= self.AHEAD:",
 		'\t\t\traise ValueError(f"a horizon of {max_ahead} is past {self.AHEAD}")',
-		"\t\tself.slots = [(0, 0)] * count\t# (nonce, expires)",
+		"\t\tself.slots = [(" + ("0" if width is None else 'b""')
+		+ ", 0)] * count\t# (nonce, expires)",
 		"\t\tself.max_ahead = max_ahead or self.AHEAD",
 		"",
 		f"\tdef check(self, {param}, now: int{given}) -> int:",
 		f'\t\t"""Whether the nonce may be accepted at `now` ({unit}). Pure: ask',
 		'\t\tit BEFORE the tag."""',
-		f"\t\tnonce, expires = int({nonce}), int({expires})",
+		f"\t\tnonce, expires = {kind}({nonce}), int({expires})",
 		"\t\tif expires == 0:",
 		zero,
 		"\t\tif expires <= now:",
@@ -137,7 +141,7 @@ def _nonce(replay: ast.Replay, unit: str) -> list[str]:
 		f"\t\tverdict = self.check({param}, now{passed})",
 		"\t\tif verdict != OK:",
 		"\t\t\treturn verdict",
-		f"\t\tnonce, expires = int({nonce}), int({expires})",
+		f"\t\tnonce, expires = {kind}({nonce}), int({expires})",
 		"\t\tif expires == 0:",
 		"\t\t\treturn OK",
 		"\t\tfor at, (_, until) in enumerate(self.slots):",
@@ -168,5 +172,6 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	]
 	for replay in replays:
 		lines += (_counter(replay) if _attr(replay, "counter") is not None
-		          else _nonce(replay, clock_unit(schema, replay)))
+		          else _nonce(replay, clock_unit(schema, replay),
+		                      nonce_bytes(replay, resolved)))
 	return {f"{basename}_replay.py": "\n".join(lines).rstrip("\n") + "\n"}

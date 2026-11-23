@@ -19,7 +19,7 @@ from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.names import ident, macro, header_guard
 from situc.codegen.c.relate import _binding, _local
-from situc.relation import Refused, path_bindings, paths_in
+from situc.relation import ReadBytes, Refused, path_bindings, paths_in
 from situc.resolve import ResolvedSchema
 
 #: The verdicts, in the order every backend numbers them.
@@ -59,7 +59,8 @@ def refusals(schema: ast.Schema,
 		        else ("nonce", "expires"))
 		for key in keys:
 			try:
-				path_bindings(_path(replay, key), replay.param, resolved)
+				path_bindings(_path(replay, key), replay.param, resolved,
+				              bytes_ok=key == "nonce")
 			except Refused as why:
 				found.append((replay.name, str(why)))
 				break
@@ -68,13 +69,14 @@ def refusals(schema: ast.Schema,
 
 def _reads(replay: ast.Replay, resolved: ResolvedSchema, keys: tuple[str, ...],
 		prefix: str) -> tuple[list[str], dict[str, str]]:
-	"""Statements reading each field into a `uint64_t`, and its local."""
+	"""Statements reading each field into a `uint64_t` -- or, for a nonce
+	that is a byte run, a pointer to its bytes -- and its local."""
 	lines: list[str] = []
 	names: dict[str, str] = {}
 	first = 0
 	for key in keys:
 		bindings, _ = path_bindings(_path(replay, key), replay.param,
-		                            resolved, first)
+		                            resolved, first, bytes_ok=key == "nonce")
 		first += len(bindings)
 		for bind in bindings:
 			lines += _binding(bind, "uint64_t", prefix)
@@ -157,6 +159,16 @@ def _counter(replay: ast.Replay, resolved: ResolvedSchema,
 	]
 
 
+def nonce_bytes(replay: ast.Replay, resolved: ResolvedSchema) -> int | None:
+	"""How many bytes a nonce that is a byte run holds, or None for a
+	scalar one (fuzznet, inbox 20261123T1215Z: XChaCha's 24 random
+	bytes, compared by their bytes)."""
+	bindings, _ = path_bindings(_path(replay, "nonce"), replay.param,
+	                            resolved, bytes_ok=True)
+	last = bindings[-1]
+	return last.length if isinstance(last, ReadBytes) else None
+
+
 def _nonce(replay: ast.Replay, resolved: ResolvedSchema, unit: str,
 		prefix: str) -> list[str]:
 	name     = ident(prefix, replay.name)
@@ -174,6 +186,13 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema, unit: str,
 	verdict  = ident(prefix, "replay", "verdict")
 	reads, local = _reads(replay, resolved, ("nonce", "expires"), prefix)
 	nonce, expires = local["nonce"], local["expires"]
+	width    = nonce_bytes(replay, resolved)
+	held_nonce = ("\tuint64_t nonce;" if width is None
+	              else f"\tuint8_t  nonce[{width}];\t/* its bytes */")
+	same     = (f"state->slots[i].nonce == {nonce}" if width is None else
+	            f"memcmp(state->slots[i].nonce, {nonce}, {width}u) == 0")
+	keep     = (f"\t\t\tstate->slots[i].nonce   = {nonce};" if width is None
+	            else f"\t\t\tmemcpy(state->slots[i].nonce, {nonce}, {width}u);")
 	param    = replay.param.name
 	ok       = macro(prefix, "replay", "ok")
 	no_expiry = macro(prefix, 'replay', 'no_expiry')
@@ -199,7 +218,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema, unit: str,
 		f"#define {upper}_LEAST {least}u\t/* the smallest table allowed */",
 		f"#define {upper}_AHEAD {ahead}u\t/* {unit}, the most a window allows */",
 		"typedef struct {",
-		"\tuint64_t nonce;",
+		held_nonce,
 		"\tuint64_t expires;\t/* 0, or at or before `now`: free */",
 		f"}} {name}_slot_t;",
 		"typedef struct {",
@@ -242,7 +261,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema, unit: str,
 		f"\tfor (uint32_t i = 0u; i < state->count; i++) {{",
 		"\t\tif (state->slots[i].expires <= now) {",
 		"\t\t\tfree_slot = 1;",
-		f"\t\t}} else if (state->slots[i].nonce == {nonce}) {{",
+		f"\t\t}} else if ({same}) {{",
 		f"\t\t\t*verdict = {macro(prefix, 'replay', 'replay')};",
 		"\t\t\treturn SITU_OK;",
 		"\t\t}",
@@ -270,7 +289,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema, unit: str,
 		"\t}",
 		f"\tfor (uint32_t i = 0u; i < state->count; i++) {{",
 		"\t\tif (state->slots[i].expires <= now) {",
-		f"\t\t\tstate->slots[i].nonce   = {nonce};",
+		keep,
 		f"\t\t\tstate->slots[i].expires = {expires};",
 		"\t\t\treturn SITU_OK;",
 		"\t\t}",
@@ -301,6 +320,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		f"#define {guard}",
 		"",
 		f"#include \"{basename}.h\"",
+		*(["#include <string.h>"] if any(
+			_attr(one, "nonce") is not None
+			and nonce_bytes(one, resolved) is not None for one in replays)
+		  else []),
 		"",
 		f"#ifndef {macro(prefix, 'replay', 'verdict', 'defined')}",
 		f"#define {macro(prefix, 'replay', 'verdict', 'defined')}",

@@ -11,8 +11,8 @@ from __future__ import annotations
 from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.replay import (VERDICTS, _attr, _number, _path, _word,
-                                    refusals)
-from situc.relation import Read, SubView, path_bindings
+                                    nonce_bytes, refusals)
+from situc.relation import Read, ReadBytes, SubView, path_bindings
 from situc.resolve import ResolvedSchema
 
 
@@ -27,7 +27,7 @@ def _reads(replay: ast.Replay, resolved: ResolvedSchema,
 	first = 0
 	for key in keys:
 		bindings, _ = path_bindings(_path(replay, key), replay.param,
-		                            resolved, first)
+		                            resolved, first, bytes_ok=key == "nonce")
 		first += len(bindings)
 		for bind in bindings:
 			source = bind.source if not bind.source.startswith("_") \
@@ -35,6 +35,9 @@ def _reads(replay: ast.Replay, resolved: ResolvedSchema,
 			target = f"situ_v{bind.target}"
 			if isinstance(bind, SubView):
 				lines.append(f"\t\tlet {target} = {source}.{bind.member}()?;"
+				             f"\t// {bind.path}")
+			elif isinstance(bind, ReadBytes):
+				lines.append(f"\t\tlet {target} = {source}.{bind.member}();"
 				             f"\t// {bind.path}")
 			else:
 				assert isinstance(bind, Read)
@@ -123,6 +126,13 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 	        "\t\t\treturn Ok(if expiry_required { Verdict::NoExpiry } "
 	        "else { Verdict::Ok });" if rule == "caller" else
 	        "\t\t\treturn Ok(Verdict::Ok); // none stated: allowed")
+	width = nonce_bytes(replay, resolved)
+	held  = "u64" if width is None else f"[u8; {width}]"
+	same  = (f"*held == {nonce}" if width is None
+	         else f"held[..] == *{nonce}")
+	keep  = ([f"\t\t\t\t*slot = ({nonce}, {expires});"] if width is None else
+	         [f"\t\t\t\tslot.0.copy_from_slice({nonce});",
+	          f"\t\t\t\tslot.1 = {expires};"])
 	name = _pascal(replay.name)
 	return [
 		f"/// `{replay.name}`: each `{_path(replay, 'nonce')}` accepted once"
@@ -131,7 +141,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		"/// count >= peak admitted rate x ahead. FULL refuses, never evicts.",
 		"#[derive(Debug)]",
 		f"pub struct {name}<'a> {{",
-		"\tpub slots: &'a mut [(u64, u64)],\t// (nonce, expires), zeroed",
+		f"\tpub slots: &'a mut [({held}, u64)],\t// (nonce, expires), zeroed",
 		f"\t/// The caller's horizon, in {unit}: 0 is `AHEAD`, more is refused.",
 		"\tpub max_ahead: u64,",
 		"}",
@@ -158,10 +168,10 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		"\t\t\treturn Ok(Verdict::Horizon);",
 		"\t\t}",
 		"\t\tlet mut free = false;",
-		"\t\tfor &(held, until) in self.slots.iter() {",
-		"\t\t\tif until <= now {",
+		"\t\tfor (held, until) in self.slots.iter() {",
+		"\t\t\tif *until <= now {",
 		"\t\t\t\tfree = true;",
-		f"\t\t\t}} else if held == {nonce} {{",
+		f"\t\t\t}} else if {same} {{",
 		"\t\t\t\treturn Ok(Verdict::Replay);",
 		"\t\t\t}",
 		"\t\t}",
@@ -181,7 +191,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		"\t\t}",
 		"\t\tfor slot in self.slots.iter_mut() {",
 		"\t\t\tif slot.1 <= now {",
-		f"\t\t\t\t*slot = ({nonce}, {expires});",
+		*keep,
 		"\t\t\t\tbreak;",
 		"\t\t\t}",
 		"\t\t}",

@@ -494,18 +494,20 @@ def plan(relation: ast.Relation, resolved: ResolvedSchema,
 
 
 def path_bindings(path: str, param: ast.RelationParam,
-		resolved: ResolvedSchema, first: int = 0
-		) -> tuple[list[SubView | Read], Placement]:
+		resolved: ResolvedSchema, first: int = 0, bytes_ok: bool = False
+		) -> tuple[list[SubView | Read | ReadBytes], Placement]:
 	"""The bindings that read one scalar `path` from a view of `param`, and
 	the placement it ends at -- the walk `plan` makes for each operand,
 	alone, for a construct that reads a field rather than comparing two
 	(a replay window's counter, nonce and expiry, 26.1120). Locals are
-	numbered from `first`."""
+	numbered from `first`. With `bytes_ok`, a fixed-size array ends the
+	walk as its bytes -- a nonce that is 24 random bytes rather than a
+	count (fuzznet, inbox 20261123T1215Z)."""
 	components = path.split(".")
 	struct = resolved.structs.get(param.type_name)
 	if struct is None:
 		raise Refused(f"`{param.type_name}` has no resolved layout")
-	bindings: list[SubView | Read] = []
+	bindings: list[SubView | Read | ReadBytes] = []
 	source, walked, index = param.name, param.name, first
 	for position, component in enumerate(components[1:]):
 		walked = f"{walked}.{component}"
@@ -515,6 +517,12 @@ def path_bindings(path: str, param: ast.RelationParam,
 		target = f"_{index}"
 		index += 1
 		if position == len(components) - 2:
+			if bytes_ok and placement.array_count is not None \
+					and placement.kind == "field":
+				bindings.append(ReadBytes(struct.name, component, source,
+				                          target, path,
+				                          _array_bytes(path, placement)))
+				return bindings, placement
 			if placement.scalar is None or placement.array_count is not None:
 				raise Refused(f"`{path}` is not a scalar field")
 			bindings.append(Read(struct.name, component, source, target,

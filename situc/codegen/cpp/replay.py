@@ -11,8 +11,8 @@ from __future__ import annotations
 from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.replay import (VERDICTS, _attr, _number, _path, _word,
-                                    refusals)
-from situc.relation import Read, SubView, path_bindings
+                                    nonce_bytes, refusals)
+from situc.relation import Read, ReadBytes, SubView, path_bindings
 from situc.resolve import ResolvedSchema
 
 
@@ -23,7 +23,7 @@ def _reads(replay: ast.Replay, resolved: ResolvedSchema,
 	first = 0
 	for key in keys:
 		bindings, _ = path_bindings(_path(replay, key), replay.param,
-		                            resolved, first)
+		                            resolved, first, bytes_ok=key == "nonce")
 		first += len(bindings)
 		for bind in bindings:
 			source = bind.source if not bind.source.startswith("_") \
@@ -37,6 +37,9 @@ def _reads(replay: ast.Replay, resolved: ResolvedSchema,
 					"\t\treturn e;",
 					"\t}",
 				]
+			elif isinstance(bind, ReadBytes):
+				lines.append(f"\tconst ::situ::rt::bytes {target} = "
+				             f"{source}.{bind.member}();\t// {bind.path}")
 			else:
 				assert isinstance(bind, Read)
 				lines.append(f"\tconst std::uint64_t {target} = "
@@ -118,6 +121,13 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 	view     = f"const ::situ::{replay.param.type_name} &{param}"
 	reads, local = _reads(replay, resolved, ("nonce", "expires"))
 	nonce, expires = local["nonce"], local["expires"]
+	width = nonce_bytes(replay, resolved)
+	held_nonce = ("std::uint64_t nonce = 0;" if width is None
+	              else f"std::uint8_t nonce[{width}] = {{}};")
+	same = (f"held.nonce == {nonce}" if width is None else
+	        f"std::memcmp(held.nonce, {nonce}.data(), {width}u) == 0")
+	keep = (f"\t\t\t\theld.nonce = {nonce};" if width is None else
+	        f"\t\t\t\tstd::memcpy(held.nonce, {nonce}.data(), {width}u);")
 	zero = ("\t\t\tout = verdict::no_expiry;" if required else
 	        "\t\t\tif (expiry_required) out = verdict::no_expiry;"
 	        if rule == "caller" else
@@ -132,7 +142,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		f"\tstatic constexpr std::uint32_t least = {least};",
 		f"\tstatic constexpr std::uint64_t ahead = {ahead};"
 		f"\t// {unit}, the most a window allows",
-		"\tstruct slot { std::uint64_t nonce = 0, expires = 0; };",
+		f"\tstruct slot {{ {held_nonce} std::uint64_t expires = 0; }};",
 		"\tslot *slots = nullptr;",
 		"\tstd::uint32_t count = 0;",
 		f"\tstd::uint64_t max_ahead = 0;\t// {unit}; 0 is `ahead`, more is refused",
@@ -164,7 +174,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		"\t\t\tconst slot &held = slots[i];",
 		"\t\t\tif (held.expires <= now) {",
 		"\t\t\t\tfree_slot = true;",
-		f"\t\t\t}} else if (held.nonce == {nonce}) {{",
+		f"\t\t\t}} else if ({same}) {{",
 		"\t\t\t\tout = verdict::replay;",
 		"\t\t\t\treturn ::situ::rt::err::ok;",
 		"\t\t\t}",
@@ -190,7 +200,7 @@ def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
 		"\t\tfor (std::uint32_t i = 0; i < count; i++) {",
 		"\t\t\tslot &held = slots[i];",
 		"\t\t\tif (held.expires <= now) {",
-		f"\t\t\t\theld.nonce = {nonce};",
+		keep,
 		f"\t\t\t\theld.expires = {expires};",
 		"\t\t\t\tbreak;",
 		"\t\t\t}",
@@ -217,6 +227,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"#pragma once",
 		"",
 		f"#include \"{basename}.hpp\"",
+		*(["#include <cstring>"] if any(
+			_attr(one, "nonce") is not None
+			and nonce_bytes(one, resolved) is not None for one in replays)
+		  else []),
 		"",
 		"namespace situ_replay {",
 		"",
