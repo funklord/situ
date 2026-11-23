@@ -119,12 +119,6 @@ def test_what_cannot_hold_is_refused(member: str, said: str) -> None:
 	assert said in _refused(member)
 
 
-def test_a_factor_from_the_message_is_not_yet_read() -> None:
-	"""Step 4 reads it. Until then it is refused, not taken as a constant
-	of whatever the name happens to fold to."""
-	assert "constant" in _refused("u32 scale;\n\tu64 t [duration = ns * scale];")
-
-
 @pytest.mark.parametrize("member", [
 	"u8 t[4] [duration = s];",
 	"bit t [duration = s];",
@@ -260,3 +254,44 @@ def test_a_value_without_a_time_adds_no_line() -> None:
 	check(schema)
 	rendered = wire.render(schema, resolve(schema, solve(schema)), "ntp.situ")
 	assert "let at" not in rendered
+
+
+# -- step 4: a unit the message or the caller chooses ------------------------
+
+
+@pytest.mark.parametrize(("body", "fact"), [
+	# Matroska: timecodes in units of a scale the segment's header states.
+	("u32 scale;\n\tu64 t [time = ns * scale, epoch = caller];",
+	 "time=ns*scale@caller"),
+	# RTP: a clock rate the session agreed, handed in by the caller.
+	("parameter u32 rate;\n\tu32 t [duration = s / rate];",
+	 "duration=s/rate"),
+	("u8 shift;\n\tu32 t [duration = ns * 100 * (1 << shift)];",
+	 "duration=1/10000000s*(1<<shift)"),
+])
+def test_a_unit_may_be_read_where_the_value_is(body: str, fact: str) -> None:
+	"""The holder's "programmable": a unit chosen per message or per
+	deployment, named in the signature by where it comes from, so a reader
+	can always tell which unit a value is in."""
+	assert fact in _members(body)["t"].split()
+
+
+def test_a_programmable_unit_names_only_its_own_struct() -> None:
+	assert "constant" in _refused("u64 t [duration = ns * elsewhere];")
+
+
+def test_constant_factors_come_first() -> None:
+	assert "come before" in _refused(
+		"u32 scale;\n\tu64 t [duration = ns * scale * 100];")
+
+
+def test_a_kernel_will_not_read_a_programmable_unit() -> None:
+	"""Its clock is one number in one unit; converting each message's
+	would be arithmetic a peer chooses (fuzznet's sec 1407)."""
+	text = KERNELS.replace("u64 exp TIME;",
+	                       "u32 scale; u64 exp [time = ns * scale, "
+	                       "epoch = unix];").replace("UNIT", "").replace(
+	                       "ROOM", "")
+	with pytest.raises(SituError) as caught:
+		check(parse_text(text, path="k.situ"))
+	assert "a clock counts a fixed unit" in str(caught.value)

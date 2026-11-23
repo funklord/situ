@@ -1799,7 +1799,7 @@ def _expiry_time(schema: ast.Schema, decl: ast.Replay | ast.Reassemble,
 		            "instant", held.span, label="here",
 		            notes=["the field says `[time = UNIT, epoch = EPOCH]` "
 		                   "for a deadline"])
-	if spec.calendar:
+	if spec.calendar or spec.scale:
 		raise error(f"`{paths[0]}` counts {spec.unit()}s, and a clock "
 		            "counts a fixed unit", held.span, label="here",
 		            notes=["a month is no fixed number of seconds, so no "
@@ -3037,10 +3037,15 @@ def check_times(schema: ast.Schema) -> None:
 
 	env = constant_env(schema)
 	for struct in schema.structs():
-		for member in _walk_members(struct.members):
-			spec_of(getattr(member, "attrs", ()), env)
+		members = _walk_members(struct.members)
+		names   = frozenset({name for member in members
+		                     if isinstance(name := getattr(member, "name",
+		                                                    None), str)}
+		                    | {let.name for let in struct.lets})
+		for member in members:
+			spec_of(getattr(member, "attrs", ()), env, names)
 		for let in struct.lets:
-			spec_of(let.attrs, env)
+			spec_of(let.attrs, env, names)
 
 
 def _attribute_place(struct: ast.StructDecl, member: ast.Member,

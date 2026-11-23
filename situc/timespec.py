@@ -60,10 +60,18 @@ class TimeSpec:
 	#: A name from EPOCHS, or a date normalised to `YYYY-MM-DDTHH:MM:SSZ`;
 	#: None for a duration.
 	epoch: str | None
+	#: The factors read where the value is (26.1165 step 4), in order:
+	#: `*hdr.timecode_scale`, `/rate`. A unit the message or the caller
+	#: chooses, named rather than folded, so a reader can always tell
+	#: where it comes from.
+	scale: tuple[str, ...] = ()
 
 	def unit(self) -> str:
 		"""The unit as `wire` writes it: a base unit's name where the
 		fraction is one, else `N/Ds` (`N/Dmonth`)."""
+		return self._fixed() + "".join(self.scale)
+
+	def _fixed(self) -> str:
 		table = CALENDAR_UNITS if self.calendar else FIXED_UNITS
 		for name, value in table.items():
 			if value == (self.numerator, self.denominator):
@@ -79,14 +87,25 @@ class TimeSpec:
 		return f"time={self.unit()}@{self.epoch}"
 
 
-def _factor(expr: ast.Expr, env: Env) -> int:
+def _factor(expr: ast.Expr, env: Env,
+            names: frozenset[str] | None) -> int | str:
+	"""A whole number the schema states, or the source of one read where
+	the value is: a member of the struct, a `parameter` the caller hands
+	in, or a value assembled from them (26.1165 step 4). `names` is the
+	struct's own; None accepts any path, for a caller after the check."""
+	from situc.invariant import paths_in
+	from situc.unparse import expr_to_source
+	paths = paths_in(expr)
 	try:
 		value = evaluate(expr, env)
 	except SituError as exc:
+		if paths and (names is None
+		              or all(path.split(".")[0] in names for path in paths)):
+			return expr_to_source(expr).replace(" ", "")
 		exc.diagnostic.notes.append(
-			"a unit's factor is a whole number the schema states; one read "
-			"from the message or handed in by the caller is 26.1165's "
-			"step 4")
+			"a unit's factor is a whole number the schema states, or one "
+			"read from a member of this struct or a `parameter` the caller "
+			"hands in")
 		raise
 	if value <= 0:
 		raise error("a unit's factor is a positive whole number", expr.span,
@@ -94,7 +113,8 @@ def _factor(expr: ast.Expr, env: Env) -> int:
 	return value
 
 
-def _unit(expr: ast.Expr, env: Env) -> tuple[int, int, bool]:
+def _unit(expr: ast.Expr, env: Env, names: frozenset[str] | None,
+          scale: list[str]) -> tuple[int, int, bool]:
 	if isinstance(expr, ast.NameRef):
 		base = BASE_UNITS.get(expr.name)
 		if base is None:
@@ -106,8 +126,20 @@ def _unit(expr: ast.Expr, env: Env) -> tuple[int, int, bool]:
 			                     "`ns * 100`"])
 		return base[0], base[1], expr.name in CALENDAR_UNITS
 	if isinstance(expr, ast.Binary) and expr.op in ("*", "/"):
-		numerator, denominator, calendar = _unit(expr.left, env)
-		factor = _factor(expr.right, env)
+		numerator, denominator, calendar = _unit(expr.left, env, names,
+		                                         scale)
+		factor = _factor(expr.right, env, names)
+		if isinstance(factor, str):
+			wrapped = factor if factor.replace(".", "").replace("_", "") \
+				.isalnum() else f"({factor})"
+			scale.append(f"{expr.op}{wrapped}")
+			return numerator, denominator, calendar
+		if scale:
+			raise error("a unit's constant factors come before the ones read "
+			            "from the message", expr.right.span, label = "here",
+			            notes = ["`ns * 100 * hdr.scale`, not "
+			                     "`ns * hdr.scale * 100`: one spelling "
+			                     "per unit, so a signature compares them"])
 		if expr.op == "*":
 			numerator *= factor
 		else:
@@ -145,7 +177,8 @@ def _epoch(attr: ast.Attr) -> str:
 	                     "a monotonic count"])
 
 
-def spec_of(attrs: tuple[ast.Attr, ...], env: Env) -> TimeSpec | None:
+def spec_of(attrs: tuple[ast.Attr, ...], env: Env,
+            names: frozenset[str] | None = None) -> TimeSpec | None:
 	"""The member's time, or None where it states none; refused where what
 	it states cannot hold."""
 	said = {attr.name: attr for attr in attrs if attr.name in TIME_ATTRIBUTES}
@@ -174,13 +207,15 @@ def spec_of(attrs: tuple[ast.Attr, ...], env: Env) -> TimeSpec | None:
 	value = said[kind].value
 	if value is None:
 		raise error(f"`{kind}` needs a unit", said[kind].span, label = "here")
-	numerator, denominator, calendar = _unit(value, env)
+	scale: list[str] = []
+	numerator, denominator, calendar = _unit(value, env, names, scale)
 	epoch = _epoch(said["epoch"]) if kind == "time" else None
 	if calendar and epoch in NO_CALENDAR:
 		raise error(f"the `{epoch}` epoch has no calendar to count months in",
 		            said[kind].span, label = "a calendar unit",
 		            notes = [f"`{epoch}` is {EPOCHS[epoch or '']}"])
-	return TimeSpec(kind, numerator, denominator, calendar, epoch)
+	return TimeSpec(kind, numerator, denominator, calendar, epoch,
+	                tuple(scale))
 
 
 def field_time(schema: ast.Schema, type_name: str, path: str,
