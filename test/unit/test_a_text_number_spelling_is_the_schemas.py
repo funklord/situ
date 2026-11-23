@@ -238,3 +238,35 @@ def test_the_dissector_reads_a_plus_signed_length(tmp_path: Path) -> None:
 	consumed, rows = dissect(tmp_path, schema, "s", b"+3,abcZ")
 	assert consumed == 7, rows
 	assert ("s.tail", 6, 1, "90") in rows, rows
+
+
+TOKEN_ARM = """target buffer;
+endian big;
+tokens word { a = "any", default = error, }
+struct pick {
+	peek u8 kind;
+	variant body switch (kind) {
+		case 'a': word w until " " | end;
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_a_token_in_an_arm_is_checked_and_compiles(tmp_path: Path) -> None:
+	"""A delimited token member in a variant arm: C's check called the
+	member form of `_ptr`, and an arm's takes the pointer and length out
+	through parameters, so the header did not compile (fuzznet, inbox
+	20261123T1616Z). Verdicts by hand: `any` and `any ` are the token,
+	`axe` is no spelling of it, `b` selects the error arm."""
+	source = tmp_path / "unit.situ"
+	source.write_text(TOKEN_ARM, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	assert len(command) == 4
+	for packet, valid in ((b"any", True), (b"any ", True), (b"axe", False),
+	                      (b"b", False)):
+		given = {name: fourway.answers(argv, packet, tmp_path)
+		         for name, argv in command.items()}
+		assert len(set(given.values())) == 1, (packet, given)
+		assert ("validate 0" in given["c"]) == valid, (packet, given["c"])

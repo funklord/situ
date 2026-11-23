@@ -12072,12 +12072,26 @@ class Emitter:
 		# not a preference: a MEMBER names `line_offset()`, which an arm does
 		# not have, and reuse named a function nothing defines. Measured by
 		# compiling, after reading the generated text and believing it.
+		tokens = self.tokens.get(placement.type_name or "")
 		if placement.delimiters and scalar is not None:
 			keep = self._arm_keep(struct, placement)
 			at   = self._offset_expression(struct, placement)
 			if keep is None or at is None:
 				return []
 			name  = bare_name(local_name(struct, placement))
+			# Its token set, which this branch never asked: `case 'a': word
+			# w until " "` took no token check here and accepted `axe` where
+			# the other three refuse it (found beside C's, fuzznet inbox
+			# 20261123T1616Z).
+			token = ([f"\t\t/* {placement.path} is one of `{tokens.name}`'s"
+			          f" {len(tokens.members)} spelling(s). */",
+			          f"\t\tif ({c_name(tokens.name)}::which("
+			          f"situ_base(raw_) + ({at}),",
+			          f"\t\t\t\t{name}_len()) == {c_name(tokens.name)}::unknown) {{",
+			          "\t\t\treturn ::situ::rt::err::constraint;",
+			          "\t\t}"]
+			         if tokens is not None and tokens.effective_default
+			         is ast.EnumDefault.ERROR else [])
 			inner = [
 				*([f"\t\t/* {placement.path} runs to"
 				   f" {render_delimiter(placement.delimiter)}; a frame",
@@ -12088,6 +12102,7 @@ class Emitter:
 				*self._span_encoding_check(struct, placement,
 				                           f"situ_base(raw_) + ({at})",
 				                           f"{name}_len()"),
+				*token,
 				# A delimited TEXT NUMBER's spelling, digits and declared
 				# range (26.852). 26.423 left these out in all four
 				# together, the member path reading a parsed property an

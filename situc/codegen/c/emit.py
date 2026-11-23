@@ -13183,6 +13183,33 @@ class Emitter:
 
 		local = c_name(self._local(struct, placement))
 		ptr   = ident(self.prefix, struct.name, local, "ptr")
+		which = ident(self.prefix, decl.name, "which")
+		unknown = macro(self.prefix, decl.name, "unknown")
+		# An ARM's `_ptr` takes the pointer and the length out through
+		# parameters, so the gate has somewhere to put SITU_ERR_VERSION; a
+		# member's returns a bare pointer. This called the member form on an
+		# arm -- `case 'a': word w until " " | end;` -- and the header did
+		# not compile (fuzznet, inbox 20261123T1616Z). The `[chars]` arm
+		# check's shape, which met the same two signatures first.
+		if fixed is None and "." in placement.path[len(struct.name) + 1:]:
+			return [
+				f"\t/* `{placement.name}` is one of `{decl.name}`'s"
+				f" {len(decl.members)} spelling(s), where selected. */",
+				"\t{",
+				"\t\tconst uint8_t *token_at = NULL;",
+				"\t\tuint32_t token_n = 0u;",
+				f"\t\tconst situ_err_t got = {ptr}(view, &token_at, &token_n"
+				f"{self._member_args(struct, placement)});",
+				"",
+				f"\t\tif (got == SITU_OK && {which}(token_at, token_n)"
+				f" == {unknown}) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				"\t\tif (got != SITU_OK && got != SITU_ERR_VERSION) {",
+				"\t\t\treturn got;",
+				"\t\t}",
+				"\t}",
+			]
 		# A FIXED width has no `_len` accessor; the number is the length.
 		wide  = (f"{fixed}u" if fixed is not None
 		         else f"{ident(self.prefix, struct.name, local, 'len')}(view)")

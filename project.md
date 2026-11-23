@@ -427,6 +427,15 @@ without huge dependencies kept, and the pertinent code shared:
   taking the run as bytes and a length, as a nested member is, would do.
   Minor: dropping `max` from such a run widened the message's bound to
   unbounded, said only as one line among the breaking ones.
+- fuzznet's permit grammars (inbox 20261123T1606Z, answered as its
+  inbox 20261123T1720Z with a probe schema): the local and events permits
+  are describable today -- a token set of the five rights spellings, a
+  peeked variant for `#id` and `@group`, a `[chars]` name, `whitespace`
+  for runs of spaces -- and the remote one is too except "`none` stands
+  alone", a rule over a run's elements that situ has no quantifier for.
+  Open: `when` over a run, if fuzznet asks; until then that rule is its.
+- Done 2026-11-23: a delimited token member in a variant arm did not
+  compile in C and was unchecked in C++ (fuzznet inbox 20261123T1616Z).
 - Done 2026-11-23: situ-edit-gui's dark-desktop detection, a copy of
   snurra's in `gui/desktop_scheme`, is qtkit's now (`qtkit/` at the root,
   `qtkit_follow_desktop` with `SITU_THEME` as its override; claude-
