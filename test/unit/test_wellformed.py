@@ -3717,10 +3717,12 @@ def test_every_ast_node_that_carries_attributes_is_one_the_walk_reaches()\
 	# which `check_replays` refuses against as a whole form (26.1120); an
 	# unknown name on it is still refused by `check_attribute_names`. And
 	# `Reassemble`, `parser.REASSEMBLE_ATTRIBUTES`, which
-	# `check_reassemblies` holds to its own list (26.1123).
+	# `check_reassemblies` holds to its own list (26.1123). And `Let`,
+	# whose only words are `time`, `duration` and `epoch` -- `check_lets`
+	# refuses any other as meaning nothing on a value of no bytes (26.1165).
 	assert bearing == {
-		"Authenticated", "Coded", "Field", "MarkerField", "Opaque", "Pad",
-		"Identify", "Reassemble", "RegistryEntry", "Relation", "Replay",
+		"Authenticated", "Coded", "Field", "Let", "MarkerField", "Opaque",
+		"Pad", "Identify", "Reassemble", "RegistryEntry", "Relation", "Replay",
 		"Reserved",
 		"Sealed", "StructDecl", "TagField", "Tlv", "Variant",
 	}, f"the attribute-bearing nodes have moved: {sorted(bearing)}"
