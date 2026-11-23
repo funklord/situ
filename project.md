@@ -6200,6 +6200,14 @@ holding that two TRACKED schemas which collide still refuse. It is here only
 so that a reader who meets the old report does not come looking in this
 tree.
 
+**Every C build is `-Os -pedantic-errors`, run from anywhere** (2026-11-23,
+from claude-guidelines inbox 20261123T1244Z). `runtime/c`, `test/generated`
+and `test/cross` each defaulted to `-O2` when run directly, so a suite run
+there had never seen the code that ships; and the root's CFLAGS, exported
+to them, lacked the `-pedantic-errors` they state, so a run from the root
+compiled the generated code without it. All four now say both, and `make
+test-c` and `make cross-test` pass with them.
+
 ### 24.1 Packaging
 
 `make deb` produces two packages, and they are two because they do not have the

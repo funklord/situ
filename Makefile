@@ -20,7 +20,10 @@ PREFIX		?= /usr/local
 DESTDIR		?=
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -Os -g -ffunction-sections -fdata-sections $(WARNFLAGS)
+# -pedantic-errors, as test/generated states its own: exported to it, this
+# replaced its CFLAGS, so a run from here compiled the generated code
+# without it (claude-guidelines inbox 20261123T1244Z).
+CFLAGS		?= -std=c11 -pedantic-errors -Os -g -ffunction-sections -fdata-sections $(WARNFLAGS)
 LDFLAGS		?= -Wl,--gc-sections
 
 BUILD_DIR	:= $(BUILD_ROOT)/$(ARCH)

@@ -18,7 +18,8 @@ CC		:= $(CROSS_COMPILE)gcc
 endif
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -O2 -g $(WARNFLAGS)
+# -Os, as the shipped build is; run from the root, the root's CFLAGS win.
+CFLAGS		?= -std=c11 -pedantic-errors -Os -g $(WARNFLAGS)
 
 BUILD_DIR	?= build
 REPO_ROOT	:= $(abspath ../..)

@@ -19,7 +19,10 @@ LD		:= $(CC)
 endif
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -pedantic-errors -O2 -g $(WARNFLAGS)
+# -Os and section collection, as the root's build: built here alone -- by a
+# consumer, or a test that needs only the library -- it was -O2.
+CFLAGS		?= -std=c11 -pedantic-errors -Os -g -ffunction-sections \
+		   -fdata-sections $(WARNFLAGS)
 
 BUILD_DIR	?= build
 LIB		:= $(BUILD_DIR)/libsitu.a

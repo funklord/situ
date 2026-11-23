@@ -17,7 +17,9 @@ LD		:= $(CC)
 endif
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -pedantic-errors -O2 -g $(WARNFLAGS)
+# -Os, as the shipped build is: a suite compiled at another level has never
+# seen the code that ships. Run from the root, the root's CFLAGS win.
+CFLAGS		?= -std=c11 -pedantic-errors -Os -g $(WARNFLAGS)
 LDFLAGS		?=
 
 BUILD_DIR	?= build
