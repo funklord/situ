@@ -195,6 +195,14 @@ def _reads_signed(placement: Placement) -> bool:
 		or (placement.scalar is not None and placement.scalar.signed)
 
 
+def _composed(width: int, little: bool, base: str = "situ_base(view)",
+		cast: str = "(uint64_t)") -> str:
+	"""A width with no `situ_get_` of its own -- `u24` -- byte by byte."""
+	terms = [f"({cast}{base}[at + {i}u] << {8 * i if little else 8 * (width - 1 - i)})"
+	         for i in range(width)]
+	return "(" + " | ".join(terms) + ")"
+
+
 @dataclass
 class Generated:
 	"""The two files a schema compiles to, and what it had to say about them."""
@@ -3290,6 +3298,15 @@ class Emitter:
 		marker said. The predicate is the one the field reads use.
 		"""
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
+		if suffix is None and width > 1:
+			# `length_type = u24` read its first byte alone, so `00 00 08`
+			# was a length of zero here and eight in Rust and Python.
+			big    = _composed(width, little=False)
+			little = _composed(width, little=True)
+			if placement is not None and placement.marker is not None:
+				predicate = self._marker_predicate(placement)
+				return f"(uint32_t)({predicate} ? {little} : {big})"
+			return f"(uint32_t){little if _order_suffix(endian) == 'le' else big}"
 		if suffix is None:
 			return "(uint32_t)situ_base(view)[at]"
 		if placement is not None and placement.marker is not None:

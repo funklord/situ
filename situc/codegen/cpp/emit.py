@@ -6710,7 +6710,21 @@ class Emitter:
 		width  = (bits + 7) // 8
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		order  = _order_suffix(placement.endian)
-		if suffix is None:
+		if suffix is None and width > 1:
+			# A `u24` tag read its first byte alone (26.1168).
+			def composed(little: bool) -> str:
+				return "(" + " | ".join(
+					f"(static_cast<std::uint64_t>(situ_base(raw_)[at + {i}u])"
+					f" << {8 * i if little else 8 * (width - 1 - i)})"
+					for i in range(width)) + ")"
+			if placement.marker is not None:
+				predicate = self._marker_predicate(placement)
+				read = (f"static_cast<std::uint64_t>({predicate}"
+				        f" ? {composed(True)} : {composed(False)})")
+			else:
+				read = (f"static_cast<std::uint64_t>"
+				        f"({composed(order == 'le')})")
+		elif suffix is None:
 			read = "static_cast<std::uint64_t>(situ_base(raw_)[at])"
 		elif placement.marker is not None:
 			# 26.833, as in the field reads: no static answer here.
@@ -6927,7 +6941,21 @@ class Emitter:
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		order  = _order_suffix(placement.endian)
-		if suffix is None:
+		if suffix is None and width > 1:
+			# `length_type = u24` read its first byte alone (26.1168).
+			def composed(little: bool) -> str:
+				return "(" + " | ".join(
+					f"(static_cast<std::uint64_t>(situ_base(raw_)[at + {i}u])"
+					f" << {8 * i if little else 8 * (width - 1 - i)})"
+					for i in range(width)) + ")"
+			if placement.marker is not None:
+				predicate = self._marker_predicate(placement)
+				read = (f"static_cast<std::uint32_t>({predicate}"
+				        f" ? {composed(True)} : {composed(False)})")
+			else:
+				read = (f"static_cast<std::uint32_t>"
+				        f"({composed(order == 'le')})")
+		elif suffix is None:
 			read = "static_cast<std::uint32_t>(situ_base(raw_)[at])"
 		elif placement.marker is not None:
 			# 26.833: the length prefix is in the region's order too, and
