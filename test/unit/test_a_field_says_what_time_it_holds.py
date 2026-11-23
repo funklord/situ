@@ -138,3 +138,76 @@ def test_a_struct_is_no_number() -> None:
 	with pytest.raises(SituError) as caught:
 		check(parse_text(text, path="f.situ"))
 	assert "means nothing here" in str(caught.value)
+
+
+# -- step 3: the kernels follow the field ------------------------------------
+
+KERNELS = """target buffer;
+endian big;
+struct h { u64 nonce; u64 exp TIME; u8 index; u8 chunks; }
+struct f { h head; u8 body[remaining]; }
+replay n(m: f) [nonce = m.head.nonce, expires = m.head.exp,
+                ahead = 1000UNIT];
+relation same(first: f, later: f) {
+	must later.head.nonce == first.head.nonce;
+}
+reassemble pieces(p: f) by same [index = p.head.index,
+	count = p.head.chunks, piece = p.body, messages = 2, bytes = 64,
+	timeout = 3000, expires = p.head.expROOM];
+"""
+
+
+def _kernels(time: str, unit: str = "", room: str = "") -> str:
+	return (KERNELS.replace("TIME", time).replace("UNIT", unit)
+	        .replace("ROOM", room))
+
+
+def _c_of(text: str) -> str:
+	from situc.codegen.c import reassemble, replay
+	schema = parse_text(text, path="k.situ")
+	check(schema)
+	resolved = resolve(schema, solve(schema))
+	files = {**replay.generate(schema, resolved, "k"),
+	         **reassemble.generate(schema, resolved, "k")}
+	assert len(files) == 2, files.keys()
+	return "\n".join(files.values())
+
+
+def test_a_kernel_takes_its_clock_from_the_field() -> None:
+	"""fuzznet's `expires_at`: the field says what both peers read, so
+	neither kernel restates the unit, and the generated tables say it."""
+	source = _c_of(_kernels("[time = ms, epoch = unix]"))
+	assert "in ms" in source
+
+
+def test_a_tick_reaches_the_generated_comment() -> None:
+	source = _c_of(_kernels("[time = s / 90000, epoch = caller]"))
+	assert "1/90000s" in source
+
+
+def test_a_kernel_unit_that_agrees_is_accepted() -> None:
+	check(parse_text(_kernels("[time = ms, epoch = unix]", ", unit = ms",
+	                          ", unit = ms"), path="k.situ"))
+
+
+@pytest.mark.parametrize(("time", "said"), [
+	("[time = ms, epoch = unix]", "is not the unit"),
+	("[duration = ms]", "an expiry is an instant"),
+	("[time = month, epoch = unix]", "a clock counts a fixed unit"),
+])
+def test_a_kernel_disagreeing_with_its_field_is_refused(time: str,
+                                                       said: str) -> None:
+	with pytest.raises(SituError) as caught:
+		check(parse_text(_kernels(time, ", unit = s"), path="k.situ"))
+	assert said in str(caught.value)
+
+
+def test_with_nothing_on_the_field_the_kernel_still_says_it() -> None:
+	"""The control: the unit is stated somewhere, or the schema is
+	refused, as before 26.1165."""
+	with pytest.raises(SituError) as caught:
+		check(parse_text(_kernels(""), path="k.situ"))
+	assert "does not state `unit`" in str(caught.value)
+	with pytest.raises(SituError) as caught:
+		check(parse_text(_kernels("", ", unit = ms"), path="k.situ"))
+	assert "states no `unit`" in str(caught.value)

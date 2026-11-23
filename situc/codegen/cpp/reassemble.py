@@ -8,6 +8,7 @@ more is wanted, and `err::constraint` or `err::bounds` where C refuses.
 
 from __future__ import annotations
 
+from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.names import c_name
 from situc.codegen.c.reassemble import (WHY, _attr, _number, _path,
@@ -86,7 +87,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	timeout  = _number(held, "timeout")
 	marks    = marks_per(held, capacity)
 	most     = count_most(held)
-	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name")
+	unit     = clock_unit(schema, held)
 	piece    = _path(held, "piece").split(".")
 	struct   = resolved.structs[held.param.type_name]
 	view_cls = class_name(struct)

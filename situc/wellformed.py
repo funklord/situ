@@ -1775,6 +1775,46 @@ REPLAY_NONCE   = {"nonce", "expires", "ahead", "unit"}
 REPLAY_UNITS   = {"ns", "us", "ms", "s"}
 
 
+def _expiry_time(schema: ast.Schema, decl: ast.Replay | ast.Reassemble,
+                 said: dict[str, ast.Attr]) -> object:
+	"""The time a kernel's `expires` field states, held to the kernel
+	(26.1165 step 3): an expiry is an instant, and a kernel's own `unit`
+	is the field's or refused, never converted behind the reader's back.
+	None where the field states no time, and the kernel's `unit` is then
+	the only word on the clock."""
+	from situc.relation import paths_in
+	from situc.timespec import (constant_env, field_time, stated_unit)
+	held = said.get("expires")
+	if held is None or held.value is None:
+		return None
+	paths = paths_in(held.value)
+	if len(paths) != 1:
+		return None
+	spec = field_time(schema, decl.param.type_name, paths[0],
+	                  constant_env(schema))
+	if spec is None:
+		return None
+	if spec.kind != "time":
+		raise error(f"`{paths[0]}` is a duration, and an expiry is an "
+		            "instant", held.span, label="here",
+		            notes=["the field says `[time = UNIT, epoch = EPOCH]` "
+		                   "for a deadline"])
+	if spec.calendar:
+		raise error(f"`{paths[0]}` counts {spec.unit()}s, and a clock "
+		            "counts a fixed unit", held.span, label="here",
+		            notes=["a month is no fixed number of seconds, so no "
+		                   "deadline is a whole number of them from now"])
+	own = stated_unit(decl)
+	if own is not None and (own.numerator, own.denominator) \
+			!= (spec.numerator, spec.denominator):
+		raise error(f"`unit = {own.unit()}` is not the unit `{paths[0]}` "
+		            f"counts in, {spec.unit()}", said["unit"].span,
+		            label="here",
+		            notes=["the field says what both peers read; leave "
+		                   "`unit` out and the clock is the field's"])
+	return spec
+
+
 def check_replays(schema: ast.Schema) -> None:
 	"""A replay window states one form whole, and nothing that cannot hold.
 
@@ -1807,6 +1847,8 @@ def check_replays(schema: ast.Schema) -> None:
 				       "a nonce set: `[nonce = m.nonce, expires = m.exp, "
 				       "ahead = 30000, unit = ms]`"])
 		needed = REPLAY_COUNTER if counter else REPLAY_NONCE
+		if not counter and _expiry_time(schema, replay, said) is not None:
+			needed = needed - {"unit"}
 		missing = sorted(needed - set(said))
 		if missing:
 			raise error(f"`{replay.name}` does not state "
@@ -1885,9 +1927,11 @@ def check_reassemblies(schema: ast.Schema) -> None:
 				notes=["a reassembly holds each later piece to the first with "
 				       "the relation's own `must`s, so both of its messages "
 				       "are the datagram the pieces arrive in"])
+		clock   = _expiry_time(schema, held, said)
 		missing = [key for key in ("index", "count", "piece", "messages",
 		                           "bytes", "timeout", "unit")
-		           if key not in said]
+		           if key not in said
+		           and not (key == "unit" and clock is not None)]
 		if missing:
 			raise error(
 				f"`{held.name}` states no `{missing[0]}`", where,
@@ -1915,7 +1959,8 @@ def check_reassemblies(schema: ast.Schema) -> None:
 			if not isinstance(value, int) or not low <= value <= high:
 				raise error(f"`{key}` is a number from {low} to {high}",
 				            said[key].span, label="here")
-		if getattr(said["unit"].value, "name", None) not in REPLAY_UNITS:
+		if "unit" in said and getattr(said["unit"].value, "name", None) \
+				not in REPLAY_UNITS:
 			raise error(f"`unit` is one of {', '.join(sorted(REPLAY_UNITS))}",
 			            said["unit"].span, label="here")
 		# `per` and `per_max` (fuzznet, inbox 20261122T1804Z): how many
@@ -2988,16 +3033,9 @@ def check_times(schema: ast.Schema) -> None:
 	"""A member's `time` or `duration` states a unit that holds, and an
 	instant its epoch (26.1165). Where it may sit is
 	`check_attribute_places`'s question, asked before this."""
-	from situc.expr import Env, evaluate
-	from situc.timespec import spec_of
+	from situc.timespec import constant_env, spec_of
 
-	consts: dict[str, int] = {}
-	for decl in schema.consts():
-		try:
-			consts[decl.name] = evaluate(decl.value, Env(consts=consts))
-		except SituError:
-			continue
-	env = Env(consts=consts)
+	env = constant_env(schema)
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
 			spec_of(getattr(member, "attrs", ()), env)

@@ -7,6 +7,7 @@ None while more is wanted, and raises where C returns a refusal.
 
 from __future__ import annotations
 
+from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.reassemble import (WHY, _attr, _number, _path,
                                         count_most,
@@ -32,7 +33,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	messages = _number(held, "messages")
 	capacity = _number(held, "bytes") // messages
 	timeout  = _number(held, "timeout")
-	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name")
+	unit     = clock_unit(schema, held)
 	piece    = _path(held, "piece").split(".")
 	struct   = resolved.structs[held.param.type_name]
 	sealed   = next((entry.placement for entry in struct.entries

@@ -8,6 +8,7 @@ each rule is there.
 
 from __future__ import annotations
 
+from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.replay import (VERDICTS, _attr, _number, _path, _word,
                                     refusals)
@@ -104,11 +105,11 @@ def _counter(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
 	]
 
 
-def _nonce(replay: ast.Replay, resolved: ResolvedSchema) -> list[str]:
+def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
+           unit: str) -> list[str]:
 	least    = (_number(replay, "capacity")
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
-	unit     = _word(replay, "unit", "ms")
 	rule     = _word(replay, "expiry", "required")
 	required = rule == "required"
 	given    = ", bool expiry_required" if rule == "caller" else ""
@@ -224,6 +225,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	]
 	for replay in replays:
 		lines += (_counter(replay, resolved) if _attr(replay, "counter")
-		          is not None else _nonce(replay, resolved))
+		          is not None else _nonce(replay, resolved,
+		                                    clock_unit(schema, replay)))
 	lines += ["}  // namespace situ_replay", ""]
 	return {f"{basename}_replay.hpp": "\n".join(lines)}

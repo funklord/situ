@@ -181,3 +181,71 @@ def spec_of(attrs: tuple[ast.Attr, ...], env: Env) -> TimeSpec | None:
 		            said[kind].span, label = "a calendar unit",
 		            notes = [f"`{epoch}` is {EPOCHS[epoch or '']}"])
 	return TimeSpec(kind, numerator, denominator, calendar, epoch)
+
+
+def field_time(schema: ast.Schema, type_name: str, path: str,
+               env: Env) -> TimeSpec | None:
+	"""The time a kernel's `expires` field states, found by its path
+	(`m.head.exp`) from the struct the kernel reads; None where the field
+	states none or the path does not lead to one."""
+	from situc.wellformed import nested
+	structs = {decl.name: decl for decl in schema.structs()}
+	steps   = path.split(".")[1:]
+	members = structs[type_name].members if type_name in structs else ()
+	found: ast.Member | None = None
+	for step in steps:
+		pending = list(members)
+		found   = None
+		while pending:
+			member = pending.pop(0)
+			if getattr(member, "name", None) == step:
+				found = member
+				break
+			pending.extend(nested(member))
+		if found is None:
+			return None
+		type_ref = getattr(found, "type_ref", None)
+		held     = structs.get(getattr(type_ref, "name", ""))
+		members  = held.members if held is not None else ()
+	if found is None:
+		return None
+	return spec_of(getattr(found, "attrs", ()), env)
+
+
+def stated_unit(decl: ast.Replay | ast.Reassemble) -> TimeSpec | None:
+	"""A kernel's own `unit = ms`, as a duration of that unit."""
+	held = next((one for one in decl.attrs if one.name == "unit"), None)
+	name = getattr(getattr(held, "value", None), "name", None)
+	if name not in FIXED_UNITS:
+		return None
+	numerator, denominator = FIXED_UNITS[name]
+	return TimeSpec("duration", numerator, denominator, False, None)
+
+
+def clock_unit(schema: ast.Schema, decl: ast.Replay | ast.Reassemble) -> str:
+	"""The unit a kernel's clock counts in, as its generated comments say
+	it: the kernel's own `unit`, or its `expires` field's (26.1165)."""
+	own = stated_unit(decl)
+	if own is not None:
+		return own.unit()
+	expires = next((one for one in decl.attrs if one.name == "expires"), None)
+	if expires is not None and expires.value is not None:
+		from situc.relation import paths_in
+		paths = paths_in(expires.value)
+		spec  = field_time(schema, decl.param.type_name, paths[0],
+		                   constant_env(schema)) if paths else None
+		if spec is not None:
+			return spec.unit()
+	raise AssertionError(f"`{decl.name}` has no clock unit; wellformed "
+	                     "refuses that")
+
+
+def constant_env(schema: ast.Schema) -> Env:
+	"""The schema's constants, folded in order, for a unit's factors."""
+	consts: dict[str, int] = {}
+	for decl in schema.consts():
+		try:
+			consts[decl.name] = evaluate(decl.value, Env(consts=consts))
+		except SituError:
+			continue
+	return Env(consts=consts)

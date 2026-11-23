@@ -15,6 +15,7 @@ reads and has been seen is a verdict, not a malformed message.
 
 from __future__ import annotations
 
+from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.names import ident, macro, header_guard
 from situc.codegen.c.relate import _binding, _local
@@ -156,14 +157,13 @@ def _counter(replay: ast.Replay, resolved: ResolvedSchema,
 	]
 
 
-def _nonce(replay: ast.Replay, resolved: ResolvedSchema,
+def _nonce(replay: ast.Replay, resolved: ResolvedSchema, unit: str,
 		prefix: str) -> list[str]:
 	name     = ident(prefix, replay.name)
 	upper    = macro(prefix, replay.name)
 	least    = (_number(replay, "capacity")
 	            if _attr(replay, "capacity") is not None else 1)
 	ahead    = _number(replay, "ahead")
-	unit     = _word(replay, "unit", "ms")
 	rule     = _word(replay, "expiry", "required")
 	required = rule == "required"
 	# `expiry = caller`: the rule is the consumer's, per message, at run
@@ -309,6 +309,6 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		if _attr(replay, "counter") is not None:
 			lines += _counter(replay, resolved, prefix)
 		else:
-			lines += _nonce(replay, resolved, prefix)
+			lines += _nonce(replay, resolved, clock_unit(schema, replay), prefix)
 	lines += [f"#endif /* {guard} */", ""]
 	return {f"{basename}_replay.h": "\n".join(lines)}

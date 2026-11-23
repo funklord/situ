@@ -29,6 +29,7 @@ rather than spilled into a neighbour's.
 
 from __future__ import annotations
 
+from situc.timespec import clock_unit
 from situc import __version__, ast
 from situc.codegen.c.converse import _key, _key_bytes
 from situc.codegen.c.names import c_name, header_guard, ident, macro
@@ -243,7 +244,7 @@ def _table(schema: ast.Schema, held: ast.Reassemble,
 	messages = _number(held, "messages")
 	total    = _number(held, "bytes")
 	timeout  = _number(held, "timeout")
-	unit     = getattr(getattr(_attr(held, "unit"), "value", None), "name")
+	unit     = clock_unit(schema, held)
 	capacity = total // messages
 	marks    = marks_per(held, capacity)
 	most     = count_most(held)
