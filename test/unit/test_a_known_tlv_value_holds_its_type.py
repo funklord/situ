@@ -90,6 +90,48 @@ def test_the_walkers_decline_rather_than_pass(tmp_path: Path) -> None:
 		assert c_verdict(tmp_path, blob, data, shape) == said, label
 
 
+HELD = """target buffer;
+endian big;
+struct tv { u8 day; u8 month [max = 12]; }
+struct inr {
+	tlv items (tag_type = u8, length_type = u8,
+	           known = { 1 : { name = date, type = tv } }, unknown = skip);
+}
+struct nested { u8 a; inr x; }
+struct armed {
+	u8 k;
+	variant body switch (k) {
+		case 1:  inr x;
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+@pytest.mark.parametrize(("shape_name", "packet"), [
+	("nested", "00 01 02 01 0d"),
+	("armed", "01 01 02 01 0d"),
+])
+def test_a_struct_holding_the_region_declines_too(tmp_path: Path,
+                                                  shape_name: str,
+                                                  packet: str) -> None:
+	"""Month 13 in a date one struct down, which the four refuse. The
+	struct holding the region could not be judged, and its parent was
+	still marked judgeable -- applied only as the flags were written, the
+	mark never reached the fixed point that carries it upward -- so both
+	walkers answered OK in an arm, and the Python walker one member
+	down."""
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	blob  = packed_text(HELD)
+	shape = shape_named_text(HELD, shape_name)
+	data  = bytes.fromhex(packet.replace(" ", ""))
+	said  = python_verdict(blob, data, shape)
+	assert said == "cannot-say", said
+	assert c_verdict(tmp_path, blob, data, shape) == said
+
+
 FORMS = """target buffer;
 endian big;
 struct options {

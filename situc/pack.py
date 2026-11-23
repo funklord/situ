@@ -3074,6 +3074,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	                           CONSTRAINT_BYTES)
 	pinned_blob      = _merged(pinned_blob, arm_pinned, PINNED_BYTES)
 
+	# Ahead of the fixed point, so that a struct holding one is not
+	# validatable either. Applied only when the flags were written, it
+	# left `struct s { u8 a; inr x; }` validatable over an `inr` that was
+	# not, and the Python walker, failing to place the region, answered OK
+	# for the parent where the four backends refuse.
+	unsized = {owner for owner, placement in rows
+	           if placement.path in coverage.unencodable}
+	for name in unsized:
+		validatable[name] = False
+
 	for _ in range(len(order) + 1):
 		changed = False
 		for name, _rstruct in order:
@@ -3106,9 +3116,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# records relations, whose keys match no placement, so a schema whose
 	# RELATION the planner refuses keeps its flags and `test_pack.py:352`
 	# still holds.
-	unsized = {owner for owner, placement in rows
-	           if placement.path in coverage.unencodable}
-
 	structs_blob = bytearray()
 	for (name, rstruct), (first, count) in zip(order, spans):
 		size = (rstruct.layout.size_bits
