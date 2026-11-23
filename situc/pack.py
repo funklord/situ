@@ -36,7 +36,8 @@ from situc.capability import DOMAINS, Axis
 from situc.diagnostics import SituError
 from situc.expr import evaluate
 from situc.invariant import paths_in
-from situc.layout import BITS_PER_BYTE, Placement, expansion_is_closed_form
+from situc.layout import (BITS_PER_BYTE, Placement, TlvGrammar, ValueRule,
+                          expansion_is_closed_form)
 from situc.types import lookup
 from situc.relation import Refused as RelationRefused
 from situc.relation import plan as plan_relation
@@ -956,6 +957,15 @@ def _arm_fields(arm: object) -> tuple[int, str | None, int]:
 	        selected if isinstance(selected, str) else None, kind)
 
 
+def _value_rules(grammar: TlvGrammar) -> tuple[ValueRule, ...]:
+	"""A region's value rules, the simple form's one length as its default
+	rule: `length_type = u8` is `value_size = prefixed(u8)` for every tag."""
+	if not grammar.rules and grammar.length_type is not None:
+		return (ValueRule(label=None, kind="prefixed",
+		                  length_type=grammar.length_type),)
+	return grammar.rules
+
+
 def _policy(name: str | None) -> int:
 	"""A tlv policy as a small integer, 0 meaning unstated."""
 	return {None: 0, "error": 1, "skip": 2, "keep": 3,
@@ -1785,6 +1795,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	for owner, placement in rows:
 		grammar = placement.tlv_grammar
 		if grammar is None:
+			continue
+		# The simple form, `tag_type = u8, length_type = u8`: one length
+		# before every value, so there is nothing to select on and a
+		# selector of 0 picks its one rule (`_value_rules`). It was
+		# refused as having no selector, and every region openmlx4 writes
+		# is this form, so no walker could measure one.
+		if not grammar.rules and grammar.length_type is not None:
+			start = len(program.code)
+			program.emit(Op.PUSH, 0, "<q")
+			program.emit(Op.END)
+			tlv_selector_at[placement.path] = start
+			coverage.expressions += 1
 			continue
 		part = next((one for one in grammar.tag_decode
 		             if one.name == grammar.selector), None)
@@ -3447,7 +3469,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# `value_rule` and `rule_kind` rather than `rule` and `kind`:
 			# both are bound in this scope already, and shadowing them
 			# made the whole loop a type error rather than a wrong image.
-			for value_rule in placement.tlv_grammar.rules:
+			for value_rule in _value_rules(placement.tlv_grammar):
 				rule_kind = TLV_RULE_KIND.get(value_rule.kind)
 				if rule_kind is None:
 					coverage.unencodable[placement.path] = (

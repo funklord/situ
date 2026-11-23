@@ -434,6 +434,15 @@ without huge dependencies kept, and the pertinent code shared:
   for runs of spaces -- and the remote one is too except "`none` stands
   alone", a rule over a run's elements that situ has no quantifier for.
   Open: `when` over a run, if fuzznet asks; until then that rule is its.
+- Done 2026-11-23, run 16: this run's constructs (spelling rules, time,
+  `while ... | end`, typed tlv values) put into `edges.situ` and asked
+  against seven contexts each. The four backends agreed in every cell;
+  C++ emitted a tlv's known struct after the class validating it
+  (bcb52caf). The walkers answered OK for a typed region one struct down
+  or in an arm (b4cdda5f), the Python walker framed an arm's struct by the
+  parent's frame (97007385), and the simple tlv form -- `tag_type`,
+  `length_type`, every region openmlx4 writes -- was not in the image at
+  all, so no walker measured one; it is packed as one `prefixed` rule now.
 - Done 2026-11-23: a delimited token member in a variant arm did not
   compile in C and was unchecked in C++ (fuzznet inbox 20261123T1616Z).
 - Done 2026-11-23: situ-edit-gui's dark-desktop detection, a copy of
