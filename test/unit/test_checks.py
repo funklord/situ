@@ -841,3 +841,38 @@ def test_a_text_number_s_digits_are_read_in_its_own_base(
 	result = build(tmp_path, f'struct s {{ {base} u32 v until "," max 8; }}')
 	assert result.returncode == 0, result.stdout
 	assert "reads_its_digits" in result.stdout
+
+
+SPELLED = ('struct s { hex u32 v until "," max 8'
+           ' [leading_zeros = refused, hex_case = upper]; }')
+
+
+def test_each_spelling_rule_gets_a_vector_each_way() -> None:
+	"""A rule refused and admitted (26.1166): one spelling, as the two
+	checks above write, passes code that dropped every rule."""
+	emitted = emit(SPELLED)
+	for name in ("refuses_a_leading_zero", "reads_a_lone_zero",
+	             "refuses_a_lower_case_digit", "reads_an_upper_case_digit",
+	             "refuses_a_plus_sign"):
+		assert f"check_s_v_{name}" in emitted, name
+	plain = emit('struct s { decimal u32 v until "," max 8; }')
+	assert "leading_zero" not in plain and "plus_sign" not in plain
+	signed = emit('struct s { decimal u32 v until "," max 8 [plus_sign]; }')
+	assert "check_s_v_reads_a_plus_sign" in signed
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize(("rules", "caught"), [
+	("4u", "refuses_a_leading_zero"),
+	("1u", "refuses_a_lower_case_digit"),
+])
+def test_a_spelling_rule_the_code_drops_is_caught(tmp_path: Path,
+                                                  rules: str,
+                                                  caught: str) -> None:
+	"""The emitted rule word is 5, a leading zero and lower case refused;
+	dropping either half fails the check that asks it."""
+	assert build(tmp_path, SPELLED).returncode == 0
+	result = build(tmp_path, SPELLED,
+	               corrupt=("16u, 5u))", f"16u, {rules}))"))
+	assert result.returncode != 0
+	assert f"FAILED  ] check_s_v_{caught}" in result.stdout, result.stdout

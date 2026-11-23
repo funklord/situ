@@ -1228,7 +1228,7 @@ def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 			# The digits in the member's own base: `42` in hex is 66, and
 			# the check compared it with 42, so every hex text number's
 			# suite failed against a correct getter.
-			f"\tsitu_check_eq(value, {int(digits, placement.radix)}u);",
+			f"\tsitu_check_eq(value, {int(digits, placement.radix or 10)}u);",
 		],
 		[f"/* {placement.path} is written as digits. The map calls it",
 		 "\t * TextConverted, which is a claim that the conversion happens --",
@@ -1255,6 +1255,61 @@ def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		["/* The other half of TextConverted: the conversion can fail, and a",
 		 "\t * getter that returned zero for `4x` would be handing back a",
 		 "\t * number nobody wrote. */"])
+
+	# Each spelling rule the member states (26.1166), held both ways: a
+	# vector the rule refuses and one it admits. A rule the generated code
+	# dropped would pass every check above, which writes one spelling. A
+	# spelling is the message's property and `validate` holds it, as it
+	# always held `[minimal]`; the getter reads the value whatever the
+	# spelling, so only `validate` is asked to refuse.
+	radix = placement.radix or 10
+	spelled: list[tuple[str, str, int | None, str]] = []
+	if placement.radix_rules & 1:
+		spelled.append(("refuses_a_leading_zero", "042", None,
+		                "`leading_zeros = refused`: 042 is not a spelling"))
+		spelled.append(("reads_a_lone_zero", "0", 0,
+		                "and a lone 0 is the number's only spelling"))
+	if radix == 16 and placement.radix_rules & 2:
+		spelled.append(("refuses_an_upper_case_digit", "2A", None,
+		                "lower-case digits only"))
+		spelled.append(("reads_a_lower_case_digit", "2a", 0x2A,
+		                "lower-case digits only"))
+	if radix == 16 and placement.radix_rules & 4:
+		spelled.append(("refuses_a_lower_case_digit", "2a", None,
+		                "upper-case digits only"))
+		spelled.append(("reads_an_upper_case_digit", "2A", 0x2A,
+		                "upper-case digits only"))
+	if placement.radix_signs & 1:
+		spelled.append(("reads_a_plus_sign", "+42", int("42", radix),
+		                "`[plus_sign]` admits a leading +"))
+	elif placement.radix_rules or placement.radix_minimal:
+		spelled.append(("refuses_a_plus_sign", "+42", None,
+		                "a + only where `[plus_sign]` admits one"))
+	for name, content, want, why in spelled:
+		if len(content) + len(delim) > extent:
+			continue
+		verdict = (["\tsitu_check_eq({getter}(view, &value), SITU_OK);",
+		            f"\tsitu_check_eq(value, {want}u);"]
+		           if want is not None else
+		           ["\t(void)value;",
+		            f"\tsitu_check_eq({ident(prefix, struct.name, 'validate')}"
+		            "(view), SITU_ERR_CONSTRAINT);"])
+		suite.add(
+			f"check_{c_name(struct.name)}_{local}_{name}",
+			[
+				f"\tuint8_t buf[{extent}u];",
+				"\tsitu_msg_t msg;",
+				"\tsitu_view_t view = {0};",
+				f"\t{ctype} value = 0;",
+				"",
+				*frame(content),
+				"\tsitu_msg_init(&msg, buf, (uint32_t)sizeof buf);",
+				f"\tsitu_check_eq({ident(prefix, struct.name, 'view')}"
+				f"(&msg, 0, {extent}u, &view), SITU_OK);",
+				"",
+				*[line.replace("{getter}", getter) for line in verdict],
+			],
+			[f"/* {placement.path}: {why} (26.1166). */"])
 
 
 def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
