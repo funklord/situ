@@ -1260,9 +1260,43 @@ def _tlv(struct: ResolvedStruct, placement: Placement, field: str,
 			return None
 		chain = [f"\t\t{line}" for line in body]
 
+	# What a `known` tag is called, and a value of a struct type dissected
+	# as that struct under the item's row: each item was its bytes alone,
+	# so a region's `date` reached Wireshark as hex (26.1167). Keyed by
+	# what a `known` key matches -- the part decision 0023 names, or the
+	# raw tag.
+	key    = names.get(grammar.identity or "tag", "tag")
+	local  = _lua(placement.path.replace(".", "_"))
+	known  = [one for one in grammar.known]
+	typed  = [one for one in known
+	          if one.type_name in _STRUCTS
+	          and not any(held.parameter
+	                      for held in own_members(_STRUCTS[one.type_name]))]
+	tables = []
+	if known:
+		tables.append(f"\tlocal {local}_named = {{"
+		              + ", ".join(f'[{one.tag}] = "{one.name}"'
+		                          for one in known) + "}")
+	if typed:
+		tables.append(f"\tlocal {local}_typed = {{"
+		              + ", ".join(f'[{one.tag}] = Dissector.get("{one.type_name}")'
+		                          for one in typed) + "}")
+	shown = [f"\t\tsubtree:add({field}, tvb(start, at - start))"]
+	if known:
+		shown = [
+			f"\t\tlocal item = subtree:add({field}, tvb(start, at - start))",
+			f"\t\tlocal named = {local}_named[{key}]",
+			"\t\tif named ~= nil then item:append_text(\" (\" .. named .. \")\") end",
+			*([f"\t\tlocal typed = {local}_typed[{key}]",
+			   "\t\tif typed ~= nil and size > 0 then",
+			   "\t\t\ttyped:call(tvb(at - size, size):tvb(), pinfo, item)",
+			   "\t\tend"] if typed else []),
+		]
+
 	return [
 		f"\t-- {placement.path}: tag-length-value items, to the end of the"
 		" frame", *seek,
+		*tables,
 		"\twhile at < tvb:len() do",
 		"\t\tlocal start = at",
 		f"\t\tlocal tag_w, _, tag = {tag}",
@@ -1273,7 +1307,7 @@ def _tlv(struct: ResolvedStruct, placement: Placement, field: str,
 		*chain,
 		"\t\tif size > tvb:len() - at then at = start; break end",
 		"\t\tat = at + size",
-		f"\t\tsubtree:add({field}, tvb(start, at - start))",
+		*shown,
 		"\tend",
 	]
 
