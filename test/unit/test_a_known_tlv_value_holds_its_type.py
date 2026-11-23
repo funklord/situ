@@ -2,11 +2,12 @@
 type's own checks (26.1167).
 
 openmlx4 (inbox 20261123T1138Z) measured an 8-byte struct verifying in a
-3-byte value, `type = u32` verifying with 2 or 10 bytes, and a date whose
-BCD year its struct refuses verifying inside an image-info region. `type
-= T` is the element type filling the item's length -- protobuf's
-`username` is `type = u8` over a string -- so 12 bytes of `u32` are three
-and 16 bytes of a date are two. The verdicts are worked by hand.
+3-byte value and a date whose BCD year its struct refuses verifying inside
+an image-info region. A struct `type` is the element filling the item's
+length, so 16 bytes of a date are two. A scalar `type` is read two ways
+by the corpus -- CoAP's uint options are `type = u16` over 0 to 2 bytes,
+openmlx4's are runs of u32 -- so it is held to nothing. The verdicts are
+worked by hand.
 
 The struct a value holds is declared after the region on purpose: C and
 C++ have to name its validator before its definition.
@@ -46,12 +47,15 @@ CASES = [
 	("a date in three bytes", "02 0003 000000", False),
 	("two dates", "02 0010" + DATE + DATE, True),
 	("a date and a binary year", "02 0010" + DATE + BINARY_YEAR, False),
-	("a u32 in two bytes", "03 0002 0000", False),
-	("a u32 in ten bytes", "03 000a" + "00" * 10, False),
+	# A scalar's `type` is held to nothing: CoAP's uint options are
+	# `type = u16` over 0 to 2 bytes, where openmlx4's are runs of u32
+	# (gate g35 caught the first reading refused).
+	("a u32 in two bytes", "03 0002 0000", True),
+	("a u32 in ten bytes", "03 000a" + "00" * 10, True),
 	("three u32", "03 000c" + "00" * 12, True),
 	("sixteen bytes of u8", "01 0010" + "41" * 16, True),
 	("an unknown tag, skipped", "04 0003 aabbcc", True),
-	("a good item, then a bad one", "01 0001 41 03 0003 000000", False),
+	("a good item, then a bad one", "01 0001 41 02 0003 000000", False),
 ]
 
 

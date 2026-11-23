@@ -3108,10 +3108,10 @@ def tlv_typed_tags(placement: Placement,
 	a 3-byte value, `type = u32` in 2 or 10 bytes, and a date whose BCD
 	year the struct refuses verifying inside the region.
 
-	**Only an element of fixed width.** A varint (`pb_varint`) sizes
-	itself and its wire type already does; an enum or a struct of varying
-	extent has no width to divide by, and is left as before rather than
-	given a rule of its own here.
+	**Only a struct of fixed size.** A scalar's `type` is read two ways by
+	the corpus -- a run of it, or one integer of at most its width -- so
+	it is held to neither; a varint sizes itself; an enum or a struct of
+	varying extent has no width to divide by.
 	"""
 	from situc.types import lookup
 	grammar = placement.tlv_grammar
@@ -3121,21 +3121,13 @@ def tlv_typed_tags(placement: Placement,
 	for known in grammar.known:
 		if known.type_name is None:
 			continue
-		scalar = lookup(known.type_name)
-		if scalar is not None:
-			width = scalar.bits // BITS_PER_BYTE
-			# A byte divides any length, and a wire whose rule fixes the
-			# size already holds it -- protobuf's `f32` on wire 5 is four
-			# bytes by its rule. Neither is a check, and naming one would
-			# make the walkers decline a region they can answer for.
-			fixed = next((rule.size for rule in grammar.rules
-			              if known.wire is not None
-			              and rule.label == known.wire
-			              and rule.kind == "fixed"), None)
-			if scalar.bits % BITS_PER_BYTE or width <= 1 \
-					or (isinstance(fixed, int) and fixed % width == 0):
-				continue
-			found.append(TypedTag(known.tag, width, None))
+		# A scalar's `type` has two readings in the corpus, and they
+		# disagree: CoAP's `content_format` is `type = u16` over a uint of
+		# 0 to 2 bytes (RFC 7252 3.2), where openmlx4's HwDevsId is `type
+		# = u32` over a run of u32. Neither can be refused on the other's
+		# account, so a scalar is held to nothing here; gate g35 found the
+		# first reading's refusal in CoAP's committed vectors.
+		if lookup(known.type_name) is not None:
 			continue
 		inner = structs.get(known.type_name)
 		if inner is not None and inner.layout.is_fixed_size \
