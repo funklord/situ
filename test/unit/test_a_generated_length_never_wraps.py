@@ -95,7 +95,6 @@ RUST_CENSUS = {
 	# Read rather than added, on 2026-11-07: every site in both is a nested
 	# member's own bound, and each tests `len() < at` first.
 	"cbor.situ": 3,
-	"coap.situ": 1,
 	"cpio.situ": 1,
 	# Read, 2026-11-10: the nested header's own bound, behind `len() < at`.
 	"ustar.situ": 1,
@@ -131,7 +130,11 @@ RUST_CENSUS = {
 	# 28 -> 32 on 2026-11-18, when `opaque_arm_section`, `after_opaque_arm`
 	# (26.1096), `deep_switch` and `off_switch` (26.1097) joined: the
 	# emitter over the edges before them still gives 28.
-	"edges.situ": 32,
+	# 32 -> 28 on 2026-11-23: a tlv tag's and length prefix's bound became
+	# `situ_rt::remaining`, which took two sites here, coap's one and one
+	# of x509's -- after the bare tlv form `typed_tlv` added two more of
+	# the same shape and this census caught them.
+	"edges.situ": 28,
 	"ethernet.situ": 2,
 	"header.situ": 1,
 	"http.situ": 2,
@@ -162,7 +165,7 @@ RUST_CENSUS = {
 	"rtp.situ": 1,
 	"tcp.situ": 2,
 	"telemetry.situ": 1,
-	"x509.situ": 3,
+	"x509.situ": 2,
 }
 
 

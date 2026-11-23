@@ -1301,7 +1301,7 @@ class Emitter:
 		else:
 			read = f"situ_rt::{reader}(self.bytes, at, {width})"
 		return [
-			f"\t\tif self.bytes.len() - at < {width} {{",
+			f"\t\tif situ_rt::remaining(self.bytes.len(), at) < {width} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			f"\t\tlet tag = {read};",
@@ -1472,7 +1472,7 @@ class Emitter:
 			if placement.marker is not None
 			else f"situ_rt::{reader}(self.bytes, at, {width})")
 		return [
-			f"{indent}if self.bytes.len() - at < {width} {{",
+			f"{indent}if situ_rt::remaining(self.bytes.len(), at) < {width} {{",
 			f"{indent}\treturn Err(Error::Bounds);",
 			f"{indent}}}",
 			f"{indent}size = {size_read}"
