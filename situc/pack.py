@@ -2087,11 +2087,17 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				continue
 			# A run of records has no check of its own but the walk, and a
 			# frame that stops before its terminator cut it short (26.926).
+			# A `| end` run's row carries 1: reaching the frame's end ends
+			# it too, and stopping short of it at an element the walk
+			# cannot read does not.
 			if (placement.delimiters or placement.repeat_while is not None) \
 					and placement.type_name in resolved.structs \
-					and traverse.must_end(placement) \
+					and traverse.asks_its_end(placement) \
 					and "." not in placement.path[len(rstruct.name) + 1:]:
-				constraints_blob += _struct.pack("<IqBxxx", at, 0, 7)
+				constraints_blob += _struct.pack(
+					"<IqBxxx", at,
+					1 if placement.repeat_while is not None
+					and placement.repeat_or_end else 0, 7)
 			# A SIZED token member (0070) is the delimited one's question of
 			# a span its length sized: membership, the same row. Written
 			# ahead of the kinds because a sized run classifies as a plain

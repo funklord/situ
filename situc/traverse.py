@@ -1394,6 +1394,19 @@ def must_end(placement: "Placement") -> bool:
 	return must_be_terminated(placement)
 
 
+def asks_its_end(placement: "Placement") -> bool:
+	"""Whether `validate` asks how a run ended: by its own rule, or -- for
+	`| end` -- by that or at exactly the frame's end.
+
+	`| end` lets the frame end a run (26.927), and nothing else: a run that
+	stopped at an element it could not read, bytes after it, ended
+	nowhere, and all six readers passed it with those bytes unread (fuzznet
+	at its permit grammar, `grant grants[] while (1) | end`).
+	"""
+	return must_end(placement) or (placement.repeat_while is not None
+	                               and placement.repeat_or_end)
+
+
 def never_empty(structs: dict[str, "ResolvedStruct"],
 		placement: Placement) -> bool:
 	"""Whether one element of this run has bytes whatever the message says.

@@ -123,6 +123,7 @@ from situc.traverse import (arm_remaining_strides,
 	local_name,
 	matched_values,
 	must_be_terminated,
+	asks_its_end,
 	must_end,
 	obligation,
 	obligations,
@@ -8020,11 +8021,15 @@ class Emitter:
 			"\t\t}",
 			"\t}",
 			"\t(void)n;",
-			("\treturn 0;" if placement.repeat_cap is None
+			# `| end`: leaving the loop is reaching the frame's end, which
+			# ends such a run; only an element that would not fit, above,
+			# does not.
+			("\treturn 1;" if placement.repeat_or_end
+			 else "\treturn 0;" if placement.repeat_cap is None
 			 else f"\treturn n >= {placement.repeat_cap}u;"),
 			"}",
 			"",
-		] if must_end(placement) else []
+		] if asks_its_end(placement) else []
 
 		return [
 			*ended,
@@ -16218,7 +16223,7 @@ class Emitter:
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			] if walked and placement.repeat_while is not None
-			     and must_end(placement) else []),
+			     and asks_its_end(placement) else []),
 				*self._element_validation(struct, placement)]
 
 		# Placed by `at`: its view is taken from the MESSAGE, which `check`

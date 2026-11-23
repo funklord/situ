@@ -7783,6 +7783,15 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				uint32_t count = 0u;
 				err = while_walk(image, message, len, shape, index, depth,
 				                 &count, &content, &terminated);
+				/* A row of 1 is `| end`: reaching the frame's end ended
+				 * the run as well; stopping short of it at an element the
+				 * walk cannot read did not. */
+				if (err == SITU_WALK_OK && !terminated
+				                && i64_at(&checks[c * image->constraint_stride
+				                                  + 4u]) == 1
+				                && at / 8u + content >= len) {
+					terminated = 1;
+				}
 			} else if (held.type_struct != SITU_WALK_NONE) {
 				/* A run: the walk says, and not the last bytes, as an
 				 * element may end in the terminator's byte (26.926). */

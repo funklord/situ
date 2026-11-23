@@ -39,3 +39,47 @@ def test_a_numeric_condition_is_true_where_not_zero(tmp_path: Path,
 	said = _said(tmp_path, cond, bytes.fromhex("01aa03bbccdd"))
 	assert len(set(said.values())) == 1, said
 	assert "ws count=2" in said["c"], said["c"]
+
+
+#: (cond, packet, valid), worked by hand. `| end` lets the frame end the
+#: run; it does not let the run stop at an element it cannot read and
+#: leave the bytes after it unread, which all four did (fuzznet).
+ENDS = [
+	("1", "01aa", True),
+	("1", "01aa02bbcc", True),
+	# A `while` run is never empty -- its first element is read before the
+	# condition is asked -- so no frame of none is one of these.
+	("1", "", False),
+	# The second element cut short by the frame, and one past its `max`:
+	# neither is an element, so neither ended the run.
+	("1", "01aa05", False),
+	("1", "01aa09bb", False),
+	# Ended by its rule, the element with `n == 2`: what follows is not the
+	# run's, and the struct need not fill its frame.
+	("n != 2", "02bbccff", True),
+	("n != 2", "01aa05", False),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+@pytest.mark.parametrize(("cond", "packet", "valid"), ENDS)
+def test_a_run_ends_by_its_rule_or_at_the_frame_end(
+		tmp_path: Path, cond: str, packet: str, valid: bool) -> None:
+	said = _said(tmp_path, cond, bytes.fromhex(packet))
+	assert len(set(said.values())) == 1, said
+	assert ("validate 0" in said["c"]) == valid, said["c"]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+@pytest.mark.parametrize(("cond", "packet", "valid"), ENDS)
+def test_both_walkers_agree(tmp_path: Path, cond: str, packet: str,
+                            valid: bool) -> None:
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	text  = RUN.replace("COND", cond)
+	blob  = packed_text(text)
+	shape = shape_named_text(text, "s")
+	data  = bytes.fromhex(packet)
+	said  = python_verdict(blob, data, shape)
+	assert (said == "0") == valid, (packet, said)
+	assert c_verdict(tmp_path, blob, data, shape) == said, packet

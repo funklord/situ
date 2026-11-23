@@ -127,6 +127,7 @@ from situc.traverse import (arm_remaining_strides,
 	matched_values,
 	must_be_terminated,
 	must_end,
+	asks_its_end,
 	obligation,
 	obligations,
 	CursorStep,
@@ -2843,10 +2844,12 @@ class Emitter:
 			"\t\t\t}",
 			"\t\t}",
 			"\t\t(void)n;",
-			("\t\treturn false;" if placement.repeat_cap is None
+			# `| end`: leaving the loop is reaching the frame's end.
+			("\t\treturn true;" if placement.repeat_or_end
+			 else "\t\treturn false;" if placement.repeat_cap is None
 			 else f"\t\treturn n >= {placement.repeat_cap}u;"),
 			"\t}",
-		] if must_end(placement) else []
+		] if asks_its_end(placement) else []
 
 		return [
 			*ended,
@@ -12612,7 +12615,7 @@ class Emitter:
 		"""A run a terminator ends has it, or the frame stopped early (26.926)."""
 		if classify(struct, placement, self.structs) not in (
 				Member.RECORD_RUN, Member.REPEAT_WHILE) \
-				or not must_end(placement):
+				or not asks_its_end(placement):
 			return []
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or self._no_element_extent(element) \

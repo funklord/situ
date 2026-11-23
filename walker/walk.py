@@ -2804,6 +2804,15 @@ def record_run_ended(view: View, index: int) -> bool:
 	return _record_run_walk(view, index)[2] > 0
 
 
+def while_run_reaches_end(view: View, index: int) -> bool:
+	"""Whether a `while` run's walk reached the frame's end, which ends a
+	`| end` run as surely as its rule (26.927); a walk that stopped short of
+	it stopped at an element it could not read."""
+	_, reach, _ = _while_walk(view, index)
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	return start + reach >= view.limit
+
+
 def record_run_count(view: View, index: int, depth: int = 0) -> int:
 	"""How many records a delimited run holds. See `_record_run_walk`."""
 	return _record_run_walk(view, index, depth)[0]

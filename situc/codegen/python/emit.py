@@ -123,6 +123,7 @@ from situc.traverse import (arm_remaining_strides,
 	matched_values,
 	must_be_terminated,
 	must_end,
+	asks_its_end,
 	obligation,
 	obligations,
 	CursorStep,
@@ -6663,6 +6664,11 @@ class Emitter:
 			'\t\t"""Whether the last element read says the run is over: a frame',
 			'\t\tthat stops first cut it short."""',
 			f"\t\tstarts = self._{name}_walk()",
+			# `| end`: a walk that reached the frame's end ended the run;
+			# one that stopped short of it stopped at an element it could
+			# not read, and did not.
+			*(["\t\tif starts[-1] >= self._len:",
+			   "\t\t\treturn True"] if placement.repeat_or_end else []),
 			"\t\tif len(starts) < 2:",
 			"\t\t\treturn False",
 			*([f"\t\tif len(starts) > {placement.repeat_cap}:",
@@ -6672,7 +6678,7 @@ class Emitter:
 			" self._at + starts[-2],",
 			"\t\t\tself._len - starts[-2])",
 			f"\t\treturn not ({plain})",
-		] if must_end(placement) else []
+		] if asks_its_end(placement) else []
 		return [
 			*walked,
 			*marked,
@@ -10785,7 +10791,7 @@ class Emitter:
 		"""A run a terminator ends has it, or the frame stopped early (26.926)."""
 		if classify(struct, placement, self.structs) not in (
 				Member.RECORD_RUN, Member.REPEAT_WHILE) \
-				or not must_end(placement):
+				or not asks_its_end(placement):
 			return []
 		element = self.resolved.structs.get(placement.type_name or "")
 		if element is None or self._no_element_extent(element) \

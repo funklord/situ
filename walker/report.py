@@ -39,7 +39,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          _sizes_in_bytes,
                          counted_run_fits,
                          element_lead, offset_bits, record_run_count,
-                         record_run_ended,
+                         record_run_ended, while_run_reaches_end,
                          TERMINATED_ROW,
                          chosen_arm, remaining_at, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
@@ -1508,11 +1508,15 @@ def _validate_here(image: Image, view: View, struct_index: int,
 		# A run of records ends by its own rule before its elements are
 		# asked: an element the frame cut is how the run went unended, and
 		# C, like each backend, answers the missing end (26.926).
-		if image.placements[index].type_struct != NONE and any(
-				check == TERMINATED
-				for check, _ in image.constraints.get(index, ())):
+		ends = next((against for check, against
+		             in image.constraints.get(index, ())
+		             if check == TERMINATED), None)
+		if image.placements[index].type_struct != NONE and ends is not None:
 			try:
-				if not record_run_ended(view, index):
+				# A row of 1 is `| end`: a walk that reached the frame's
+				# end ended the run as well (26.927).
+				if not record_run_ended(view, index) and not (
+						ends == 1 and while_run_reaches_end(view, index)):
 					return fail(ERR_CONSTRAINT, index, TERMINATED)
 			except Refused:
 				return fail(ERR_BOUNDS, index, TERMINATED)
