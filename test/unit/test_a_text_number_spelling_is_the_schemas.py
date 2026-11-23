@@ -162,6 +162,13 @@ def test_a_rule_that_cannot_hold_is_refused(member: str, said: str) -> None:
 	('hex u32 n until "," [leading_zeros = refused, hex_case = upper];', True),
 	('decimal i32 n until "," [leading_zeros = refused, plus_sign];', False),
 	('decimal u32 n until ",";', False),
+	# A width fixes the zeros and not the case: `ff`, `FF` and `fF` are
+	# one value in every reader, so only a stated case is one spelling --
+	# and a field too narrow for a digit past nine has no case at all.
+	("hex u8 n[2];", False),
+	("hex u8 n[2] [hex_case = upper];", True),
+	("hex u2 n[1];", True),
+	("decimal u16 n[3];", True),
 ])
 def test_the_map_follows_the_rules(member: str, canonical: bool) -> None:
 	"""One spelling per value takes every rule; any one left loose is a
@@ -170,7 +177,8 @@ def test_the_map_follows_the_rules(member: str, canonical: bool) -> None:
 	from situc.layout import solve
 	from situc.parser import parse_text
 	from situc.resolve import resolve
-	text = ("target buffer;\nendian big;\nstruct s {\n\t" + member
+	text = ("target buffer;\nendian big;\nbit_order msb_first;\n"
+	        "struct s {\n\t" + member
 	        + "\n\tu8 r[remaining];\n}\n")
 	schema   = parse_text(text, path="s.situ")
 	resolved = resolve(schema, solve(schema))

@@ -1800,7 +1800,11 @@ need the padding threaded through a grammar ustar does not have.
 The forms differ on canonicity, in the direction that surprises. A
 fixed-width field is `Canonical`: `007` is the only spelling of seven in
 three digits, because `7` alone does not fit and the parse refuses a space,
-so the padding is forced rather than optional. A delimited number is
+so the padding is forced rather than optional. Its case is not forced: a
+hexadecimal width reads `ff`, `FF` and `fF` as one value in every reader,
+so above radix ten it is `NonCanonical` unless `[hex_case]` fixes the case
+or no value needs a digit past nine (26.1166; cpio's map said otherwise
+until then). A delimited number is
 `NonCanonical` unless `[minimal]` says otherwise, and a `[padded]` one is
 `NonCanonical` outright -- `0000644` and a NUL, `644` and five NULs and
 `00000644` are one value -- which is also why it has no owned form, whose

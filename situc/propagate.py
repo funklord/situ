@@ -350,12 +350,22 @@ def _is_loose_text_number(context: Context) -> bool:
 			and not placement.radix_signs:
 		return False
 
-	# A fixed-width text number is canonical without asking. `007` is not a
-	# second spelling of `7` in a three-digit field -- it is the only one,
-	# because `7` alone does not fit the field and the parse refuses a space.
-	# The padding is forced rather than optional, which is the whole
-	# difference between this and a delimited number.
-	return placement.array_count is None
+	# A fixed-width text number has no second spelling by its zeros. `007`
+	# is not a second spelling of `7` in a three-digit field -- it is the
+	# only one, because `7` alone does not fit the field and the parse
+	# refuses a space. The padding is forced rather than optional, which is
+	# the whole difference between this and a delimited number.
+	#
+	# Its CASE is another matter, and this said "without asking" of it
+	# too: `hex u8 x[2]` reads `ff`, `FF` and `fF` as one value in every
+	# reader, so above radix ten a width is canonical only where the
+	# schema fixes the case (26.1166).
+	# Only where a digit past nine can be written: `hex u2 h[1]` holds 0 to
+	# 3, and no value of it has a case.
+	if placement.array_count is not None:
+		return (placement.radix or 10) > 10 and not rules & 6 \
+			and (placement.radix_max is None or placement.radix_max >= 10)
+	return True
 
 
 def _is_padded_text_number(context: Context) -> bool:
