@@ -2010,6 +2010,13 @@ def containment_order(structs: dict[str, "ResolvedStruct"],
 			if named is not None and named != name:
 				visit(named)
 			visit(holds_of(entry.placement) or "")
+			# A `tlv` region's known types: a value held to its struct
+			# (26.1167) calls that struct's `validate`, and C++ named a class
+			# not yet declared -- found by edges' `typed_tlv`, whose element
+			# type sorts after it.
+			grammar = entry.placement.tlv_grammar
+			for known in grammar.known if grammar is not None else ():
+				visit(known.type_name or "")
 		order.append(name)
 
 	for name in roots:

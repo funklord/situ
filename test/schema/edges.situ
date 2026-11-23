@@ -2980,3 +2980,52 @@ struct classed_arm {
 		default: u8 digits[n] [chars = "0-9"];
 	}
 }
+
+// A text number's spelling rule by rule (26.1166): a case without
+// `[minimal]`, leading zeros refused alone, and `[minimal]` in upper case.
+// The sign spellings are left out on purpose: a `+` or a `-0` admitted
+// makes both walkers decline the struct, and this is here to be compared.
+struct spelled {
+	hex u32     upper until "," [hex_case = upper];
+	hex u32     no_zero until "," [leading_zeros = refused];
+	hex u32     canon until "," max 8 [minimal, hex_case = upper];
+	u8          rest[remaining];
+}
+
+// What time a member holds (26.1165): it changes no reading, and is here
+// so every reader generates the constants beside it and still agrees.
+struct timed {
+	u64 expires_at [time = ms, epoch = unix];
+	u32 rtt [duration = s / 90000];
+	u32 scale;
+	u64 tick [duration = ns * scale];
+}
+
+// A `while` run the frame may end, and nothing short of it (26.927):
+// junk after the last element is no element.
+struct to_the_end {
+	held_word words[] while (n != 0) | end;
+}
+struct held_word {
+	u8 n [max = 3];
+	u8 b[n];
+}
+
+// A known tlv value held to its type (26.1167): a struct's whole
+// elements, a scalar `form = run` or `form = number`, and one with no form.
+struct typed_value {
+	u8 day;
+	u8 month [max = 12];
+}
+struct typed_tlv {
+	tlv items (
+		tag_type = u8, length_type = u8,
+		known = {
+			1 : { name = date,  type = typed_value },
+			2 : { name = words, type = u16, form = run },
+			3 : { name = small, type = u16, form = number },
+			4 : { name = loose, type = u16 },
+		},
+		unknown = skip
+	);
+}

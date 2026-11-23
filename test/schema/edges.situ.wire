@@ -451,6 +451,10 @@ struct held_record size=2..257
 struct held_records size=0..
   @0x0000   0..       held_record all  sized-by=remaining
 
+struct held_word size=1..4
+  @0x0000   1         u8         n  max=3
+  @0x0001   0..3      u8         b  sized-by=n
+
 struct holds_arg_only size=2..257
   @0x0000   1         u8         lead
   @0x0001   0..255    arg_only   one  args width=2
@@ -922,6 +926,12 @@ struct spanned_arm size=6
   held case 3: wide u16
   held case default: error
 
+struct spelled size=3..
+  @0x0000   until:2c  u32        upper  radix=16 hex-case=upper
+  ~         until:2c  u32        no_zero  radix=16 leading-zeros=refused
+  ~         until:2c  u32        canon  radix=16 minimal hex-case=upper cap=8
+  ~         0..       u8         rest  sized-by=remaining
+
 struct split_coverage size=8
   @0x0000   2         u16        a  big
   @0x0002   2         u16        between  big
@@ -984,6 +994,15 @@ struct texty size=2..65543
   @0x0000   until:0d0a u16        count  big radix=10 cap=8
   ~         0..65535  u8         body  sized-by=count
 
+struct timed size=24
+  @0x0000   8         u64        expires_at  big time=ms@unix
+  @0x0008   4         u32        rtt  big duration=1/90000s
+  @0x000c   4         u32        scale  big
+  @0x0010   8         u64        tick  big duration=ns*scale
+
+struct to_the_end size=1..
+  @0x0000   1..       held_word  words  while=n!=0 while-or-end
+
 struct turn_back size=1..
   parameter -         u8         z [stream]
   @0x0000   0..255    u8         d  sized-by=z
@@ -1032,6 +1051,20 @@ struct typed_kind size=3
   held case 1: named arm_kind
   held case 2: raw u8
   held case default: error
+
+struct typed_tlv size=0..
+  @0x0000   0..       tlv        items
+  items tlv length: u8
+  items tlv known 1: date type=typed_value
+  items tlv known 2: words type=u16 form=run
+  items tlv known 3: small type=u16 form=number
+  items tlv known 4: loose type=u16
+  items tlv duplicates: error
+  items tlv unknown: skip
+
+struct typed_value size=2
+  @0x0000   1         u8         day
+  @0x0001   1         u8         month  max=12
 
 struct unbounded_nest size=2..
   @0x0000   1         u8         n
