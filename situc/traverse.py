@@ -3068,6 +3068,68 @@ def tlv_single_tags(placement: Placement) -> tuple[int, ...]:
 	                     if not known.repeated}))
 
 
+@dataclass(frozen=True)
+class TypedTag:
+	"""A `known` tag whose value is a run of one type (26.1167)."""
+
+	tag: int
+	#: How wide one element is; the value is a whole number of them.
+	element_bytes: int
+	#: The struct each element is, whose own checks hold of it; None for
+	#: a scalar, whose width is the whole of what it states.
+	struct: str | None
+
+
+def tlv_typed_tags(placement: Placement,
+		structs: dict[str, ResolvedStruct]) -> tuple[TypedTag, ...]:
+	"""The `known` tags whose value is held to its `type`.
+
+	`type = T` is the element type filling the item's length -- protobuf's
+	`username` is `type = u8` over a length-delimited string, and `T[]`
+	says the TAG repeats (`tlv_single_tags`). Nothing held a value to it:
+	openmlx4 (inbox 20261123T1138Z) measured an 8-byte struct verifying in
+	a 3-byte value, `type = u32` in 2 or 10 bytes, and a date whose BCD
+	year the struct refuses verifying inside the region.
+
+	**Only an element of fixed width.** A varint (`pb_varint`) sizes
+	itself and its wire type already does; an enum or a struct of varying
+	extent has no width to divide by, and is left as before rather than
+	given a rule of its own here.
+	"""
+	from situc.types import lookup
+	grammar = placement.tlv_grammar
+	if grammar is None:
+		return ()
+	found: list[TypedTag] = []
+	for known in grammar.known:
+		if known.type_name is None:
+			continue
+		scalar = lookup(known.type_name)
+		if scalar is not None:
+			width = scalar.bits // BITS_PER_BYTE
+			# A byte divides any length, and a wire whose rule fixes the
+			# size already holds it -- protobuf's `f32` on wire 5 is four
+			# bytes by its rule. Neither is a check, and naming one would
+			# make the walkers decline a region they can answer for.
+			fixed = next((rule.size for rule in grammar.rules
+			              if known.wire is not None
+			              and rule.label == known.wire
+			              and rule.kind == "fixed"), None)
+			if scalar.bits % BITS_PER_BYTE or width <= 1 \
+					or (isinstance(fixed, int) and fixed % width == 0):
+				continue
+			found.append(TypedTag(known.tag, width, None))
+			continue
+		inner = structs.get(known.type_name)
+		if inner is not None and inner.layout.is_fixed_size \
+				and inner.layout.size_bytes > 0 \
+				and not any(entry.placement.parameter
+				            for entry in inner.entries):
+			found.append(TypedTag(known.tag, inner.layout.size_bytes,
+			                      known.type_name))
+	return tuple(found)
+
+
 def framing_floor(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct) -> int:
 	"""The fewest bytes a COMPLETE `struct` can occupy, constraints ignored.

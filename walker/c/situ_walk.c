@@ -7958,11 +7958,12 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 
 			/* A region declaring `ordering = ascending` (bit 0 of its
 			 * flags), refusing tags outside `known` (bit 1) or a repeat of
-			 * one it admits once (bit 2): the four backends enforce all
-			 * three, and the image carries neither the tags nor the part
-			 * they are matched on, so this declines rather than passes it
-			 * (26.741, 26.738, 26.740). */
-			if (row != NULL && (row[4] & 7u) != 0u) {
+			 * one it admits once (bit 2), or holding a known value to its
+			 * `type` (bit 3): the four backends enforce all four, and the
+			 * image carries neither the tags nor the part they are matched
+			 * on, so this declines rather than passes it (26.741, 26.738,
+			 * 26.740, 26.1167). */
+			if (row != NULL && (row[4] & 15u) != 0u) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 			err = tlv_walk(image, message, len, shape, index, &items,

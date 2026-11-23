@@ -3370,14 +3370,18 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if placement.tlv_grammar is not None:
 			# Bit 0: `ordering = ascending` (26.741). Bit 1: the region names
 			# `known` tags and refuses every other (26.738). Bit 2: it admits
-			# some of those tags once at most (26.740). A walker can enforce
+			# some of those tags once at most (26.740). Bit 3: a `known`
+			# value is held to its `type` (26.1167). A walker can enforce
 			# none of them, the image carrying neither the tags nor the part
 			# they are matched on, and so must decline rather than call such
 			# a region valid.
 			regions = ((1 if placement.tlv_ordered else 0)
 			           | (2 if traverse.tlv_admitted_tags(placement) is not None
 			              else 0)
-			           | (4 if traverse.tlv_single_tags(placement) else 0))
+			           | (4 if traverse.tlv_single_tags(placement) else 0)
+			           | (8 if traverse.tlv_typed_tags(placement,
+			                                           resolved.structs)
+			              else 0))
 			tag_bytes, tag_terminal, tag_flags = _number_params(
 				varint_decls.get(placement.tlv_tag_varint or ""),
 				_tlv_tag_name(placement), placement.endian,

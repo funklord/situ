@@ -141,6 +141,8 @@ from situc.traverse import (arm_remaining_strides,
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	tlv_typed_tags,
+	TypedTag,
 	walk_order,
 	held_here,
 	holds_of,
@@ -3317,6 +3319,32 @@ class Emitter:
 		order = _order_suffix(endian)
 		return f"(uint32_t)situ_get_{order}{suffix}(situ_base(view) + at)"
 
+	def _typed_check(self, typed: TypedTag, keyed: str) -> list[str]:
+		"""A known value held to its `type` (26.1167): a whole number of
+		elements, each holding its struct's own checks."""
+		width = typed.element_bytes
+		lines = [f"\t\tif ({keyed} == {typed.tag}u) {{",
+		         f"\t\t\tif (item.value_len % {width}u != 0u) {{",
+		         "\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+		         "\t\t\t}"]
+		if typed.struct is not None:
+			check = ident(self.prefix, typed.struct, "validate")
+			lines += [
+				"\t\t\tfor (uint32_t situ_k = 0u; situ_k < item.value_len;"
+				f" situ_k += {width}u) {{",
+				"\t\t\t\tsitu_view_t situ_one;",
+				"\t\t\t\tsitu_err_t situ_held = situ_view_sub(view,"
+				f" item.value_at + situ_k, {width}u, &situ_one);",
+				"",
+				"\t\t\t\tif (situ_held == SITU_OK) {",
+				f"\t\t\t\t\tsitu_held = {check}(situ_one);",
+				"\t\t\t\t}",
+				"\t\t\t\tif (situ_held != SITU_OK) {",
+				"\t\t\t\t\treturn situ_held;",
+				"\t\t\t\t}",
+				"\t\t\t}"]
+		return lines + ["\t\t}"]
+
 	def _tlv_cursor(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, item: str, local: str) -> list[str]:
 		"""`first` and `next`: the region walked from its own start."""
@@ -3336,6 +3364,8 @@ class Emitter:
 		single   = tlv_single_tags(placement)
 		# `ordering = ascending`: identities never decrease (26.741).
 		ordered  = placement.tlv_ordered
+		# A known value held to its `type` (26.1167).
+		typed    = tlv_typed_tags(placement, self.resolved.structs)
 
 		# A carried value starts at zero and is handed on by `next`. The
 		# seed is what makes the walk the only way to a number: a caller
@@ -3407,6 +3437,11 @@ class Emitter:
 			  if single else []),
 			*([" * for an item out of `ordering = ascending` order (26.741). */"]
 			  if ordered else []),
+			# Declared here as well: the struct a value holds may come
+			# after this one in the schema, and its prototype with it.
+			*sorted({f"situ_err_t {ident(self.prefix, one.struct, 'validate')}"
+			         "(situ_view_t view);" for one in typed
+			         if one.struct is not None}),
 			f"static inline situ_err_t {whole}(situ_view_t view)",
 			"{",
 			f"\t{item} item;",
@@ -3427,6 +3462,8 @@ class Emitter:
 			   "\t\t\treturn SITU_ERR_CONSTRAINT;",
 			   "\t\t}",
 			   f"\t\tlast = (uint64_t){keyed};"] if ordered else []),
+			*[line for one in typed
+			  for line in self._typed_check(one, keyed)],
 			"\t\tend = item.next;",
 			f"\t\terr = {nxt}(&item);",
 			"\t}",

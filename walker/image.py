@@ -546,7 +546,8 @@ class Image:
 	#: The regions whose policy the image cannot carry: those declaring
 	#: `ordering = ascending` (bit 0 of the row's flags, 26.741), naming
 	#: `known` tags and refusing every other (bit 1, 26.738), or admitting
-	#: some of them once at most (bit 2, 26.740). Neither the tags nor the
+	#: some of them once at most (bit 2, 26.740), or holding a `known`
+	#: value to its `type` (bit 3, 26.1167). Neither the tags nor the
 	#: part they are matched on is in the image, so a validator declines on
 	#: these rather than passes them.
 	tlv_unenforceable: set[int] = field(default_factory=set)
@@ -874,7 +875,7 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			(where, flags, _unknown, _dup, selector,
 			 tag_bytes, tag_terminal, tag_flags) = _struct.unpack_from(
 				"<IBBBxIBBBx", blob, at + i * stride)
-			if flags & 7:
+			if flags & 15:
 				image.tlv_unenforceable.add(where)
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
 			                     _number_is_big(tag_flags),

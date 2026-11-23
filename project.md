@@ -9767,6 +9767,10 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1167 A known tlv value holds its type
+
+Moved to `doc/decision/26.1167-a-known-tlv-value-holds-its-type.md`.
+
 ### 26.1165 A field says what time it holds
 
 Moved to `doc/decision/26.1165-a-field-says-what-time-it-holds.md`.

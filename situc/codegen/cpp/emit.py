@@ -148,6 +148,8 @@ from situc.traverse import (arm_remaining_strides,
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	tlv_typed_tags,
+	TypedTag,
 	held_here,
 	holds_of,
 	walks_to_the_frame_end,
@@ -6682,7 +6684,9 @@ class Emitter:
 		lines.extend(self._tlv_cursor(grammar, item, name, start,
 		                              tlv_admitted_tags(placement),
 		                              tlv_single_tags(placement),
-		                              placement.tlv_ordered))
+		                              placement.tlv_ordered,
+		                              tlv_typed_tags(placement,
+		                                             self.resolved.structs)))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -6979,7 +6983,8 @@ class Emitter:
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
 			start: str, admitted: tuple[int, ...] | None = None,
-			single: tuple[int, ...] = (), ordered: bool = False) -> list[str]:
+			single: tuple[int, ...] = (), ordered: bool = False,
+			typed: tuple[TypedTag, ...] = ()) -> list[str]:
 		"""`first`, `next` and `count`: the region walked from its own start."""
 		# The tag `find` matches on, decision 0023's part or the raw tag,
 		# held against every tag `known` names (26.738).
@@ -7066,12 +7071,40 @@ class Emitter:
 			   "\t\t\t}",
 			   f"\t\t\tlast = static_cast<std::uint64_t>({keyed});"]
 			  if ordered else []),
+			*[line for one in typed
+			  for line in self._typed_check(one, keyed)],
 			"\t\t\tend = item.next;",
 			f"\t\t\te   = {name}_next(item);",
 			"\t\t}",
 			"\t\treturn end >= raw_.limit ? ::situ::rt::err::ok : e;",
 			"\t}",
 		]
+
+	def _typed_check(self, typed: TypedTag, keyed: str) -> list[str]:
+		"""A known value held to its `type` (26.1167): a whole number of
+		elements, each holding its struct's own checks."""
+		width = typed.element_bytes
+		lines = [f"\t\t\tif ({keyed} == {typed.tag}u) {{",
+		         f"\t\t\t\tif (item.value_len % {width}u != 0u) {{",
+		         "\t\t\t\t\treturn ::situ::rt::err::constraint;",
+		         "\t\t\t\t}"]
+		if typed.struct is not None:
+			lines += [
+				"\t\t\t\tfor (std::uint32_t situ_k = 0; situ_k <"
+				f" item.value_len; situ_k += {width}u) {{",
+				"\t\t\t\t\tsitu_view_t situ_one;",
+				"",
+				"\t\t\t\t\tif (situ_view_sub(::situ::rt::view::raw(),"
+				f" item.value_at + situ_k, {width}u, &situ_one) != SITU_OK) {{",
+				"\t\t\t\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t\t\t\t}",
+				f"\t\t\t\t\tconst ::situ::rt::err situ_held = ::{self.namespace}::"
+				f"{self._struct_class(typed.struct)}(situ_one).validate();",
+				"\t\t\t\t\tif (situ_held != ::situ::rt::err::ok) {",
+				"\t\t\t\t\t\treturn situ_held;",
+				"\t\t\t\t\t}",
+				"\t\t\t\t}"]
+		return lines + ["\t\t\t}"]
 
 	def _tlv_by_name(self, grammar: TlvGrammar, item: str,
 			name: str) -> list[str]:

@@ -142,6 +142,8 @@ from situc.traverse import (arm_remaining_strides,
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	tlv_typed_tags,
+	TypedTag,
 	held_here,
 	holds_of,
 	walks_to_the_frame_end,
@@ -330,6 +332,24 @@ def _leaf(scalar: ScalarType) -> str:
 def _wide(scalar: ScalarType) -> str:
 	"""The 64-bit type that leaf bound takes, in the scalar's own domain."""
 	return "i64" if scalar.signed else "u64"
+
+
+def _typed_check(typed: TypedTag, keyed: str) -> list[str]:
+	"""A known value held to its `type` (26.1167): a whole number of
+	elements, each holding its struct's own checks."""
+	width = typed.element_bytes
+	lines = [f"\t\t\t\t\tif u64::from({keyed}) == {typed.tag} {{",
+	         f"\t\t\t\t\t\tif item.value_len % {width} != 0 {{",
+	         "\t\t\t\t\t\t\treturn Err(Error::Constraint);",
+	         "\t\t\t\t\t\t}"]
+	if typed.struct is not None:
+		lines += [
+			f"\t\t\t\t\t\tfor situ_k in (0..item.value_len).step_by({width}) {{",
+			"\t\t\t\t\t\t\tlet situ_at = item.value_at + situ_k;",
+			f"\t\t\t\t\t\t\t{_pascal(typed.struct)}::new(&self.bytes"
+			f"[situ_at..situ_at + {width}])?.validate()?;",
+			"\t\t\t\t\t\t}"]
+	return lines + ["\t\t\t\t\t}"]
 
 
 def _pascal(name: str) -> str:
@@ -1170,7 +1190,9 @@ class Emitter:
 		lines.extend(self._tlv_cursor(grammar, item, name, start,
 		                              tlv_admitted_tags(placement),
 		                              tlv_single_tags(placement),
-		                              placement.tlv_ordered))
+		                              placement.tlv_ordered,
+		                              tlv_typed_tags(placement,
+		                                             self.resolved.structs)))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -1422,7 +1444,8 @@ class Emitter:
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
 			start: str, admitted: tuple[int, ...] | None = None,
-			single: tuple[int, ...] = (), ordered: bool = False) -> list[str]:
+			single: tuple[int, ...] = (), ordered: bool = False,
+			typed: tuple[TypedTag, ...] = ()) -> list[str]:
 		"""`first`, `next`, `count`, and the value's bytes."""
 		# The tag `find` matches on, decision 0023's part or the raw tag,
 		# held against every tag `known` names (26.738).
@@ -1507,6 +1530,7 @@ class Emitter:
 			   "\t\t\t\t\t\treturn Err(Error::Constraint);",
 			   "\t\t\t\t\t}",
 			   f"\t\t\t\t\tlast = u64::from({keyed});"] if ordered else []),
+			*[line for one in typed for line in _typed_check(one, keyed)],
 			"\t\t\t\t\tend  = item.next;",
 			f"\t\t\t\t\theld = self.{name}_next(&item);",
 			"\t\t\t\t}",

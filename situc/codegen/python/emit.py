@@ -143,6 +143,8 @@ from situc.traverse import (arm_remaining_strides,
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	tlv_typed_tags,
+	TypedTag,
 	held_here,
 	holds_of,
 	walks_to_the_frame_end,
@@ -152,6 +154,22 @@ from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
+
+
+def _typed_check(typed: TypedTag, keyed: str, name: str) -> list[str]:
+	"""A known value held to its `type` (26.1167): a whole number of
+	elements, each holding its struct's own checks."""
+	width = typed.element_bytes
+	lines = [f"\t\t\t\tif {keyed} == {typed.tag}:",
+	         f"\t\t\t\t\tif item.value_len % {width}:",
+	         f'\t\t\t\t\t\traise ConstraintError(f"{name}: tag {typed.tag}'
+	         f"'s value is {{item.value_len}} bytes, not a whole number of"
+	         f' {width}")']
+	if typed.struct is not None:
+		lines += [f"\t\t\t\t\tfor situ_k in range(0, item.value_len, {width}):",
+		          f"\t\t\t\t\t\t{py_name(typed.struct)}.at(self._msg, "
+		          "self._at + item.value_at + situ_k).validate()"]
+	return lines
 
 
 def _uint_parser(placement: Placement) -> str:
@@ -2011,7 +2029,9 @@ class Emitter:
 		lines.extend(self._tlv_cursor(grammar, name, start, item,
 		                              tlv_admitted_tags(placement),
 		                              tlv_single_tags(placement),
-		                              placement.tlv_ordered))
+		                              placement.tlv_ordered,
+		                              tlv_typed_tags(placement,
+		                                             self.resolved.structs)))
 		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
 
@@ -2279,7 +2299,8 @@ class Emitter:
 
 	def _tlv_cursor(self, grammar: TlvGrammar, name: str, start: str,
 			item: str, admitted: tuple[int, ...] | None = None,
-			single: tuple[int, ...] = (), ordered: bool = False) -> list[str]:
+			single: tuple[int, ...] = (), ordered: bool = False,
+			typed: tuple[TypedTag, ...] = ()) -> list[str]:
 		"""The cursor, the generator over it, and the value's bytes.
 
 		Annotated, like everything else this backend emits. These were not,
@@ -2381,6 +2402,7 @@ class Emitter:
 			   f'\t\t\t\t\traise ConstraintError(f"{name}: tag'
 			   f' {{{keyed}}} after {{last}}, against `ordering = ascending`")',
 			   f"\t\t\t\tlast = {keyed}"] if ordered else []),
+			*[line for one in typed for line in _typed_check(one, keyed, name)],
 			"\t\t\t\tend  = item.next",
 			f"\t\t\t\titem = self.{name}_next(item)",
 			"\t\texcept (BoundsError, ConstraintError):",
