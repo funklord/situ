@@ -400,7 +400,8 @@ def _struct_lines(decl: ast.StructDecl) -> list[str]:
 	start = 0
 	for let in decl.lets:
 		lines.extend(member_lines(decl.members[start:let.after], depth=1))
-		lines.append(f"\tlet {let.type_ref.name} {let.name} = "
+		lines.append(f"\tlet {let.type_ref.name} {let.name}"
+		             f"{_attrs_to_source(let.attrs)} = "
 		             f"{expr_to_source(let.expr)};")
 		start = let.after
 	lines.extend(member_lines(decl.members[start:], depth=1))

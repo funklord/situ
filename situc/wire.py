@@ -93,6 +93,7 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 	for name in sorted(resolved.structs):
 		lines.append("")
 		lines.extend(_struct(resolved.structs[name], resolved.layout.env))
+		lines.extend(_timed_lets(schema, name, resolved.layout.env))
 		lines.extend(_refusals(schema, name))
 
 	lines.extend(_registries(schema))
@@ -145,6 +146,20 @@ def _registries(schema: ast.Schema) -> list[str]:
 					facts.append(f"{attr.name}="
 					              f"{_spelled(expr_to_source(value))}")
 			lines.append("  " + " ".join(facts))
+	return lines
+
+
+def _timed_lets(schema: ast.Schema, struct: str, env: Env) -> list[str]:
+	"""A named value that says what time it holds (26.1165): the time is
+	what a peer reads it as, so it is contract as a member's is. A value
+	saying nothing about time adds no line, so 26.1056's values leave
+	every existing signature as it was."""
+	decl = next((one for one in schema.structs() if one.name == struct), None)
+	lines: list[str] = []
+	for let in decl.lets if decl is not None else ():
+		time = spec_of(let.attrs, env)
+		if time is not None:
+			lines.append(f"  let {let.name} {time.render()}")
 	return lines
 
 

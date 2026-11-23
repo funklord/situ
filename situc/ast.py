@@ -1822,6 +1822,9 @@ class Let(Node):
 	#: How many of the struct's members precede it, so a use before it is
 	#: refused rather than reading a value its fields may not reach.
 	after: int = 0
+	#: `let u64 t [time = s / (1 << 32), epoch = ntp] = ...`: what time
+	#: the value holds (26.1165), the one thing a value may say of itself.
+	attrs: tuple[Attr, ...] = ()
 
 
 @dataclass(frozen=True)

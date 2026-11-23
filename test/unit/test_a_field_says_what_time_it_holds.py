@@ -211,3 +211,52 @@ def test_with_nothing_on_the_field_the_kernel_still_says_it() -> None:
 	with pytest.raises(SituError) as caught:
 		check(parse_text(_kernels("", ", unit = ms"), path="k.situ"))
 	assert "states no `unit`" in str(caught.value)
+
+
+# -- step 2: a named value says what time it holds ---------------------------
+
+NTP = HEAD + """struct ts {
+	u32 seconds;
+	u32 fraction;
+	let u64 at [time = s / (1 << 32), epoch = ntp] = seconds << 32 | fraction;
+}
+"""
+
+
+def test_a_time_split_across_fields_is_one_value() -> None:
+	"""NTP's two halves are one instant (example/ntp says situ named them
+	apart because nothing could say they were one)."""
+	schema = parse_text(NTP, path="ntp.situ")
+	check(schema)
+	text = wire.render(schema, resolve(schema, solve(schema)), "ntp.situ")
+	assert "  let at time=1/4294967296s@ntp" in text.splitlines()
+
+
+def test_a_named_value_round_trips_its_time() -> None:
+	once = unparse(parse_text(NTP, path="ntp.situ"))
+	assert "let u64 at [time = s / (1 << 32), epoch = ntp] =" in once
+	assert once == unparse(parse_text(once, path="ntp.situ"))
+
+
+def test_a_named_value_says_nothing_else() -> None:
+	text = NTP.replace("epoch = ntp]", "epoch = ntp, max = 3]")
+	with pytest.raises(SituError) as caught:
+		check(parse_text(text, path="ntp.situ"))
+	assert "means nothing on a named value" in str(caught.value)
+
+
+def test_a_named_value_is_held_to_the_same_rules() -> None:
+	text = NTP.replace(", epoch = ntp]", "]")
+	with pytest.raises(SituError) as caught:
+		check(parse_text(text, path="ntp.situ"))
+	assert "a `time` states its `epoch`" in str(caught.value)
+
+
+def test_a_value_without_a_time_adds_no_line() -> None:
+	"""26.1056's values, in every signature already committed, are left
+	as they were."""
+	text = NTP.replace(" [time = s / (1 << 32), epoch = ntp]", "")
+	schema = parse_text(text, path="ntp.situ")
+	check(schema)
+	rendered = wire.render(schema, resolve(schema, solve(schema)), "ntp.situ")
+	assert "let at" not in rendered

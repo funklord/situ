@@ -3039,6 +3039,8 @@ def check_times(schema: ast.Schema) -> None:
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
 			spec_of(getattr(member, "attrs", ()), env)
+		for let in struct.lets:
+			spec_of(let.attrs, env)
 
 
 def _attribute_place(struct: ast.StructDecl, member: ast.Member,
@@ -7054,6 +7056,13 @@ def check_lets(schema: ast.Schema) -> None:
 			ahead = {getattr(member, "name", None): member
 			         for member in struct.members[:let.after]}
 			_check_let_expr(let, let.expr, ahead, consts, tokens)
+			other = next((attr for attr in let.attrs if attr.name not in
+			              ("time", "duration", "epoch")), None)
+			if other is not None:
+				raise error(f"`[{other.name}]` means nothing on a named value",
+				            other.span, label = "here",
+				            notes = ["a `let` occupies no bytes, so it may "
+				                     "say only what time it holds (26.1165)"])
 			lets_seen.add(let.name)
 
 

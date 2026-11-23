@@ -2016,6 +2016,7 @@ class Parser:
 		start = self.advance()
 		type_ref = self.parse_type_ref()
 		name = self.expect_ident("the value's name")
+		attrs = self.parse_attrs()
 		self.expect_symbol("=", "before the value's definition")
 		expr = self.parse_expr()
 		self.expect_symbol(";", "after the value's definition")
@@ -2027,7 +2028,8 @@ class Parser:
 				label = "a named value is a number its fields assemble",
 				notes = ["say its width as an integer type: u8 to u64, i8 "
 				         "to i64 (26.1056)"])
-		return ast.Let(self.span_from(start), name.text, type_ref, expr, after)
+		return ast.Let(self.span_from(start), name.text, type_ref, expr, after,
+		               attrs)
 
 	def parse_member(self) -> ast.Member:
 		token = self.current
