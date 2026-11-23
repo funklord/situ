@@ -6024,6 +6024,15 @@ class Emitter:
 		rendered = self._over_fields(
 			element, placement.repeat_while or "", "element",
 			extra = {"remaining": f"{limit}.saturating_sub(at)"})
+		# A condition that is a number -- `while (1)`, `while (flags &
+		# 0x80)` -- is true where it is not zero, as in C and Python, and an
+		# `if` in Rust takes only a bool: `!(1)` did not compile (found
+		# under fuzznet's permit, `while (1) | end`).
+		tree = placement.repeat_ast
+		if not ((isinstance(tree, ast.Binary) and tree.op in (
+				"==", "!=", "<", "<=", ">", ">=", "&&", "||"))
+				or (isinstance(tree, ast.Unary) and tree.op == "!")):
+			rendered = f"(({rendered}) != 0)"
 		return (self._reading_marks(element, rendered, "element", "read")
 		        if marked else rendered)
 
