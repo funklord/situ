@@ -2859,8 +2859,11 @@ def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule | trave
 			run = held.run
 			if run.array_count is not None:
 				reads[name] = str(run.array_count)
-			elif struct is not None and run.delimiters \
-					and run.path == f"{struct.name}.{run.name}":
+			elif struct is not None \
+					and run.path == f"{struct.name}.{run.name}" \
+					and (run.delimiters or pinned_bytes(run) is None):
+				# A sized run's `_len` is its length unless `[size = N]`
+				# pins a footprint, when `_len` is that and not the count.
 				reads[name] = f"{_lua(_local(struct, run))}_len"
 			continue
 		# A rule over a run's elements is not read here (26.1170): left

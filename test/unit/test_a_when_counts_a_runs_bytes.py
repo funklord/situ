@@ -79,6 +79,20 @@ GROUP_CASES = [
 ]
 
 
+#: A run its length field sizes, whose bytes are its count.
+SIZED = """target buffer;
+endian big;
+struct t { u8 n; u8 body[n]; u8 tail; }
+when count(t.body) > 2 refuse long "at most two bytes";
+"""
+
+SIZED_CASES = [
+	("two", bytes([2, 0xAA, 0xBB, 0x00]), "0"),
+	("three", bytes([3, 0xAA, 0xBB, 0xCC, 0x00]), "2"),
+	("none", bytes([0, 0x00]), "0"),
+]
+
+
 def _verdicts(tmp_path: Path, schema: str, top: str,
               cases: list[tuple[str, bytes, str]]) -> None:
 	source = tmp_path / "unit.situ"
@@ -97,7 +111,8 @@ def _verdicts(tmp_path: Path, schema: str, top: str,
 @pytest.mark.parametrize(("schema", "top", "cases"), [
 	(PERMIT, "remote_permit", PERMIT_CASES),
 	(GROUP, "member_list", GROUP_CASES),
-], ids=["permit", "group"])
+	(SIZED, "t", SIZED_CASES),
+], ids=["permit", "group", "sized"])
 def test_all_four_count_a_runs_bytes(tmp_path: Path, schema: str, top: str,
                                      cases: list[tuple[str, bytes, str]]) -> None:
 	_verdicts(tmp_path, schema, top, cases)
@@ -107,7 +122,8 @@ def test_all_four_count_a_runs_bytes(tmp_path: Path, schema: str, top: str,
 @pytest.mark.parametrize(("schema", "top", "cases"), [
 	(PERMIT, "remote_permit", PERMIT_CASES),
 	(GROUP, "member_list", GROUP_CASES),
-], ids=["permit", "group"])
+	(SIZED, "t", SIZED_CASES),
+], ids=["permit", "group", "sized"])
 def test_both_walkers_count_a_runs_bytes(tmp_path: Path, schema: str, top: str,
                                          cases: list[tuple[str, bytes, str]]) -> None:
 	from test_walker_c import (c_verdict, packed_text, python_verdict,
@@ -143,6 +159,8 @@ DISSECTED = [
 	(GROUP, "member_name", b"x" * 32 + b" y", False),
 	(GROUP, "member_name", b"x" * 33, True),
 	(GROUP, "member_name", b" y", True),
+	(SIZED, "t", bytes([2, 0xAA, 0xBB, 0x00]), False),
+	(SIZED, "t", bytes([3, 0xAA, 0xBB, 0xCC, 0x00]), True),
 ]
 
 
@@ -163,5 +181,5 @@ def test_the_dissector_counts_a_runs_bytes(tmp_path: Path) -> None:
 		               encoding="ascii")
 		experts = read_back_experts(lua, struct, packet)
 		said = [abbrev for abbrev, _, _ in experts
-		        if abbrev.endswith(("key_length", "name_length"))]
+		        if abbrev.endswith(("key_length", "name_length", ".long"))]
 		assert bool(said) == fires, (struct, packet, experts)

@@ -2845,8 +2845,7 @@ Permitted:
   four backends, both walkers and the dissector (26.1170)
 - in a `when`, `count(s.key)` of a run of bytes -- counted, sized or
   delimited, never a text number: its bytes with no terminator, where
-  `size` counts one that is there (26.1171); the dissector reads a
-  delimited or fixed one
+  `size` counts one that is there (26.1171)
 
 Forbidden, by construction:
 
