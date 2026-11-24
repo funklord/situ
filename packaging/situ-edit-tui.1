@@ -1,0 +1,59 @@
+.TH SITU-EDIT-TUI 1 "" "situ" "User Commands"
+.SH NAME
+situ-edit-tui \- read and edit a message against a situ schema, on a terminal
+.SH SYNOPSIS
+.B situ-edit-tui
+.RI [ options ]
+.I schema
+.I message
+.SH DESCRIPTION
+.B situ-edit-tui
+is
+.BR situ\-edit (1)
+as a screen: the message's fields, their values and what the schema says
+of them, edited in place. The message opened is never overwritten;
+.B w
+writes the edited bytes where
+.B \-\-out
+names.
+.SH OPTIONS
+.TP
+.BI \-\-struct " STRUCT"
+Which layout to read the message as.
+.TP
+.BI \-\-offset " N"
+Where the struct starts in the file.
+.TP
+.BI \-\-length " N"
+How long its frame is; to the end by default.
+.TP
+.BI \-\-arg " N"
+A value for one of the struct's
+.B parameter
+members, in declaration order.
+.TP
+.B \-\-hex
+The message file holds hex rather than bytes.
+.TP
+.BI \-\-set " NAME=VALUE"
+Store a value before the screen opens.
+.TP
+.BI \-\-set\-bytes " NAME=HEX"
+Store a byte run, at the length it has.
+.TP
+.BI \-\-insert " NAME:N=HEX"
+Put an element into a run of structs.
+.TP
+.BI \-\-remove " NAME:N"
+Take an element out of a run of structs.
+.TP
+.BI \-\-out " FILE"
+Where
+.B w
+writes the edited bytes.
+.TP
+.B \-\-no\-ui
+Print what would be shown and exit.
+.SH SEE ALSO
+.BR situ\-edit (1),
+.BR situ\-edit\-gui (1)

@@ -1,0 +1,29 @@
+.TH SITU-WALK 1 "" "situ" "User Commands"
+.SH NAME
+situ-walk \- read bytes against a packed situ layout image
+.SH SYNOPSIS
+.B situ-walk
+.I image
+.I hex
+.RB [ \-\-prefix
+.IR hex ]
+.SH DESCRIPTION
+.B situ-walk
+answers questions about bytes from a packed layout image, as written by
+.BR "situc pack" ,
+rather than from generated code: every struct, and every member of it it
+can read, with the verdict validation gives. It is the same questions the
+four generated backends answer, from a table, so that a disagreement
+between them is a finding.
+.PP
+.I hex
+is the message, written as hex digits.
+.SH OPTIONS
+.TP
+.BI \-\-prefix " hex"
+A pseudo-header a
+.B prefix(...)
+checksum is summed over first.
+.SH SEE ALSO
+.BR situc (1),
+.BR situ\-edit (1)

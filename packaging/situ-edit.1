@@ -1,0 +1,78 @@
+.TH SITU-EDIT 1 "" "situ" "User Commands"
+.SH NAME
+situ-edit \- read and edit a message against a situ schema
+.SH SYNOPSIS
+.B situ-edit
+.RI [ options ]
+.I schema
+.I message
+.SH DESCRIPTION
+.B situ-edit
+reads
+.I message
+as the schema describes it and prints each field, its offset, its value
+and what the schema says about it. Given edits, it applies them where the
+schema permits one and shows the result; nothing is written unless
+.B \-\-out
+names where.
+.PP
+.I schema
+is a
+.I .situ
+schema, a packed image, or a directory of schemas, in which case the file
+is recognised by their
+.B identify
+declarations.
+.SH OPTIONS
+.TP
+.BI \-\-struct " STRUCT"
+Which layout to read the message as; the first by default.
+.TP
+.BI \-\-offset " N"
+Where the struct starts in the file.
+.TP
+.BI \-\-length " N"
+How long its frame is; the rest of the file by default.
+.TP
+.BI \-\-within " STRUCT:OFFSET:LENGTH"
+A window this one was opened inside, outermost first, so a byte run may
+change length inside a nested struct.
+.TP
+.BI \-\-relate " NAME"
+Check a cross-message relation by name, with
+.BI \-\-against " FILE"
+as the later message.
+.TP
+.BI \-\-arg " N"
+A value for one of the struct's
+.B parameter
+members, in declaration order; repeatable.
+.TP
+.B \-\-hex
+The message file holds hex rather than bytes.
+.TP
+.BR \-\-format " " text | json
+The output's form; json is for another frontend.
+.TP
+.BI \-\-set " NAME=VALUE"
+Store a value, decimal or 0x hex; repeatable, applied in order.
+.TP
+.BI \-\-set\-bytes " NAME=HEX"
+Store a byte run; a run written shorter or longer moves what follows.
+.TP
+.BI \-\-put " NAME=TEXT"
+Store text read the way the field shows it.
+.TP
+.BI \-\-insert " NAME:N=HEX"
+Put an element into a run of structs, moving the field that sizes it.
+.TP
+.BI \-\-remove " NAME:N"
+Take an element out of a run of structs.
+.TP
+.BI \-\-out " FILE"
+Write the edited message here.
+.SH SEE ALSO
+.BR situc (1),
+.BR situ\-edit\-tui (1),
+.BR situ\-edit\-gui (1),
+.BR situ\-walk (1)

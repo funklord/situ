@@ -1,4 +1,5 @@
 usr/bin/situ-edit-gui
+usr/share/man/man1/situ-edit-gui.1
 usr/share/applications/se.vibes.situ-edit-gui.desktop
 usr/share/icons/hicolor/scalable/apps/se.vibes.situ-edit-gui.svg
 usr/share/icons/hicolor/16x16/apps/se.vibes.situ-edit-gui.png

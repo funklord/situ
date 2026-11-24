@@ -165,7 +165,7 @@ specs passing.
 - Chunk interleave is out of scope until a stream needs it (fuzznet).
 - Next, nothing above the bar without input: a token compared inside a
   rule and rules over `until` runs wait for fuzznet to name a format;
-  the inbox items below: manual pages.
+  the inbox items below are done.
 
 **Run 12 (2026-11-22), the walkers held to the backends by fuzzing:**
 
@@ -614,10 +614,11 @@ both walkers and the dissector. What a user cannot yet do is listed under
   the editor and not the compiler -- with the old names removed on
   install and uninstall; (b) the window icon falls back to that SVG,
   compiled in through `gui/gui.qrc`, so a build run from the tree and the
-  GUI tests under offscreen have one (`--window-icon` says which). Open:
-  (d)
-  lintian's `no-manual-page` for `situ-edit`, `situ-edit-tui`,
-  `situ-walk` and `situ-edit-gui` (`debian-packaging` skill).
+  GUI tests under offscreen have one (`--window-icon` says which); (d)
+  a hand-written manual page for `situ-edit`, `situ-edit-tui`, `situ-walk`
+  and `situ-edit-gui` in `packaging/`, installed by `install` and
+  `install-gui`, the Debian lists naming each page (`situc.install` had
+  claimed all of `usr/share/man`). lintian not rerun on a rebuilt deb.
 
 - The rest of the cppcheck noise: 22 `e != SITU_OK` need cppcheck's
   cross-function view of an arm whose `required` cannot fail; 12

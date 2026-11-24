@@ -301,6 +301,8 @@ $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
 # needs Qt; `make install` first, since the window is nothing without them.
 install-gui: gui
 	install -Dm755 '$(GUI_BIN)' '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
+	install -Dm644 packaging/situ-edit-gui.1 \
+		'$(DESTDIR)$(PREFIX)/share/man/man1/situ-edit-gui.1'
 	@# On the desktop's menu, with its icon (harmonization.md, GUI).
 	install -Dm644 packaging/$(GUI_ID).desktop \
 		'$(DESTDIR)$(PREFIX)/share/applications/$(GUI_ID).desktop'
@@ -485,6 +487,11 @@ install: runtime
 	@# only to people who did not build from the tree.
 	install -Dm644 packaging/situc.1 \
 		'$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
+	@# A manual page per command in bin/ (Debian policy 12.1, lintian).
+	for page in situ-edit situ-edit-tui situ-walk; do \
+		install -Dm644 packaging/$$page.1 \
+			"$(DESTDIR)$(PREFIX)/share/man/man1/$$page.1" || exit 1; \
+	done
 	@echo 'installed situc to $(DESTDIR)$(PREFIX)/bin/situc'
 
 uninstall:
@@ -508,6 +515,10 @@ uninstall:
 	rm -f '$(DESTDIR)$(PREFIX)/include/situ.h'
 	rm -f '$(DESTDIR)$(PREFIX)/lib/libsitu.a'
 	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situc.1'
+	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situ-edit.1'
+	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situ-edit-tui.1'
+	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situ-walk.1'
+	rm -f '$(DESTDIR)$(PREFIX)/share/man/man1/situ-edit-gui.1'
 
 # -- packaging ---------------------------------------------------------------
 #

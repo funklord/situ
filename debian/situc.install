@@ -6,4 +6,7 @@ usr/lib/situc
 usr/lib/walker
 usr/lib/editor
 usr/share/situc
-usr/share/man
+usr/share/man/man1/situc.1
+usr/share/man/man1/situ-edit.1
+usr/share/man/man1/situ-edit-tui.1
+usr/share/man/man1/situ-walk.1
