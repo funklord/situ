@@ -11528,9 +11528,15 @@ class Emitter:
 						"\t}",
 					])
 					continue
-				body  = self._over_fields(rule.element,
-				                          unparse_expr(rule.body, explicit=True)
-				                          ).replace("this->", "element.")
+				# Rendered as the element's own class reads it, then pointed at
+				# the element: its accessors through `element`, and a member
+				# at a static offset -- which this backend loads from the
+				# view directly, `situ_base(raw_)` -- through `sub`, the
+				# element's view. Swapping only `this->` read every
+				# element's first byte from the ENCLOSING struct.
+				body  = re.sub(r"\braw_\b", "sub", self._over_fields(
+					rule.element, unparse_expr(rule.body, explicit=True)
+				)).replace("this->", "element.")
 				answer = {"any": "hits != 0u ? 1u : 0u",
 				          "all": "hits == n ? 1u : 0u",
 				          "count": "hits"}[rule.kind]

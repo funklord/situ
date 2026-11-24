@@ -2435,13 +2435,16 @@ def check_quantifiers(schema: ast.Schema) -> None:
 	that element's view; a body reading the enclosing struct as well would
 	need two views in one comparison, which no reader is built for yet.
 	"""
+	# An enum's or a token set's member, `rights_word.rw`, is a value.
+	named = {decl.name for decl in schema.enums()} \
+		| {decl.name for decl in schema.token_sets()}
 	for when in schema.whens():
 		for rule in quantifiers_in(when.expr):
 			for path in paths_in(rule.body):
 				# A bare name is a constant, an enum's or a token set's
 				# member; a struct's member is always `s.m` in a `when`.
 				head, dot, _rest = path.partition(".")
-				if dot and head != rule.var:
+				if dot and head != rule.var and head not in named:
 					raise error(
 						f"`{rule.kind}` reads `{path}`, which is not a "
 						f"member of `{rule.var}`",

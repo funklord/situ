@@ -172,3 +172,38 @@ def test_unique_is_bounded_and_over_one_member(schema: str,
 		resolve(parsed, solve(parsed))
 	assert said in caught.value.diagnostic.render(), \
 		caught.value.diagnostic.render()
+
+
+ENUMERATED = """target buffer;
+endian big;
+enum k : u8 { none = 0, read = 1, write = 2, }
+struct grant { k kind; u8 n; u8 who[n]; }
+struct p { u8 c [max = 8]; grant grants[c]; }
+when any(g in p.grants: g.kind == k.none) && count(p.grants) > 1
+	refuse none_alone "none stands alone";
+"""
+
+#: An enum member in the body, and the element's own member at a static
+#: offset -- which C++ loads from the view rather than through a getter, so
+#: a body rendered over the enclosing struct read ITS first byte, the count,
+#: and called "none beside another" clean (found by hand, 2026-11-24).
+ENUMERATED_CASES = [
+	("none beside another", bytes.fromhex("0200000100"), "2"),
+	("another, then none", bytes.fromhex("020100000000"), "2"),
+	("none alone", bytes.fromhex("010000"), "0"),
+	("no none", bytes.fromhex("0201000200"), "0"),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_an_enum_member_reads_each_element(tmp_path: Path) -> None:
+	source = tmp_path / "unit.situ"
+	source.write_text(ENUMERATED, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	for label, data, verdict in ENUMERATED_CASES:
+		for name, argv in command.items():
+			held = fourway.answers(argv, data, tmp_path) \
+				.split("-- p\n")[1].split("\n-- ")[0]
+			line = next(one for one in held.splitlines()
+			            if one.startswith("validate "))
+			assert line.split()[1] == verdict, (label, name, held)
