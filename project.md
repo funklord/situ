@@ -439,8 +439,15 @@ without huge dependencies kept, and the pertinent code shared:
   installed binary by 158,528 bytes (text +121,656) at -Os with section
   GC -- spread across generated modules (fzn_entry_record +6.7 KB,
   fzn_contact_devices +6.3 KB, a tail of `_check`/`_pack` near 1 KB each).
-  Not a request; both offer to rebuild at a named situ commit. Being
-  measured as run 16's size item.
+  Not a request; both offer to rebuild at a named situ commit. Measured
+  here over fuzznet's schemas (edit layer, -Os, section GC, the .c files
+  alone): a length behind a dynamic offset re-emitted its driver's getter
+  inline; calling it cut `fzn_entry_record` 5,973 -> 5,502 bytes and the
+  set 197,267 -> 194,215 (1.5%). Two tried and dropped: a shared `[chars]`
+  helper (larger than the inlined loop, 5,973 -> 6,018). Most of the
+  consumer's growth is likely the header's `static inline` accessors
+  compiled into each caller, which this .c measurement cannot see; the
+  next step is fuzznet's own build at a named situ commit.
 - Done 2026-11-23, run 16: this run's constructs (spelling rules, time,
   `while ... | end`, typed tlv values) put into `edges.situ` and asked
   against seven contexts each. The four backends agreed in every cell;

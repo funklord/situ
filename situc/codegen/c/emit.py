@@ -11730,6 +11730,26 @@ class Emitter:
 			                                     held)
 			return (leaf(digits), True)
 
+		# An own member's getter is that read already, the bound included,
+		# and one call is smaller than its body again at every count: fuzznet
+		# measured the generated C at +158 KB in a consumer (situ inbox
+		# 20261124T0245Z), and each length behind a dynamic offset carried
+		# a copy of its driver's getter.
+		# Only where the read needs that bound -- the driver at an offset
+		# the message decides; at a static one the bare load is smaller.
+		local_target = local_name(struct, target.placement)
+		if held == "view" and "." not in local_target \
+				and not target.placement.parameter \
+				and self._fits(struct, target.placement,
+				               self._scalar_bytes(target.placement.scalar),
+				               held, gated=False) is not None:
+			got = (f"{ident(self.prefix, struct.name, c_name(local_target), 'get')}"
+			       f"(view{self._member_args(struct, target.placement)})")
+			kind = ("int64_t" if target.placement.scalar.signed
+			        else "uint64_t")
+			return (leaf(f"({kind}){got}", target.placement.scalar.signed),
+			        True)
+
 		loaded = self._load_expression(
 			target.placement.scalar, target.placement,
 			self._value_base(struct, target.placement, gated=held != "view"),

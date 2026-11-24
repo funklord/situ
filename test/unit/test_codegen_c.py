@@ -7285,3 +7285,20 @@ def test_a_text_number_at_a_constant_offset_is_not_guarded() -> None:
 	assert "situ_parse_uint" in header, "this schema has no text read at all"
 	assert "situ_in_bounds" not in header, (
 		"a constant offset was guarded, which no other accessor here is")
+
+
+def test_a_length_behind_a_dynamic_offset_calls_its_driver_s_getter() -> None:
+	"""Each length whose driver the message places carried a copy of the
+	driver's getter -- `(in_bounds(off) ? load : 0)` -- which is what
+	`_get` is. fuzznet measured the generated C at +158 KB in a consumer
+	(situ inbox 20261124T0245Z); the call is smaller at every site. At a
+	static offset the bare load stays, being smaller still."""
+	header = "".join(emit("""struct s {
+		u8 n;
+		u8 head[n];
+		u8 len;
+		u8 body[len];
+	}"""))
+	assert "(uint64_t)situ_s_len_get(view)" in header
+	assert "situ_in_bounds(view, situ_s_len_offset(view), 1u)) ? (uint64_t)" \
+		not in header
