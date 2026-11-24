@@ -13553,7 +13553,7 @@ class Emitter:
 		        for let in (decl.lets if decl is not None else ())}
 
 	def _same_reads(self, struct: ResolvedStruct,
-			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+			same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as C (26.1128): the
 		runtime's byte compare over the two runs' pointers, read where any
@@ -13561,7 +13561,16 @@ class Emitter:
 		def run(placement: Placement) -> str:
 			return (f"{ident(self.prefix, struct.name, c_name(placement.name), 'ptr')}"
 			        f"(view{self._member_args(struct, placement)})")
-		return {name: (f"{ident(self.prefix, struct.name, held.helper)}(view)"
+		def length(placement: Placement) -> str:
+			# A run of bytes counted in a `when` (26.1171): its content,
+			# no terminator, which `_len` already is.
+			if placement.array_count is not None:
+				return f"UINT64_C({placement.array_count})"
+			return (f"(uint64_t){ident(self.prefix, struct.name, c_name(placement.name), 'len')}"
+			        "(view)")
+		return {name: (length(held.run)
+		               if isinstance(held, traverse.RunLength) else
+		               f"{ident(self.prefix, struct.name, held.helper)}(view)"
 		               if isinstance(held, traverse.RunRule) else
 		               f"(situ_bytes_eq({run(held.left)}, {held.length}u, "
 		               f"{run(held.right)}, {held.length}u) "

@@ -2116,6 +2116,22 @@ class RunEquality:
 
 
 @dataclass(frozen=True)
+class RunLength:
+	"""`count(s.key)` of a run of bytes, lifted for a renderer (26.1171).
+
+	Its bytes, a terminator not among them: `size` counts a delimiter that
+	is there and not one that is not, so 64 digits and a space measure as
+	65 digits at the end, and no `size` rule tells them apart. Every
+	backend already has the run's content length (`_len`); this names it.
+	`call` is the `count(...)` it stood for, which an image carries as
+	its own `COUNT` and so takes back.
+	"""
+
+	run: Placement
+	call: ast.Expr
+
+
+@dataclass(frozen=True)
 class RunRule:
 	"""`any(r in s.rules: r.kind == 3)`, lifted for a renderer (rules over
 	lists, 2026-11-24).
@@ -2218,7 +2234,7 @@ def rule_run_fault(structs: dict[str, ResolvedStruct],
 def run_equalities(expr: ast.Expr, struct: ResolvedStruct,
 		structs: dict[str, ResolvedStruct] | None = None,
 		named: str = "rule") -> tuple[ast.Expr,
-		                              dict[str, "RunEquality | RunRule"]]:
+		                              dict[str, "RunEquality | RunRule | RunLength"]]:
 	"""`expr` with each byte-run comparison replaced by a name (26.1128).
 
 	Every renderer reads a `when` by unparsing it and rewriting each name
@@ -2230,7 +2246,7 @@ def run_equalities(expr: ast.Expr, struct: ResolvedStruct,
 
 	by_path = {entry.placement.path: entry.placement
 	           for entry in struct.entries}
-	found: dict[str, RunEquality | RunRule] = {}
+	found: dict[str, RunEquality | RunRule | RunLength] = {}
 	rules = 0
 
 	def lifted(kind: str, run: ast.Expr, var: str, body: ast.Expr,
@@ -2270,12 +2286,32 @@ def run_equalities(expr: ast.Expr, struct: ResolvedStruct,
 			return None
 		return held
 
+	def byte_run(operand: ast.Expr) -> Placement | None:
+		"""A run of bytes this struct holds: counted, sized or delimited."""
+		if not isinstance(operand, (ast.NameRef, ast.Access)):
+			return None
+		paths = paths_in(operand)
+		held  = by_path.get(paths[0]) if len(paths) == 1 else None
+		if held is None or held.kind != "field" \
+				or held.scalar is None or held.scalar.bits != 8 \
+				or held.radix is not None or held.repeat_while is not None:
+			return None
+		if held.array_count is None and not held.delimiters \
+				and held.sized_by is None and held.size_expr is None:
+			return None
+		return held
+
 	def rewrite(node: ast.Expr) -> ast.Expr:
 		if isinstance(node, ast.Quantified):
 			got = lifted(node.kind, node.run, node.var, node.body, node.span)
 			return got if got is not None else node
 		if isinstance(node, ast.Call) and node.name == "count" \
 				and len(node.args) == 1:
+			bytes_run = byte_run(node.args[0])
+			if bytes_run is not None:
+				name = f"{SAME}{len(found)}"
+				found[name] = RunLength(bytes_run, node)
+				return ast.NameRef(node.span, name)
 			got = lifted("count", node.args[0], "situ_element",
 			             ast.IntLiteral(node.span, 1, "1"), node.span)
 			return got if got is not None else node

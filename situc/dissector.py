@@ -2699,7 +2699,7 @@ def _let_reads(struct: ResolvedStruct) -> dict[str, str]:
 	return reads
 
 
-def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]"
 		) -> dict[str, str]:
 	"""Each byte-run comparison of a `when` as Lua (26.1128).
 

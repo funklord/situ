@@ -4592,9 +4592,11 @@ def _check_arguments(struct: ast.StructDecl, member: ast.Field,
 
 
 def _counts_a_rule_run(schema: ast.Schema, arg: ast.Expr) -> bool:
-	"""Whether `count(arg)` names a run a rule walks (26.1170): a counted
-	or `while` run of structs, a member of the struct the path starts at.
-	Anything else has no reader counting it, as before."""
+	"""Whether `count(arg)` names a run a `when` can count: one a rule
+	walks (26.1170), a counted or `while` run of structs, or a run of
+	bytes, whose count is its bytes with no terminator among them
+	(26.1171) -- a member of the struct the path starts at. Anything else
+	has no reader counting it, as before."""
 	paths = paths_in(arg)
 	if len(paths) != 1:
 		return False
@@ -4604,8 +4606,14 @@ def _counts_a_rule_run(schema: ast.Schema, arg: ast.Expr) -> bool:
 	if struct is None or not field or "." in field:
 		return False
 	member = _find_member(struct, field)
-	return isinstance(member, ast.Field) \
-		and member.type_ref.name in decls \
+	if not isinstance(member, ast.Field):
+		return False
+	scalar = member.type_ref.scalar
+	if scalar is not None and scalar.bits == 8 and member.radix is None \
+			and member.repeat is None \
+			and (member.array is not None or member.until is not None):
+		return True
+	return member.type_ref.name in decls \
 		and member.until is None \
 		and (member.array is not None or member.repeat is not None)
 

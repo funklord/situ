@@ -1005,6 +1005,11 @@ when any(r in permit.rules: r.kind == none) && count(permit.rules) > 1
 `unique(r in run: r.name)` says no two elements share a key, over a run
 whose size bounds how many pairs that is.
 
+`count(key)` of a run of bytes is its bytes with no terminator among them,
+where `size(key)` counts a terminator that is there: a key of exactly 64
+digits, ended by a space or by the value's end, is `count(key) == 64`, and
+no `size` rule can say it, 64 digits and a space measuring as 65 digits do.
+
 Three severities and no fourth. `refuse` makes a message illegal and
 `validate` says so; `warn` and `note` describe one that conforms. All three
 come back from the sibling `situ_frame_messages(view, ids, cap, &count)`,

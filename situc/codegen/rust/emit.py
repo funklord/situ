@@ -5871,14 +5871,16 @@ class Emitter:
 		return lines
 
 	def _same_reads(self, struct: ResolvedStruct,
-			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+			same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as Rust (26.1128): slice
 		equality, over getters that answer an empty slice on a view too short
 		for the run."""
 		def run(placement: Placement) -> str:
 			return f"self.{_ident(placement.name)}()"
-		return {name: (f"self.{_ident(c_name(held.helper))}()"
+		return {name: (f"({run(held.run)}.len() as u64)"
+		               if isinstance(held, traverse.RunLength) else
+		               f"self.{_ident(c_name(held.helper))}()"
 		               if isinstance(held, traverse.RunRule) else
 		               f"({run(held.left)} {'==' if held.equal else '!='} "
 		               f"{run(held.right)})")

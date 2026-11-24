@@ -9909,14 +9909,16 @@ class Emitter:
 		return lines
 
 	def _same_reads(self, struct: ResolvedStruct,
-			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+			same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as Python (26.1128): the two
 		runs' bytes compared, where a number against a memoryview was never
 		equal and so a refusal that never fired."""
 		def run(placement: Placement) -> str:
 			return f"bytes(self.{py_name(placement.name)})"
-		return {name: (f"self._{py_name(held.helper)}()"
+		return {name: (f"len(self.{py_name(held.run.name)})"
+		               if isinstance(held, traverse.RunLength) else
+		               f"self._{py_name(held.helper)}()"
 		               if isinstance(held, traverse.RunRule) else
 		               f"({run(held.left)} {'==' if held.equal else '!='} "
 		               f"{run(held.right)})")

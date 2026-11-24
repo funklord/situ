@@ -999,6 +999,11 @@ def _count(view: View, index: int) -> int:
 	placement = view.image.placements[index]
 	if placement.array_count != NONE:
 		return placement.array_count
+	# A delimited run of bytes counts its content, the terminator not
+	# among it (26.1171), as each backend's `_len` does.
+	if index in view.image.delimiters and placement.type_struct == NONE \
+			and not placement.radix:
+		return scan(view, index)[0]
 	if placement.size_code != NONE:
 		return _evaluate(
 			view, placement.size_code,

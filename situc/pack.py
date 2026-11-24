@@ -1300,6 +1300,21 @@ def _kernel_row(schema: "ast.Schema", named: str,
 		+ _struct.pack("<ii", 0, 0)
 
 
+def _unlifted(expr: ast.Expr, calls: dict[str, ast.Expr]) -> ast.Expr:
+	"""`expr` with each lifted name in `calls` put back as its call."""
+	if not calls:
+		return expr
+	if isinstance(expr, ast.NameRef) and expr.name in calls:
+		return calls[expr.name]
+	if isinstance(expr, ast.Binary):
+		return dc_replace(expr, left = _unlifted(expr.left, calls),
+		                           right = _unlifted(expr.right, calls))
+	if isinstance(expr, ast.Unary):
+		return dc_replace(expr,
+		                           operand = _unlifted(expr.operand, calls))
+	return expr
+
+
 def _measured(expr: ast.Expr, struct: ResolvedStruct,
 		resolved: ResolvedSchema) -> ast.Expr:
 	"""`expr` with `size(s)` of its own struct spelled as its parts (26.981).
@@ -2114,6 +2129,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			if when.severity is ast.Severity.REFUSE:
 				refusal_lost.add(owner)
 			continue
+
+		# A run's bytes counted (26.1171) is the image's own `COUNT`, which
+		# both walkers answer from the run's scan: the call goes back in.
+		lifted = _unlifted(lifted, {
+			name: held.call for name, held in lifted_held.items()
+			if isinstance(held, traverse.RunLength)})
 
 		start = len(program.code)
 		try:

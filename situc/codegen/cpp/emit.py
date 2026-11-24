@@ -11591,14 +11591,16 @@ class Emitter:
 		return lines
 
 	def _same_reads(self, struct: ResolvedStruct,
-			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+			same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as C++ (26.1128): the C
 		runtime's byte compare over the two runs' spans, which on a view too
 		short for them are empty, so nothing is read past it."""
 		def run(placement: Placement, part: str) -> str:
 			return f"this->{bare_name(placement.name)}().{part}()"
-		return {name: (f"this->{bare_name(held.helper)}()"
+		return {name: (f"static_cast<std::uint64_t>({run(held.run, 'size')})"
+		               if isinstance(held, traverse.RunLength) else
+		               f"this->{bare_name(held.helper)}()"
 		               if isinstance(held, traverse.RunRule) else
 		               f"(situ_bytes_eq({run(held.left, 'data')}, "
 		               f"static_cast<uint32_t>({run(held.left, 'size')}), "

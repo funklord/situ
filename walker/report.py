@@ -3256,9 +3256,16 @@ def _rule_value(view: View, row: int) -> int:
 			# nowhere to put more; so does this, so the two agree.
 			if len(seen) >= 256:
 				raise vm.VmError("more keys than a walker keeps")
-			if walk.is_run(image, key):
+			if key in image.delimiters:
+				# A delimited key is its content, the terminator not part
+				# of it: a name ended by a space and the same name at the
+				# end are one name, as each backend compares them.
 				start = inner.at + offset_bits(inner, key) // BITS_PER_BYTE
 				held: object = bytes(view.buffer[
+					start:start + walk.scan(inner, key)[0]])
+			elif walk.is_run(image, key):
+				start = inner.at + offset_bits(inner, key) // BITS_PER_BYTE
+				held = bytes(view.buffer[
 					start:start + size_bits(inner, key) // BITS_PER_BYTE])
 			else:
 				held = walk._value_of(inner, key)

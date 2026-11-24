@@ -5124,6 +5124,22 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 		*out = held.array_count;
 		return SITU_WALK_OK;
 	}
+	/* A delimited run of bytes counts its content, the terminator not
+	 * among it (26.1171), as each backend's `_len` does. */
+	if (held.type_struct == SITU_WALK_NONE
+	    && delimiter_rules(image, index) != NULL) {
+		uint32_t from       = 0u;
+		uint32_t took       = 0u;
+		int      terminated = 0;
+
+		err = situ_walk_offset_bits(image, message, len, shape, index,
+		                            &from);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		return situ_walk_scan(image, message, len, index, from / 8u, out,
+		                      &terminated, &took);
+	}
 	if (held.size_code == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;	/* not a run */
 	}
@@ -7068,7 +7084,19 @@ static situ_walk_err rule_element(const situ_walk_image *elements,
 		situ_walk_err err = situ_walk_offset_bits(elements, message + at,
 		                                          extent, element, tally->key,
 		                                          &off);
-		if (err == SITU_WALK_OK) {
+		if (err == SITU_WALK_OK && delimiter_rules(elements, tally->key)
+		                           != NULL) {
+			/* A delimited key is its content, the terminator not part of
+			 * it: a name ended by a space and the same name at the end
+			 * are one name, as each backend compares them. */
+			uint32_t content    = 0u;
+			uint32_t took       = 0u;
+			int      terminated = 0;
+
+			err = situ_walk_scan(elements, message + at, extent, tally->key,
+			                     off / 8u, &content, &terminated, &took);
+			size = content * 8u;
+		} else if (err == SITU_WALK_OK) {
 			err = situ_walk_size_bits(elements, message + at, extent,
 			                          element, tally->key, &size);
 		}
