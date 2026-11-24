@@ -78,7 +78,50 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		lines.extend(_struct(struct, fmt))
 		lines.extend(_messages(schema, struct, fmt))
 
+	lines.extend(_exchanges(schema, fmt))
 	return "\n".join(lines).rstrip() + "\n"
+
+
+def _attrs_text(attrs: "Sequence[ast.Attr]") -> str:
+	return (" [" + ", ".join(f"{attr.name} = {_attr_value(attr)}"
+	                         if attr.value is not None else attr.name
+	                         for attr in attrs) + "]") if attrs else ""
+
+
+def _exchanges(schema: ast.Schema, fmt: str) -> list[str]:
+	"""What the schema says about messages taken together: which answers
+	which, and the windows a receiver keeps.
+
+	A relation is protocol semantics -- a reply's id is its query's, within
+	5000 ms, retried twice -- and a replay window or a reassembly is what
+	a receiver must keep; none of it was in the document, which described
+	each message alone.
+	"""
+	relations = schema.relations()
+	replays   = schema.replays()
+	pieces    = schema.reassemblies()
+	if not (relations or replays or pieces):
+		return []
+	heading = "Exchanges"
+	lines   = ([f"## {heading}", ""] if fmt == "markdown"
+	           else [heading, "-" * len(heading), ""])
+	for relation in relations:
+		params = ", ".join(f"{one.name}: {one.type_name}"
+		                   for one in relation.params)
+		lines.append(f"relation {relation.name}({params})"
+		             f"{_attrs_text(relation.attrs)}:")
+		lines.extend(f"  - {expr_to_source(must.expr)}"
+		             for must in relation.body)
+		lines.append("")
+	for replay in replays:
+		lines.extend([f"replay {replay.name}({replay.param.name}: "
+		              f"{replay.param.type_name}){_attrs_text(replay.attrs)}",
+		              ""])
+	for piece in pieces:
+		lines.extend([f"reassemble {piece.name}({piece.param.name}: "
+		              f"{piece.param.type_name}) by {piece.relation}"
+		              f"{_attrs_text(piece.attrs)}", ""])
+	return lines
 
 
 def _preamble(basename: str, fmt: str) -> list[str]:

@@ -576,3 +576,18 @@ def test_a_registry_s_keys_are_listed() -> None:
 	assert "count_cell" in row and 'default = "60"' in row
 	assert "how far back the journal reaches" in row
 	assert any(line.startswith("stream/grant/*") for line in text.splitlines())
+
+
+def test_exchanges_are_listed() -> None:
+	"""Which message answers which, and the windows a receiver keeps, were
+	in no part of the document, which described each message alone."""
+	from test_one_message_from_many_datagrams import SCHEMA as PIECES
+	from situc.parser import parse_text as parse_whole
+	schema   = parse_whole(PIECES)
+	resolved = resolve(schema, solve(schema))
+	text     = render(schema, resolved, "unit")
+	assert "Exchanges" in text
+	assert "relation same_message(" in text
+	assert "  - later.h.chunks == first.h.chunks" in text
+	assert "reassemble pieces(f: piece_frame) by same_message [" in text
+	assert "timeout = 3000, unit = ms]" in text
