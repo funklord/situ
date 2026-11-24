@@ -2699,7 +2699,8 @@ def _let_reads(struct: ResolvedStruct) -> dict[str, str]:
 	return reads
 
 
-def _same_reads(same: dict[str, traverse.RunEquality]) -> dict[str, str]:
+def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+		) -> dict[str, str]:
 	"""Each byte-run comparison of a `when` as Lua (26.1128).
 
 	The runs' raw bytes as Lua strings, which compare by content: `uint`
@@ -2713,6 +2714,10 @@ def _same_reads(same: dict[str, traverse.RunEquality]) -> dict[str, str]:
 	"""
 	reads = {}
 	for name, held in same.items():
+		# A rule over a run's elements is not read here (26.1170): left
+		# unread, the caller declines the `when` beside its expert.
+		if not isinstance(held, traverse.RunEquality):
+			continue
 		left, right = held.left.offset_bits, held.right.offset_bits
 		if left is None or right is None or left % 8 or right % 8:
 			continue
