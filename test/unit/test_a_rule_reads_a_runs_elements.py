@@ -286,3 +286,33 @@ def test_both_walkers_hold_the_rules(tmp_path: Path, schema: str,
 	for label, data, verdict in cases:
 		assert python_verdict(blob, data, shape) == verdict, label
 		assert c_verdict(tmp_path, blob, data, shape) == verdict, label
+
+
+@pytest.mark.parametrize(("schema", "cases", "top", "rules"), [
+	(SCHEMA, CASES, "s", ("none_alone", "too_many_nines", "four_empty")),
+	(ENUMERATED, ENUMERATED_CASES, "p", ("none_alone",)),
+	(FIRST, FIRST_CASES, "p", ("none_alone",)),
+], ids=["any-count-all", "enumerated", "first-member"])
+def test_the_dissector_holds_the_rules(tmp_path: Path, schema: str,
+                                       cases: list[tuple[str, bytes, str]],
+                                       top: str, rules: tuple[str, ...]) -> None:
+	"""The dissector walks the run again after dissecting it, each element
+	asked each rule's body at its own offset, and raises the `when`'s
+	expert where the readers refuse (26.1170). A case a member check
+	refuses first is left out: the dissector shows what it can of a
+	malformed message, where the readers stop at the member."""
+	from situc.dissector import generate
+	from test_dissector import LUA, read_back_experts
+	if LUA is None:
+		pytest.skip("no Lua interpreter")
+	parsed = parse_text(schema, path="s.situ")
+	lua = tmp_path / "s.lua"
+	lua.write_text(generate(parsed, resolve(parsed, solve(parsed)), "s"),
+	               encoding="ascii")
+	assert "rule0_hits" in lua.read_text(encoding="ascii")
+	for label, data, verdict in cases:
+		if verdict == "1":
+			continue
+		raised = [abbrev for abbrev, _, _ in read_back_experts(lua, top, data)
+		          if abbrev.split(".")[-1] in rules]
+		assert bool(raised) == (verdict == "2"), (label, raised)

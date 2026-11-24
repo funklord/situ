@@ -1353,6 +1353,7 @@ def _message_setup(schema: ast.Schema, resolved: ResolvedSchema) -> None:
 	"""
 	_MESSAGES.clear()
 	_ORDERED.clear()
+	_TALLIED.clear()
 	for name, struct in resolved.structs.items():
 		held = messages_of(schema, name)
 		if held:
@@ -2283,12 +2284,15 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 		body = _member(resolved, struct, placement)
 		order = _ORDERED.get(struct.name, {}).get(placement.path)
-		if order is not None and _LOST not in body:
+		rules = _run_rules(struct).get(placement.path, [])
+		if (order is not None or rules) and _LOST not in body:
 			lines.append(f"\tlocal {_lua(_local(struct, placement))}_first = at")
 		lines.extend(line for line in body if line != _LOST)
 		lost = _LOST in body
 		if order is not None and not lost:
 			lines.extend(_order_check(struct, placement, order))
+		if rules and not lost:
+			lines.extend(_rule_tallies(resolved, struct, placement, rules))
 		if not lost:
 			lines.extend(_check_marks(struct, checked, placement, "after"))
 
@@ -2414,6 +2418,72 @@ def _experts(struct: ResolvedStruct) -> list[str]:
 	return lines
 
 
+#: The rule tallies a struct's body declared, by helper name: what
+#: `_message_calls` may read (26.1170).
+_TALLIED: set[str] = set()
+
+
+def _run_rules(struct: ResolvedStruct) -> "dict[str, list[traverse.RunRule]]":
+	"""The rules over a run's elements this struct's `when`s ask, by run."""
+	found: dict[str, list[traverse.RunRule]] = {}
+	for when in _MESSAGES.get(struct.name, []):
+		_, same = traverse.run_equalities(when.expr, struct, _STRUCTS,
+		                                  when.name)
+		for held in same.values():
+			if isinstance(held, traverse.RunRule) and held.kind != "unique":
+				found.setdefault(held.run.path, []).append(held)
+	return found
+
+
+def _rule_tallies(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, rules: "list[traverse.RunRule]") -> list[str]:
+	"""The run just dissected walked again, each element asked each rule's
+	body, as the other six readers ask it (26.1170).
+
+	From the run's first byte to where its dissection stopped, each element
+	measured by the stride the run's own loop measures it by, its body read
+	at the element's offset. A rule whose body this cannot read is left
+	untallied, and `_message_calls` declines it; `unique` is declined.
+	"""
+	element = _STRUCTS.get(placement.type_name or "")
+	stride  = (_element_stride(resolved, element)
+	           if element is not None else None)
+	if element is None or stride is None:
+		return []
+	bodies = []
+	for rule in rules:
+		shown = _over_fields(element, expr_to_source(rule.body, explicit=True),
+		                     "at")
+		if shown is None:
+			continue
+		shown = translate_operators(shown, conj=" and ", disj=" or ",
+		                            ne=" ~= ", neg="not ")
+		bodies.append((_lua(rule.helper), shown))
+	if not bodies:
+		return []
+	run = _lua(_local(struct, placement))
+	lines = [f"	-- {placement.path}: each element asked its rules (26.1170)"]
+	for tally, _ in bodies:
+		lines.append(f"	local {tally}_hits, {tally}_n = 0, 0")
+	lines.extend([
+		f"	local {run}_p, {run}_end = {run}_first, at",
+		f"	while {run}_p < {run}_end do",
+		f"		local at = {run}_p",
+		f"		local size = {stride}",
+		f"		if size == nil or size <= 0 or at + size > {run}_end then"
+		" break end",
+	])
+	for tally, shown in bodies:
+		lines.extend([
+			f"		{tally}_n = {tally}_n + 1",
+			f"		if ({shown}) and ({shown}) ~= 0 then"
+			f" {tally}_hits = {tally}_hits + 1 end",
+		])
+		_TALLIED.add(tally)
+	lines.extend([f"		{run}_p = at + size", "	end"])
+	return lines
+
+
 def _placement_at(struct: ResolvedStruct, path: str) -> Placement:
 	return next(entry.placement for entry in struct.entries
 	            if entry.placement.path == path)
@@ -2503,7 +2573,8 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 	proto = _lua(struct.name)
 	lines = ["", "\t-- what the schema says about this message (0051)"]
 	for when in held:
-		expr, same = traverse.run_equalities(when.expr, struct)
+		expr, same = traverse.run_equalities(when.expr, struct, _STRUCTS,
+		                                     when.name)
 		source = expr_to_source(expr, explicit=True)
 		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 		lengths = _same_reads(same, struct)
@@ -2515,6 +2586,19 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		guards = "".join(f"{read} ~= nil and "
 		                 for read in sorted(set(lengths.values()))
 		                 if read.endswith("_len"))
+		# A rule over a run's elements, from the tallies the run's second
+		# walk declared (26.1170), asked to exist as a length is.
+		for lifted, rule in same.items():
+			if not isinstance(rule, traverse.RunRule):
+				continue
+			tally = _lua(rule.helper)
+			if tally not in _TALLIED:
+				continue
+			extra[lifted] = {
+				"any":   f"({tally}_hits > 0 and 1 or 0)",
+				"all":   f"({tally}_hits == {tally}_n and 1 or 0)",
+				"count": f"{tally}_hits"}[rule.kind]
+			guards += f"{tally}_hits ~= nil and "
 		if not lost:
 			local = re.sub(rf"\bsize\(\s*{re.escape(struct.name)}\s*\)",
 			               "situ_struct_extent", local)
