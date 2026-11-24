@@ -2742,3 +2742,32 @@ def test_refuse_ungenerated_does_not_refuse_a_shape_that_has_no_owned_form(
 	assert main(["build", str(ROOT / schema), "--target", "c",
 	             "--layer", "drive", "--refuse-ungenerated",
 	             "--out", str(tmp_path / "out")]) == 0
+
+
+def test_a_file_that_is_not_text_is_said_to_be_so(tmp_path: Path) -> None:
+	"""Handed a capture where a schema or a vectors file goes -- `verify`
+	reads message bytes written as hex -- situc ended in a Python
+	traceback, `UnicodeDecodeError`, with no word of its own."""
+	capture = tmp_path / "capture.bin"
+	capture.write_bytes(b"\x00\x00\x01\xa2\x03\x96")
+	schema = tmp_path / "unit.situ"
+	schema.write_text("target buffer;\nstruct s { u8 a; }\n", encoding="ascii")
+	for argv in (["verify", str(schema), str(capture)],
+	             ["build", "--target", "c", "--out", str(tmp_path),
+	              str(capture)]):
+		with pytest.raises(SystemExit) as raised:
+			main(argv)
+		assert "is not UTF-8 text: byte 0xa2 at offset 3" in str(
+			raised.value.code), argv
+
+
+def test_an_import_that_is_not_text_is_a_diagnostic(tmp_path: Path) -> None:
+	from situc.cli import analyse
+	from situc.diagnostics import SituError
+	(tmp_path / "capture.bin").write_bytes(b"\x00\x00\x01\xa2")
+	schema = tmp_path / "unit.situ"
+	schema.write_text('target buffer;\nimport "capture.bin";\n'
+	                  "struct s { u8 a; }\n", encoding="ascii")
+	with pytest.raises(SituError) as raised:
+		analyse(schema)
+	assert "is not UTF-8 text" in raised.value.diagnostic.message

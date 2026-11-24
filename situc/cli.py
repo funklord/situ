@@ -461,6 +461,15 @@ def read_source(path: Path) -> Source:
 		text = path.read_text(encoding="utf-8")
 	except OSError as exc:
 		raise SystemExit(f"situc: cannot read {path}: {exc.strerror}") from exc
+	except UnicodeDecodeError as exc:
+		# A schema or a vectors file is text. Handed a capture -- the
+		# bytes `verify` checks are written as hex in a vectors file --
+		# this ended in a Python traceback.
+		raise SystemExit(
+			f"situc: {path} is not UTF-8 text: byte "
+			f"0x{exc.object[exc.start]:02x} at offset {exc.start}; a "
+			"schema and a vectors file are text, with message bytes "
+			"written as hex") from exc
 	return Source(str(path), text)
 
 
@@ -1458,7 +1467,7 @@ def cmd_import_proto(args: argparse.Namespace) -> int:
 	"""
 	from situc import proto
 
-	text     = args.proto.read_text(encoding="utf-8")
+	text     = read_source(args.proto).text
 	imported = proto.read(text)
 	name     = args.proto.name
 

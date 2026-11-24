@@ -209,3 +209,10 @@ def _read(target: Path, directive: ast.ImportDirective) -> str:
 			         "directory, not from a search path: which file it names "
 			         "does not depend on how situc was invoked"],
 		) from exc
+	except UnicodeDecodeError as exc:
+		raise error(
+			f"`{directive.path}` is not UTF-8 text",
+			directive.span,
+			label = f"byte 0x{exc.object[exc.start]:02x} at offset {exc.start}",
+			notes = [f"read {target}", "a schema is text"],
+		) from exc
