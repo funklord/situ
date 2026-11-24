@@ -248,7 +248,18 @@ GUI_SOURCES += $(wildcard $(QTKIT_DIR)/src/*.cpp $(QTKIT_DIR)/src/*.h \
 gui: $(GUI_BIN)
 	@$(if $(GUI_QTTY),:,echo 'gui: built without qtty ($(QTTY_DIR) is not checked out): no --tui' >&2)
 
-$(BUILD_DIR)/qtty/Makefile: $(QTTY_DIR)/src/src.pro $(QTTY_DIR)/qtty.pri
+# Which copy of qtty its Makefile was generated from, rewritten only when
+# that changes. Without it a tree built before 3a6aeada moved qtty from
+# vendor/qtty to the root kept a Makefile naming the old path, which its
+# own qmake rule then could not find, and the window never built again.
+QTTY_DIR_STAMP = $(BUILD_DIR)/qtty/dir.stamp
+$(QTTY_DIR_STAMP): FORCE
+	@mkdir -p '$(@D)'
+	@printf '%s\n' '$(abspath $(QTTY_DIR))' > '$@.new'
+	@if cmp -s '$@.new' '$@'; then rm -f '$@.new'; else mv '$@.new' '$@'; fi
+
+$(BUILD_DIR)/qtty/Makefile: $(QTTY_DIR)/src/src.pro $(QTTY_DIR)/qtty.pri \
+                            $(QTTY_DIR_STAMP)
 	@mkdir -p '$(@D)'
 	cd '$(@D)' && $(QMAKE) '$(abspath $(QTTY_DIR))/src/src.pro' \
 	    QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib'
