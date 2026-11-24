@@ -4591,6 +4591,25 @@ def _check_arguments(struct: ast.StructDecl, member: ast.Field,
 				 "[stream];` if it is fixed for a stream"])
 
 
+def _counts_a_rule_run(schema: ast.Schema, arg: ast.Expr) -> bool:
+	"""Whether `count(arg)` names a run a rule walks (26.1170): a counted
+	or `while` run of structs, a member of the struct the path starts at.
+	Anything else has no reader counting it, as before."""
+	paths = paths_in(arg)
+	if len(paths) != 1:
+		return False
+	owner, _, field = paths[0].partition(".")
+	decls = {decl.name: decl for decl in schema.structs()}
+	struct = decls.get(owner)
+	if struct is None or not field or "." in field:
+		return False
+	member = _find_member(struct, field)
+	return isinstance(member, ast.Field) \
+		and member.type_ref.name in decls \
+		and member.until is None \
+		and (member.array is not None or member.repeat is not None)
+
+
 def check_when_calls(schema: ast.Schema) -> None:
 	"""A `when` may ask `size`, and nothing else about the layout (26.897).
 
@@ -4607,8 +4626,7 @@ def check_when_calls(schema: ast.Schema) -> None:
 			# counts as it counts `count(r in s.rules: ...)` -- by walking
 			# them (rules over lists, 2026-11-24).
 			if call.name == "count" and len(call.args) == 1 \
-					and len(paths_in(call.args[0])) == 1 \
-					and paths_in(call.args[0])[0].partition(".")[0] in structs:
+					and _counts_a_rule_run(schema, call.args[0]):
 				continue
 			# `offset(s)` of the struct the `when` is on: where this one
 			# sits in the message, which every reader holds (26.1045). A

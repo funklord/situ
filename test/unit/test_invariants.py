@@ -1735,7 +1735,10 @@ def test_every_expression_kind_is_classified_by_paths_in() -> None:
 	`unparse._expr` raises `TypeError` for a kind it does not know and is the
 	only expression walker in the tree that cannot have this defect."""
 	names_no_field = {"IntLiteral", "StringLiteral", "CharLiteral", "Remaining"}
-	recurses       = {"Access", "NameRef", "Call", "Binary", "Unary"}
+	recurses       = {"Access", "NameRef", "Call", "Binary", "Unary",
+	                  # A rule over a run's elements: the run, and each
+	                  # element member as `run[].member` (26.1170).
+	                  "Quantified"}
 	names_its_base = {"Index"}
 
 	every = {kind.__name__ for kind in ast.Expr.__subclasses__()}
