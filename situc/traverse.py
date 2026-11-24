@@ -2839,9 +2839,43 @@ def run_ordering(structs: dict[str, ResolvedStruct],
 			return f"its elements: {fault}"
 		return RunOrdering(stride, 0, stride, placement)
 
+	# A key of several members, `(capability, grantee)`: compared member by
+	# member, first first -- which, for runs of bytes that follow one
+	# another in the element, is one byte key over their whole extent, and
+	# every reader already compares one. fuzznet's manifest orders its
+	# pairs so, by capability and then grantee (its `chain/manifest.c`,
+	# 2026-11-24). Members of any other kind, or with bytes between them,
+	# are refused: the comparison would need a reader that walks a tuple.
+	if isinstance(attr.value, ast.Call) and attr.value.name == "tuple":
+		held: list[Placement] = []
+		for part in attr.value.args:
+			if not isinstance(part, ast.NameRef):
+				return "a key of several members names each of them"
+			found = next((entry.placement for entry in element.entries
+			              if entry.placement.path
+			              == f"{element.name}.{part.name}"), None)
+			if found is None:
+				return f"`{element.name}` has no member `{part.name}`"
+			held.append(found)
+		at = None
+		for one in held:
+			if one.offset_bits is None or one.offset_bits % BITS_PER_BYTE \
+					or not one.is_fixed_size \
+					or one.scalar is None \
+					or one.scalar.bits != BITS_PER_BYTE \
+					or one.scalar.signed or one.array_count is None:
+				return (f"`{one.path}` is not a run of bytes at one place, "
+				        "which a key of several members is")
+			if at is not None and one.offset_bits != at:
+				return (f"`{one.path}` does not follow the member before it "
+				        "in the key, so the key is not one run of bytes")
+			at = one.offset_bits + one.size_bits
+		first = (held[0].offset_bits or 0) // BITS_PER_BYTE
+		return RunOrdering(stride, first, (at or 0) // BITS_PER_BYTE - first,
+		                   None)
 	if attr.value is None or not isinstance(attr.value, ast.NameRef):
 		return ("a run of structs is ordered by one of its members: "
-		        "`[ascending = key]`")
+		        "`[ascending = key]`, or several, `[ascending = (a, b)]`")
 	key = next((entry.placement for entry in element.entries
 	            if entry.placement.path == f"{element.name}.{attr.value.name}"),
 	           None)

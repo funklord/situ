@@ -433,7 +433,12 @@ without huge dependencies kept, and the pertinent code shared:
   peeked variant for `#id` and `@group`, a `[chars]` name, `whitespace`
   for runs of spaces -- and the remote one is too except "`none` stands
   alone", a rule over a run's elements that situ has no quantifier for.
-  Open: `when` over a run, if fuzznet asks; until then that rule is its.
+  Rules over lists: wanted (holder, 2026-11-24). fuzznet's cases, by its
+  own ranking: its manifest's pairs strictly ascending by a key of two
+  members (`chain/manifest.c`, data from the wire); the remote permit's
+  "none stands alone"; the group list's "no name twice" (its message,
+  2026-11-24). Built in that order: a composite `[ascending]` key, then
+  quantifiers over a run's elements in `when`.
 - From fuzznet, relaying netcfgd (inbox 20261124T0245Z, fuzznet sec
   1428): moving fuzznet's layouts onto situ's generated C grew netcfgd's
   installed binary by 158,528 bytes (text +121,656) at -Os with section
@@ -621,7 +626,12 @@ both walkers and the dissector. What a user cannot yet do is listed under
   to back, one CRC16 over `[0, image_size)` matching each (inbox
   20261122T1417Z, 26.1117 amended); (e) a failsafe flash's
   chunk interleave, whose chunk size is read from inside what it permutes
-  -- a scope question, low priority. Also told: a schema with an
+  -- a scope question, low priority. Scope settled (holder, 2026-11-24):
+  in scope if streaming needs it. fuzznet, asked the same day, needs no
+  stream carried in fixed chunks alternating with another's -- its pieces
+  interleave on the wire but are told apart by fields, which `reassemble`
+  states -- so the failsafe flash's interleave stays out of scope until
+  a stream needs it. Also told: a schema with an
   unbounded codec builds Python only at `--layer edit`, and a view-layer
   gate then reports "no vector to run it on" with the reason only in
   stderr.
@@ -1681,7 +1691,11 @@ says each element's `digest` is above the one before -- so none appears
 twice, which is what `ordering = ascending` asks of a `tlv` region's items
 under its default (9.5) -- and `u32 offsets[n] [ascending]` says it of the
 elements themselves. A byte key compares byte by byte, first byte first; an
-integer key as the number its bytes say. `validate` refuses a run out of
+integer key as the number its bytes say. A key of several members,
+`[ascending = (capability, grantee)]`, compares them in turn, first
+first: runs of bytes that follow one another in the element, which is one
+byte key over their extent (fuzznet's manifest, 2026-11-24); a key whose
+members are integers or have bytes between them is refused for now. `validate` refuses a run out of
 order in all four backends and both walkers, the image carrying each run's
 stride and key (26.988), and the dissector says so as expert info (26.989).
 It holds a counted run

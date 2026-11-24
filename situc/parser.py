@@ -3895,6 +3895,17 @@ class Parser:
 
 		if self.accept_symbol("(") is not None:
 			inner = self.parse_expr()
+			# `(capability, grantee)`: a key of several members (26.985's
+			# composite key). A call named `tuple`, so a pass that has no
+			# use for one refuses it as it refuses any builtin it does not
+			# know.
+			if self.current.is_symbol(","):
+				parts = [inner]
+				while self.accept_symbol(",") is not None:
+					parts.append(self.parse_expr())
+				close = self.expect_symbol(")", "to close the list of members")
+				return ast.Call(Span(self.source, token.span.start,
+				                     close.span.end), "tuple", tuple(parts))
 			self.expect_symbol(")", "to close the parenthesised expression")
 			return inner
 

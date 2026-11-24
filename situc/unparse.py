@@ -710,7 +710,8 @@ def _expr(expr: ast.Expr, parent_binding: int, explicit: bool = False,
 	if isinstance(expr, ast.Call):
 		args = ", ".join(expr_to_source(arg, explicit=explicit)
 		                 for arg in expr.args)
-		return f"{expr.name}({args})"
+		# A key of several members is written as the parser read it.
+		return f"({args})" if expr.name == "tuple" else f"{expr.name}({args})"
 
 	if isinstance(expr, ast.Unary):
 		rendered = f"{expr.op}{_expr(expr.operand, _UNARY_BINDING, explicit)}"

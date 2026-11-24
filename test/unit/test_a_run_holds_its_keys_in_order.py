@@ -143,3 +143,76 @@ def test_the_dissector_says_a_run_is_out_of_order(tmp_path: Path) -> None:
 		run = "values" if struct in ("by_signed", "by_byte") else "index"
 		expected = [f"{struct}.{run}_out_of_order"] if verdict == "2" else []
 		assert said == expected, (struct, data.hex(), said)
+
+
+# -- a key of several members (fuzznet's manifest, 2026-11-24) --------------
+
+PAIRS = """target buffer;
+endian big;
+struct pair {
+	u8 cap[2];
+	u8 gr[2];
+	u8 id;
+	u8 state [max = 1];
+}
+struct manifest {
+	u8   count [max = 8];
+	pair pairs[count] [ascending = (cap, gr)];
+}
+"""
+
+
+def pair(cap: int, gr: int, id_: int = 0, state: int = 0) -> bytes:
+	return cap.to_bytes(2, "big") + gr.to_bytes(2, "big") + bytes([id_, state])
+
+
+#: (struct, bytes, verdict), worked by hand: the key is `cap` and then
+#: `gr`, strictly ascending, and `id` and `state` are not in it -- so two
+#: pairs differing only in what is said about them are a duplicate.
+PAIR_CASES = [
+	("manifest", bytes([2]) + pair(1, 2) + pair(1, 3), "0"),
+	("manifest", bytes([2]) + pair(1, 9) + pair(2, 0), "0"),
+	("manifest", bytes([2]) + pair(1, 2, 7) + pair(1, 2, 8, 1), "2"),
+	("manifest", bytes([2]) + pair(1, 3) + pair(1, 2), "2"),
+	("manifest", bytes([2]) + pair(2, 0) + pair(1, 9), "2"),
+	("manifest", bytes([1]) + pair(5, 5), "0"),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason = "needs all four toolchains")
+def test_a_key_of_several_members_is_held_by_all_six(tmp_path: Path) -> None:
+	"""fuzznet's manifest orders its pairs by capability and then grantee,
+	and checks it by hand (`chain/manifest.c`): equal is a duplicate and
+	lower is out of order. `[ascending = (cap, gr)]` states it; the two
+	members follow one another, so the key is one run of bytes, which
+	every reader already compares."""
+	source = tmp_path / "unit.situ"
+	source.write_text(PAIRS, encoding = "ascii")
+	command = fourway.build(tmp_path, source)
+	image = _inline_image(PAIRS)
+	shape = shape_named_text(PAIRS, "manifest")
+	for struct, data, verdict in PAIR_CASES:
+		for backend, argv in command.items():
+			answer  = fourway.answers(argv, data, tmp_path)
+			section = answer[answer.index(f"-- {struct}\n"):].split("\n-- ")[0]
+			line = next(one for one in section.splitlines()
+			            if one.startswith("validate "))
+			assert line.split()[1] == verdict, (data.hex(), backend)
+		assert python_verdict(image, data, shape) == verdict, data.hex()
+		assert c_verdict(tmp_path, image, data, shape) == verdict, data.hex()
+
+
+@pytest.mark.parametrize("key, said", [
+	("(cap, id)", "is not a run of bytes"),
+	("(cap, gr, state)", "is not a run of bytes"),
+	("(gr, cap)", "does not follow the member before it"),
+	("(cap, nothing)", "has no member"),
+	("(cap, gr + 1)", "names each of them"),
+])
+def test_a_key_of_several_members_is_one_run_of_bytes(key: str,
+                                                      said: str) -> None:
+	text = PAIRS.replace("[ascending = (cap, gr)]", f"[ascending = {key}]")
+	with pytest.raises(SituError) as caught:
+		schema = parse_text(text, path = "t.situ")
+		resolve(schema, solve(schema))
+	assert said in caught.value.diagnostic.render()
