@@ -560,3 +560,19 @@ def test_a_variant_lists_what_each_case_selects() -> None:
 	assert _row(text, "kind.a", "x", "u8", "1", "byte")
 	assert _row(text, "kind.b", "y", "u16", "2", "bytes")
 	assert _row(text, "other", "-", "refused")
+
+
+def test_a_registry_s_keys_are_listed() -> None:
+	"""A registry is a keyspace a person reads -- fuzznet's 48 settings --
+	and the document said nothing of it: not the keys, their cells, their
+	bounds and defaults, nor what each is for (0070)."""
+	from situc.cli import analyse
+	source, resolved, _ = analyse(ROOT / "test" / "schema" / "edges.situ")
+	from situc.parser import parse
+	text = render(parse(source), resolved, "edges")
+	assert "registry edge_settings" in text
+	row = next(line for line in text.splitlines()
+	           if line.startswith("journal/window"))
+	assert "count_cell" in row and 'default = "60"' in row
+	assert "how far back the journal reaches" in row
+	assert any(line.startswith("stream/grant/*") for line in text.splitlines())

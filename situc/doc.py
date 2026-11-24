@@ -151,7 +151,8 @@ def _grid(headers: tuple[str, ...], rows: Sequence[tuple[str, ...]],
 
 
 def _vocabulary(schema: ast.Schema, fmt: str) -> list[str]:
-	"""Each enum's values and each token set's spellings.
+	"""Each enum's values, each registry's keys and each token set's
+	spellings.
 
 	The field table names a member's type -- `kind`, `greeting` -- and the
 	values that type admits were nowhere in the document, so a reader met
@@ -171,6 +172,22 @@ def _vocabulary(schema: ast.Schema, fmt: str) -> list[str]:
 		lines.extend(["", ("Any other value is accepted and kept."
 		                   if decl.effective_default is ast.EnumDefault.PASS
 		                   else "Any other value is refused."), ""])
+	for registry in schema.registries():
+		heading = f"registry {registry.name}"
+		lines.extend([f"## {heading}", ""] if fmt == "markdown"
+		             else [heading, "-" * len(heading), ""])
+		lines.extend(_grid(
+			("Key", "Cell", "Bounds and default", "Summary"),
+			[(entry.key + ("*" if entry.family else ""), entry.type_name,
+			  ", ".join(f"{attr.name} = {_attr_value(attr)}"
+			            if attr.value is not None else attr.name
+			            for attr in entry.attrs) or "-",
+			  entry.summary or "-")
+			 for entry in registry.entries], fmt))
+		if any(entry.family for entry in registry.entries):
+			lines.extend(["", "A key ending in `/*` is a family: each "
+			              "instance adds one word to it."])
+		lines.append("")
 	for tokens in schema.token_sets():
 		heading = f"tokens {tokens.name}"
 		lines.extend([f"## {heading}", ""] if fmt == "markdown"

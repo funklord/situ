@@ -547,7 +547,8 @@ both walkers and the dissector. What a user cannot yet do is listed under
   `let` over a text number or a token is declined, and so is a rule that
   compares a possibly negative value with a possibly huge unsigned one
   (26.1153).
-- `situc map` does not describe a registry; its contract is in `wire`.
+- `situc map` does not describe a registry; its contract is in `wire`,
+  and `situc doc` lists its keys, cells, bounds, defaults and summaries.
 - Coverage-guided fuzzing of the Rust and Python harnesses: built
   (26.1132), `make fuzz-python` and `make fuzz-rust`; atheris and
   cargo-fuzz are user-level installs here (holder, 2026-11-21). And of
