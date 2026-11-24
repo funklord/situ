@@ -62,6 +62,8 @@ SPELLS = 0x0D
 #: A struct's `let`, by its row in the lets section (26.1102): the value its own
 #: program assembles, held to its width and sign as the getter is.
 LET = 0x0E
+#: A rule over a run's elements (26.1170): + u32 row of `image_run_rule`.
+RULE = 0x0F
 _U64 = (1 << 64) - 1
 
 
@@ -153,7 +155,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
         sum_of: Callable[[int], int] | None = None,
         here: int | None = None,
         spells: Callable[[int, bytes, bool], int] | None = None,
-        let_of: Callable[[int], int] | None = None) -> int:
+        let_of: Callable[[int], int] | None = None,
+        rule_of: Callable[[int], int] | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -207,6 +210,14 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 				raise VmError("this program reads a `let` and nothing here "
 				              "computes one")
 			stack.append(let_of(row))
+			continue
+		if op == RULE:
+			row = _struct.unpack_from("<I", code, pc)[0]
+			pc += 4
+			if rule_of is None:
+				raise VmError("this program asks a rule over a run and nothing "
+				              "here walks one")
+			stack.append(rule_of(row))
 			continue
 		if op == SUM:
 			if sum_of is None:

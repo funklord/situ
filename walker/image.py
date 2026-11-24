@@ -40,6 +40,8 @@ REGISTRY_WORDS                    = 33
 CHOICES                           = 34
 #: The tags a `tlv` region knows, with what its policies say of each.
 TLV_KNOWN                         = 35
+#: The rules over a run's elements a `when` asks (26.1170).
+RUN_RULES                         = 36
 SKIPS                             = 22
 WHITESPACE                        = 23
 TLV_RULES                         = 24
@@ -66,6 +68,7 @@ KNOWN_SECTIONS = frozenset({
 	ENUM_VALUES, VERSIONS, RELATIONS, RELATION_MUSTS, PINNED_RUNS, DEPTHS,
 	SKIPS, WHITESPACE, TLV_RULES, MESSAGES, TAGS, KERNEL_TABLES, ARGUMENTS,
 	HOLDS, ORDERINGS, LETS, REGISTRY, REGISTRY_WORDS, CHOICES, TLV_KNOWN,
+	RUN_RULES,
 })
 SECTION_ANCILLARY = 1
 
@@ -553,6 +556,11 @@ class Image:
 	#: part they are matched on is in the image, so a validator declines on
 	#: these rather than passes them.
 	tlv_unenforceable: set[int] = field(default_factory=set)
+	#: Each rule over a run's elements, by row (26.1170): (run placement,
+	#: element struct, kind -- 0 any, 1 all, 2 count, 3 unique -- body
+	#: program, `unique`'s key placement or NONE).
+	run_rules: list[tuple[int, int, int, int, int]] = field(
+		default_factory=list)
 	#: placement index -> (policy bits 0-3 of the row's flags, identity
 	#: program, {known tag: (bit 0 admitted and bit 1 once, typed form,
 	#: element bytes, element struct)}) for a region whose policies a walk
@@ -900,6 +908,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
 			                     _number_is_big(tag_flags),
 			                     bool(tag_flags & 1))
+
+	if RUN_RULES in found:
+		at, records, stride = found[RUN_RULES]
+		for i in range(records):
+			image.run_rules.append(_struct.unpack_from(
+				"<IIBxxxII", blob, at + i * stride))
 
 	if TLV_KNOWN in found:
 		at, records, stride = found[TLV_KNOWN]

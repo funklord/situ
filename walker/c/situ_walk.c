@@ -18,6 +18,12 @@
 #define TAG_TLV_RULES  24u
 /* The tags a `tlv` region knows and what its policies say of each. */
 #define TAG_TLV_KNOWN  35u
+/* The rules over a run's elements a `when` asks (26.1170). */
+#define TAG_RUN_RULES  36u
+#define RUN_RULE_READS 20u	/* run, element, kind, body, key */
+/* The most keys `unique` keeps: this walker allocates nothing, and the
+ * Python walker declines at the same count so the two agree. */
+#define RULE_UNIQUE_MOST 256u
 #define TAG_INDEXES    11u
 #define TAG_DEPTHS     21u
 #define TAG_PINNED_RUNS 20u
@@ -259,6 +265,13 @@ static situ_walk_err read_sections(situ_walk_image *out,
 			out->tlvs       = image + offset;
 			out->tlv_count_ = items;
 			out->tlv_stride = stride;
+		} else if (kind == TAG_RUN_RULES) {
+			if (stride < RUN_RULE_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->run_rules       = image + offset;
+			out->run_rule_count  = items;
+			out->run_rule_stride = stride;
 		} else if (kind == TAG_TLV_KNOWN) {
 			if (stride < TLV_KNOWN_READS) {
 				return SITU_WALK_MALFORMED;
@@ -1709,6 +1722,30 @@ static int digits_out_of_domain(const situ_walk_image *image, uint32_t index,
 static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
                               int32_t base, int64_t *out);
 
+/* A rule over a run's elements, tallied as the run is walked (26.1170):
+ * `any`, `all` and `count` count the elements whose body holds; `unique`
+ * keeps each key's place and length and notes a repeat. */
+typedef struct {
+	uint32_t kind;		/* 0 any, 1 all, 2 count, 3 unique */
+	uint32_t body;
+	uint32_t key;
+	uint32_t hits;
+	uint32_t n;
+	int      repeated;
+	uint32_t kept;
+	uint32_t key_at[RULE_UNIQUE_MOST];
+	uint32_t key_len[RULE_UNIQUE_MOST];
+} rule_tally;
+
+static situ_walk_err run_elements_walk(const situ_walk_image *image,
+                                       const uint8_t *message,
+                                       uint32_t len, uint32_t shape,
+                                       uint32_t index, uint32_t depth,
+                                       uint32_t from, uint32_t named,
+                                       situ_walk_err *verdict,
+                                       situ_walk_why *why,
+                                       rule_tally *tally);
+
 /* `remaining` is ASKED FOR rather than handed over, so a program that never
  * names it never pays for the offset the word is measured from.
  *
@@ -2015,6 +2052,43 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 	 * backend's `which` over its clamped pointer and length answers. */
 	/* A `let` (26.1102): its own program over this frame, held to its width and
 	 * read back signed where the let is, as `situ_walk_let` holds it. */
+	/* A rule over a run's elements (26.1170): the run walked once with a
+	 * tally, as `report._rule_value` walks it. */
+	if (what == SITU_WALK_ASK_RULE) {
+		/* On the stack, not static: a walk shares nothing between
+		 * threads (26.1137), and 2 KB is what `unique`'s keys cost. */
+		rule_tally        tally;
+		situ_walk_err     verdict = SITU_WALK_OK;
+		const uint8_t    *row;
+
+		if (ctx->image->run_rules == NULL
+		    || index >= ctx->image->run_rule_count) {
+			return SITU_WALK_MALFORMED;
+		}
+		row = ctx->image->run_rules + index * ctx->image->run_rule_stride;
+		tally.kind     = row[8];
+		tally.body     = u32_at(row + 12u);
+		tally.key      = u32_at(row + 16u);
+		tally.hits     = 0u;
+		tally.n        = 0u;
+		tally.repeated = 0;
+		tally.kept     = 0u;
+		const situ_walk_err err = run_elements_walk(ctx->image, ctx->message,
+		                                            ctx->len, ctx->shape,
+		                                            u32_at(row), ctx->depth,
+		                                            SITU_WALK_NONE,
+		                                            u32_at(row), &verdict,
+		                                            NULL, &tally);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = tally.kind == 0u ? (tally.hits != 0u)
+		       : tally.kind == 1u ? (tally.hits == tally.n)
+		       : tally.kind == 2u ? (int64_t)tally.hits
+		       : !tally.repeated;
+		return SITU_WALK_OK;
+	}
+
 	if (what == SITU_WALK_ASK_LET) {
 		const uint8_t *row;
 		int64_t        held = 0;
@@ -6970,6 +7044,91 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
                                            situ_walk_err *verdict,
                                            situ_walk_why *why)
 {
+	return run_elements_walk(image, message, len, shape, index, depth, from,
+	                         named, verdict, why, NULL);
+}
+
+/* One element's part in a rule (26.1170): its body asked over its own
+ * frame, or for `unique` its key's bytes compared with each kept before
+ * it -- exact for a number as for a run of bytes, both sides of one width
+ * and one encoding. */
+static situ_walk_err rule_element(const situ_walk_image *elements,
+                                  const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t at, uint32_t extent,
+                                  uint32_t element, uint32_t depth,
+                                  rule_tally *tally)
+{
+	(void)image;
+	tally->n += 1u;
+	if (tally->kind == 3u) {
+		uint32_t off  = 0u;
+		uint32_t size = 0u;
+		situ_walk_err err = situ_walk_offset_bits(elements, message + at,
+		                                          extent, element, tally->key,
+		                                          &off);
+		if (err == SITU_WALK_OK) {
+			err = situ_walk_size_bits(elements, message + at, extent,
+			                          element, tally->key, &size);
+		}
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (off % 8u != 0u || size % 8u != 0u
+		    || off / 8u + size / 8u > extent
+		    || tally->kept >= RULE_UNIQUE_MOST) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		const uint32_t key_at  = at + off / 8u;
+		const uint32_t key_len = size / 8u;
+		for (uint32_t k = 0u; k < tally->kept && !tally->repeated; k++) {
+			if (tally->key_len[k] != key_len) {
+				continue;
+			}
+			uint32_t i = 0u;
+			while (i < key_len
+			       && message[tally->key_at[k] + i] == message[key_at + i]) {
+				i++;
+			}
+			if (i == key_len) {
+				tally->repeated = 1;
+			}
+		}
+		tally->key_at[tally->kept]  = key_at;
+		tally->key_len[tally->kept] = key_len;
+		tally->kept += 1u;
+		(void)len;
+		return SITU_WALK_OK;
+	}
+	{
+		walk_ctx ctx   = {elements, message + at, extent, element,
+		                  depth + 1u};
+		int64_t  value = 0;
+		const situ_walk_err err = situ_walk_eval(elements, tally->body,
+		                                         ctx_load, &ctx,
+		                                         (int64_t)extent, &value);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (value != 0) {
+			tally->hits += 1u;
+		}
+	}
+	return SITU_WALK_OK;
+}
+
+/* The walk itself: each element validated, or -- given a `tally` -- asked
+ * a rule's body instead (26.1170). A run the walk does not take is
+ * UNSUPPORTED for a rule, where for validation it adds nothing. */
+static situ_walk_err run_elements_walk(const situ_walk_image *image,
+                                       const uint8_t *message,
+                                       uint32_t len, uint32_t shape,
+                                       uint32_t index, uint32_t depth,
+                                       uint32_t from, uint32_t named,
+                                       situ_walk_err *verdict,
+                                       situ_walk_why *why,
+                                       rule_tally *tally)
+{
 	situ_walk_placement held;
 	situ_walk_err       err = situ_walk_placement_at(image, index, &held);
 	const uint8_t      *rules = NULL;
@@ -6985,9 +7144,11 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 	    || varint_rules(image, index) != NULL
 	    || (held.repeat_code == SITU_WALK_NONE && rules == NULL
 	        && held.size_code == SITU_WALK_NONE
-	        && held.array_count == SITU_WALK_NONE)
-	    || (!element_validatable(image, held.type_struct)
-	        && !argument_rows(image, index))) {
+	        && held.array_count == SITU_WALK_NONE)) {
+		return tally != NULL ? SITU_WALK_UNSUPPORTED : SITU_WALK_OK;
+	}
+	if (tally == NULL && !element_validatable(image, held.type_struct)
+	    && !argument_rows(image, index)) {
 		return SITU_WALK_OK;
 	}
 	/* What the run hands each element (0068). */
@@ -7004,7 +7165,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 	     i++) {
 		if (u32_at(image->arms + (size_t)i * image->arm_stride + 4u)
 		    == index) {
-			return SITU_WALK_OK;
+			return tally != NULL ? SITU_WALK_UNSUPPORTED : SITU_WALK_OK;
 		}
 	}
 	/* `record_run_walk`'s guard, whose elements these are (26.930). */
@@ -7101,6 +7262,15 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 			break;
 		}
 
+		if (tally != NULL) {
+			err = rule_element(&elements, image, message, len, at, extent,
+			                   held.type_struct, depth, tally);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			goto advance;
+		}
+
 		situ_walk_err inner_verdict = SITU_WALK_OK;
 		/* The row's fifth word, where the image carries it (26.577). */
 		const uint32_t floor = image->struct_stride >= 20u
@@ -7125,6 +7295,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 			*verdict = inner_verdict;
 			return SITU_WALK_OK;
 		}
+	advance:
 		at += extent;
 		n  += 1u;
 
@@ -8847,6 +9018,8 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_SPELLS 0x0Du
 /* A `let` by its row in the lets section (26.1102), a u32 operand. */
 #define OP_LET 0x0Eu
+/* A rule over a run's elements (26.1170): + u32 row. */
+#define OP_RULE 0x0Fu
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -9114,12 +9287,17 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			continue;
 		}
 
-		if (op == OP_LET) {
+		if (op == OP_LET || op == OP_RULE) {
 			if (pc + 4u > image->code_len || depth >= STACK_DEPTH) {
 				return SITU_WALK_MALFORMED;
 			}
+			if (load == NULL) {
+				return SITU_WALK_UNSUPPORTED;
+			}
 			int64_t value = 0;
-			const situ_walk_err err = load(ctx, SITU_WALK_ASK_LET,
+			const situ_walk_err err = load(ctx, op == OP_LET
+			                                    ? SITU_WALK_ASK_LET
+			                                    : SITU_WALK_ASK_RULE,
 			                               u32_at(image->code + pc), 0,
 			                               &value);
 			if (err != SITU_WALK_OK) {

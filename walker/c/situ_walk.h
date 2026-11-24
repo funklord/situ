@@ -197,6 +197,10 @@ typedef struct {
 	uint32_t       tlv_rule_count;
 	uint32_t       tlv_rule_stride;
 
+	const uint8_t *run_rules;
+	uint32_t       run_rule_count;
+	uint32_t       run_rule_stride;
+
 	const uint8_t *tlv_known;
 	uint32_t       tlv_known_count;
 	uint32_t       tlv_known_stride;
@@ -864,7 +868,11 @@ typedef enum {
 	/* A struct's `let` (26.1102): `index` is its row in the lets section, and
 	 * the answer is its program's value held to the let's width and sign,
 	 * as the getter returns it. `base` is unused. */
-	SITU_WALK_ASK_LET = 9
+	SITU_WALK_ASK_LET = 9,
+	/* A rule over a run's elements (26.1170): `index` is its row in the
+	 * run-rules section, the answer its value -- 1 or 0 for `any`, `all`
+	 * and `unique`, how many for `count`. `base` is unused. */
+	SITU_WALK_ASK_RULE = 10
 } situ_walk_ask;
 
 typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,

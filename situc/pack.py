@@ -87,6 +87,8 @@ VARINT_BYTES	= 12
 #: walker needs to hold `known` tags to their policies (26.738, 26.740,
 #: 26.741); a reader taking sixteen declines those as before.
 TLV_BYTES	= 20
+#: `image_run_rule`, one row per rule over a run's elements (26.1170).
+RUN_RULE_BYTES	= 20
 #: `image_tlv_known`, one row per tag a region's `known` names, with what
 #: its value is held to (26.1167).
 TLV_KNOWN_BYTES	= 20
@@ -197,6 +199,10 @@ SECTION_CHOICES		= 34
 #: The tags a `tlv` region knows and what its policies say of each:
 #: `image_tlv_known`. Ancillary, below.
 SECTION_TLV_KNOWN	= 35
+#: The rules over a run's elements a `when` asks (26.1170):
+#: `image_run_rule`. Ancillary: a walker without it meets `RULE` in a
+#: refusal's program and declines, as for any instruction it lacks.
+SECTION_RUN_RULES	= 36
 CHOICE_BYTES		= 24
 #: What `--metadata` adds and a bare image lacks: the tail, named once so a
 #: test holding the core to "unchanged by the tail" cannot list it short.
@@ -208,7 +214,8 @@ TAIL_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_CHOICES})
 #: the section existed, so it walks the same and answers no less soundly.
 ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_LETS,
                                 SECTION_REGISTRY, SECTION_REGISTRY_WORDS,
-                                SECTION_CHOICES, SECTION_TLV_KNOWN})
+                                SECTION_CHOICES, SECTION_TLV_KNOWN,
+                                SECTION_RUN_RULES})
 #: A tag and what computes it (26.579), and the kernel tables a polynomial
 #: codec needs. Both are additive: a reader that does not know them reads
 #: every other section exactly as before.
@@ -394,6 +401,9 @@ class Op:
 	#: A struct's `let` in a `when` (26.1102), by its row in the lets section:
 	#: the walker runs that row's program and holds it to the let's width.
 	LET		= 0x0E		# + u32 let row
+	# A rule over a run's elements (26.1170): its value, which the walker
+	# computes by walking the run and asking the row's body of each.
+	RULE		= 0x0F		# + u32 rule row
 
 
 BINARY = {
@@ -442,6 +452,8 @@ class Program:
 		#: `owner.let` paths to their rows in the lets section, which a
 		#: `when` program reads with `LET`. Filled once the lets are packed.
 		self.lets: dict[str, int] = {}
+		#: A lifted rule's name -> its row in `image_run_rule`.
+		self.rules: dict[str, int] = {}
 
 	def character(self, expr: "ast.CharLiteral") -> int:
 		"""A character literal, as the number the parser resolved it to.
@@ -554,6 +566,9 @@ class Program:
 				if path is not None and path in self.lets:
 					self.emit(Op.LET, self.lets[path])
 					return
+				if path is not None and path in self.rules:
+					self.emit(Op.RULE, self.rules[path])
+					return
 				raise PackError(f"no placement for `{path or expr}`")
 			index, base = found
 			if base:
@@ -564,6 +579,13 @@ class Program:
 			return
 		if isinstance(expr, ast.Unary):
 			self.compile(expr.operand, resolve_path, known, folded, spelled)
+			# A logical `!` is a comparison with zero, which every walker
+			# already evaluates: `!unique(...)` is how a rule is refused
+			# (26.1170), and it was a `when` no image could carry.
+			if expr.op == "!":
+				self.emit(Op.PUSH, 0, "<q")
+				self.emit(Op.EQ)
+				return
 			op = UNARY.get(expr.op, ...)
 			if op is ...:
 				raise PackError(f"unary `{expr.op}`")
@@ -2034,6 +2056,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	              ast.Severity.NOTE: 2}
 	#: Structs with a `refuse` this image could not encode.
 	refusal_lost: set[str] = set()
+	run_rules_blob = bytearray()
 	for when in schema.whens():
 		owners = [path.partition(".")[0] for path in paths_in(when.expr)
 		          if path.partition(".")[0] in shape_of]
@@ -2043,11 +2066,49 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				"names no struct in this image"
 			continue
 
+		# Rules over a run's elements (26.1170): each body a program over
+		# the element, a row naming the run, and `RULE` where the rule
+		# stood. Any rule whose body cannot be carried loses the `when`.
+		lifted, lifted_held = traverse.run_equalities(
+			when.expr, resolved.structs[owner], resolved.structs, when.name)
+		rules_ok = True
+		for lifted_name, run_rule in lifted_held.items():
+			if not isinstance(run_rule, traverse.RunRule):
+				continue
+			body_start = len(program.code)
+			element_name = run_rule.element.name
+
+			def in_element(path: str | None,
+					element: str = element_name) -> tuple[int, int] | None:
+				return resolve_path(path, element)
+			try:
+				program.compile(run_rule.body, in_element, consts,
+				                enum_members)
+			except PackError as why:
+				del program.code[body_start:]
+				coverage.unencodable[f"when {when.name}"] = str(why)
+				rules_ok = False
+				break
+			program.emit(Op.END)
+			program.rules[lifted_name] = len(run_rules_blob) // RUN_RULE_BYTES
+			run_rules_blob += _struct.pack(
+				"<IIBxxxII", placement_index[run_rule.run.path],
+				struct_index[run_rule.element.name],
+				{"any": 0, "all": 1, "count": 2, "unique": 3}[run_rule.kind],
+				body_start,
+				_u32(placement_index.get(run_rule.key.path)
+				     if run_rule.key is not None else None))
+		if not rules_ok:
+			if when.severity is ast.Severity.REFUSE:
+				refusal_lost.add(owner)
+			continue
+
 		# Two byte runs compared (26.1128): the image has a stack of numbers
 		# and no instruction comparing bytes, and loading a run as a number
 		# reads at most a word of it. Recorded as any expression the image
 		# cannot carry is, rather than answered from a word of a key.
-		if traverse.run_equalities(when.expr, resolved.structs[owner])[1]:
+		if any(isinstance(one, traverse.RunEquality)
+		       for one in lifted_held.values()):
 			coverage.unencodable[f"when {when.name}"] = \
 				"compares two byte runs, and an image compares numbers"
 			if when.severity is ast.Severity.REFUSE:
@@ -2056,7 +2117,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 		start = len(program.code)
 		try:
-			program.compile(_measured(when.expr, resolved.structs[owner],
+			program.compile(_measured(lifted, resolved.structs[owner],
 			                          resolved),
 			                resolve_path, consts, enum_members)
 		except PackError as why:
@@ -3700,6 +3761,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
 			(SECTION_TLV_RULES, tlv_rules_blob, TLV_RULE_BYTES),
 			(SECTION_TLV_KNOWN, tlv_known_blob, TLV_KNOWN_BYTES),
+			(SECTION_RUN_RULES, run_rules_blob, RUN_RULE_BYTES),
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
 			(SECTION_ARGUMENTS, arguments_blob, ARGUMENT_BYTES),
 			(SECTION_HOLDS, holds_blob, HOLDS_BYTES),

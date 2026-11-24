@@ -946,7 +946,15 @@ def _evaluate(view: View, code_at: int,
 		# `offset(s)`: the view's start is its offset in the message, every
 		# nested view being made over the one buffer (26.1045).
 		here       = view.at,
+		rule_of    = (None if RULE_VALUE is None
+		              else lambda row: RULE_VALUE(view, row)),
 	)
+
+
+#: How a rule over a run's elements is valued (26.1170). `report` walks the
+#: run with its own element validation beside it, and this module cannot
+#: import it, so it hands the function in; None leaves `RULE` unread.
+RULE_VALUE: "Callable[[View, int], int] | None" = None
 
 
 def let_value(view: View, row: int) -> int:

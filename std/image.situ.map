@@ -186,6 +186,14 @@ struct image_relation_must size=8 repr=ValueConverted
   image_relation_must.code               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_relation_must.must_pad           offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
+struct image_run_rule size=20 repr=ValueConverted atomic=NonAtomic
+  image_run_rule.run_placement           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_run_rule.element_struct          offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_run_rule.rule_kind               offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_run_rule.rule_pad                offset=AbsoluteStatic(0x09) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  image_run_rule.body_code               offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_run_rule.key_placement           offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
 struct image_section size=16 repr=ValueConverted canonical=NonCanonical
   image_section.kind                     offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord canonical=NonCanonical
   image_section.section_flags            offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord

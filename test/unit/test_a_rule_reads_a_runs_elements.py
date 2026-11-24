@@ -73,21 +73,6 @@ def test_all_four_hold_the_rules(tmp_path: Path) -> None:
 			assert line.split()[1] == verdict, (label, name, held)
 
 
-@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
-def test_the_walkers_decline_rather_than_pass(tmp_path: Path) -> None:
-	"""The image carries no program for a rule over a run, so both walkers
-	say they cannot answer -- never `0` where the four refuse."""
-	from test_walker_c import (c_verdict, packed_text, python_verdict,
-	                           shape_named_text)
-	blob  = packed_text(SCHEMA)
-	shape = shape_named_text(SCHEMA, "s")
-	for label, data, verdict in CASES:
-		said = python_verdict(blob, data, shape)
-		assert said in ("cannot-say", "1") and (said == "1") == \
-			(verdict == "1") or said == "cannot-say", (label, said)
-		assert c_verdict(tmp_path, blob, data, shape) == said, label
-
-
 @pytest.mark.parametrize(("rule", "said"), [
 	("any(x in s.gs: x.kind == s.c)", "which is not a member of `x`"),
 	("any(x in s.c: x == 1)", "is not a run of structs"),
@@ -207,3 +192,26 @@ def test_an_enum_member_reads_each_element(tmp_path: Path) -> None:
 			line = next(one for one in held.splitlines()
 			            if one.startswith("validate "))
 			assert line.split()[1] == verdict, (label, name, held)
+
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+@pytest.mark.parametrize(("schema", "cases", "shape_name"), [
+	(SCHEMA, CASES, "s"), (UNIQUE, UNIQUE_CASES, "s"),
+	(ENUMERATED, ENUMERATED_CASES, "p"),
+])
+def test_both_walkers_hold_the_rules(tmp_path: Path, schema: str,
+                                     cases: list[tuple[str, bytes, str]],
+                                     shape_name: str) -> None:
+	"""The image carries each rule -- its run, its element, its body as a
+	program over the element, `unique`'s key -- and `RULE` where it stood,
+	so both walkers give the four backends' verdict rather than declining.
+	A logical `!` is a comparison with zero, which is how `!unique(...)`
+	reaches an image at all."""
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	blob  = packed_text(schema)
+	shape = shape_named_text(schema, shape_name)
+	for label, data, verdict in cases:
+		assert python_verdict(blob, data, shape) == verdict, label
+		assert c_verdict(tmp_path, blob, data, shape) == verdict, label

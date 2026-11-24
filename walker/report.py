@@ -3234,3 +3234,52 @@ def _run_count(view: View, index: int) -> int:
 	start  = view.at + offset_bits(view, index) // 8
 	spare  = max(0, view.limit - start) // max(1, width)
 	return min(want, spare)
+
+
+def _rule_value(view: View, row: int) -> int:
+	"""A rule over a run's elements (26.1170), as the four backends value
+	it: the run's own elements, each asked the row's body over its own
+	view -- `any` and `all` 1 or 0, `count` how many, `unique` 1 where no
+	two share the key. A run this cannot walk is one it cannot value."""
+	from walker import walk
+	image = view.image
+	run, element, kind, body, key = image.run_rules[row]
+	elements = _run_elements(view, run)
+	if elements is None:
+		raise vm.VmError("a rule over a run this walker does not walk")
+	hits = 0
+	seen: list[object] = []
+	for at, size in elements:
+		inner = View(image, view.buffer, element, at, at + size, {})
+		if kind == 3:
+			# The C walker keeps 256 keys and declines past them, having
+			# nowhere to put more; so does this, so the two agree.
+			if len(seen) >= 256:
+				raise vm.VmError("more keys than a walker keeps")
+			if walk.is_run(image, key):
+				start = inner.at + offset_bits(inner, key) // BITS_PER_BYTE
+				held: object = bytes(view.buffer[
+					start:start + size_bits(inner, key) // BITS_PER_BYTE])
+			else:
+				held = walk._value_of(inner, key)
+			if held in seen:
+				return 0
+			seen.append(held)
+			continue
+		if walk._evaluate(inner, body):
+			hits += 1
+	if kind == 0:
+		return 1 if hits else 0
+	if kind == 1:
+		return 1 if hits == len(elements) else 0
+	if kind == 2:
+		return hits
+	return 1
+
+
+def _install_rule_value() -> None:
+	from walker import walk
+	walk.RULE_VALUE = _rule_value
+
+
+_install_rule_value()

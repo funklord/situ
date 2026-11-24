@@ -79,6 +79,7 @@ enum image_section_tag : u16 {
 	registry_words = 33,   // the policy words a registry's cells name (0070)
 	choices      = 34,     // tail: an enum-typed field's members, by name
 	tlv_known    = 35,     // the tags a `tlv` region knows, and their policies
+	run_rules    = 36,     // the rules over a run's elements a `when` asks
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -451,6 +452,19 @@ struct image_tlv {
 	u32  identity_code;
 }
 
+// A rule over a run's elements (26.1170), which a `when`'s program reads
+// with `rule`: the run, its element's struct, what it asks -- 0 any, 1 all,
+// 2 count, 3 unique -- the body as a program over the element, and
+// `unique`'s key member or `none`. Rows in the order the programs name.
+struct image_run_rule {
+	u32  run_placement;
+	u32  element_struct;
+	u8   rule_kind;
+	u8   rule_pad[3];
+	u32  body_code;
+	u32  key_placement;
+}
+
 // A tag a `tlv` region's `known` names, and what its policies say of it:
 // bit 0 the region admits it (`unknown = error` refuses every other),
 // bit 1 it is admitted once (`duplicate_tags = error`). Consecutive under
@@ -814,6 +828,7 @@ require absolute_static(image_varint);
 require absolute_static(image_tlv);
 require absolute_static(image_tlv_rule);
 require absolute_static(image_tlv_known);
+require absolute_static(image_run_rule);
 require absolute_static(image_constraint);
 require absolute_static(image_pinned);
 require absolute_static(image_enum_value);
@@ -838,6 +853,7 @@ require size(image_varint) == 12;
 require size(image_tlv) == 20;
 require size(image_tlv_rule) == 28;
 require size(image_tlv_known) == 20;
+require size(image_run_rule) == 20;
 require size(image_constraint) == 16;
 require size(image_pinned) == 32;
 require size(image_enum_value) == 16;
