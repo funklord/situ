@@ -2771,3 +2771,17 @@ def test_an_import_that_is_not_text_is_a_diagnostic(tmp_path: Path) -> None:
 	with pytest.raises(SituError) as raised:
 		analyse(schema)
 	assert "is not UTF-8 text" in raised.value.diagnostic.message
+
+
+@pytest.mark.parametrize("command", ["wire", "map"])
+def test_a_committed_file_situc_did_not_write_is_said_to_be_so(
+		tmp_path: Path, command: str) -> None:
+	"""A committed signature or map is ASCII situc wrote; one holding any
+	other byte ended `--check` in a traceback."""
+	schema = tmp_path / "unit.situ"
+	schema.write_text("target buffer;\nstruct s { u8 a; }\n", encoding="ascii")
+	(tmp_path / f"unit.situ.{command}").write_bytes(b"\xff\xfe")
+	with pytest.raises(SystemExit) as raised:
+		main([command, "--check", str(schema)])
+	assert "is not what situc writes: byte 0xff at offset 0" in str(
+		raised.value.code)

@@ -473,6 +473,17 @@ def read_source(path: Path) -> Source:
 	return Source(str(path), text)
 
 
+def read_committed(path: Path) -> str:
+	"""A committed signature or map, which situc writes as ASCII."""
+	try:
+		return path.read_text(encoding="ascii")
+	except UnicodeDecodeError as exc:
+		raise SystemExit(
+			f"situc: {path} is not what situc writes: byte "
+			f"0x{exc.object[exc.start]:02x} at offset {exc.start} is not "
+			"ASCII; write it again with the command its name gives") from exc
+
+
 def apply_defines(source: Source, defines: Sequence[str] | None) -> Source:
 	"""`--define name=value`: a declared `const` set at generation (0050).
 
@@ -656,7 +667,7 @@ def cmd_wire(args: argparse.Namespace) -> int:
 		      file=sys.stderr)
 		return 1
 
-	before = committed.read_text(encoding="ascii")
+	before = read_committed(committed)
 	if before == current:
 		print(f"situc: {committed} is current", file=sys.stderr)
 		return 0
@@ -859,7 +870,7 @@ def _check_map(args: argparse.Namespace, current: str,
 		      file=sys.stderr)
 		return 1
 
-	expected = committed.read_text(encoding="ascii")
+	expected = read_committed(committed)
 	if expected == current:
 		print(f"situc: {committed} is current", file=sys.stderr)
 		_report(args, requirements.warnings(outcomes)
