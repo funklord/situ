@@ -155,3 +155,15 @@ def test_a_struct_sent_on_its_own_and_removed_still_breaks() -> None:
 	found = _kinds(before, "endian big;\nstruct b { u8 y; }\n")
 	assert ("breaking", "a") in [(kind, subject)
 	                             for kind, subject, _ in found], found
+
+
+def test_a_composite_key_is_one_change() -> None:
+	"""`ascending=(a, b)` holds a space and is one fact; split at it, the
+	check reported one attribute gained as two changes, each half a tuple
+	(fuzznet, inbox 20261124T1616Z)."""
+	before = ("target buffer;\nendian big;\nstruct p { u8 a[2]; u8 b[2]; }\n"
+	          "struct s { u8 c; p pairs[c]; }\n")
+	after  = before.replace("p pairs[c];", "p pairs[c] [ascending = (a, b)];")
+	found  = _kinds(before, after)
+	assert len(found) == 1, found
+	assert "`ascending=(a, b)`" in found[0][2], found

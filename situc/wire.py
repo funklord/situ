@@ -2332,7 +2332,32 @@ def _name_of(line: str) -> str:
 
 
 def _facts_of(line: str) -> set[str]:
-	return set(line.split()[4:])
+	return set(_words(line)[4:])
+
+
+def _words(line: str) -> list[str]:
+	"""`line` split at spaces outside brackets.
+
+	A fact may hold a space where it holds a tuple: `ascending=(capability,
+	grantee)` is one fact, and split at every space it was two, so
+	`wire --check` reported one attribute gained as two changes, each
+	half a tuple (fuzznet, inbox 20261124T1616Z).
+	"""
+	words: list[str] = []
+	depth = 0
+	word  = ""
+	for char in line:
+		if char.isspace() and depth == 0:
+			if word:
+				words.append(word)
+			word = ""
+			continue
+		depth += {"(": 1, ")": -1}.get(char, 0)
+		depth  = max(depth, 0)
+		word  += char
+	if word:
+		words.append(word)
+	return words
 
 
 def _compare_annotations(name: str, old: list[str],
