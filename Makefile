@@ -194,6 +194,11 @@ QTTY_DIR    ?= qtty
 QTTY_LIB     = $(BUILD_DIR)/qtty/lib/libqtty.a
 GUI_BIN      = $(BUILD_DIR)/situ-edit-gui
 GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h)
+# The menu entry's id, reverse-DNS (desktop-entry skill); the binary keeps
+# its own name. And the icon's PNG sizes, rendered from the SVG and
+# committed under packaging/icon: TDE takes a PNG before an SVG.
+GUI_ID         = se.vibes.situ-edit-gui
+GUI_ICON_SIZES = 16 22 32 48 64 128
 
 ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(QTTY_DIR)/qtty.pri),)
@@ -285,10 +290,29 @@ $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
 install-gui: gui
 	install -Dm755 '$(GUI_BIN)' '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
 	@# On the desktop's menu, with its icon (harmonization.md, GUI).
-	install -Dm644 packaging/situ-edit-gui.desktop \
-		'$(DESTDIR)$(PREFIX)/share/applications/situ-edit-gui.desktop'
-	install -Dm644 packaging/situ-edit-gui.svg \
-		'$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/situ-edit-gui.svg'
+	install -Dm644 packaging/$(GUI_ID).desktop \
+		'$(DESTDIR)$(PREFIX)/share/applications/$(GUI_ID).desktop'
+	install -Dm644 packaging/$(GUI_ID).svg \
+		'$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(GUI_ID).svg'
+	for n in $(GUI_ICON_SIZES); do \
+		install -Dm644 packaging/icon/$$n.png \
+			"$(DESTDIR)$(PREFIX)/share/icons/hicolor/$${n}x$${n}/apps/$(GUI_ID).png" \
+			|| exit 1; \
+	done
+	@# The id was `situ-edit-gui` until 2026-11-24: its two files go, so
+	@# the menu holds one entry (a launcher pinned to it breaks once).
+	rm -f '$(DESTDIR)$(PREFIX)/share/applications/situ-edit-gui.desktop'
+	rm -f '$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/situ-edit-gui.svg'
+	@# A live install refreshes the desktop's caches, where each tool is
+	@# present; a packager's (DESTDIR set) leaves that to dpkg's triggers.
+	@if [ -z '$(DESTDIR)' ]; then \
+		if command -v update-desktop-database >/dev/null; then \
+			update-desktop-database -q '$(PREFIX)/share/applications' || true; fi; \
+		if command -v gtk-update-icon-cache >/dev/null; then \
+			gtk-update-icon-cache -q -t -f '$(PREFIX)/share/icons/hicolor' || true; fi; \
+		if command -v tdebuildsycoca >/dev/null; then \
+			tdebuildsycoca >/dev/null 2>&1 || true; fi; \
+	fi
 	@echo 'installed situ-edit-gui; it needs the Qt 6 Widgets libraries$(if $(GUI_QTTY),, (built without qtty: no --tui))'
 
 # The window, opened on a message the repository ships: NTP's server reply
@@ -461,6 +485,12 @@ uninstall:
 	rm -rf '$(DESTDIR)$(PREFIX)/lib/editor'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situ-edit' '$(DESTDIR)$(PREFIX)/bin/situ-edit-tui'
 	rm -f '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
+	rm -f '$(DESTDIR)$(PREFIX)/share/applications/$(GUI_ID).desktop'
+	rm -f '$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(GUI_ID).svg'
+	for n in $(GUI_ICON_SIZES); do \
+		rm -f "$(DESTDIR)$(PREFIX)/share/icons/hicolor/$${n}x$${n}/apps/$(GUI_ID).png"; \
+	done
+	@# The names before the reverse-DNS id (2026-11-24).
 	rm -f '$(DESTDIR)$(PREFIX)/share/applications/situ-edit-gui.desktop'
 	rm -f '$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/situ-edit-gui.svg'
 	rm -f '$(DESTDIR)$(PREFIX)/include/situ.h'

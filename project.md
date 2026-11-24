@@ -165,8 +165,7 @@ specs passing.
 - Chunk interleave is out of scope until a stream needs it (fuzznet).
 - Next, nothing above the bar without input: a token compared inside a
   rule and rules over `until` runs wait for fuzznet to name a format;
-  the inbox items below (desktop entry, window icon, id rename, manual
-  pages) are open and not started.
+  the inbox items below: the window icon fallback and manual pages.
 
 **Run 12 (2026-11-22), the walkers held to the backends by fuzzing:**
 
@@ -609,16 +608,15 @@ both walkers and the dissector. What a user cannot yet do is listed under
 
 - From claude-guidelines' inbox messages of 2026-11-24 (20261124T2059Z,
   T2111Z, T2112Z, T2114Z), the GUI and packaging conventions the holder
-  set that day, none started: (a) `situ-edit-gui`'s icon is SVG only --
-  add PNGs at 16, 22, 32, 48, 64, 128, which TDE prefers
-  (`desktop-entry` skill); (b) `gui/main.cpp`'s `QIcon::fromTheme
+  set that day. Done: (a) PNGs at 16, 22, 32, 48, 64, 128 beside the
+  SVG, rendered with inkscape into `packaging/icon/`, and (c) the id is
+  `se.vibes.situ-edit-gui` -- the program's name, since the menu entry is
+  the editor and not the compiler -- with the old names removed on
+  install and uninstall. Open: (b) `gui/main.cpp`'s `QIcon::fromTheme
   ("situ-edit-gui")` has no fallback, so a build run from the tree and
   the GUI tests show no window icon -- a `.qrc` naming
-  `packaging/situ-edit-gui.svg` as `fromTheme`'s fallback, the same file
-  the package installs; (c) rename the desktop id `situ-edit-gui` to
-  `se.vibes.<name>` (the `.desktop` file, the icon files, `Icon=`,
-  `setDesktopFileName`; the binary and `StartupWMClass` keep their name;
-  uninstall removes the old name; the commit says it was renamed); (d)
+  `packaging/se.vibes.situ-edit-gui.svg` as `fromTheme`'s fallback, the same file
+  the package installs; (d)
   lintian's `no-manual-page` for `situ-edit`, `situ-edit-tui`,
   `situ-walk` and `situ-edit-gui` (`debian-packaging` skill).
 

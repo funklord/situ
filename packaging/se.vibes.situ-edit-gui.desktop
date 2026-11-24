@@ -4,13 +4,15 @@ Name=situ-edit-gui
 GenericName=Binary Message Editor
 Comment=Read and edit a message against a situ schema
 Exec=situ-edit-gui
-Icon=situ-edit-gui
+Icon=se.vibes.situ-edit-gui
 Terminal=false
 Categories=Development;
 Keywords=binary;hex;protocol;schema;packet;situ;
 
 # StartupWMClass has to match what the window reports, or its launcher and
 # the running window show as two entries. Measured with xprop on the
-# running window: WM_CLASS = "situ-edit-gui", "situ-edit-gui". Wayland's
-# half is QGuiApplication::setDesktopFileName("situ-edit-gui") in main.cpp.
+# running window: WM_CLASS = "situ-edit-gui", "situ-edit-gui" -- the
+# binary's name, which this keeps. Wayland's half is
+# QGuiApplication::setDesktopFileName("se.vibes.situ-edit-gui") in
+# main.cpp: the entry's id, reverse-DNS as freedesktop recommends.
 StartupWMClass=situ-edit-gui

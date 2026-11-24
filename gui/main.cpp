@@ -205,8 +205,8 @@ int main(int argc, char **argv)
 	QApplication::setApplicationName(QStringLiteral("situ-edit-gui"));
 	// The launcher and the running window as one entry: X11 matches
 	// WM_CLASS against the .desktop's StartupWMClass, Wayland this name.
-	QGuiApplication::setDesktopFileName(QStringLiteral("situ-edit-gui"));
-	QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("situ-edit-gui")));
+	QGuiApplication::setDesktopFileName(QStringLiteral("se.vibes.situ-edit-gui"));
+	QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("se.vibes.situ-edit-gui")));
 	QApplication::setApplicationVersion(QStringLiteral(SITU_VERSION));
 
 	QCommandLineParser parser;

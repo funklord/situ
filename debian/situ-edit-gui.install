@@ -1,3 +1,9 @@
 usr/bin/situ-edit-gui
-usr/share/applications/situ-edit-gui.desktop
-usr/share/icons/hicolor/scalable/apps/situ-edit-gui.svg
+usr/share/applications/se.vibes.situ-edit-gui.desktop
+usr/share/icons/hicolor/scalable/apps/se.vibes.situ-edit-gui.svg
+usr/share/icons/hicolor/16x16/apps/se.vibes.situ-edit-gui.png
+usr/share/icons/hicolor/22x22/apps/se.vibes.situ-edit-gui.png
+usr/share/icons/hicolor/32x32/apps/se.vibes.situ-edit-gui.png
+usr/share/icons/hicolor/48x48/apps/se.vibes.situ-edit-gui.png
+usr/share/icons/hicolor/64x64/apps/se.vibes.situ-edit-gui.png
+usr/share/icons/hicolor/128x128/apps/se.vibes.situ-edit-gui.png
