@@ -434,6 +434,13 @@ without huge dependencies kept, and the pertinent code shared:
   for runs of spaces -- and the remote one is too except "`none` stands
   alone", a rule over a run's elements that situ has no quantifier for.
   Open: `when` over a run, if fuzznet asks; until then that rule is its.
+- From fuzznet, relaying netcfgd (inbox 20261124T0245Z, fuzznet sec
+  1428): moving fuzznet's layouts onto situ's generated C grew netcfgd's
+  installed binary by 158,528 bytes (text +121,656) at -Os with section
+  GC -- spread across generated modules (fzn_entry_record +6.7 KB,
+  fzn_contact_devices +6.3 KB, a tail of `_check`/`_pack` near 1 KB each).
+  Not a request; both offer to rebuild at a named situ commit. Being
+  measured as run 16's size item.
 - Done 2026-11-23, run 16: this run's constructs (spelling rules, time,
   `while ... | end`, typed tlv values) put into `edges.situ` and asked
   against seven contexts each. The four backends agreed in every cell;
