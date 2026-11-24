@@ -2830,7 +2830,8 @@ Permitted:
 
 - in a `when`, `any(r in s.rules: pred)`, `all(...)`, `count(r in s.rules:
   pred)` and `count(s.rules)`: a rule over a run's elements, each asked
-  over its own view, the run walked once (26.1170)
+  over its own view, the run walked once; and `unique(r in s.rules:
+  r.key)`, no two elements sharing a key, over a bounded run (26.1170)
 
 Forbidden, by construction:
 

@@ -13755,6 +13755,10 @@ class Emitter:
 				                            unparse_expr(rule.body,
 				                                         explicit=True),
 				                            "element")
+				if rule.kind == "unique":
+					lines.extend(self._unique_helper(struct, when, rule,
+					                                 linkage))
+					continue
 				lines.extend([
 					f"/* `{rule.kind}` over `{rule.run.path}`, for `{when.name}`:"
 					" the run walked once. */",
@@ -13799,6 +13803,87 @@ class Emitter:
 					"",
 				])
 		return lines
+
+	def _unique_helper(self, struct: ResolvedStruct, when: ast.When,
+			rule: "traverse.RunRule", linkage: str) -> list[str]:
+		"""`unique`: no two elements share the key -- every pair compared,
+		which `traverse.unique_key_fault` bounds (26.1170). 1 where all
+		differ, 0 at the first pair that does not."""
+		element = rule.element
+		key     = rule.key
+		assert key is not None
+		extent  = self._element_extent_call(element)
+		assert extent is not None, "rule_run_fault: the element measures itself"
+		local   = c_name(self._local(struct, rule.run))
+		name    = c_name(key.name)
+
+		def read(view: str) -> str:
+			return f"{ident(self.prefix, element.name, name, 'get')}({view})"
+
+		if key.array_count is not None or key.delimiters or key.sized_by \
+				or key.size_expr is not None:
+			same = (f"situ_bytes_eq({ident(self.prefix, element.name, name, 'ptr')}(a),"
+			        f" {ident(self.prefix, element.name, name, 'len')}(a),"
+			        f" {ident(self.prefix, element.name, name, 'ptr')}(b),"
+			        f" {ident(self.prefix, element.name, name, 'len')}(b)) != 0")
+		else:
+			same = f"{read('a')} == {read('b')}"
+
+		def measured(view: str, at: str, size: str) -> list[str]:
+			return [
+				f"\t\tif (situ_view_sub(view, {at}, situ_remaining_u32(view.limit,"
+				f" {at}), &{view}) != SITU_OK) {{",
+				"\t\t\tbreak;",
+				"\t\t}",
+				f"\t\t{size} = {extent.replace('(element', f'({view}')};",
+				f"\t\tif ({size} == 0u || {size} > situ_remaining_u32(view.limit,"
+				f" {at})",
+				f"\t\t    || situ_view_sub(view, {at}, {size}, &{view})"
+				" != SITU_OK) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+			]
+		return [
+			f"/* `unique` over `{rule.run.path}` by `{key.name}`, for"
+			f" `{when.name}`: every pair compared. */",
+			f"{linkage or 'static '}"
+			f"uint32_t {ident(self.prefix, struct.name, rule.helper)}"
+			"(situ_view_t view)",
+			"{",
+			f"\tconst uint32_t total = (uint32_t)"
+			f"{ident(self.prefix, struct.name, local, 'count')}(view);",
+			f"\tuint32_t at = {self._base_expression(struct, rule.run)};",
+			"\tuint32_t n = 0u;",
+			"",
+			"\twhile (n < total && at < view.limit) {",
+			"\t\tsitu_view_t a;",
+			"\t\tuint32_t    size;",
+			"",
+			*measured("a", "at", "size"),
+			"\t\t{",
+			"\t\t\tuint32_t bt = at + size;",
+			"\t\t\tuint32_t m  = n + 1u;",
+			"",
+			"\t\t\twhile (m < total && bt < view.limit) {",
+			"\t\t\t\tsitu_view_t b;",
+			"\t\t\t\tuint32_t    bsize;",
+			"",
+			*[line.replace("\t\t", "\t\t\t\t", 1)
+			  for line in measured("b", "bt", "bsize")],
+			f"\t\t\t\tif ({same}) {{",
+			"\t\t\t\t\treturn 0u;",
+			"\t\t\t\t}",
+			"\t\t\t\tbt = bt + bsize;",
+			"\t\t\t\tm  = m + 1u;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\treturn 1u;",
+			"}",
+			"",
+		]
 
 	def _validate_body(self, struct: ResolvedStruct,
 			linkage: str = "") -> list[str]:

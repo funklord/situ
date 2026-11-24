@@ -9830,6 +9830,39 @@ class Emitter:
 					continue
 				name  = py_name(local_name(struct, rule.run))
 				inner = self._made(struct, rule.run, py_name(rule.element.name))
+				if rule.kind == "unique":
+					assert rule.key is not None
+					key = rule.key
+					run = (key.array_count is not None or key.delimiters
+					       or key.sized_by or key.size_expr is not None)
+					field = py_name(key.name)
+
+					def read(view: str) -> str:
+						return (f"bytes({view}.{field})" if run
+						        else f"{view}.{field}")
+					lines.extend([
+						"",
+						f"\tdef _{py_name(rule.helper)}(self) -> int:",
+						f'\t\t"""`unique` over `{rule.run.path}` by'
+						f' `{key.name}`, for `{when.name}`."""',
+						f"\t\ttotal = self.{name}_count",
+						f"\t\tat    = self.{name}_offset",
+						"\t\tseen: list[object] = []",
+						"\t\twhile len(seen) < total and at < self._len:",
+						f"\t\t\t_element = {inner}(self._msg, self._at + at,"
+						" self._len - at)",
+						"\t\t\tsize = _element._extent",
+						"\t\t\tif size == 0 or size > self._len - at:",
+						"\t\t\t\tbreak",
+						f"\t\t\t_element = {inner}(self._msg, self._at + at, size)",
+						f"\t\t\tkey = {read('_element')}",
+						"\t\t\tif key in seen:",
+						"\t\t\t\treturn 0",
+						"\t\t\tseen.append(key)",
+						"\t\t\tat += size",
+						"\t\treturn 1",
+					])
+					continue
 				body  = self._over_fields(rule.element,
 				                          unparse_expr(rule.body, explicit=True),
 				                          "_element")

@@ -5777,6 +5777,45 @@ class Emitter:
 					continue
 				run   = _ident(c_name(local_name(struct, rule.run)))
 				inner = _pascal(rule.element.name)
+				if rule.kind == "unique":
+					assert rule.key is not None
+					field = _ident(c_name(rule.key.name))
+					lines.extend([
+						"",
+						f"\t/// `unique` over `{rule.run.path}` by"
+						f" `{rule.key.name}`, for `{when.name}`: every pair"
+						" compared.",
+						f"\tfn {_ident(c_name(rule.helper))}(&self) -> usize {{",
+						f"\t\tlet total = self.{run}_count();",
+						f"\t\tlet mut at = self.{run}_offset();",
+						"\t\tlet mut n = 0usize;",
+						"\t\twhile n < total && at < self.bytes.len() {",
+						f"\t\t\tlet size = {inner} {{ bytes: &self.bytes[at..] }}.extent();",
+						"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
+						"\t\t\t\tbreak;",
+						"\t\t\t}",
+						f"\t\t\tlet a = {inner} {{ bytes: &self.bytes[at..at + size] }};",
+						"\t\t\tlet mut bt = at + size;",
+						"\t\t\tlet mut m = n + 1;",
+						"\t\t\twhile m < total && bt < self.bytes.len() {",
+						f"\t\t\t\tlet bsize = {inner} {{ bytes: &self.bytes[bt..] }}.extent();",
+						"\t\t\t\tif bsize == 0 || bsize > situ_rt::remaining(self.bytes.len(), bt) {",
+						"\t\t\t\t\tbreak;",
+						"\t\t\t\t}",
+						f"\t\t\t\tlet b = {inner} {{ bytes: &self.bytes[bt..bt + bsize] }};",
+						f"\t\t\t\tif a.{field}() == b.{field}() {{",
+						"\t\t\t\t\treturn 0;",
+						"\t\t\t\t}",
+						"\t\t\t\tbt += bsize;",
+						"\t\t\t\tm += 1;",
+						"\t\t\t}",
+						"\t\t\tat += size;",
+						"\t\t\tn += 1;",
+						"\t\t}",
+						"\t\t1",
+						"\t}",
+					])
+					continue
 				body  = self._over_fields(rule.element,
 				                          unparse_expr(rule.body, explicit=True),
 				                          "element")

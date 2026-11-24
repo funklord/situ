@@ -11466,6 +11466,68 @@ class Emitter:
 					continue
 				run   = bare_name(local_name(struct, rule.run))
 				inner = f"::{self.namespace}::{self._struct_class(rule.element.name)}"
+				measure = [
+					"\t\t\tsitu_view_t sub;",
+					"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,"
+					" situ_remaining_u32(raw_.limit, at), &sub) != SITU_OK) {",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					f"\t\t\tconst std::uint32_t size = {inner}(sub).extent();",
+					"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)",
+					"\t\t\t    || situ_view_sub(::situ::rt::view::raw(), at, size,"
+					" &sub) != SITU_OK) {",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+				]
+				if rule.kind == "unique":
+					assert rule.key is not None
+					key = rule.key
+					field = bare_name(key.name)
+					runs = (key.array_count is not None or key.delimiters
+					        or key.sized_by or key.size_expr is not None)
+					same = (f"situ_bytes_eq(a.{field}().data(),"
+					        f" static_cast<uint32_t>(a.{field}().size()),"
+					        f" b.{field}().data(),"
+					        f" static_cast<uint32_t>(b.{field}().size())) != 0"
+					        if runs else f"a.{field}() == b.{field}()")
+					inner_measure = [
+						re.sub(r"\bsize\b", "bsize", re.sub(
+							r"\bsub\b", "bsub", re.sub(
+								r"\bat\b", "bt", line))).replace(
+							"\t\t\t", "\t\t\t\t", 1)
+						for line in measure]
+					lines.extend([
+						"",
+						f"\t/** `unique` over `{rule.run.path}` by `{key.name}`,"
+						f" for `{when.name}`: every pair compared. */",
+						f"\t[[nodiscard]] std::uint32_t {bare_name(rule.helper)}()"
+						" const noexcept",
+						"\t{",
+						f"\t\tconst std::uint32_t total = {run}_count();",
+						f"\t\tstd::uint32_t at = {run}_offset();",
+						"\t\tstd::uint32_t n = 0u;",
+						"",
+						"\t\twhile (n < total && at < raw_.limit) {",
+						*measure,
+						f"\t\t\tconst {inner} a(sub);",
+						"\t\t\tstd::uint32_t bt = at + size;",
+						"\t\t\tstd::uint32_t m = n + 1u;",
+						"\t\t\twhile (m < total && bt < raw_.limit) {",
+						*inner_measure,
+						f"\t\t\t\tconst {inner} b(bsub);",
+						f"\t\t\t\tif ({same}) {{",
+						"\t\t\t\t\treturn 0u;",
+						"\t\t\t\t}",
+						"\t\t\t\tbt += bsize;",
+						"\t\t\t\tm  += 1u;",
+						"\t\t\t}",
+						"\t\t\tat += size;",
+						"\t\t\tn  += 1u;",
+						"\t\t}",
+						"\t\treturn 1u;",
+						"\t}",
+					])
+					continue
 				body  = self._over_fields(rule.element,
 				                          unparse_expr(rule.body, explicit=True)
 				                          ).replace("this->", "element.")

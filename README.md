@@ -1001,7 +1001,9 @@ when any(r in permit.rules: r.kind == none) && count(permit.rules) > 1
 	refuse none_alone "`none` stands alone";
 ```
 
-`any`, `all`, `count(r in run: pred)` and `count(run)`, the run walked once.
+`any`, `all`, `count(r in run: pred)` and `count(run)`, the run walked once;
+`unique(r in run: r.name)` says no two elements share a key, over a run
+whose size bounds how many pairs that is.
 
 Three severities and no fourth. `refuse` makes a message illegal and
 `validate` says so; `warn` and `note` describe one that conforms. All three

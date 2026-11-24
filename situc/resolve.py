@@ -121,6 +121,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 
 	from situc.traverse import messages
 	_check_when_arithmetic(schema, layout, result)
+	_check_run_rules(schema, result)
 	_check_when_extents(schema, result)
 	_check_orderings(result)
 	for name in result.structs:
@@ -867,6 +868,34 @@ def _check_orderings(result: ResolvedSchema) -> None:
 				         "one size, or `[ascending]` on a counted run of "
 				         "integers: each key above the one before"],
 			)
+
+
+def _check_run_rules(schema: ast.Schema, result: ResolvedSchema) -> None:
+	"""A rule over a run's elements is over one a reader can walk, and
+	`unique`'s key is one it can compare, bounded (26.1170)."""
+	from situc.invariant import paths_in
+	from situc.traverse import rule_run_fault, unique_key_fault, \
+		_over_element
+	from situc.wellformed import quantifiers_in
+
+	for when in schema.whens():
+		for rule in quantifiers_in(when.expr):
+			run_path = paths_in(rule.run)[0]
+			struct = result.structs.get(run_path.partition(".")[0])
+			held = next((entry.placement for entry in struct.entries
+			             if entry.placement.path == run_path), None) \
+				if struct is not None else None
+			fault = rule_run_fault(result.structs, held)
+			if fault is None and rule.kind == "unique" and held is not None:
+				fault = unique_key_fault(result.structs, held,
+				                         _over_element(rule.body, rule.var))[1]
+			if fault is not None:
+				raise error(
+					f"`{rule.kind}` cannot walk `{run_path}`",
+					rule.span, label = fault,
+					notes = ["a rule over a run's elements walks a counted "
+					         "or `while` run of structs that measure "
+					         "themselves, once (26.1170)"])
 
 
 def _check_when_extents(schema: ast.Schema, result: ResolvedSchema) -> None:

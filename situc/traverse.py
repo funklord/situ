@@ -2132,6 +2132,47 @@ class RunRule:
 	element: ResolvedStruct
 	body: ast.Expr
 	helper: str
+	#: `unique`'s key: the element member compared between every pair.
+	key: Placement | None = None
+
+
+#: The most elements `unique` compares pairwise: half of this squared is
+#: what a hostile message may ask of `validate` at worst.
+UNIQUE_MOST = 4096
+
+
+def unique_key_fault(structs: dict[str, ResolvedStruct], run: Placement,
+		body: ast.Expr) -> tuple[Placement | None, str | None]:
+	"""`unique`'s key, or why it cannot be one: one member of the element,
+	a scalar or a run of bytes, over a run whose elements are bounded."""
+	element = structs.get(run.type_name or "")
+	if element is None:
+		return None, "its elements are not structs"
+	if not isinstance(body, ast.NameRef):
+		return None, "`unique` compares one member of each element: `r.name`"
+	key = next((entry.placement for entry in element.entries
+	            if entry.placement.path == f"{element.name}.{body.name}"),
+	           None)
+	if key is None:
+		return None, f"`{element.name}` has no member `{body.name}`"
+	if key.scalar is None or (key.array_count is None and not key.delimiters
+	                          and key.sized_by is None
+	                          and key.size_expr is None
+	                          and not key.is_fixed_size):
+		return None, f"`{key.path}` is neither a number nor a run of bytes"
+	if (key.array_count is not None or key.delimiters or key.sized_by
+	        or key.size_expr is not None) and key.scalar.bits != BITS_PER_BYTE:
+		return None, f"`{key.path}` is a run of something other than bytes"
+	least = max(element.layout.size_bits, BITS_PER_BYTE)
+	if run.size_max_bits is None:
+		return None, ("the run has no largest size, so every pair is a "
+		              "number of comparisons the message chooses: bound it")
+	most = run.size_max_bits // least
+	if most > UNIQUE_MOST:
+		return None, (f"the run may hold {most} elements, and `unique` "
+		              f"compares every pair of at most {UNIQUE_MOST}: bound "
+		              "it tighter")
+	return key, None
 
 
 def _over_element(body: ast.Expr, var: str) -> ast.Expr:
@@ -2202,9 +2243,13 @@ def run_equalities(expr: ast.Expr, struct: ResolvedStruct,
 		if held is None or rule_run_fault(structs, held) is not None:
 			return None
 		name = f"{SAME}rule{len(found)}"
+		local = _over_element(body, var)
+		key = (unique_key_fault(structs, held, local)[0]
+		       if kind == "unique" else None)
+		if kind == "unique" and key is None:
+			return None
 		found[name] = RunRule(kind, held, structs[held.type_name or ""],
-		                      _over_element(body, var),
-		                      f"{named}_rule{rules}")
+		                      local, f"{named}_rule{rules}", key)
 		rules += 1
 		held_name = ast.NameRef(span, name)  # type: ignore[arg-type]
 		if kind == "count":

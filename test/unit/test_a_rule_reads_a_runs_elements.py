@@ -114,3 +114,61 @@ def test_a_rule_outside_a_when_is_refused() -> None:
 	with pytest.raises(SituError) as caught:
 		parse_text(text)
 	assert "a rule is a `when`" in caught.value.diagnostic.message
+
+
+UNIQUE = """target buffer;
+endian big;
+struct nm { u8 n; u8 text[n]; u8 tag; }
+struct s { u8 c [max = 8]; nm names[c]; }
+when !unique(x in s.names: x.text) refuse twice "a name twice";
+when !unique(x in s.names: x.tag) refuse tag_twice "a tag twice";
+"""
+
+
+def named(text: bytes, tag: int) -> bytes:
+	return bytes([len(text)]) + text + bytes([tag])
+
+
+#: The group list's rule, `unique` by a run of bytes, and by a number.
+UNIQUE_CASES = [
+	("two names", message(named(b"a", 1), named(b"b", 2)), "0"),
+	("a name twice", message(named(b"a", 1), named(b"a", 2)), "2"),
+	("a tag twice", message(named(b"a", 1), named(b"b", 1)), "2"),
+	("a name and its prefix", message(named(b"ab", 1), named(b"a", 2)), "0"),
+	("first and third", message(named(b"a", 1), named(b"b", 2),
+	                            named(b"a", 3)), "2"),
+	("an empty name twice", message(named(b"", 1), named(b"", 2)), "2"),
+	("none", message(), "0"),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_all_four_hold_unique(tmp_path: Path) -> None:
+	"""fuzznet's group list holds "no name twice" by hand: `unique`, every
+	pair compared, by a run of bytes or by a number."""
+	source = tmp_path / "unit.situ"
+	source.write_text(UNIQUE, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	for label, data, verdict in UNIQUE_CASES:
+		for name, argv in command.items():
+			held = fourway.answers(argv, data, tmp_path) \
+				.split("-- s\n")[1].split("\n-- ")[0]
+			line = next(one for one in held.splitlines()
+			            if one.startswith("validate "))
+			assert line.split()[1] == verdict, (label, name, held)
+
+
+@pytest.mark.parametrize(("schema", "said"), [
+	(UNIQUE.replace("u8 c [max = 8]", "u8 c"), "elements, and `unique`"),
+	(UNIQUE.replace("struct s { u8 c [max = 8]; nm names[c]; }",
+	                "struct s { u16 c; nm names[c]; }"),
+	 "elements, and `unique`"),
+	(UNIQUE.replace("x.tag)", "x.tag + 1)"), "compares one member"),
+])
+def test_unique_is_bounded_and_over_one_member(schema: str,
+                                               said: str) -> None:
+	with pytest.raises(SituError) as caught:
+		parsed = parse_text(schema)
+		resolve(parsed, solve(parsed))
+	assert said in caught.value.diagnostic.render(), \
+		caught.value.diagnostic.render()
