@@ -193,7 +193,8 @@ QMAKE       ?= qmake6
 QTTY_DIR    ?= qtty
 QTTY_LIB     = $(BUILD_DIR)/qtty/lib/libqtty.a
 GUI_BIN      = $(BUILD_DIR)/situ-edit-gui
-GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h)
+GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h gui/*.qrc) \
+               packaging/se.vibes.situ-edit-gui.svg
 # The menu entry's id, reverse-DNS (desktop-entry skill); the binary keeps
 # its own name. And the icon's PNG sizes, rendered from the SVG and
 # committed under packaging/icon: TDE takes a PNG before an SVG.

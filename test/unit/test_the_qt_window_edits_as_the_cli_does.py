@@ -465,3 +465,17 @@ def test_a_window_on_a_removed_element_refuses(window_binary: Path,
 	                 str(tmp_path / "f.png"))
 	assert window.returncode != 0
 	assert "reopen it" in window.stderr
+
+
+def test_the_window_has_an_icon_with_no_theme(window_binary: Path,
+		tmp_path: Path) -> None:
+	"""The window icon falls back to the SVG the package installs, compiled
+	in (gui.qrc): under -platform offscreen, or run from the tree, the
+	theme holds no `se.vibes.situ-edit-gui`, and the window had none
+	(qt-desktop-integration skill, claude-guidelines inbox 20261124T2111Z)."""
+	environment = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path),
+	               "QT_QPA_PLATFORM": "offscreen", "LANG": "C.UTF-8"}
+	done = subprocess.run([str(window_binary), "--window-icon"],
+	                      capture_output=True, text=True, timeout=60,
+	                      env=environment)
+	assert done.stdout.strip() == "present", done.stderr

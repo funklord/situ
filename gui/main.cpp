@@ -206,7 +206,12 @@ int main(int argc, char **argv)
 	// The launcher and the running window as one entry: X11 matches
 	// WM_CLASS against the .desktop's StartupWMClass, Wayland this name.
 	QGuiApplication::setDesktopFileName(QStringLiteral("se.vibes.situ-edit-gui"));
-	QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("se.vibes.situ-edit-gui")));
+	// The installed icon where the theme has it, and otherwise the same SVG
+	// compiled in (gui.qrc): run from the tree, or under -platform
+	// offscreen, the theme finds nothing and the window had no icon.
+	QApplication::setWindowIcon(QIcon::fromTheme(
+	    QStringLiteral("se.vibes.situ-edit-gui"),
+	    QIcon(QStringLiteral(":/se.vibes.situ-edit-gui.svg"))));
 	QApplication::setApplicationVersion(QStringLiteral(SITU_VERSION));
 
 	QCommandLineParser parser;
@@ -274,6 +279,10 @@ int main(int argc, char **argv)
 	    QStringLiteral("print whether the desktop reads as dark, light or "
 	                   "unknown -- what the window follows -- and exit"));
 	parser.addOption(scheme_option);
+	const QCommandLineOption icon_option(QStringLiteral("window-icon"),
+	    QStringLiteral("print whether the window has an icon to draw, "
+	                   "\"present\" or \"none\", and exit"));
+	parser.addOption(icon_option);
 	parser.addOptions({structure, offset, length, argument, hex, set,
 	                   set_bytes, insert, remove, out, open_field, no_ui, keys_option,
 	                   tui_option,
@@ -282,6 +291,11 @@ int main(int argc, char **argv)
 	if (parser.isSet(scheme_option)) {
 		std::printf("%s\n", qPrintable(qtkit_scheme_name(
 		    qtkit_desktop_scheme("SITU_THEME"))));
+		return 0;
+	}
+	if (parser.isSet(icon_option)) {
+		std::printf("%s\n", QApplication::windowIcon().pixmap(16).isNull()
+		                    ? "none" : "present");
 		return 0;
 	}
 

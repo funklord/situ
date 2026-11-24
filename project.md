@@ -165,7 +165,7 @@ specs passing.
 - Chunk interleave is out of scope until a stream needs it (fuzznet).
 - Next, nothing above the bar without input: a token compared inside a
   rule and rules over `until` runs wait for fuzznet to name a format;
-  the inbox items below: the window icon fallback and manual pages.
+  the inbox items below: manual pages.
 
 **Run 12 (2026-11-22), the walkers held to the backends by fuzzing:**
 
@@ -612,11 +612,10 @@ both walkers and the dissector. What a user cannot yet do is listed under
   SVG, rendered with inkscape into `packaging/icon/`, and (c) the id is
   `se.vibes.situ-edit-gui` -- the program's name, since the menu entry is
   the editor and not the compiler -- with the old names removed on
-  install and uninstall. Open: (b) `gui/main.cpp`'s `QIcon::fromTheme
-  ("situ-edit-gui")` has no fallback, so a build run from the tree and
-  the GUI tests show no window icon -- a `.qrc` naming
-  `packaging/se.vibes.situ-edit-gui.svg` as `fromTheme`'s fallback, the same file
-  the package installs; (d)
+  install and uninstall; (b) the window icon falls back to that SVG,
+  compiled in through `gui/gui.qrc`, so a build run from the tree and the
+  GUI tests under offscreen have one (`--window-icon` says which). Open:
+  (d)
   lintian's `no-manual-page` for `situ-edit`, `situ-edit-tui`,
   `situ-walk` and `situ-edit-gui` (`debian-packaging` skill).
 

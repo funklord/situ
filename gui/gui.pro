@@ -18,6 +18,8 @@
 TEMPLATE = app
 TARGET = situ-edit-gui
 QT += widgets
+# The window icon's fallback, the SVG the package installs (main.cpp).
+RESOURCES += gui.qrc
 CONFIG += c++17
 CONFIG -= app_bundle
 
