@@ -9876,6 +9876,27 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1171 A `when` counts a run's bytes, its terminator not among them
+
+fuzznet (inbox 20261124T1616Z) could not state its remote permit's host
+key of exactly 64 digits, nor its group list's names of 1 to 32: `size`
+counts a terminator that is there, so 64 digits and a space measure like
+65 at the end. `count(key)` of a run of bytes is its content now, in the
+four backends and both walkers, and `unique` over a delimited key
+compares content in both walkers as the backends did. The record, with
+the options weighed, is `doc/decision/26.1171-a-when-counts-a-runs-bytes.md`;
+held in `test_a_when_counts_a_runs_bytes.py`, fuzznet's two schemas.
+
+### 26.1170 A rule reads a run's elements
+
+`any`, `all`, `count` and `unique` over a counted or `while` run of
+structs, in a `when` (holder, 2026-11-24: "we likely want rules over
+lists"). Built in the four backends and both walkers, declined by the
+dissector; fuzznet's "none stands alone" agreed with its hand check on a
+million values. The record is
+`doc/decision/26.1170-a-rule-reads-a-runs-elements.md`; faults found
+asking it against fifteen contexts are in `test_a_rule_reads_a_runs_elements.py`.
+
 ### 26.1169 A registry names each cell type
 
 fuzznet (inbox 20261123T1218Z) builds its settings table from the
