@@ -3596,7 +3596,11 @@ class Parser:
 		no words does not.
 		"""
 		start = self.advance()
-		expr  = self.parse_expr()
+		self.in_when = True
+		try:
+			expr = self.parse_expr()
+		finally:
+			self.in_when = False
 
 		token    = self.expect_ident("a severity")
 		severity = SEVERITIES.get(token.text)
@@ -3928,6 +3932,38 @@ class Parser:
 
 	def parse_call(self, name: Token) -> ast.Expr:
 		self.expect_symbol("(", "to open the argument list")
+
+		# `any(r in s.rules: r.right == none)`: a rule over a run's
+		# elements, told from a call by the `in` after its first name.
+		if name.text in ast.QUANTIFIERS and self.current.kind is TokenKind.IDENT \
+				and self.peek().kind is TokenKind.IDENT and self.peek().text == "in":
+			if not getattr(self, "in_when", False):
+				raise error(
+					f"`{name.text}` over a run is a rule, and a rule is a "
+					"`when`", name.span, label = "here",
+					notes = ["a size, a bound or a pin is arithmetic over "
+					         "fields; a rule over a run's elements is "
+					         "asked once, in `validate`, as a `when` is"])
+			if getattr(self, "in_quantifier", False):
+				raise error(
+					f"`{name.text}` inside another rule over a run",
+					name.span, label = "here",
+					notes = ["one run per rule: an element is compared with "
+					         "its own members, and a rule pairing two runs' "
+					         "elements is not one a reader walks in one pass"])
+			var = self.advance()
+			self.advance()
+			run = self.parse_expr()
+			self.expect_symbol(":", f"after the run `{name.text}` reads")
+			self.in_quantifier = True
+			try:
+				body = self.parse_expr()
+			finally:
+				self.in_quantifier = False
+			close = self.expect_symbol(")", f"to close `{name.text}`")
+			return ast.Quantified(Span(self.source, name.span.start,
+			                           close.span.end),
+			                      name.text, var.text, run, body)
 
 		args: list[ast.Expr] = []
 		while not self.current.is_symbol(")"):

@@ -804,6 +804,7 @@ class Emitter:
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
+		lines.extend(self._rule_methods(struct))
 		lines.extend(self._messages(struct))
 		lines.extend(self._gates(struct))
 		lines.append("};")
@@ -11438,11 +11439,12 @@ class Emitter:
 
 		lines = ["\t\t/* What the schema refuses this message over (0051). */"]
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct), **self._same_reads(same)})}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct), **self._same_reads(struct, same)})}) {{",
 				f"\t\t\t/* {when.name} */",
 				*(["\t\t\t*which_ = no_check;"] if named else []),
 				"\t\t\treturn ::situ::rt::err::constraint;",
@@ -11450,18 +11452,77 @@ class Emitter:
 			])
 		return lines
 
-	def _same_reads(self, same: dict[str, traverse.RunEquality]
+	def _rule_methods(self, struct: ResolvedStruct) -> list[str]:
+		"""One member function per rule over a run's elements in this
+		struct's `when`s (rules over lists, 2026-11-24): the run walked once,
+		each element measured by its own extent and asked the rule's body,
+		read through the element's own accessors."""
+		lines: list[str] = []
+		for when in traverse.messages(self.schema, struct.name):
+			_expr, held = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
+			for rule in held.values():
+				if not isinstance(rule, traverse.RunRule):
+					continue
+				run   = bare_name(local_name(struct, rule.run))
+				inner = f"::{self.namespace}::{self._struct_class(rule.element.name)}"
+				body  = self._over_fields(rule.element,
+				                          unparse_expr(rule.body, explicit=True)
+				                          ).replace("this->", "element.")
+				answer = {"any": "hits != 0u ? 1u : 0u",
+				          "all": "hits == n ? 1u : 0u",
+				          "count": "hits"}[rule.kind]
+				lines.extend([
+					"",
+					f"\t/** `{rule.kind}` over `{rule.run.path}`, for"
+					f" `{when.name}`: the run walked once. */",
+					f"\t[[nodiscard]] std::uint32_t {bare_name(rule.helper)}()"
+					" const noexcept",
+					"\t{",
+					f"\t\tconst std::uint32_t total = {run}_count();",
+					f"\t\tstd::uint32_t at = {run}_offset();",
+					"\t\tstd::uint32_t n = 0u;",
+					"\t\tstd::uint32_t hits = 0u;",
+					"",
+					"\t\twhile (n < total && at < raw_.limit) {",
+					"\t\t\tsitu_view_t sub;",
+					"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,"
+					" situ_remaining_u32(raw_.limit, at), &sub) != SITU_OK) {",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					f"\t\t\tconst std::uint32_t size = {inner}(sub).extent();",
+					"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)",
+					"\t\t\t    || situ_view_sub(::situ::rt::view::raw(), at, size,"
+					" &sub) != SITU_OK) {",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					f"\t\t\tconst {inner} element(sub);",
+					f"\t\t\tif ({body}) {{",
+					"\t\t\t\thits += 1u;",
+					"\t\t\t}",
+					"\t\t\tat += size;",
+					"\t\t\tn  += 1u;",
+					"\t\t}",
+					f"\t\treturn {answer};",
+					"\t}",
+				])
+		return lines
+
+	def _same_reads(self, struct: ResolvedStruct,
+			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as C++ (26.1128): the C
 		runtime's byte compare over the two runs' spans, which on a view too
 		short for them are empty, so nothing is read past it."""
 		def run(placement: Placement, part: str) -> str:
 			return f"this->{bare_name(placement.name)}().{part}()"
-		return {name: f"(situ_bytes_eq({run(held.left, 'data')}, "
-		              f"static_cast<uint32_t>({run(held.left, 'size')}), "
-		              f"{run(held.right, 'data')}, "
-		              f"static_cast<uint32_t>({run(held.right, 'size')})) "
-		              f"{'!=' if held.equal else '=='} 0)"
+		return {name: (f"this->{bare_name(held.helper)}()"
+		               if isinstance(held, traverse.RunRule) else
+		               f"(situ_bytes_eq({run(held.left, 'data')}, "
+		               f"static_cast<uint32_t>({run(held.left, 'size')}), "
+		               f"{run(held.right, 'data')}, "
+		               f"static_cast<uint32_t>({run(held.right, 'size')})) "
+		               f"{'!=' if held.equal else '=='} 0)")
 		        for name, held in same.items()}
 
 	def _messages(self, struct: ResolvedStruct) -> list[str]:
@@ -11497,12 +11558,13 @@ class Emitter:
 			"\t\tstd::size_t found = 0;",
 		])
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t/* {when.severity.value} {when.name} */",
-				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct), **self._same_reads(same)})}) {{",
+				f"\t\tif ({self._over_fields(struct, local, extra = {'remaining': 'raw_.limit', **self._let_reads(struct), **self._same_reads(struct, same)})}) {{",
 				"\t\t\tif (found < cap) {",
 				f"\t\t\t\tids[found] = msg_{c_name(when.name)};",
 				"\t\t\t}",

@@ -801,6 +801,7 @@ class Emitter:
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._validate(struct))
+		lines.extend(self._rule_methods(struct))
 		lines.extend(self._messages(struct))
 		lines.extend(self._gate_opens(struct))
 		lines.extend(["}", ""])
@@ -5763,15 +5764,70 @@ class Emitter:
 			         f"situ_rt::remaining(self.bytes.len(), {start})"}
 		return self._rule_text(struct, source, extra)
 
-	def _same_reads(self, same: dict[str, traverse.RunEquality]
+	def _rule_methods(self, struct: ResolvedStruct) -> list[str]:
+		"""One method per rule over a run's elements in this struct's
+		`when`s (rules over lists, 2026-11-24): the run walked once, each
+		element measured by its own extent and asked the rule's body."""
+		lines: list[str] = []
+		for when in traverse.messages(self.schema, struct.name):
+			_expr, held = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
+			for rule in held.values():
+				if not isinstance(rule, traverse.RunRule):
+					continue
+				run   = _ident(c_name(local_name(struct, rule.run)))
+				inner = _pascal(rule.element.name)
+				body  = self._over_fields(rule.element,
+				                          unparse_expr(rule.body, explicit=True),
+				                          "element")
+				# `if` takes a `bool`: a body that is a number -- `count(s.gs)`
+				# is `1`, a flag mask is a value -- is held against zero.
+				truth = isinstance(rule.body, ast.Binary) and rule.body.op in (
+					"==", "!=", "<", "<=", ">", ">=", "&&", "||") \
+					or isinstance(rule.body, ast.Unary) and rule.body.op == "!"
+				if not truth:
+					body = f"(({body}) != 0)"
+				answer = {"any": "if hits != 0 { 1 } else { 0 }",
+				          "all": "if hits == n { 1 } else { 0 }",
+				          "count": "hits"}[rule.kind]
+				lines.extend([
+					"",
+					f"\t/// `{rule.kind}` over `{rule.run.path}`, for"
+					f" `{when.name}`: the run walked once.",
+					f"\tfn {_ident(c_name(rule.helper))}(&self) -> usize {{",
+					f"\t\tlet total = self.{run}_count();",
+					f"\t\tlet mut at = self.{run}_offset();",
+					"\t\tlet mut n = 0usize;",
+					"\t\tlet mut hits = 0usize;",
+					"\t\twhile n < total && at < self.bytes.len() {",
+					f"\t\t\tlet size = {inner} {{ bytes: &self.bytes[at..] }}.extent();",
+					"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..at + size] }};",
+					f"\t\t\tif {body} {{",
+					"\t\t\t\thits += 1;",
+					"\t\t\t}",
+					"\t\t\tat += size;",
+					"\t\t\tn += 1;",
+					"\t\t}",
+					f"\t\t{answer}",
+					"\t}",
+				])
+		return lines
+
+	def _same_reads(self, struct: ResolvedStruct,
+			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as Rust (26.1128): slice
 		equality, over getters that answer an empty slice on a view too short
 		for the run."""
 		def run(placement: Placement) -> str:
 			return f"self.{_ident(placement.name)}()"
-		return {name: f"({run(held.left)} {'==' if held.equal else '!='} "
-		              f"{run(held.right)})"
+		return {name: (f"self.{_ident(c_name(held.helper))}()"
+		               if isinstance(held, traverse.RunRule) else
+		               f"({run(held.left)} {'==' if held.equal else '!='} "
+		               f"{run(held.right)})")
 		        for name, held in same.items()}
 
 	def _rule_text(self, struct: ResolvedStruct, local: str,
@@ -11627,11 +11683,12 @@ class Emitter:
 
 		lines = ["\t\t// What the schema refuses this message over (0051)."]
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()', **self._same_reads(same)})} {{",
+				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()', **self._same_reads(struct, same)})} {{",
 				f"\t\t\t// {when.name}",
 				"\t\t\treturn Err(situ_rt::Error::Constraint);",
 				"\t\t}",
@@ -11680,12 +11737,13 @@ class Emitter:
 			"\t\tlet mut found = 0usize;",
 		])
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t// {when.severity.value} {when.name}",
-				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()', **self._same_reads(same)})} {{",
+				f"\t\tif {self._rule_text(struct, local, extra = {'remaining': 'self.bytes.len()', **self._same_reads(struct, same)})} {{",
 				"\t\t\tif found < ids.len() {",
 				f"\t\t\t\tids[found] = Self::MSG_{_ident(when.name).upper()};",
 				"\t\t\t}",

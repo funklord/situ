@@ -13548,16 +13548,19 @@ class Emitter:
 		        for let in (decl.lets if decl is not None else ())}
 
 	def _same_reads(self, struct: ResolvedStruct,
-			same: dict[str, traverse.RunEquality]) -> dict[str, str]:
+			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
+			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as C (26.1128): the
 		runtime's byte compare over the two runs' pointers, read where any
 		of the `when`'s fields are, over a view `validate` has measured."""
 		def run(placement: Placement) -> str:
 			return (f"{ident(self.prefix, struct.name, c_name(placement.name), 'ptr')}"
 			        f"(view{self._member_args(struct, placement)})")
-		return {name: f"(situ_bytes_eq({run(held.left)}, {held.length}u, "
-		              f"{run(held.right)}, {held.length}u) "
-		              f"{'!=' if held.equal else '=='} 0)"
+		return {name: (f"{ident(self.prefix, struct.name, held.helper)}(view)"
+		               if isinstance(held, traverse.RunRule) else
+		               f"(situ_bytes_eq({run(held.left)}, {held.length}u, "
+		               f"{run(held.right)}, {held.length}u) "
+		               f"{'!=' if held.equal else '=='} 0)")
 		        for name, held in same.items()}
 
 	def _messages_body(self, struct: ResolvedStruct,
@@ -13582,7 +13585,8 @@ class Emitter:
 			"",
 		]
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
@@ -13731,10 +13735,76 @@ class Emitter:
 			"\t}",
 		]
 
+	def _rule_helpers(self, struct: ResolvedStruct,
+			linkage: str) -> list[str]:
+		"""One function per rule over a run's elements in this struct's
+		`when`s (rules over lists, 2026-11-24): the run walked once, each
+		element measured by its own extent and asked the rule's body over
+		its own view. `any` and `all` answer 0 or 1, `count` how many."""
+		lines: list[str] = []
+		for when in traverse.messages(self.schema, struct.name):
+			_expr, held = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
+			for rule in held.values():
+				if not isinstance(rule, traverse.RunRule):
+					continue
+				element = rule.element
+				extent  = self._element_extent_call(element)
+				local   = c_name(self._local(struct, rule.run))
+				body    = self._over_fields(element,
+				                            unparse_expr(rule.body,
+				                                         explicit=True),
+				                            "element")
+				lines.extend([
+					f"/* `{rule.kind}` over `{rule.run.path}`, for `{when.name}`:"
+					" the run walked once. */",
+					# `static inline` in the header, so a file including it and
+					# calling none is not warned of an unused function; plain
+					# `static` beside `check` in the source.
+					f"{linkage or 'static '}"
+					f"uint32_t {ident(self.prefix, struct.name, rule.helper)}"
+					"(situ_view_t view)",
+					"{",
+					f"\tconst uint32_t total = (uint32_t)"
+					f"{ident(self.prefix, struct.name, local, 'count')}(view);",
+					f"\tuint32_t at = {self._base_expression(struct, rule.run)};",
+					"\tuint32_t n = 0u;",
+					"\tuint32_t hits = 0u;",
+					"",
+					"\twhile (n < total && at < view.limit) {",
+					"\t\tsitu_view_t element;",
+					"\t\tuint32_t    size;",
+					"",
+					"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit,"
+					" at), &element) != SITU_OK) {",
+					"\t\t\tbreak;",
+					"\t\t}",
+					f"\t\tsize = {extent};",
+					"\t\tif (size == 0u || size > situ_remaining_u32(view.limit,"
+					" at)",
+					"\t\t    || situ_view_sub(view, at, size, &element)"
+					" != SITU_OK) {",
+					"\t\t\tbreak;",
+					"\t\t}",
+					f"\t\tif ({body}) {{",
+					"\t\t\thits = hits + 1u;",
+					"\t\t}",
+					"\t\tat = at + size;",
+					"\t\tn  = n + 1u;",
+					"\t}",
+					{"any": "\treturn hits != 0u ? 1u : 0u;",
+					 "all": "\treturn hits == n ? 1u : 0u;",
+					 "count": "\treturn hits;"}[rule.kind],
+					"}",
+					"",
+				])
+		return lines
+
 	def _validate_body(self, struct: ResolvedStruct,
 			linkage: str = "") -> list[str]:
 		named  = ident(self.prefix, struct.name, "check")
 		lines  = [
+			*self._rule_helpers(struct, linkage),
 			f"{linkage}situ_err_t {named}(situ_view_t view, uint32_t *which"
 			f"{self._argument_tail(struct)})",
 			"{",
@@ -13885,7 +13955,8 @@ class Emitter:
 		         " Written on the", "\t * line above the refusal because"
 		         " that is `check`'s contract. */"]
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([

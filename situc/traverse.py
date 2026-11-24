@@ -2115,8 +2115,69 @@ class RunEquality:
 	length: int
 
 
-def run_equalities(expr: ast.Expr, struct: ResolvedStruct
-		) -> tuple[ast.Expr, dict[str, RunEquality]]:
+@dataclass(frozen=True)
+class RunRule:
+	"""`any(r in s.rules: r.kind == 3)`, lifted for a renderer (rules over
+	lists, 2026-11-24).
+
+	`body` is over the ELEMENT, its `r.` taken off, so a backend renders it
+	with the element's own struct and view as it renders any `when` of
+	that struct; `helper` is the stable suffix of the function each
+	backend emits for it, the same at the definition and the call.
+	`count(s.rules)` alone is a `count` whose body is 1.
+	"""
+
+	kind: str
+	run: Placement
+	element: ResolvedStruct
+	body: ast.Expr
+	helper: str
+
+
+def _over_element(body: ast.Expr, var: str) -> ast.Expr:
+	"""`body` with `var.` taken off each path, so `r.kind` reads `kind` of
+	the element's own view."""
+	if isinstance(body, ast.Access):
+		if isinstance(body.base, ast.NameRef) and body.base.name == var:
+			return ast.NameRef(body.span, body.name)
+		return dataclasses.replace(body, base = _over_element(body.base, var))
+	if isinstance(body, ast.Binary):
+		return dataclasses.replace(body, left = _over_element(body.left, var),
+		                           right = _over_element(body.right, var))
+	if isinstance(body, ast.Unary):
+		return dataclasses.replace(body,
+		                           operand = _over_element(body.operand, var))
+	if isinstance(body, ast.Call):
+		return dataclasses.replace(body, args = tuple(
+			_over_element(arg, var) for arg in body.args))
+	return body
+
+
+def rule_run_fault(structs: dict[str, ResolvedStruct],
+		placement: Placement | None) -> str | None:
+	"""Why a rule cannot walk this run, or None where it can: a counted
+	run or a `while` run of structs whose element measures itself."""
+	if placement is None:
+		return "it is not a member of the struct"
+	element = structs.get(placement.type_name or "")
+	if element is None:
+		return "its elements are not structs"
+	if placement.delimiters:
+		return ("a run a terminator ends is not walked by a rule yet: "
+		        "count it, or end it by a condition")
+	if not is_struct_run(structs, placement):
+		return "it is not a run"
+	if element.layout.is_fixed_size:
+		return None
+	if not has_element_extent(structs, element):
+		return f"`{element.name}` does not measure itself"
+	return None
+
+
+def run_equalities(expr: ast.Expr, struct: ResolvedStruct,
+		structs: dict[str, ResolvedStruct] | None = None,
+		named: str = "rule") -> tuple[ast.Expr,
+		                              dict[str, "RunEquality | RunRule"]]:
 	"""`expr` with each byte-run comparison replaced by a name (26.1128).
 
 	Every renderer reads a `when` by unparsing it and rewriting each name
@@ -2128,7 +2189,30 @@ def run_equalities(expr: ast.Expr, struct: ResolvedStruct
 
 	by_path = {entry.placement.path: entry.placement
 	           for entry in struct.entries}
-	found: dict[str, RunEquality] = {}
+	found: dict[str, RunEquality | RunRule] = {}
+	rules = 0
+
+	def lifted(kind: str, run: ast.Expr, var: str, body: ast.Expr,
+			span: object) -> ast.Expr | None:
+		nonlocal rules
+		if structs is None:
+			return None
+		paths = paths_in(run)
+		held = by_path.get(paths[0]) if len(paths) == 1 else None
+		if held is None or rule_run_fault(structs, held) is not None:
+			return None
+		name = f"{SAME}rule{len(found)}"
+		found[name] = RunRule(kind, held, structs[held.type_name or ""],
+		                      _over_element(body, var),
+		                      f"{named}_rule{rules}")
+		rules += 1
+		held_name = ast.NameRef(span, name)  # type: ignore[arg-type]
+		if kind == "count":
+			return held_name
+		# A truth compared with zero, as a byte-run comparison is: Rust's
+		# `&&` takes nothing but a `bool`.
+		return ast.Binary(span, "!=", held_name,  # type: ignore[arg-type]
+		                  ast.IntLiteral(span, 0, "0"))  # type: ignore[arg-type]
 
 	def run(operand: ast.Expr) -> Placement | None:
 		if not isinstance(operand, (ast.NameRef, ast.Access)):
@@ -2142,6 +2226,14 @@ def run_equalities(expr: ast.Expr, struct: ResolvedStruct
 		return held
 
 	def rewrite(node: ast.Expr) -> ast.Expr:
+		if isinstance(node, ast.Quantified):
+			got = lifted(node.kind, node.run, node.var, node.body, node.span)
+			return got if got is not None else node
+		if isinstance(node, ast.Call) and node.name == "count" \
+				and len(node.args) == 1:
+			got = lifted("count", node.args[0], "situ_element",
+			             ast.IntLiteral(node.span, 1, "1"), node.span)
+			return got if got is not None else node
 		if isinstance(node, ast.Binary):
 			left, right = run(node.left), run(node.right)
 			if node.op in ("==", "!=") and left is not None \

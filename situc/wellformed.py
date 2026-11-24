@@ -82,6 +82,7 @@ def check(schema: ast.Schema) -> None:
 	check_parameters(schema)
 	check_sums(schema)
 	check_when_calls(schema)
+	check_quantifiers(schema)
 	check_member_arguments(schema)
 	check_parameter_nesting(schema)
 	check_holds(schema)
@@ -1647,6 +1648,34 @@ def check_whens(schema: ast.Schema) -> None:
 			# and a `when` refused it as a field that does not exist (26.1102).
 			if field in {let.name for let in struct.lets}:
 				continue
+			# An element's member, `rules[].right`, which a rule over a
+			# run's elements reads (rules over lists, 2026-11-24): the run
+			# a member of this struct, of structs, and the rest a member of
+			# the element as any path is of its struct.
+			if "[]" in field:
+				run_name, _, rest = field.partition("[]")
+				run = _find_member(struct, run_name)
+				element = structs.get(run.type_ref.name) \
+					if isinstance(run, ast.Field) else None
+				if run is None or element is None \
+						or not isinstance(run, ast.Field) \
+						or (run.array is None and run.until is None
+						    and run.repeat is None):
+					raise error(
+						f"`{held.name}` reads `{path}`, and `{run_name}` "
+						"is not a run of structs",
+						held.span, label = "nothing to take elements of",
+						notes = ["a rule over a run's elements reads each "
+						         "element's own members: `any(r in s.rules: "
+						         "r.kind == 3)`"])
+				rest = rest.lstrip(".")
+				if not rest or "[" in rest:
+					raise error(
+						f"`{held.name}` reads `{path}`, which is not a "
+						f"member of `{element.name}`",
+						held.span, label = "name a member of the element")
+				_step_through(structs, element, rest, held, path)
+				continue
 			reached = _step_through(structs, struct, field, held, path)
 			holder = _conditional_holder(*reached)
 			if holder is not None:
@@ -2386,7 +2415,51 @@ def _check_invariant_calls(invariant: ast.Invariant) -> None:
 		)
 
 
+def quantifiers_in(expr: ast.Expr) -> list[ast.Quantified]:
+	"""Every rule over a run's elements in `expr`, outermost first."""
+	if isinstance(expr, ast.Quantified):
+		return [expr]
+	if isinstance(expr, ast.Call):
+		return [held for arg in expr.args for held in quantifiers_in(arg)]
+	if isinstance(expr, ast.Binary):
+		return quantifiers_in(expr.left) + quantifiers_in(expr.right)
+	if isinstance(expr, ast.Unary):
+		return quantifiers_in(expr.operand)
+	return []
+
+
+def check_quantifiers(schema: ast.Schema) -> None:
+	"""A rule over a run's elements reads the element and nothing else.
+
+	Each reader walks the run once and asks the body of each element, over
+	that element's view; a body reading the enclosing struct as well would
+	need two views in one comparison, which no reader is built for yet.
+	"""
+	for when in schema.whens():
+		for rule in quantifiers_in(when.expr):
+			for path in paths_in(rule.body):
+				# A bare name is a constant, an enum's or a token set's
+				# member; a struct's member is always `s.m` in a `when`.
+				head, dot, _rest = path.partition(".")
+				if dot and head != rule.var:
+					raise error(
+						f"`{rule.kind}` reads `{path}`, which is not a "
+						f"member of `{rule.var}`",
+						rule.span, label = "here",
+						notes = ["the rule is asked of each element over its "
+						         "own view: name its members, "
+						         f"`{rule.var}.field`, and constants",
+						         "a comparison with the enclosing struct is "
+						         "not built yet"])
+			if not isinstance(rule.run, (ast.NameRef, ast.Access)) \
+					or len(paths_in(rule.run)) != 1:
+				raise error(f"`{rule.kind}` takes one run, `s.member`",
+				            rule.run.span, label = "here")
+
+
 def _calls_in(expr: ast.Expr) -> list[ast.Call]:
+	if isinstance(expr, ast.Quantified):
+		return _calls_in(expr.run) + _calls_in(expr.body)
 	if isinstance(expr, ast.Call):
 		return [expr, *[held for arg in expr.args for held in _calls_in(arg)]]
 	if isinstance(expr, ast.Binary):
@@ -4526,6 +4599,13 @@ def check_when_calls(schema: ast.Schema) -> None:
 		roots = {path.partition(".")[0] for path in paths_in(when.expr)}
 		for call in _calls_in(when.expr):
 			if call.name not in ("offset", "count"):
+				continue
+			# `count(s.rules)` of a run: how many elements, which a reader
+			# counts as it counts `count(r in s.rules: ...)` -- by walking
+			# them (rules over lists, 2026-11-24).
+			if call.name == "count" and len(call.args) == 1 \
+					and len(paths_in(call.args[0])) == 1 \
+					and paths_in(call.args[0])[0].partition(".")[0] in structs:
 				continue
 			# `offset(s)` of the struct the `when` is on: where this one
 			# sits in the message, which every reader holds (26.1045). A

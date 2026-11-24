@@ -1,0 +1,116 @@
+"""Rules over a run's elements in a `when` (holder, 2026-11-24).
+
+`any(r in s.rules: r.kind == 0)`, `all(...)`, `count(r in s.rules: ...)`
+and `count(s.rules)`: each element asked over its own view, the run
+walked once. fuzznet's remote permit holds "none stands alone" by hand --
+an element meaning none, with others beside it -- which is the first rule
+here, and "no more than two nines" the second, `count` with a predicate.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import fourway
+from situc.diagnostics import SituError
+from situc.layout import solve
+from situc.parser import parse_text
+from situc.resolve import resolve
+
+SCHEMA = """target buffer;
+endian big;
+struct g { u8 kind; u8 n; u8 name[n]; }
+struct s { u8 c [max = 8]; g gs[c]; }
+when any(x in s.gs: x.kind == 0) && count(s.gs) > 1
+	refuse none_alone "none stands alone";
+when count(x in s.gs: x.kind == 9) > 2
+	refuse too_many_nines "at most two nines";
+when all(x in s.gs: x.n == 0) && count(s.gs) == 4
+	refuse four_empty "four elements, none named";
+"""
+
+
+def element(kind: int, name: bytes = b"") -> bytes:
+	return bytes([kind, len(name)]) + name
+
+
+def message(*elements: bytes, count: int | None = None) -> bytes:
+	return bytes([len(elements) if count is None else count]) + b"".join(elements)
+
+
+#: (label, bytes, verdict), worked by hand. Member checks come first, so a
+#: run the frame cuts short is BOUNDS whatever the rules say.
+CASES = [
+	("none alone", message(element(0)), "0"),
+	("none beside another", message(element(0), element(1)), "2"),
+	("none last of three", message(element(1), element(2, b"a"), element(0)),
+	 "2"),
+	("no none", message(element(1), element(2, b"ab")), "0"),
+	("two nines", message(element(9), element(9)), "0"),
+	("three nines", message(element(9), element(9, b"x"), element(9)), "2"),
+	("four, one named", message(element(1), element(1), element(1),
+	                            element(1, b"z")), "0"),
+	("four, none named", message(*[element(1)] * 4), "2"),
+	("three declared, two there", message(element(1), element(1), count=3),
+	 "1"),
+	("empty", message(), "0"),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_all_four_hold_the_rules(tmp_path: Path) -> None:
+	source = tmp_path / "unit.situ"
+	source.write_text(SCHEMA, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	for label, data, verdict in CASES:
+		for name, argv in command.items():
+			held = fourway.answers(argv, data, tmp_path) \
+				.split("-- s\n")[1].split("\n-- ")[0]
+			line = next(one for one in held.splitlines()
+			            if one.startswith("validate "))
+			assert line.split()[1] == verdict, (label, name, held)
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
+def test_the_walkers_decline_rather_than_pass(tmp_path: Path) -> None:
+	"""The image carries no program for a rule over a run, so both walkers
+	say they cannot answer -- never `0` where the four refuse."""
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	blob  = packed_text(SCHEMA)
+	shape = shape_named_text(SCHEMA, "s")
+	for label, data, verdict in CASES:
+		said = python_verdict(blob, data, shape)
+		assert said in ("cannot-say", "1") and (said == "1") == \
+			(verdict == "1") or said == "cannot-say", (label, said)
+		assert c_verdict(tmp_path, blob, data, shape) == said, label
+
+
+@pytest.mark.parametrize(("rule", "said"), [
+	("any(x in s.gs: x.kind == s.c)", "which is not a member of `x`"),
+	("any(x in s.c: x == 1)", "is not a run of structs"),
+	("any(x in s.gs: x.nope == 1)", "has no field `nope`"),
+	("any(x in s.gs: any(y in s.gs: y.kind == 1))",
+	 "inside another rule over a run"),
+])
+def test_what_a_rule_cannot_read_is_refused(rule: str, said: str) -> None:
+	text = ("target buffer;\nendian big;\n"
+	        "struct g { u8 kind; u8 n; u8 name[n]; }\n"
+	        "struct s { u8 c [max = 8]; g gs[c]; }\n"
+	        f"when {rule} refuse r \"x\";\n")
+	with pytest.raises(SituError) as caught:
+		schema = parse_text(text)
+		resolve(schema, solve(schema))
+	assert said in caught.value.diagnostic.render(), \
+		caught.value.diagnostic.render()
+
+
+def test_a_rule_outside_a_when_is_refused() -> None:
+	text = ("target buffer;\nendian big;\n"
+	        "struct g { u8 kind; }\n"
+	        "struct s { u8 c; g gs[c]; u8 t[any(x in s.gs: x.kind == 1)]; }\n")
+	with pytest.raises(SituError) as caught:
+		parse_text(text)
+	assert "a rule is a `when`" in caught.value.diagnostic.message

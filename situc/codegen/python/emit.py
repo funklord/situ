@@ -1168,6 +1168,7 @@ class Emitter:
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
+		lines.extend(self._rule_methods(struct))
 		lines.extend(self._messages(struct))
 		lines.extend(self._gates(struct))
 		lines.append("")
@@ -9816,15 +9817,61 @@ class Emitter:
 		lines.extend(refusals)
 		return lines
 
-	def _same_reads(self, same: dict[str, traverse.RunEquality]
+	def _rule_methods(self, struct: ResolvedStruct) -> list[str]:
+		"""One method per rule over a run's elements in this struct's
+		`when`s (rules over lists, 2026-11-24): the run walked once, each
+		element measured by its own extent and asked the rule's body."""
+		lines: list[str] = []
+		for when in traverse.messages(self.schema, struct.name):
+			_expr, held = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
+			for rule in held.values():
+				if not isinstance(rule, traverse.RunRule):
+					continue
+				name  = py_name(local_name(struct, rule.run))
+				inner = self._made(struct, rule.run, py_name(rule.element.name))
+				body  = self._over_fields(rule.element,
+				                          unparse_expr(rule.body, explicit=True),
+				                          "_element")
+				answer = {"any": "1 if hits else 0",
+				          "all": "1 if hits == n else 0",
+				          "count": "hits"}[rule.kind]
+				lines.extend([
+					"",
+					f"\tdef _{py_name(rule.helper)}(self) -> int:",
+					f'\t\t"""`{rule.kind}` over `{rule.run.path}`, for'
+					f' `{when.name}`: the run walked once."""',
+					f"\t\ttotal = self.{name}_count",
+					f"\t\tat    = self.{name}_offset",
+					"\t\tn     = 0",
+					"\t\thits  = 0",
+					"\t\twhile n < total and at < self._len:",
+					f"\t\t\t_element = {inner}(self._msg, self._at + at,"
+					" self._len - at)",
+					"\t\t\tsize = _element._extent",
+					"\t\t\tif size == 0 or size > self._len - at:",
+					"\t\t\t\tbreak",
+					f"\t\t\t_element = {inner}(self._msg, self._at + at, size)",
+					f"\t\t\tif {body}:",
+					"\t\t\t\thits += 1",
+					"\t\t\tat += size",
+					"\t\t\tn  += 1",
+					f"\t\treturn {answer}",
+				])
+		return lines
+
+	def _same_reads(self, struct: ResolvedStruct,
+			same: "dict[str, traverse.RunEquality | traverse.RunRule]"
 			) -> dict[str, str]:
 		"""Each byte-run comparison of a `when` as Python (26.1128): the two
 		runs' bytes compared, where a number against a memoryview was never
 		equal and so a refusal that never fired."""
 		def run(placement: Placement) -> str:
 			return f"bytes(self.{py_name(placement.name)})"
-		return {name: f"({run(held.left)} {'==' if held.equal else '!='} "
-		              f"{run(held.right)})"
+		return {name: (f"self._{py_name(held.helper)}()"
+		               if isinstance(held, traverse.RunRule) else
+		               f"({run(held.left)} {'==' if held.equal else '!='} "
+		               f"{run(held.right)})")
 		        for name, held in same.items()}
 
 	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
@@ -9841,11 +9888,12 @@ class Emitter:
 
 		lines = ["\t\t# What the schema refuses this message over (0051)."]
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
-				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct), **self._same_reads(same)})}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct), **self._same_reads(struct, same)})}:",
 				f'\t\t\traise ConstraintError("{struct.name}: {when.name}")',
 			])
 		return lines
@@ -9880,12 +9928,13 @@ class Emitter:
 			"\t\tfound: _situ_list[int] = []",
 		])
 		for when in held:
-			expr, same = traverse.run_equalities(when.expr, struct)
+			expr, same = traverse.run_equalities(
+				when.expr, struct, self.resolved.structs, when.name)
 			source = unparse_expr(expr, explicit=True)
 			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
 			lines.extend([
 				f"\t\t# {when.severity.value} {when.name}",
-				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct), **self._same_reads(same)})}:",
+				f"\t\tif {self._over_fields(struct, local, 'self', extra = {'remaining': 'self._len', **self._let_reads(struct), **self._same_reads(struct, same)})}:",
 				f"\t\t\tfound.append(self.MSG_{py_name(when.name).upper()})",
 			])
 		lines.append("\t\treturn found")

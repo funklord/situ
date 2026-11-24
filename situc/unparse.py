@@ -707,6 +707,11 @@ def _expr(expr: ast.Expr, parent_binding: int, explicit: bool = False,
 		         else expr_to_source(expr.index, explicit=explicit))
 		return f"{_expr(expr.base, _ATOM_BINDING, explicit)}[{inner}]"
 
+	if isinstance(expr, ast.Quantified):
+		return (f"{expr.kind}({expr.var} in "
+		        f"{expr_to_source(expr.run, explicit=explicit)}: "
+		        f"{expr_to_source(expr.body, explicit=explicit)})")
+
 	if isinstance(expr, ast.Call):
 		args = ", ".join(expr_to_source(arg, explicit=explicit)
 		                 for arg in expr.args)

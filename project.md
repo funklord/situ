@@ -2828,10 +2828,14 @@ Permitted:
   u32 mode[8]` adds eight bytes, which is what ustar's header checksum adds
   (26.949)
 
+- in a `when`, `any(r in s.rules: pred)`, `all(...)`, `count(r in s.rules:
+  pred)` and `count(s.rules)`: a rule over a run's elements, each asked
+  over its own view, the run walked once (26.1170)
+
 Forbidden, by construction:
 
-- function calls, recursion, iteration other than `sum`, which a run's own
-  count bounds
+- function calls, recursion, iteration other than `sum` and a `when`'s
+  rules over a run, which a run's own count bounds
 - forward references to fields later in layout order
 - references to the *result* of a transform (see 13.2 -- this is the
   decidability boundary)

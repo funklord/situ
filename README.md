@@ -994,6 +994,15 @@ when frame.ver == 1
 	"v1 counts the header in `length`; every later version does not";
 ```
 
+A rule may read a run's elements, each over its own view:
+
+```situ
+when any(r in permit.rules: r.kind == none) && count(permit.rules) > 1
+	refuse none_alone "`none` stands alone";
+```
+
+`any`, `all`, `count(r in run: pred)` and `count(run)`, the run walked once.
+
 Three severities and no fourth. `refuse` makes a message illegal and
 `validate` says so; `warn` and `note` describe one that conforms. All three
 come back from the sibling `situ_frame_messages(view, ids, cap, &count)`,

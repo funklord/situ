@@ -118,6 +118,27 @@ class Call(Expr):
 
 
 @dataclass(frozen=True)
+class Quantified(Expr):
+	"""`any(r in s.rules: r.right == none)` -- a rule over a run's elements.
+
+	`kind` is `any`, `all`, `count` or `unique`; `var` names each element
+	in `body`, and only there. `unique` holds when no two elements share
+	the value of `body`, its key. A `when` alone may hold one: the run's
+	own elements bound the iteration, as they bound `sum` (section 10).
+	"""
+
+	span: Span
+	kind: str
+	var: str
+	run: Expr
+	body: Expr
+
+
+#: The rules over a run's elements a `when` may state.
+QUANTIFIERS = ("any", "all", "count", "unique")
+
+
+@dataclass(frozen=True)
 class Unary(Expr):
 	span: Span
 	op: str

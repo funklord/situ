@@ -350,6 +350,22 @@ def paths_in(expr: ast.Expr) -> list[str]:
 		return [expr.name]
 	if isinstance(expr, ast.Call):
 		return [path for arg in expr.args for path in paths_in(arg)]
+	if isinstance(expr, ast.Quantified):
+		# The run, and each element member the body reads, as the
+		# flattened element path `s.rules[].right` -- the spelling a
+		# run's own entries carry, so the scope checks find it. A name in
+		# the body that is not the element is the struct's own.
+		run = paths_in(expr.run)
+		if len(run) != 1:
+			return run
+		element: list[str] = []
+		for path in paths_in(expr.body):
+			head, dot, rest = path.partition(".")
+			if head == expr.var:
+				element.append(f"{run[0]}[]{dot}{rest}")
+			else:
+				element.append(path)
+		return run + element
 	if isinstance(expr, ast.Binary):
 		return paths_in(expr.left) + paths_in(expr.right)
 	if isinstance(expr, ast.Unary):
