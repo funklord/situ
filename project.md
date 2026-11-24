@@ -447,7 +447,14 @@ without huge dependencies kept, and the pertinent code shared:
   helper (larger than the inlined loop, 5,973 -> 6,018). Most of the
   consumer's growth is likely the header's `static inline` accessors
   compiled into each caller, which this .c measurement cannot see; the
-  next step is fuzznet's own build at a named situ commit.
+  next step is fuzznet's own build at a named situ commit. Measured by
+  fuzznet at e485b900 (its ca97214f): embedded profile text 1,041,027 ->
+  1,039,563 (-0.14%), so the headers' inline accessors are where to look
+  next; across the whole span its text grew 37,496 bytes (3.7%) and its
+  bss shrank 593,984 (inbox 20261124T0403Z). Same message: fuzznet kept
+  its own nonce set over the replay form, for admission order (its sec
+  1430); and `ahead = 2^64-1` printed the `ahead = 0` note, read as a
+  wrap -- the note is for zero alone now.
 - Done 2026-11-23, run 16: this run's constructs (spelling rules, time,
   `while ... | end`, typed tlv values) put into `edges.situ` and asked
   against seven contexts each. The four backends agreed in every cell;

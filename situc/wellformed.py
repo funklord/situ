@@ -1887,7 +1887,12 @@ def check_replays(schema: ast.Schema) -> None:
 				                   "what keeps a frame from pinning a slot "
 				                   "for a century, and leaving it out must "
 				                   "not be the unbounded case"]
-				            if key == "ahead" else [])
+				            # Only for the value it explains: a horizon
+				            # past the range is refused for its size,
+				            # and fuzznet read this note under 2^64-1 as
+				            # a wrap to zero (inbox 20261124T0403Z).
+				            if key == "ahead" and isinstance(value, int)
+				            and value < low else [])
 		for key, allowed in (("unit", REPLAY_UNITS),
 		                     ("expiry", {"required", "optional", "caller"})):
 			if key not in said:

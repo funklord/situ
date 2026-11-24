@@ -337,3 +337,25 @@ def test_rust(tmp_path: Path) -> None:
 	         for line in ran.stdout.splitlines()]
 	assert _numbers("\n".join(lines)) == [COUNTER, NONCES, CALLER,
 	                                      HORIZONS], ran.stdout
+
+
+@pytest.mark.parametrize(("ahead", "noted"), [
+	("0", True), ("9223372036854775808", False),
+	("18446744073709551615", False),
+])
+def test_the_zero_horizon_note_is_for_zero(ahead: str, noted: bool) -> None:
+	"""A horizon past the range is refused for its size; the note about
+	`ahead = 0` beside 2^64-1 read as a wrap to zero (fuzznet, situ inbox
+	20261124T0403Z)."""
+	from situc.diagnostics import SituError
+	from situc.parser import parse_text
+	text = ("target buffer;\nendian big;\n"
+	        "struct replay_key { u8 nonce[8]; u64 expires; }\n"
+	        "replay seen(k: replay_key) [nonce = k.nonce, expires = "
+	        f"k.expires, capacity = 1, ahead = {ahead}, unit = s, "
+	        "expiry = caller];\n")
+	with pytest.raises(SituError) as raised:
+		parse_text(text)
+	diagnostic = raised.value.diagnostic
+	assert "`ahead` is a number from 1 to" in diagnostic.message
+	assert any("`ahead = 0`" in note for note in diagnostic.notes) == noted
