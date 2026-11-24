@@ -87,8 +87,9 @@ VARINT_BYTES	= 12
 #: walker needs to hold `known` tags to their policies (26.738, 26.740,
 #: 26.741); a reader taking sixteen declines those as before.
 TLV_BYTES	= 20
-#: `image_tlv_known`, one row per tag a region's `known` names.
-TLV_KNOWN_BYTES	= 16
+#: `image_tlv_known`, one row per tag a region's `known` names, with what
+#: its value is held to (26.1167).
+TLV_KNOWN_BYTES	= 20
 #: `image_tlv_rule`. 28 rather than 24 since a value size could be an
 #: expression over the tag's own parts: the row gained the offset of
 #: that arm's program. The reader takes the row by stride, so a
@@ -3511,13 +3512,28 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# rest, bit 1 admitted once (26.738, 26.740).
 			known_admitted = traverse.tlv_admitted_tags(placement)
 			known_once     = set(traverse.tlv_single_tags(placement))
+			known_typed    = {one.tag: one for one in traverse.tlv_typed_tags(
+				placement, resolved.structs)}
 			for known_tag in sorted({one.tag for one in
 			                         placement.tlv_grammar.known}):
+				held_type = known_typed.get(known_tag)
+				typed_form = (0 if held_type is None
+				              else 2 if held_type.most is not None
+				              else 3 if held_type.struct is not None else 1)
+				# 255: held to a type this row cannot carry -- an element
+				# wider than its sixteen bits -- which a walker declines.
+				if held_type is not None and held_type.element_bytes > 0xFFFF:
+					typed_form = 255
 				tlv_known_blob += _struct.pack(
-					"<IqBxxx", at, known_tag,
+					"<IqBBHI", at, known_tag,
 					(1 if known_admitted is not None
 					 and known_tag in known_admitted else 0)
-					| (2 if known_tag in known_once else 0))
+					| (2 if known_tag in known_once else 0),
+					typed_form,
+					held_type.element_bytes
+					if held_type is not None and typed_form != 255 else 0,
+					_u32(struct_index.get(held_type.struct or "")
+					     if held_type is not None else None))
 			# One row per rule, consecutive under this placement -- the
 			# delimiter table's arrangement, for its reason: the table is
 			# sorted by placement and binary-searched, so consecutive rows

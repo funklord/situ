@@ -242,11 +242,13 @@ struct image_tlv size=20
   @0x000f   1         u8         tag_pad
   @0x0010   4         u32        identity_code  little
 
-struct image_tlv_known size=16
+struct image_tlv_known size=20
   @0x0000   4         u32        placement  little
   @0x0004   8         i64        tag  little
   @0x000c   1         u8         known_flags
-  @0x000d   3         u8         known_pad  little
+  @0x000d   1         u8         typed_form
+  @0x000e   2         u16        element_bytes  little
+  @0x0010   4         u32        typed_struct  little
 
 struct image_tlv_rule size=28
   @0x0000   4         u32        placement  little

@@ -75,18 +75,27 @@ def test_the_four_hold_a_value_to_its_type(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
-def test_the_walkers_decline_rather_than_pass(tmp_path: Path) -> None:
-	"""The image carries no element type, so both walkers say they cannot
-	answer -- never `0` for the binary year the four refuse -- as they do
-	for the region's other policies (26.738)."""
+def test_the_walkers_hold_a_value_to_its_type(tmp_path: Path) -> None:
+	"""Both walkers declined, the image carrying no element type; it
+	carries one per known tag now, and the struct's own validate runs over
+	each element, so each gives the four backends' own code -- never `0`
+	for the binary year the four refuse."""
 	from test_walker_c import (c_verdict, packed_text, python_verdict,
 	                           shape_named_text)
+	source = tmp_path / "unit.situ"
+	source.write_text(SCHEMA, encoding="ascii")
+	command = fourway.build(tmp_path, source)
 	blob  = packed_text(SCHEMA)
 	shape = shape_named_text(SCHEMA, "image_info")
-	for label, packet, _ in CASES:
+	for label, packet, valid in CASES:
 		data = bytes.fromhex(packet.replace(" ", ""))
+		held = fourway.answers(command["c"], data, tmp_path) \
+			.split("-- image_info\n")[1].split("\n-- ")[0]
+		code = next(line for line in held.splitlines()
+		            if line.startswith("validate")).split()[1]
+		assert (code == "0") == valid, (label, code)
 		said = python_verdict(blob, data, shape)
-		assert said == "cannot-say", (label, said)
+		assert said == code, (label, said, code)
 		assert c_verdict(tmp_path, blob, data, shape) == said, label
 
 
@@ -113,22 +122,21 @@ struct armed {
 	("nested", "00 01 02 01 0d"),
 	("armed", "01 01 02 01 0d"),
 ])
-def test_a_struct_holding_the_region_declines_too(tmp_path: Path,
-                                                  shape_name: str,
-                                                  packet: str) -> None:
-	"""Month 13 in a date one struct down, which the four refuse. The
-	struct holding the region could not be judged, and its parent was
-	still marked judgeable -- applied only as the flags were written, the
-	mark never reached the fixed point that carries it upward -- so both
-	walkers answered OK in an arm, and the Python walker one member
-	down."""
+def test_a_struct_holding_the_region_is_refused_too(tmp_path: Path,
+                                                    shape_name: str,
+                                                    packet: str) -> None:
+	"""Month 13 in a date one struct down, which the four refuse. When the
+	region could not be judged, its parent was still marked judgeable --
+	the mark never reached the fixed point that carries it upward -- so
+	both walkers answered OK in an arm, and the Python walker one member
+	down. The region is judged now, and the refusal is the answer."""
 	from test_walker_c import (c_verdict, packed_text, python_verdict,
 	                           shape_named_text)
 	blob  = packed_text(HELD)
 	shape = shape_named_text(HELD, shape_name)
 	data  = bytes.fromhex(packet.replace(" ", ""))
 	said  = python_verdict(blob, data, shape)
-	assert said == "cannot-say", said
+	assert said == "2", said
 	assert c_verdict(tmp_path, blob, data, shape) == said
 
 

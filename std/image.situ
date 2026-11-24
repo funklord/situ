@@ -455,11 +455,19 @@ struct image_tlv {
 // bit 0 the region admits it (`unknown = error` refuses every other),
 // bit 1 it is admitted once (`duplicate_tags = error`). Consecutive under
 // the placement and ascending by tag, as `image_tlv_rule` is.
+//
+// And what its value is held to (26.1167): `typed_form` 0 nothing, 1 a
+// whole number of `element_bytes`, 2 at most `element_bytes` (`form =
+// number`), 3 a whole number of `typed_struct`s, each holding that
+// struct's own checks, and 255 held to one this row cannot carry, which a
+// walker declines.
 struct image_tlv_known {
 	u32  placement;
 	i64  tag;
 	u8   known_flags;
-	u8   known_pad[3];
+	u8   typed_form;
+	u16  element_bytes;
+	u32  typed_struct;               // a struct index, or `none`
 }
 
 // How one item's value says where it ends (section 9.5). One row per rule,
@@ -829,7 +837,7 @@ require size(image_codec) == 4;
 require size(image_varint) == 12;
 require size(image_tlv) == 20;
 require size(image_tlv_rule) == 28;
-require size(image_tlv_known) == 16;
+require size(image_tlv_known) == 20;
 require size(image_constraint) == 16;
 require size(image_pinned) == 32;
 require size(image_enum_value) == 16;

@@ -446,8 +446,11 @@ without huge dependencies kept, and the pertinent code shared:
   Then the walkers hold a tlv region's order, its known tags and its
   once-only tags (26.738, 26.740, 26.741), where both declined them: the
   image carries an identity program and an `image_tlv_known` row per tag.
-  Still declined: a typed value (26.1167) and a region keyed on a running
+  And a typed value (26.1167): each element of a struct-typed value runs
+  that struct's own validate. Still declined: a region keyed on a running
   part (CoAP's `previous + delta`), which no program over one tag computes.
+  On the way, a region one struct down measured 0 bytes in both walkers,
+  its items never walked (083467ce).
 - Done 2026-11-23: a delimited token member in a variant arm did not
   compile in C and was unchecked in C++ (fuzznet inbox 20261123T1616Z).
 - Done 2026-11-23: situ-edit-gui's dark-desktop detection, a copy of

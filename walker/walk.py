@@ -2369,7 +2369,7 @@ def tlv_count(view: View, index: int) -> int:
 	return _tlv_walk(view, index)[0]
 
 
-def tlv_whole(view: View, index: int) -> str | None:
+def tlv_whole(view: View, index: int) -> str | int | None:
 	"""Why a `tlv` region's items do not fill it, or None where they do.
 
 	"bounds" for an item the frame cuts short and "constraint" for one no
@@ -2378,11 +2378,23 @@ def tlv_whole(view: View, index: int) -> str | None:
 	`example/protobuf` passed a cut varint and a wire type its own schema
 	declares an error, each as zero items (26.737).
 	"""
-	return _tlv_walk(view, index, policed=True)[1]
+	return tlv_whole_validating(view, index, None)
 
 
-def _tlv_walk(view: View, index: int,
-		policed: bool = False) -> tuple[int, str | None]:
+def tlv_whole_validating(view: View, index: int,
+		validate: "Callable[[int, int, int], int | None] | None"
+		) -> str | int | None:
+	"""`tlv_whole`, and a value held to a struct (26.1167) validated by
+	`validate(struct, start, end)` -- `report._validate`, which this module
+	cannot import. Its nonzero verdict is the answer as it stands, and
+	"cannot-say" where it has none; without it such a region is declined.
+	"""
+	return _tlv_walk(view, index, policed=True, validate=validate)[1]
+
+
+def _tlv_walk(view: View, index: int, policed: bool = False,
+		validate: "Callable[[int, int, int], int | None] | None" = None
+		) -> tuple[int, str | int | None]:
 	"""The walk both of those read: how many items, and why it stopped
 	short of the region's end, or None where it did not.
 
@@ -2535,9 +2547,11 @@ def _tlv_walk(view: View, index: int,
 				sum_of     = lambda i: _sum(view, i),
 				remaining  = max(0, view.limit - at),
 				tag        = tag) & 0xFFFFFFFFFFFFFFFF
-			if bits & 2 and not known.get(identity, 0) & 1:
+			flags, form, width, element = known.get(identity,
+			                                        (0, 0, 0, NONE))
+			if bits & 2 and not flags & 1:
 				return count, "constraint"
-			if bits & 4 and known.get(identity, 0) & 2:
+			if bits & 4 and flags & 2:
 				if identity in seen:
 					return count, "constraint"
 				seen.add(identity)
@@ -2545,6 +2559,22 @@ def _tlv_walk(view: View, index: int,
 				if identity < last:
 					return count, "constraint"
 				last = identity
+			# A value held to its type (26.1167), as the backends hold it:
+			# at most `width` bytes for one number, a whole number of
+			# elements otherwise, and each element a struct's own checks.
+			if bits & 8 and form == 2 and size > width:
+				return count, "constraint"
+			if bits & 8 and form in (1, 3) and size % width:
+				return count, "constraint"
+			if bits & 8 and form == 3:
+				if validate is None:
+					return count, "cannot-say"
+				for start in range(at, at + size, width):
+					verdict = validate(element, start, start + width)
+					if verdict is None:
+						return count, "cannot-say"
+					if verdict:
+						return count, verdict
 		at    += size
 		count += 1
 	return count, None

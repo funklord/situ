@@ -43,7 +43,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          TERMINATED_ROW,
                          chosen_arm, remaining_at, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
-                         tlv_count, tlv_whole, varint, varint_run_at,
+                         tlv_count, tlv_whole_validating, varint,
+                         varint_run_at,
                          varint_run_count, while_holds,
                          while_count)
 
@@ -1543,11 +1544,22 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			# in it. Declined rather than passed (26.738, 26.740, 26.741).
 			if index in image.tlv_unenforceable:
 				return None
-			why = tlv_whole(view, index)
-			if why == "bounds":
+			# A value held to a struct is that struct's own `validate`
+			# over each element's bytes (26.1167), and its verdict is the
+			# answer as it stands.
+			why = tlv_whole_validating(
+				view, index,
+				lambda element, start, end: _validate(
+					image, View(image, view.buffer, element, start, end, {}),
+					element))
+			if why == "cannot-say":
+				return None
+			if why == "bounds" or why == ERR_BOUNDS:
 				return fail(ERR_BOUNDS, index, FITS_FRAME)
 			if why == "constraint":
 				return fail(ERR_CONSTRAINT, index, ARM_SELECTED)
+			if isinstance(why, int):
+				return fail(why, index, ARM_SELECTED)
 
 		# A run of bytes holding a struct frames it with exactly those
 		# bytes, so the inner limit is the run's end and nothing past it

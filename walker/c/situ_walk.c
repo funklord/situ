@@ -4600,10 +4600,18 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
  * first and validate refuses on it; nothing asked the second, so
  * `example/protobuf` validated a cut varint and a wire type its own
  * schema declares an error, each as zero items (26.737). */
+/* A value held to a struct (26.1167) is that struct's own validate. */
+static situ_walk_err validate_deep(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t depth,
+                                   situ_walk_err *verdict,
+                                   situ_walk_why *why);
+
 static situ_walk_err tlv_walk(const situ_walk_image *image,
                               const uint8_t *message, uint32_t len,
                               uint32_t shape, uint32_t index, int policed,
-                              uint32_t *out, situ_walk_err *stop)
+                              uint32_t depth, uint32_t *out,
+                              situ_walk_err *stop)
 {
 	const uint8_t *row = table_row(image->tlvs, image->tlv_count_,
 	                               image->tlv_stride, index);
@@ -4648,7 +4656,7 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 	 * 26.741). A tag admitted once is a bit in `seen`, by its row's place
 	 * among the region's rows, so more than 64 of them is declined rather
 	 * than counted in memory this walker does not have. */
-	const uint32_t policy        = policed ? (row[4] & 7u) : 0u;
+	const uint32_t policy        = policed ? (row[4] & 15u) : 0u;
 	uint32_t       identity_code = SITU_WALK_NONE;
 	const uint8_t *known         = NULL;
 	uint32_t       known_n       = 0u;
@@ -4680,10 +4688,18 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 			}
 		}
 		/* A policy naming tags has at least one row; none is an image
-		 * without the section. */
-		if (((policy & 6u) != 0u && known_n == 0u)
-		                || ((policy & 4u) != 0u && known_n > 64u)) {
+		 * without the section. A typed one needs rows wide enough to say
+		 * how, none of them a type the image could not carry (255). */
+		if (((policy & 14u) != 0u && known_n == 0u)
+		                || ((policy & 4u) != 0u && known_n > 64u)
+		                || ((policy & 8u) != 0u
+		                    && image->tlv_known_stride < 20u)) {
 			return SITU_WALK_UNSUPPORTED;
+		}
+		for (uint32_t k = 0u; (policy & 8u) != 0u && k < known_n; k++) {
+			if (known[(size_t)k * image->tlv_known_stride + 13u] == 255u) {
+				return SITU_WALK_UNSUPPORTED;
+			}
 		}
 	}
 
@@ -4823,6 +4839,7 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 			uint32_t       flags  = 0u;
 			uint32_t       slot   = 0u;
 			int            listed = 0;
+			const uint8_t *match  = NULL;
 			for (uint32_t k = 0u; k < known_n; k++) {
 				const uint8_t *one = known
 				        + (size_t)k * image->tlv_known_stride;
@@ -4830,6 +4847,7 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 					flags  = one[12];
 					slot   = k;
 					listed = 1;
+					match  = one;
 					break;
 				}
 			}
@@ -4851,6 +4869,39 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 				}
 				last = key;
 			}
+			/* A value held to its type (26.1167), as the backends hold
+			 * it: at most `width` bytes for one number, a whole number of
+			 * elements otherwise, each element a struct's own checks. */
+			if ((policy & 8u) != 0u && match != NULL && match[13] != 0u) {
+				const uint32_t form  = match[13];
+				const uint32_t width = u16_at(match + 14);
+				if (form == 2u) {
+					if (size > width) {
+						*stop = SITU_WALK_CONSTRAINT;
+						break;
+					}
+				} else if (width == 0u) {
+					return SITU_WALK_UNSUPPORTED;
+				} else if (size % width != 0u) {
+					*stop = SITU_WALK_CONSTRAINT;
+					break;
+				} else if (form == 3u) {
+					situ_walk_err inner = SITU_WALK_OK;
+					for (uint32_t k = 0u; k < size && inner == SITU_WALK_OK;
+					     k += width) {
+						err = validate_deep(image, message + at + k, width,
+						                    u32_at(match + 16), depth + 1u,
+						                    &inner, NULL);
+						if (err != SITU_WALK_OK) {
+							return err;
+						}
+					}
+					if (inner != SITU_WALK_OK) {
+						*stop = inner;
+						break;
+					}
+				}
+			}
 		}
 		at    += size;
 		count += 1u;
@@ -4868,7 +4919,7 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 {
 	situ_walk_err stop = SITU_WALK_OK;
 
-	return tlv_walk(image, message, len, shape, index, 0, out, &stop);
+	return tlv_walk(image, message, len, shape, index, 0, 0u, out, &stop);
 }
 
 
@@ -8092,18 +8143,13 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			const uint8_t *row  = table_row(image->tlvs, image->tlv_count_,
 			                                image->tlv_stride, index);
 
-			/* A region holding a known value to its `type` (bit 3 of its
-			 * flags, 26.1167): the four backends enforce it and this walk
-			 * does not yet, so it declines rather than passes it. The
-			 * other three -- `ordering = ascending`, tags outside `known`,
-			 * a repeat of one admitted once (26.741, 26.738, 26.740) --
-			 * the walk holds, from the region's identity program and its
-			 * `tlv_known` rows, and declines where the image has neither. */
-			if (row != NULL && (row[4] & 8u) != 0u) {
-				return SITU_WALK_UNSUPPORTED;
-			}
-			err = tlv_walk(image, message, len, shape, index, 1, &items,
-			               &stop);
+			/* `ordering = ascending`, tags outside `known`, a repeat of
+			 * one admitted once and a value held to its `type` (26.741,
+			 * 26.738, 26.740, 26.1167): the walk holds all four from the
+			 * region's identity program and its `tlv_known` rows, and
+			 * declines -- UNSUPPORTED -- where the image has neither. */
+			err = tlv_walk(image, message, len, shape, index, 1, depth,
+			               &items, &stop);
 			if (err != SITU_WALK_OK
 			                && (err != SITU_WALK_UNSUPPORTED || row != NULL)) {
 				/* A region this cannot walk is a verdict it cannot give.

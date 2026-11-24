@@ -217,11 +217,13 @@ struct image_tlv size=20 repr=ValueConverted
   image_tlv.tag_pad                      offset=AbsoluteStatic(0x0F) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   image_tlv.identity_code                offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
-struct image_tlv_known size=16 repr=ValueConverted atomic=NonAtomic
+struct image_tlv_known size=20 repr=ValueConverted atomic=NonAtomic
   image_tlv_known.placement              offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_tlv_known.tag                    offset=AbsoluteStatic(0x04) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
   image_tlv_known.known_flags            offset=AbsoluteStatic(0x0C) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
-  image_tlv_known.known_pad              offset=AbsoluteStatic(0x0D) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  image_tlv_known.typed_form             offset=AbsoluteStatic(0x0D) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  image_tlv_known.element_bytes          offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  image_tlv_known.typed_struct           offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
 struct image_tlv_rule size=28 repr=ValueConverted atomic=NonAtomic
   image_tlv_rule.placement               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

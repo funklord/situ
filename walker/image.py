@@ -553,13 +553,15 @@ class Image:
 	#: part they are matched on is in the image, so a validator declines on
 	#: these rather than passes them.
 	tlv_unenforceable: set[int] = field(default_factory=set)
-	#: placement index -> (policy bits 0-2 of the row's flags, identity
-	#: program, {known tag: bit 0 admitted, bit 1 once}) for a region whose
-	#: policies a walk can hold, the image carrying what they are matched
-	#: on (26.738, 26.740, 26.741). Its absence from `tlv_unenforceable`
-	#: is what says so.
-	tlv_policies: dict[int, tuple[int, int, dict[int, int]]] = field(
-		default_factory=dict)
+	#: placement index -> (policy bits 0-3 of the row's flags, identity
+	#: program, {known tag: (bit 0 admitted and bit 1 once, typed form,
+	#: element bytes, element struct)}) for a region whose policies a walk
+	#: can hold, the image carrying what they are matched on (26.738,
+	#: 26.740, 26.741, 26.1167). Its absence from `tlv_unenforceable` is
+	#: what says so.
+	tlv_policies: dict[int, tuple[int, int,
+	                              dict[int, tuple[int, int, int, int]]]] = \
+		field(default_factory=dict)
 	#: placement index -> [(label, kind, is_default, size, length_varint)],
 	#: in declaration order, which is the order a selector is matched in.
 	#: 9.5's four ways for a value to say where it ends, the last of them by
@@ -889,28 +891,37 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			identity = (_struct.unpack_from("<I", blob, at + i * stride
 			                                + 16)[0]
 			            if stride >= 20 else NONE)
-			# A typed value (bit 3) is not held yet; the other three are,
-			# where the region's identity is in the image.
-			if flags & 8 or (flags & 7 and identity == NONE):
+			# Each policy is held where the region's identity is in the
+			# image, and declined where it is not.
+			if flags & 15 and identity == NONE:
 				image.tlv_unenforceable.add(where)
-			elif flags & 7:
-				image.tlv_policies[where] = (flags & 7, identity, {})
+			elif flags & 15:
+				image.tlv_policies[where] = (flags & 15, identity, {})
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
 			                     _number_is_big(tag_flags),
 			                     bool(tag_flags & 1))
 
 	if TLV_KNOWN in found:
 		at, records, stride = found[TLV_KNOWN]
+		typed_rows = stride >= 20
 		for i in range(records):
 			where, known_tag, known_flags = _struct.unpack_from(
 				"<IqB", blob, at + i * stride)
+			form, width, element = (
+				_struct.unpack_from("<BHI", blob, at + i * stride + 13)
+				if typed_rows else (255, 0, NONE))
 			if where in image.tlv_policies:
-				image.tlv_policies[where][2][known_tag] = known_flags
+				image.tlv_policies[where][2][known_tag] = (
+					known_flags, form, width, element)
 	# A region whose policy names tags (bit 1 admits only `known`, bit 2
-	# admits some once) has at least one row; none means an image without
-	# the section, and the region is declined as before it.
+	# admits some once, bit 3 holds some to a type) has at least one row;
+	# none means an image without the section. And a typed region needs
+	# rows saying how -- none narrower than that, none this image could
+	# not carry. Each is declined as before.
 	for where, (bits, _identity, rows) in list(image.tlv_policies.items()):
-		if bits & 6 and not rows:
+		if (bits & 14 and not rows) or (bits & 8 and any(
+				form == 255 for _flags, form, _width, _element
+				in rows.values())):
 			del image.tlv_policies[where]
 			image.tlv_unenforceable.add(where)
 
