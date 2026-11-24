@@ -1533,6 +1533,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			expr = field.size
 		elif isinstance(field, ast.Variant) and field.size is not None:
 			expr = field.size		# `variant body[length]` (26.1040)
+		elif placement.kind == "tlv":
+			# A `tlv` region reaches to the end of its frame, as every
+			# backend's extent has it -- `extent + view.limit` -- and with
+			# no program the walkers took the layout's minimum, nothing:
+			# a struct ending in one measured 0 bytes one member down, its
+			# items never walked, and both walkers answered OK where the
+			# four refuse an item inside it.
+			expr = ast.Remaining(placement.span)
 		elif isinstance(field, (ast.Field, ast.Reserved)) and field.array:
 			expr = field.array.size
 			# What a run leaves the members after it (26.894), as the

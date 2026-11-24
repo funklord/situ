@@ -345,3 +345,49 @@ def test_the_walkers_hold_a_region_to_its_order(tmp_path: Path) -> None:
 		assert python_verdict(blob, packet, shape) == str(verdict), label
 		assert c_verdict(tmp_path, blob, packet, shape) == str(verdict), \
 			label
+
+
+# -- a struct ending in a region, one member down ----------------------------
+#
+# A `tlv` region reaches to the end of its frame, and the image gave it no
+# size program, so both walkers took the layout's minimum: a struct ending in
+# one measured 0 bytes when nested, its items were never walked, and every
+# item inside it -- cut short, or a wire type its grammar refuses -- passed.
+
+NESTED = """target buffer;
+endian big;
+struct inr {
+	tlv fields (tag_type = u8,
+	            tag_decode = { field = tag >> 3, wire = tag & 0x7 },
+	            value_size = switch (wire) { case 2: prefixed(u8), default: error, },
+	            unknown = skip, duplicate_tags = allowed);
+}
+struct outer { u8 a; inr x; }
+"""
+
+#: label, verdict, bytes: field 1 wire 2 is tag 0x0a.
+NESTED_CASES = [
+	("one item", 0, bytes([0, 0x0A, 2, 7, 7])),
+	("no item", 0, bytes([0])),
+	("an item cut short", 1, bytes([0, 0x0A, 5, 7])),
+	("a wire type the grammar refuses", 2, bytes([0, 0x0B, 1])),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_a_region_one_member_down_is_walked_by_all_six(
+		tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(NESTED, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	blob  = packed_text(NESTED)
+	shape = shape_named_text(NESTED, "outer")
+	for label, verdict, packet in NESTED_CASES:
+		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),
+		                        "outer")
+		         for name, argv in command.items()}
+		assert set(given.values()) == {f"validate {verdict}"}, (
+			f"{label}: {given}")
+		assert python_verdict(blob, packet, shape) == str(verdict), label
+		assert c_verdict(tmp_path, blob, packet, shape) == str(verdict), \
+			label
