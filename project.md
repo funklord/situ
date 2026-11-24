@@ -2842,8 +2842,7 @@ Permitted:
   pred)` and `count(s.rules)`: a rule over a run's elements, each asked
   over its own view, the run walked once; and `unique(r in s.rules:
   r.key)`, no two elements sharing a key, over a bounded run -- in the
-  four backends, both walkers and the dissector, which declines
-  `unique` (26.1170)
+  four backends, both walkers and the dissector (26.1170)
 - in a `when`, `count(s.key)` of a run of bytes -- counted, sized or
   delimited, never a text number: its bytes with no terminator, where
   `size` counts one that is there (26.1171); the dissector reads a
@@ -9893,8 +9892,8 @@ held in `test_a_when_counts_a_runs_bytes.py`, fuzznet's two schemas.
 
 `any`, `all`, `count` and `unique` over a counted or `while` run of
 structs, in a `when` (holder, 2026-11-24: "we likely want rules over
-lists"). Built in the four backends, both walkers and the dissector
-(which declines `unique`); fuzznet's "none stands alone" agreed with its hand check on a
+lists"). Built in the four backends, both walkers and the dissector;
+fuzznet's "none stands alone" agreed with its hand check on a
 million values. The record is
 `doc/decision/26.1170-a-rule-reads-a-runs-elements.md`; faults found
 asking it against fifteen contexts are in `test_a_rule_reads_a_runs_elements.py`.

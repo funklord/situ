@@ -316,3 +316,47 @@ def test_the_dissector_holds_the_rules(tmp_path: Path, schema: str,
 		raised = [abbrev for abbrev, _, _ in read_back_experts(lua, top, data)
 		          if abbrev.split(".")[-1] in rules]
 		assert bool(raised) == (verdict == "2"), (label, raised)
+
+
+#: A delimited key, fuzznet's group list's shape: a name ended by a space
+#: and the same name at the end are one name. The dissector reads a key at
+#: a constant offset in its element; `UNIQUE`'s keys sit behind a sized
+#: run, which it declines.
+DELIMITED = """target buffer;
+endian big;
+struct nm { u8 name[] until " " | end max 8; }
+struct s { nm names[] while (1) | end max 8; }
+when !unique(g in s.names: g.name) refuse twice "a name twice";
+"""
+
+DELIMITED_CASES = [
+	("two names", b"a b", "0"),
+	("a name twice", b"a a", "2"),
+	("first and last alike", b"a b a", "2"),
+	("a prefix", b"ab a", "0"),
+]
+
+
+@pytest.mark.parametrize(("schema", "cases"), [
+	(DELIMITED, DELIMITED_CASES), (FIXED, FIXED_CASES),
+], ids=["delimited", "bit-field"])
+def test_the_dissector_holds_unique(tmp_path: Path, schema: str,
+                                    cases: list[tuple[str, bytes, str]]) -> None:
+	"""`unique` in the dissector: each key kept in a table, by its bytes
+	or, for a bit field, its value; a repeat raises the expert."""
+	from situc.dissector import generate
+	from test_dissector import LUA, read_back_experts
+	if LUA is None:
+		pytest.skip("no Lua interpreter")
+	parsed = parse_text(schema, path="s.situ")
+	lua = tmp_path / "s.lua"
+	lua.write_text(generate(parsed, resolve(parsed, solve(parsed)), "s"),
+	               encoding="ascii")
+	assert "_seen" in lua.read_text(encoding="ascii")
+	for label, data, verdict in cases:
+		if verdict == "1":
+			continue
+		raised = [abbrev for abbrev, _, _ in read_back_experts(lua, "s", data)
+		          if abbrev.split(".")[-1] in ("twice", "tag_twice",
+		                                       "none_alone")]
+		assert bool(raised) == (verdict == "2"), (label, raised)

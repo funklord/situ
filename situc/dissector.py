@@ -2430,7 +2430,7 @@ def _run_rules(struct: ResolvedStruct) -> "dict[str, list[traverse.RunRule]]":
 		_, same = traverse.run_equalities(when.expr, struct, _STRUCTS,
 		                                  when.name)
 		for held in same.values():
-			if isinstance(held, traverse.RunRule) and held.kind != "unique":
+			if isinstance(held, traverse.RunRule):
 				found.setdefault(held.run.path, []).append(held)
 	return found
 
@@ -2443,7 +2443,8 @@ def _rule_tallies(resolved: ResolvedSchema, struct: ResolvedStruct,
 	From the run's first byte to where its dissection stopped, each element
 	measured by the stride the run's own loop measures it by, its body read
 	at the element's offset. A rule whose body this cannot read is left
-	untallied, and `_message_calls` declines it; `unique` is declined.
+	untallied, and `_message_calls` declines it. `unique` keeps each key
+	in a table, by its bytes or, for a bit field, its value.
 	"""
 	element = _STRUCTS.get(placement.type_name or "")
 	stride  = (_element_stride(resolved, element)
@@ -2451,7 +2452,13 @@ def _rule_tallies(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if element is None or stride is None:
 		return []
 	bodies = []
+	keys = []
 	for rule in rules:
+		if rule.kind == "unique":
+			key = None if rule.key is None else _unique_key(element, rule.key)
+			if key is not None:
+				keys.append((_lua(rule.helper), key))
+			continue
 		shown = _over_fields(element, expr_to_source(rule.body, explicit=True),
 		                     "at")
 		if shown is None:
@@ -2459,29 +2466,62 @@ def _rule_tallies(resolved: ResolvedSchema, struct: ResolvedStruct,
 		shown = translate_operators(shown, conj=" and ", disj=" or ",
 		                            ne=" ~= ", neg="not ")
 		bodies.append((_lua(rule.helper), shown))
-	if not bodies:
+	if not bodies and not keys:
 		return []
 	run = _lua(_local(struct, placement))
-	lines = [f"	-- {placement.path}: each element asked its rules (26.1170)"]
+	lines = [f"\t-- {placement.path}: each element asked its rules (26.1170)"]
 	for tally, _ in bodies:
-		lines.append(f"	local {tally}_hits, {tally}_n = 0, 0")
+		lines.append(f"\tlocal {tally}_hits, {tally}_n = 0, 0")
+	for tally, _ in keys:
+		lines.append(f"\tlocal {tally}_seen, {tally}_twice = {{}}, false")
 	lines.extend([
-		f"	local {run}_p, {run}_end = {run}_first, at",
-		f"	while {run}_p < {run}_end do",
-		f"		local at = {run}_p",
-		f"		local size = {stride}",
-		f"		if size == nil or size <= 0 or at + size > {run}_end then"
+		f"\tlocal {run}_p, {run}_end = {run}_first, at",
+		f"\twhile {run}_p < {run}_end do",
+		f"\t\tlocal at = {run}_p",
+		f"\t\tlocal size = {stride}",
+		f"\t\tif size == nil or size <= 0 or at + size > {run}_end then"
 		" break end",
 	])
 	for tally, shown in bodies:
 		lines.extend([
-			f"		{tally}_n = {tally}_n + 1",
-			f"		if ({shown}) and ({shown}) ~= 0 then"
+			f"\t\t{tally}_n = {tally}_n + 1",
+			f"\t\tif ({shown}) and ({shown}) ~= 0 then"
 			f" {tally}_hits = {tally}_hits + 1 end",
 		])
 		_TALLIED.add(tally)
-	lines.extend([f"		{run}_p = at + size", "	end"])
+	for tally, key in keys:
+		lines.extend([
+			f"\t\tlocal {tally}_key = {key}",
+			f"\t\tif {tally}_seen[{tally}_key] then {tally}_twice = true end",
+			f"\t\t{tally}_seen[{tally}_key] = true",
+		])
+		_TALLIED.add(tally)
+	lines.extend([f"\t\t{run}_p = at + size", "\tend"])
 	return lines
+
+
+def _unique_key(element: ResolvedStruct, key: Placement) -> str | None:
+	"""One element's `unique` key as a Lua value over `at`, or None.
+
+	Its bytes where it is a byte run -- a fixed one, or a delimited one
+	without its terminator, as every reader compares it -- or a whole-byte
+	scalar; a bit field's value. Only at a constant offset in the element.
+	"""
+	if key.offset_bits is None or key.sized_by is not None \
+			or key.size_expr is not None:
+		return None
+	if key.offset_bits % 8 or key.size_bits % 8:
+		if key.delimiters or key.array_count is not None:
+			return None
+		return _over_fields(element, _local(element, key), "at")
+	at = f"at + {key.offset_bits // 8}"
+	if key.delimiters:
+		# `situ_scan`'s first value is the content length; an empty key
+		# is the empty string, which `tvb(x, 0)` need not be asked for.
+		return (f"(function() local n = {_scan_call(key, f'({at})')}"
+		        f" if n > 0 then return tvb({at}, n):raw() end"
+		        " return \"\" end)()")
+	return f"tvb({at}, {key.size_bits // 8}):raw()"
 
 
 def _placement_at(struct: ResolvedStruct, path: str) -> Placement:
@@ -2593,6 +2633,10 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 				continue
 			tally = _lua(rule.helper)
 			if tally not in _TALLIED:
+				continue
+			if rule.kind == "unique":
+				extra[lifted] = f"({tally}_twice and 0 or 1)"
+				guards += f"{tally}_twice ~= nil and "
 				continue
 			extra[lifted] = {
 				"any":   f"({tally}_hits > 0 and 1 or 0)",

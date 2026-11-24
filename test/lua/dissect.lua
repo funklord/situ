@@ -106,6 +106,14 @@ function Range:bytes()
 	return self.buffer:sub(self.offset + 1, self.offset + self.length)
 end
 
+--- The range's bytes as a Lua string, which is Wireshark's `TvbRange:raw()`
+--- -- byte for byte, where `string()` stops at a zero. A `when` comparing
+--- two byte runs (26.1128) and a `unique` key (26.1170) read through it,
+--- and the stub had none, so neither had ever run here.
+function Range:raw()
+	return self.buffer:sub(self.offset + 1, self.offset + self.length)
+end
+
 --- The range as text, which is what Wireshark's `TvbRange:string()` gives.
 --- A schema whose numbers are written as digits reads them through this and
 --- `tonumber`, because `uint()` over eight ASCII characters is a number
