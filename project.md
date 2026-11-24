@@ -588,6 +588,16 @@ both walkers and the dissector. What a user cannot yet do is listed under
   the size is known nonzero; 33 `pos` scopes per generated function. Each
   is noise in a consumer build, not behaviour -- taken up again when a
   consumer reports one.
+- Framing an element whose discriminant is peeked behind leading
+  whitespace (`peek u8 kind skip;`) with `default: error`: `required`
+  over a buffer holding no discriminant -- empty, or whitespace alone --
+  answers whole at what it has, since the discriminant reads as zero and
+  no arm is chosen; the four agree, and are wrong. Its consequence, a
+  `while` run of it spinning in every backend, is closed: a run's framing
+  ends at an element of nothing (2026-11-24). The element's own answer
+  wants the discriminant's arrival guarded where its offset is not
+  constant, as it already is where it is; no corpus schema has the shape
+  (json and sexpr give the variant a default arm), so it waits for one.
 - The dissector computes a `let` in `UInt64` (26.1112), over a field of up
   to 64 bits, and a `when` reads one of any width (26.1133, 26.1151); a
   `let` over a text number or a token is declined, and so is a rule that

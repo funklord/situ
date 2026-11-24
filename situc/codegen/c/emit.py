@@ -7462,7 +7462,12 @@ class Emitter:
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				"\t\tif (situ_view_sub(view, pos, part, &element) != SITU_OK) {",
+				# A whole element of nothing never advances the walk: the run
+				# ends there, as every other walk ends at a zero-extent
+				# element. Without it `required` spun on a run whose element
+				# said "complete" of no bytes (found 2026-11-24).
+				"\t\tif (part == 0u"
+				" || situ_view_sub(view, pos, part, &element) != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
 				"\t\tat  = situ_need_u32(at, part);",

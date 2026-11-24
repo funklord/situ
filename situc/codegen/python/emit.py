@@ -7553,6 +7553,10 @@ class Emitter:
 			cond = self._element_condition(element, placement, "at", "have")
 			body.extend([
 				*read,
+				# A whole element of nothing never advances: the run ends
+				# there, as C's does (found 2026-11-24, a spin).
+				"\t\t\tif part == 0:",
+				"\t\t\t\tbreak",
 				f"\t\t\t_element = {self._child(struct, placement, 'probe')[0]}"
 				f"(probe._msg, pos, part{self._child(struct, placement, 'probe')[1]})",
 				"\t\t\tat  = min(at + part, 0xFFFFFFFF)",

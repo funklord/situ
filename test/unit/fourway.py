@@ -372,9 +372,13 @@ def answers(command: list[str], packet: bytes, cwd: Path) -> str:
 	A driver that dies is a failure of the same kind a disagreement is -- a
 	Rust panic and a C++ segfault have both been that -- so the exit status is
 	part of the answer.
+
+	And so is one that never answers: every backend's framing once spun on a
+	run whose element framed to nothing (2026-11-24), and with no bound here
+	the suite hung with it. Two minutes is far past any one packet.
 	"""
 	result = subprocess.run([*command, packet.hex()], capture_output=True,
-	                        text=True, cwd=cwd)
+	                        text=True, cwd=cwd, timeout=120)
 	if result.returncode != 0:
 		raise BuildFailed(command[0], result.stderr)
 	return result.stdout

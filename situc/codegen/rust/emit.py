@@ -7551,6 +7551,11 @@ class Emitter:
 			cond = self._element_condition(element, placement, "have")
 			body.extend([
 				*read,
+				# A whole element of nothing never advances: the run ends
+				# there, as C's does (found 2026-11-24, a spin).
+				"\t\t\tif part == 0 {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
 				# Bound only where the condition reads it. A condition over
 				# `remaining` alone names no field of the element, and an
 				# unused binding is an error under `-D warnings` -- which

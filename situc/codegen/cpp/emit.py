@@ -3814,7 +3814,10 @@ class Emitter:
 				"\t\t\tsitu_view_t raw;",
 				"",
 				*read,
-				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), pos, part, &raw)"
+				# A whole element of nothing never advances: the run ends
+				# there, as C's does (found 2026-11-24, a spin).
+				"\t\t\tif (part == 0u"
+				" || situ_view_sub(::situ::rt::view::raw(), pos, part, &raw)"
 				" != SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
