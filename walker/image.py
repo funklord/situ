@@ -38,6 +38,8 @@ REGISTRY_WORDS                    = 33
 #: An enum-typed field's members by name, and whether it admits others
 #: (26.1114). Tail.
 CHOICES                           = 34
+#: The tags a `tlv` region knows, with what its policies say of each.
+TLV_KNOWN                         = 35
 SKIPS                             = 22
 WHITESPACE                        = 23
 TLV_RULES                         = 24
@@ -63,7 +65,7 @@ KNOWN_SECTIONS = frozenset({
 	VARINTS, TLVS, INDEXES, NAMES, VECTORS, MARKERS, CONSTRAINTS,
 	ENUM_VALUES, VERSIONS, RELATIONS, RELATION_MUSTS, PINNED_RUNS, DEPTHS,
 	SKIPS, WHITESPACE, TLV_RULES, MESSAGES, TAGS, KERNEL_TABLES, ARGUMENTS,
-	HOLDS, ORDERINGS, LETS, REGISTRY, REGISTRY_WORDS, CHOICES,
+	HOLDS, ORDERINGS, LETS, REGISTRY, REGISTRY_WORDS, CHOICES, TLV_KNOWN,
 })
 SECTION_ANCILLARY = 1
 
@@ -551,6 +553,13 @@ class Image:
 	#: part they are matched on is in the image, so a validator declines on
 	#: these rather than passes them.
 	tlv_unenforceable: set[int] = field(default_factory=set)
+	#: placement index -> (policy bits 0-2 of the row's flags, identity
+	#: program, {known tag: bit 0 admitted, bit 1 once}) for a region whose
+	#: policies a walk can hold, the image carrying what they are matched
+	#: on (26.738, 26.740, 26.741). Its absence from `tlv_unenforceable`
+	#: is what says so.
+	tlv_policies: dict[int, tuple[int, int, dict[int, int]]] = field(
+		default_factory=dict)
 	#: placement index -> [(label, kind, is_default, size, length_varint)],
 	#: in declaration order, which is the order a selector is matched in.
 	#: 9.5's four ways for a value to say where it ends, the last of them by
@@ -875,11 +884,35 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			(where, flags, _unknown, _dup, selector,
 			 tag_bytes, tag_terminal, tag_flags) = _struct.unpack_from(
 				"<IBBBxIBBBx", blob, at + i * stride)
-			if flags & 15:
+			# The identity program, by stride: an image written before it
+			# reads `NONE`, and its policies stay declined.
+			identity = (_struct.unpack_from("<I", blob, at + i * stride
+			                                + 16)[0]
+			            if stride >= 20 else NONE)
+			# A typed value (bit 3) is not held yet; the other three are,
+			# where the region's identity is in the image.
+			if flags & 8 or (flags & 7 and identity == NONE):
 				image.tlv_unenforceable.add(where)
+			elif flags & 7:
+				image.tlv_policies[where] = (flags & 7, identity, {})
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
 			                     _number_is_big(tag_flags),
 			                     bool(tag_flags & 1))
+
+	if TLV_KNOWN in found:
+		at, records, stride = found[TLV_KNOWN]
+		for i in range(records):
+			where, known_tag, known_flags = _struct.unpack_from(
+				"<IqB", blob, at + i * stride)
+			if where in image.tlv_policies:
+				image.tlv_policies[where][2][known_tag] = known_flags
+	# A region whose policy names tags (bit 1 admits only `known`, bit 2
+	# admits some once) has at least one row; none means an image without
+	# the section, and the region is declined as before it.
+	for where, (bits, _identity, rows) in list(image.tlv_policies.items()):
+		if bits & 6 and not rows:
+			del image.tlv_policies[where]
+			image.tlv_unenforceable.add(where)
 
 	if TLV_RULES in found:
 		at, records, stride = found[TLV_RULES]

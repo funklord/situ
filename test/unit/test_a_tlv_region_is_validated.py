@@ -189,24 +189,21 @@ def test_an_unknown_tag_is_refused_by_all_four(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-def test_the_walkers_decline_a_region_that_refuses_unknown_tags(
+def test_the_walkers_hold_a_region_to_its_known_tags(
 		tmp_path: Path) -> None:
-	"""The image carries neither `known`'s tags nor the part they match, so
-	a walker cannot enforce the policy; it must not call such a region valid
-	either. `cannot-say` on the regions that refuse, and the verdict where
-	the region admits anything.
+	"""Both walkers declined every region with a policy: the image carried
+	neither `known`'s tags nor the part they match. It carries both now --
+	an identity program and a row per known tag -- so each region gets the
+	four backends' verdict.
 
-	`strict` and `lenient` are the simple `length_type` form, which no
-	walker reads at all -- the image has no selector for it -- so both are
-	`cannot-say` whatever the policy, and `numbered_lenient` is the region
-	whose verdict the walkers do give -- `duplicate_tags = allowed` as well,
-	since a tag `known` admits once is one more thing the image cannot
-	carry (26.740)."""
+	Except `numbered`, whose identity is a RUNNING part, `previous +
+	delta`: a program over one item's tag cannot compute it, the image has
+	none, and the walkers still decline that region rather than guess.
+	`numbered_lenient` keys on the same part and asks nothing of it."""
 	blob = packed_text(KNOWN)
 	for struct, label, verdict, packet in KNOWN_CASES:
 		shape    = shape_named_text(KNOWN, struct)
-		expected = (str(verdict) if struct == "numbered_lenient"
-		            else "cannot-say")
+		expected = "cannot-say" if struct == "numbered" else str(verdict)
 		assert python_verdict(blob, packet, shape) == expected, label
 		assert c_verdict(tmp_path, blob, packet, shape) == expected, label
 
@@ -277,16 +274,16 @@ def test_a_repeated_tag_is_refused_by_all_four(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-def test_the_walkers_decline_a_region_that_limits_repeats(
-		tmp_path: Path) -> None:
-	"""`once` limits tag 1 to one item, which the image cannot carry, so
-	both walkers decline it; `many` limits nothing and gets its verdict."""
+def test_the_walkers_hold_a_tag_to_once(tmp_path: Path) -> None:
+	"""`once` limits tag 1 to one item, and both walkers declined it until
+	the image carried which tags a region admits once; they give the four
+	backends' verdict now."""
 	blob = packed_text(REPEATED)
 	for struct, label, verdict, packet in REPEATED_CASES:
-		shape    = shape_named_text(REPEATED, struct)
-		expected = str(verdict) if struct == "many" else "cannot-say"
-		assert python_verdict(blob, packet, shape) == expected, label
-		assert c_verdict(tmp_path, blob, packet, shape) == expected, label
+		shape = shape_named_text(REPEATED, struct)
+		assert python_verdict(blob, packet, shape) == str(verdict), label
+		assert c_verdict(tmp_path, blob, packet, shape) == str(verdict), \
+			label
 
 
 # -- `ordering = ascending` (26.741) ----------------------------------------
@@ -339,11 +336,12 @@ def test_an_item_out_of_order_is_refused_by_all_four(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-def test_the_walkers_decline_an_ordered_region(tmp_path: Path) -> None:
-	"""The image carries no identity program to compare, so an order is one
-	more policy both walkers decline rather than pass."""
+def test_the_walkers_hold_a_region_to_its_order(tmp_path: Path) -> None:
+	"""The image carried no identity program to compare, and both walkers
+	declined; with one, they give the four backends' verdict."""
 	blob  = packed_text(ORDERED)
 	shape = shape_named_text(ORDERED, "sorted")
-	for label, _verdict_code, packet in ORDERED_CASES:
-		assert python_verdict(blob, packet, shape) == "cannot-say", label
-		assert c_verdict(tmp_path, blob, packet, shape) == "cannot-say", label
+	for label, verdict, packet in ORDERED_CASES:
+		assert python_verdict(blob, packet, shape) == str(verdict), label
+		assert c_verdict(tmp_path, blob, packet, shape) == str(verdict), \
+			label

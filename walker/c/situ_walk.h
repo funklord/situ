@@ -197,6 +197,10 @@ typedef struct {
 	uint32_t       tlv_rule_count;
 	uint32_t       tlv_rule_stride;
 
+	const uint8_t *tlv_known;
+	uint32_t       tlv_known_count;
+	uint32_t       tlv_known_stride;
+
 	const uint8_t *indexes;
 	uint32_t       index_count;
 	uint32_t       index_stride;

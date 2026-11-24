@@ -83,7 +83,12 @@ CODEC_BYTES	= 32
 TAG_BYTES	= 28
 KERNEL_TABLE_BYTES	= 1024
 VARINT_BYTES	= 12
-TLV_BYTES	= 16
+#: `image_tlv`. 20 since a region's identity program joined it, which a
+#: walker needs to hold `known` tags to their policies (26.738, 26.740,
+#: 26.741); a reader taking sixteen declines those as before.
+TLV_BYTES	= 20
+#: `image_tlv_known`, one row per tag a region's `known` names.
+TLV_KNOWN_BYTES	= 16
 #: `image_tlv_rule`. 28 rather than 24 since a value size could be an
 #: expression over the tag's own parts: the row gained the offset of
 #: that arm's program. The reader takes the row by stride, so a
@@ -188,15 +193,21 @@ SECTION_REGISTRY_WORDS	= 33
 #: `image_choice`, one row per (placement, member). Tail: an editor offers
 #: them as choices; a walk never needs them.
 SECTION_CHOICES		= 34
+#: The tags a `tlv` region knows and what its policies say of each:
+#: `image_tlv_known`. Ancillary, below.
+SECTION_TLV_KNOWN	= 35
 CHOICE_BYTES		= 24
 #: What `--metadata` adds and a bare image lacks: the tail, named once so a
 #: test holding the core to "unchanged by the tail" cannot list it short.
 TAIL_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_CHOICES})
 #: Read only to print -- names and capability vectors, under `--metadata`.
 #: A walker that cannot print them walks the same.
+#: And the tags a `tlv` region knows: a walker that cannot read them
+#: declines those regions' policies by the row's flags, as it did before
+#: the section existed, so it walks the same and answers no less soundly.
 ANCILLARY_SECTIONS = frozenset({SECTION_NAMES, SECTION_VECTORS, SECTION_LETS,
                                 SECTION_REGISTRY, SECTION_REGISTRY_WORDS,
-                                SECTION_CHOICES})
+                                SECTION_CHOICES, SECTION_TLV_KNOWN})
 #: A tag and what computes it (26.579), and the kernel tables a polynomial
 #: codec needs. Both are additive: a reader that does not know them reads
 #: every other section exactly as before.
@@ -1788,6 +1799,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# how far its VALUE reached, so no walker could count items in one. The
 	# record carried the tag varint and two policies and stopped there.
 	tlv_selector_at: dict[str, int] = {}
+	#: placement path -> where the region's identity program starts: what
+	#: a `known` key is matched against (decision 0023), over the raw tag.
+	tlv_identity_at: dict[str, int] = {}
 	#: (placement path, rule label) -> where that rule's size program starts.
 	#: Keyed by the label as well, because each arm sizes its own way and
 	#: `default` is `None`.
@@ -1796,6 +1810,26 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		grammar = placement.tlv_grammar
 		if grammar is None:
 			continue
+		# The identity first, for every form: the part the region names,
+		# or the raw tag. A running part -- CoAP's `number = previous +
+		# delta` -- needs the item before it and gets no program; the
+		# walkers then decline the region's policies, as before.
+		identity_part = next((one for one in grammar.tag_decode
+		                      if one.name == grammar.identity), None)
+		identity_expr = (identity_part.value if identity_part is not None
+		                 else None)
+		if grammar.identity is None or identity_expr is not None:
+			start = len(program.code)
+			try:
+				if identity_expr is None:
+					program.emit(Op.TAG)
+				else:
+					_compile_over_tag(program, identity_expr, consts)
+				program.emit(Op.END)
+				tlv_identity_at[placement.path] = start
+				coverage.expressions += 1
+			except PackError:
+				del program.code[start:]
 		# The simple form, `tag_type = u8, length_type = u8`: one length
 		# before every value, so there is nothing to select on and a
 		# selector of 0 picks its one rule (`_value_rules`). It was
@@ -3199,6 +3233,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	regions_blob = bytearray()
 	tlvs_blob    = bytearray()
 	tlv_rules_blob = bytearray()
+	tlv_known_blob = bytearray()
 	index_blob   = bytearray()
 	markers_blob = bytearray()
 
@@ -3456,12 +3491,25 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				_tlv_tag_name(placement), placement.endian,
 				placement.marker is not None)
 			tlvs_blob += _struct.pack(
-				"<IBBBxIBBBx", at,
+				"<IBBBxIBBBxI", at,
 				regions,
 				_policy(placement.tlv_unknown),
 				_policy(placement.tlv_duplicates),
 				_u32(tlv_selector_at.get(placement.path)),
-				tag_bytes, tag_terminal, tag_flags)
+				tag_bytes, tag_terminal, tag_flags,
+				_u32(tlv_identity_at.get(placement.path)))
+			# Each tag `known` names, with what the region's policies say
+			# of it: bit 0 admitted where `unknown = error` refuses the
+			# rest, bit 1 admitted once (26.738, 26.740).
+			known_admitted = traverse.tlv_admitted_tags(placement)
+			known_once     = set(traverse.tlv_single_tags(placement))
+			for known_tag in sorted({one.tag for one in
+			                         placement.tlv_grammar.known}):
+				tlv_known_blob += _struct.pack(
+					"<IqBxxx", at, known_tag,
+					(1 if known_admitted is not None
+					 and known_tag in known_admitted else 0)
+					| (2 if known_tag in known_once else 0))
 			# One row per rule, consecutive under this placement -- the
 			# delimiter table's arrangement, for its reason: the table is
 			# sorted by placement and binary-searched, so consecutive rows
@@ -3627,6 +3675,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_VARINTS, varints_blob, VARINT_BYTES),
 			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
 			(SECTION_TLV_RULES, tlv_rules_blob, TLV_RULE_BYTES),
+			(SECTION_TLV_KNOWN, tlv_known_blob, TLV_KNOWN_BYTES),
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
 			(SECTION_ARGUMENTS, arguments_blob, ARGUMENT_BYTES),
 			(SECTION_HOLDS, holds_blob, HOLDS_BYTES),

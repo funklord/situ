@@ -443,6 +443,11 @@ without huge dependencies kept, and the pertinent code shared:
   parent's frame (97007385), and the simple tlv form -- `tag_type`,
   `length_type`, every region openmlx4 writes -- was not in the image at
   all, so no walker measured one; it is packed as one `prefixed` rule now.
+  Then the walkers hold a tlv region's order, its known tags and its
+  once-only tags (26.738, 26.740, 26.741), where both declined them: the
+  image carries an identity program and an `image_tlv_known` row per tag.
+  Still declined: a typed value (26.1167) and a region keyed on a running
+  part (CoAP's `previous + delta`), which no program over one tag computes.
 - Done 2026-11-23: a delimited token member in a variant arm did not
   compile in C and was unchecked in C++ (fuzznet inbox 20261123T1616Z).
 - Done 2026-11-23: situ-edit-gui's dark-desktop detection, a copy of

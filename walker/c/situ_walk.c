@@ -16,6 +16,8 @@
 #define TAG_VERSIONS   17u
 #define TAG_TLVS       10u
 #define TAG_TLV_RULES  24u
+/* The tags a `tlv` region knows and what its policies say of each. */
+#define TAG_TLV_KNOWN  35u
 #define TAG_INDEXES    11u
 #define TAG_DEPTHS     21u
 #define TAG_PINNED_RUNS 20u
@@ -67,6 +69,10 @@
  * array a descent keeps them in. A child taking more is UNSUPPORTED. */
 #define SITU_WALK_ARGUMENTS_MAX 8u
 #define TLV_READS       15u	/* to the tag's decode parameters */
+/* And to the identity program, which a region's policies need; a row
+ * shorter than this has none, and those policies are declined. */
+#define TLV_IDENTITY_READS 20u
+#define TLV_KNOWN_READS 13u	/* placement, tag and its flags */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
 #define TLV_RULE_COMPUTED_READS 28u	/* to a computed size's program */
 #define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
@@ -253,6 +259,13 @@ static situ_walk_err read_sections(situ_walk_image *out,
 			out->tlvs       = image + offset;
 			out->tlv_count_ = items;
 			out->tlv_stride = stride;
+		} else if (kind == TAG_TLV_KNOWN) {
+			if (stride < TLV_KNOWN_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->tlv_known        = image + offset;
+			out->tlv_known_count  = items;
+			out->tlv_known_stride = stride;
 		} else if (kind == TAG_TLV_RULES) {
 			if (stride < TLV_RULE_READS) {
 				return SITU_WALK_MALFORMED;
@@ -4589,7 +4602,7 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
  * schema declares an error, each as zero items (26.737). */
 static situ_walk_err tlv_walk(const situ_walk_image *image,
                               const uint8_t *message, uint32_t len,
-                              uint32_t shape, uint32_t index,
+                              uint32_t shape, uint32_t index, int policed,
                               uint32_t *out, situ_walk_err *stop)
 {
 	const uint8_t *row = table_row(image->tlvs, image->tlv_count_,
@@ -4627,6 +4640,52 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 
 	uint32_t at    = from / 8u;
 	uint32_t count = 0u;
+
+	/* The region's policies, for `validate` alone -- the count is every
+	 * item the walk reads. Each item's identity against the tags `known`
+	 * names, in the order the four backends ask: a tag outside them, a
+	 * second of one admitted once, one below the last (26.738, 26.740,
+	 * 26.741). A tag admitted once is a bit in `seen`, by its row's place
+	 * among the region's rows, so more than 64 of them is declined rather
+	 * than counted in memory this walker does not have. */
+	const uint32_t policy        = policed ? (row[4] & 7u) : 0u;
+	uint32_t       identity_code = SITU_WALK_NONE;
+	const uint8_t *known         = NULL;
+	uint32_t       known_n       = 0u;
+	uint64_t       seen          = 0u;
+	uint64_t       last          = 0u;
+	if (policy != 0u) {
+		if (image->tlv_stride < TLV_IDENTITY_READS) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		identity_code = u32_at(row + 16);
+		if (identity_code == SITU_WALK_NONE) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		known = table_row(image->tlv_known, image->tlv_known_count,
+		                  image->tlv_known_stride, index);
+		if (known != NULL) {
+			const uint8_t *end = image->tlv_known
+			        + (size_t)image->tlv_known_count
+			          * image->tlv_known_stride;
+			while (known > image->tlv_known
+			                && u32_at(known - image->tlv_known_stride)
+			                   == index) {
+				known -= image->tlv_known_stride;
+			}
+			for (const uint8_t *one = known;
+			     one < end && u32_at(one) == index;
+			     one += image->tlv_known_stride) {
+				known_n += 1u;
+			}
+		}
+		/* A policy naming tags has at least one row; none is an image
+		 * without the section. */
+		if (((policy & 6u) != 0u && known_n == 0u)
+		                || ((policy & 4u) != 0u && known_n > 64u)) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+	}
 
 	*stop = SITU_WALK_OK;
 	while (at < len) {
@@ -4753,6 +4812,46 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 			*stop = SITU_WALK_BOUNDS;
 			break;
 		}
+		if (policy != 0u) {
+			int64_t identity = 0;
+			err = eval_tagged(image, identity_code, ctx_load, &ctx,
+			                  (int64_t)(len - at), 1, tag, &identity);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			const uint64_t key    = (uint64_t)identity;
+			uint32_t       flags  = 0u;
+			uint32_t       slot   = 0u;
+			int            listed = 0;
+			for (uint32_t k = 0u; k < known_n; k++) {
+				const uint8_t *one = known
+				        + (size_t)k * image->tlv_known_stride;
+				if ((uint64_t)i64_at(one + 4) == key) {
+					flags  = one[12];
+					slot   = k;
+					listed = 1;
+					break;
+				}
+			}
+			if ((policy & 2u) != 0u && (!listed || (flags & 1u) == 0u)) {
+				*stop = SITU_WALK_CONSTRAINT;
+				break;
+			}
+			if ((policy & 4u) != 0u && listed && (flags & 2u) != 0u) {
+				if (((seen >> slot) & 1u) != 0u) {
+					*stop = SITU_WALK_CONSTRAINT;
+					break;
+				}
+				seen |= (uint64_t)1u << slot;
+			}
+			if ((policy & 1u) != 0u) {
+				if (key < last) {
+					*stop = SITU_WALK_CONSTRAINT;
+					break;
+				}
+				last = key;
+			}
+		}
 		at    += size;
 		count += 1u;
 	}
@@ -4769,7 +4868,7 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 {
 	situ_walk_err stop = SITU_WALK_OK;
 
-	return tlv_walk(image, message, len, shape, index, out, &stop);
+	return tlv_walk(image, message, len, shape, index, 0, out, &stop);
 }
 
 
@@ -7993,17 +8092,17 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			const uint8_t *row  = table_row(image->tlvs, image->tlv_count_,
 			                                image->tlv_stride, index);
 
-			/* A region declaring `ordering = ascending` (bit 0 of its
-			 * flags), refusing tags outside `known` (bit 1) or a repeat of
-			 * one it admits once (bit 2), or holding a known value to its
-			 * `type` (bit 3): the four backends enforce all four, and the
-			 * image carries neither the tags nor the part they are matched
-			 * on, so this declines rather than passes it (26.741, 26.738,
-			 * 26.740, 26.1167). */
-			if (row != NULL && (row[4] & 15u) != 0u) {
+			/* A region holding a known value to its `type` (bit 3 of its
+			 * flags, 26.1167): the four backends enforce it and this walk
+			 * does not yet, so it declines rather than passes it. The
+			 * other three -- `ordering = ascending`, tags outside `known`,
+			 * a repeat of one admitted once (26.741, 26.738, 26.740) --
+			 * the walk holds, from the region's identity program and its
+			 * `tlv_known` rows, and declines where the image has neither. */
+			if (row != NULL && (row[4] & 8u) != 0u) {
 				return SITU_WALK_UNSUPPORTED;
 			}
-			err = tlv_walk(image, message, len, shape, index, &items,
+			err = tlv_walk(image, message, len, shape, index, 1, &items,
 			               &stop);
 			if (err != SITU_WALK_OK
 			                && (err != SITU_WALK_UNSUPPORTED || row != NULL)) {

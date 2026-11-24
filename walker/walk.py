@@ -2378,10 +2378,11 @@ def tlv_whole(view: View, index: int) -> str | None:
 	`example/protobuf` passed a cut varint and a wire type its own schema
 	declares an error, each as zero items (26.737).
 	"""
-	return _tlv_walk(view, index)[1]
+	return _tlv_walk(view, index, policed=True)[1]
 
 
-def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
+def _tlv_walk(view: View, index: int,
+		policed: bool = False) -> tuple[int, str | None]:
 	"""The walk both of those read: how many items, and why it stopped
 	short of the region's end, or None where it did not.
 
@@ -2413,6 +2414,15 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 
 	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	count = 0
+
+	# The region's policies, for `validate` alone -- the count is every
+	# item the walk reads, whatever they say. Each item's identity against
+	# the tags `known` names, in the order the four backends ask: a tag
+	# outside them, a second of one admitted once, one below the last
+	# (26.738, 26.740, 26.741).
+	policies = view.image.tlv_policies.get(index) if policed else None
+	seen: set[int] = set()
+	last = 0
 
 	while at < view.limit:
 		try:
@@ -2514,6 +2524,27 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 		# somebody re-deriving it.
 		if size > view.limit - at:
 			return count, "bounds"
+		if policies is not None:
+			bits, identity_code, known = policies
+			identity = vm.run(
+				view.image.code, identity_code,
+				load_field = lambda i: _value_of(view, i),
+				size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
+				offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
+				count_of   = lambda i: _count(view, i),
+				sum_of     = lambda i: _sum(view, i),
+				remaining  = max(0, view.limit - at),
+				tag        = tag) & 0xFFFFFFFFFFFFFFFF
+			if bits & 2 and not known.get(identity, 0) & 1:
+				return count, "constraint"
+			if bits & 4 and known.get(identity, 0) & 2:
+				if identity in seen:
+					return count, "constraint"
+				seen.add(identity)
+			if bits & 1:
+				if identity < last:
+					return count, "constraint"
+				last = identity
 		at    += size
 		count += 1
 	return count, None

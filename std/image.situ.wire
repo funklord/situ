@@ -19,7 +19,7 @@ endian little
 target buffer
 
 enum image_section_tag : u16 unknown=pass
-  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 holds=29 orderings=30 lets=31 registry=32 registry_words=33 choices=34 names=12 vectors=13
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 holds=29 orderings=30 lets=31 registry=32 registry_words=33 choices=34 tlv_known=35 names=12 vectors=13
 
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
@@ -229,7 +229,7 @@ struct image_struct size=16
   @0x0008   4         u32        size_bits  little
   @0x000c   4         u32        struct_flags  little
 
-struct image_tlv size=16
+struct image_tlv size=20
   @0x0000   4         u32        placement  little
   @0x0004   1         u8         tlv_flags
   @0x0005   1         u8         unknown_policy
@@ -240,8 +240,15 @@ struct image_tlv size=16
   @0x000d   1         u8         tag_terminal_bits
   @0x000e   1         u8         tag_varint_flags
   @0x000f   1         u8         tag_pad
+  @0x0010   4         u32        identity_code  little
 
-struct image_tlv_rule size=24
+struct image_tlv_known size=16
+  @0x0000   4         u32        placement  little
+  @0x0004   8         i64        tag  little
+  @0x000c   1         u8         known_flags
+  @0x000d   3         u8         known_pad  little
+
+struct image_tlv_rule size=28
   @0x0000   4         u32        placement  little
   @0x0004   8         i64        label  little
   @0x000c   1         u8         rule_kind
@@ -252,6 +259,7 @@ struct image_tlv_rule size=24
   @0x0015   1         u8         length_terminal_bits
   @0x0016   1         u8         length_varint_flags
   @0x0017   1         u8         length_pad
+  @0x0018   4         u32        size_code  little
 
 struct image_varint size=12
   @0x0000   4         u32        placement  little

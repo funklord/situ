@@ -78,6 +78,7 @@ enum image_section_tag : u16 {
 	registry     = 32,     // a registry's cells (0070)
 	registry_words = 33,   // the policy words a registry's cells name (0070)
 	choices      = 34,     // tail: an enum-typed field's members, by name
+	tlv_known    = 35,     // the tags a `tlv` region knows, and their policies
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -407,7 +408,8 @@ struct image_varint {
 
 struct image_tlv {
 	u32  placement;
-	u8   tlv_flags;                   // bit 0: ordered
+	u8   tlv_flags;                   // bit 0 ordered, 1 known tags only,
+	                                  // 2 a tag once, 3 values typed
 	u8   unknown_policy;
 	u8   duplicate_policy;
 	u8   tlv_pad;
@@ -440,6 +442,24 @@ struct image_tlv {
 	u8   tag_terminal_bits;
 	u8   tag_varint_flags;            // bit 1: big-endian groups (be128)
 	u8   tag_pad;
+	// What a `known` key matches (decision 0023), as a program over the
+	// raw tag: the part the region names, or `tag` itself. `none` where the
+	// part is one a walk carries from item to item -- CoAP's running option
+	// number -- which this program cannot compute. Bits 0 to 2 of
+	// `tlv_flags` are answerable with it and the rows of `tlv_known`; a
+	// reader that predates it stops at sixteen bytes and declines them.
+	u32  identity_code;
+}
+
+// A tag a `tlv` region's `known` names, and what its policies say of it:
+// bit 0 the region admits it (`unknown = error` refuses every other),
+// bit 1 it is admitted once (`duplicate_tags = error`). Consecutive under
+// the placement and ascending by tag, as `image_tlv_rule` is.
+struct image_tlv_known {
+	u32  placement;
+	i64  tag;
+	u8   known_flags;
+	u8   known_pad[3];
 }
 
 // How one item's value says where it ends (section 9.5). One row per rule,
@@ -464,6 +484,7 @@ struct image_tlv_rule {
 	u8   length_terminal_bits;
 	u8   length_varint_flags;         // bit 1: big-endian groups (be128)
 	u8   length_pad;
+	u32  size_code;                   // a `computed` size's program, or `none`
 }
 
 // One thing `validate` checks. In placement order, because the first failure
@@ -784,6 +805,7 @@ require absolute_static(image_codec);
 require absolute_static(image_varint);
 require absolute_static(image_tlv);
 require absolute_static(image_tlv_rule);
+require absolute_static(image_tlv_known);
 require absolute_static(image_constraint);
 require absolute_static(image_pinned);
 require absolute_static(image_enum_value);
@@ -805,8 +827,9 @@ require size(image_skip) == 8;
 require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;
-require size(image_tlv) == 16;
-require size(image_tlv_rule) == 24;
+require size(image_tlv) == 20;
+require size(image_tlv_rule) == 28;
+require size(image_tlv_known) == 16;
 require size(image_constraint) == 16;
 require size(image_pinned) == 32;
 require size(image_enum_value) == 16;
