@@ -472,6 +472,18 @@ without huge dependencies kept, and the pertinent code shared:
   `qtkit_follow_desktop` with `SITU_THEME` as its override; claude-
   guidelines inbox 20261123T1226Z). It also follows a change of desktop
   scheme while running, which the copy did not.
+- One copy of each dependency, at the leaf (claude-guidelines
+  harmonization.md f26d139; situ is step 3 of 8, from snurra's inbox
+  20261124T0341Z): situ keeps its `qtty/` and `qtkit/` submodules, and
+  `make gui` takes each from outside -- a consumer building situ's window
+  beside its own copies sets `QTTY_DIR=` and `QTKIT_DIR=`. A directory
+  given is never fetched into; one holding no `qtty.pri`/`qtkit.pri`
+  stops the build naming the variable. qmake gets both, through a stamp
+  that reruns it when either changes. Neither has submodules of its own,
+  so nothing situ builds vendors them again. Proved in a fresh clone:
+  built from copies outside it with its own two directories unfetched, a
+  second make wrote no file, `QTKIT_DIR=/nowhere` stopped by name, and a
+  changed `QTKIT_DIR` reran qmake and recompiled.
 - File identification: the first tier is built (26.1124) -- `identify`,
   `situc identify`, `--magic`, `--mime` (shared-mime-info), `--c` (the
   one-pass matcher), and the named text heuristics `utf8`, `ascii`, `csv`,

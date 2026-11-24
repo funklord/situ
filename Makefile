@@ -183,14 +183,23 @@ bench:
 # the commit the gitlink names and no other. Without it -- no git, no
 # network -- the window is built alone and `make gui` says so, rather than
 # a build that quietly has no --tui.
+#
+# Each dependency's directory is taken from outside (harmonization.md,
+# "the leaf decides"): a tree vendoring situ beside its own copy of qtty or
+# qtkit sets QTTY_DIR / QTKIT_DIR to that copy, and one copy is built. A
+# directory given is never fetched into; absent, the build stops naming the
+# variable.
 QMAKE       ?= qmake6
-QTTY_DIR     = qtty
+QTTY_DIR    ?= qtty
 QTTY_LIB     = $(BUILD_DIR)/qtty/lib/libqtty.a
 GUI_BIN      = $(BUILD_DIR)/situ-edit-gui
 GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h)
 
 ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(QTTY_DIR)/qtty.pri),)
+ifneq ($(QTTY_DIR),qtty)
+$(error QTTY_DIR=$(QTTY_DIR) holds no qtty.pri; a directory given is not fetched into)
+endif
 QTTY_FETCH := $(shell \
 	if ! command -v git >/dev/null 2>&1; then \
 		echo "make: $(QTTY_DIR)/ is empty and git is not installed." >&2; \
@@ -208,9 +217,12 @@ GUI_QTTY = $(if $(wildcard $(QTTY_DIR)/qtty.pri),$(QTTY_LIB))
 # qtty is -- at the commit the gitlink names -- and REQUIRED: the window
 # has no theme without it, so where it cannot be fetched `make gui` stops
 # and says why, rather than building something else.
-QTKIT_DIR    = qtkit
+QTKIT_DIR   ?= qtkit
 ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(QTKIT_DIR)/qtkit.pri),)
+ifneq ($(QTKIT_DIR),qtkit)
+$(error QTKIT_DIR=$(QTKIT_DIR) holds no qtkit.pri; a directory given is not fetched into)
+endif
 QTKIT_FETCH := $(shell \
 	if ! command -v git >/dev/null 2>&1; then \
 		echo "make: $(QTKIT_DIR)/ is empty and git is not installed." >&2; \
@@ -233,7 +245,7 @@ gui: $(GUI_BIN)
 
 $(BUILD_DIR)/qtty/Makefile: $(QTTY_DIR)/src/src.pro $(QTTY_DIR)/qtty.pri
 	@mkdir -p '$(@D)'
-	cd '$(@D)' && $(QMAKE) '$(CURDIR)/$(QTTY_DIR)/src/src.pro' \
+	cd '$(@D)' && $(QMAKE) '$(abspath $(QTTY_DIR))/src/src.pro' \
 	    QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib'
 
 # FORCE: only qtty's own make knows whether its sources moved; recursing
@@ -244,11 +256,23 @@ $(QTTY_LIB): $(BUILD_DIR)/qtty/Makefile FORCE
 
 FORCE:
 
-# Written again only when the project, or whether qtty is there, changes.
-$(BUILD_DIR)/gui/Makefile: gui/gui.pro $(QTKIT_DIR)/qtkit.pri $(GUI_QTTY)
+# Which copies the window is built from, rewritten only when they change,
+# so a changed QTTY_DIR or QTKIT_DIR reruns qmake and an unchanged one
+# writes nothing (makefile-hazards: a second make writes no file).
+GUI_DIRS_STAMP = $(BUILD_DIR)/gui/dirs.stamp
+$(GUI_DIRS_STAMP): FORCE
+	@mkdir -p '$(@D)'
+	@printf '%s\n' '$(abspath $(QTTY_DIR))' '$(abspath $(QTKIT_DIR))' > '$@.new'
+	@if cmp -s '$@.new' '$@'; then rm -f '$@.new'; else mv '$@.new' '$@'; fi
+
+# Written again only when the project, the copies it is built from, or
+# whether qtty is there, changes.
+$(BUILD_DIR)/gui/Makefile: gui/gui.pro $(QTKIT_DIR)/qtkit.pri $(GUI_QTTY) \
+                           $(GUI_DIRS_STAMP)
 	@mkdir -p '$(@D)'
 	cd '$(@D)' && $(QMAKE) '$(CURDIR)/gui/gui.pro' \
 	    SITU_BUILD='$(abspath $(BUILD_DIR))' \
+	    QTTY_DIR='$(abspath $(QTTY_DIR))' QTKIT_DIR='$(abspath $(QTKIT_DIR))' \
 	    $(if $(GUI_QTTY),QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib')
 
 $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)

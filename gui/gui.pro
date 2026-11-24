@@ -32,6 +32,10 @@ QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections -Wall -Wextra
 QMAKE_LFLAGS += -Wl,--gc-sections
 
 ROOT = $$PWD/..
+# The copies of qtty and qtkit, as the Makefile hands them (a consumer's
+# own, or this tree's submodules).
+isEmpty(QTTY_DIR): QTTY_DIR = $$ROOT/qtty
+isEmpty(QTKIT_DIR): QTKIT_DIR = $$ROOT/qtkit
 # Where `situ-edit` and `situc` are when this runs from the build tree. An
 # installed copy finds them beside itself first, so this is the fallback.
 DEFINES += SITU_TREE_BIN=\\\"$$ROOT/bin\\\"
@@ -41,7 +45,7 @@ DEFINES += SITU_VERSION=\\\"$$cat($$ROOT/VERSION, singleline)\\\"
 # without it situ-edit-gui is the window alone and says so when asked for
 # --tui, and the terminal frontend that needs nothing is situ-edit-tui.
 !isEmpty(QTTY_LIB_DIR):exists($$QTTY_LIB_DIR/libqtty.a) {
-	include($$ROOT/qtty/qtty.pri)
+	include($$QTTY_DIR/qtty.pri)
 	DEFINES += SITU_QTTY
 	LIBS += -L$$QTTY_LIB_DIR -lqtty
 	PRE_TARGETDEPS += $$QTTY_LIB_DIR/libqtty.a
@@ -54,7 +58,7 @@ DEFINES += SITU_VERSION=\\\"$$cat($$ROOT/VERSION, singleline)\\\"
 # from. QtDBus before the include, or qtkit sees none and leaves the
 # freedesktop portal out.
 QT += dbus
-include($$ROOT/qtkit/qtkit.pri)
+include($$QTKIT_DIR/qtkit.pri)
 
 SOURCES += \
 	cell_editor.cpp \
