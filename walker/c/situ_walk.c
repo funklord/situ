@@ -3377,6 +3377,50 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 
+	/* An `indexed` region is its offset table: `count` entries, the
+	 * elements living past it at offsets the table gives, as every
+	 * backend's extent has it. Its row names the ELEMENT type, so the
+	 * nested-struct branch below measured it as one element, and a struct
+	 * holding one was refused BOUNDS one member down where all four
+	 * accept it. */
+	{
+		const uint8_t *table = table_row(image->indexes, image->index_count,
+		                                 image->index_stride, index);
+		if (table != NULL) {
+			const uint32_t entry_bits = u32_at(table + 4);
+			const uint32_t count_code = u32_at(table + 8);
+			uint32_t       from       = 0u;
+			int64_t        count      = 0;
+			if (entry_bits == SITU_WALK_NONE
+			                || count_code == SITU_WALK_NONE) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			err = offset_bits_deep(image, message, len, shape, index,
+			                       depth + 1u, &from);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			from /= 8u;
+			walk_ctx ctx = {image, message, len, shape, depth};
+			err = situ_walk_eval(image, count_code, ctx_load, &ctx,
+			                     (int64_t)(from < len ? len - from : 0u),
+			                     &count);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			/* Negative reads as none and an overflow saturates (14.2b);
+			 * a table no 32-bit extent holds is past any frame. */
+			if (count < 0) {
+				count = 0;
+			}
+			if ((uint64_t)count * entry_bits > 0xFFFFFFFFu) {
+				return SITU_WALK_BOUNDS;
+			}
+			*out = (uint32_t)count * entry_bits;
+			return SITU_WALK_OK;
+		}
+	}
+
 	/* A variant's extent is the arm the discriminant selects. Before the
 	 * branches below, as `walk.py` has it: an arm is not a member of the
 	 * struct holding the variant, and asking the chain to place one walks

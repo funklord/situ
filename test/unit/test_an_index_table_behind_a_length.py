@@ -60,3 +60,45 @@ def test_a_pad_arm_in_a_struct_holding_itself_is_refused() -> None:
 	schema = parse(Source("pad.situ", text))
 	with pytest.raises(SituError, match="pads by its arm"):
 		resolve(schema, solve(schema))
+
+
+ONE_DOWN = """target buffer;
+endian big;
+struct rec { u8 len; u8 body[len]; }
+struct inr {
+	u8 n;
+	indexed(offset_type = u16, count = n) {
+		rec entries[];
+	}
+}
+struct outer { u8 a; inr x; }
+"""
+
+#: (packet, verdict), worked by hand: `inr` is its count and a table of
+#: `n` two-byte offsets, which is every backend's extent -- the entries
+#: live past it.
+ONE_DOWN_CASES = [("0200", 0), ("0201", 1), ("020100", 1)]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+@pytest.mark.parametrize(("packet", "verdict"), ONE_DOWN_CASES)
+def test_a_struct_holding_an_index_is_measured_by_its_table(
+		tmp_path: Path, packet: str, verdict: int) -> None:
+	"""Both walkers measured an `indexed` region as one ELEMENT, the type
+	its row names, so a count of zero read a `rec` that is not there and
+	`outer` was refused BOUNDS one member down, where all four accept
+	it; the C walker refused it and the Python walker `inr` alone too."""
+	from test_walker_c import (c_verdict, packed_text, python_verdict,
+	                           shape_named_text)
+	source = tmp_path / "unit.situ"
+	source.write_text(ONE_DOWN, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	data = bytes.fromhex(packet)
+	for name, argv in command.items():
+		held = fourway.answers(argv, data, tmp_path) \
+			.split("-- outer\n")[1].split("\n-- ")[0]
+		assert f"validate {verdict}" in held, (name, held)
+	blob  = packed_text(ONE_DOWN)
+	shape = shape_named_text(ONE_DOWN, "outer")
+	assert python_verdict(blob, data, shape) == str(verdict)
+	assert c_verdict(tmp_path, blob, data, shape) == str(verdict)

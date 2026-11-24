@@ -408,6 +408,22 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		if placement.offset_known:
 			return aligned - off
 		return min(aligned, room) - off
+	# An `indexed` region is its offset table: `count` entries, the
+	# elements living past it at offsets the table gives, as every
+	# backend's extent has it (`1 + n * 2` for a `u16` table after a
+	# byte). Its row names the ELEMENT type, so the struct branch below
+	# measured the region as one element -- reading a `rec` that a count
+	# of zero says is not there -- and refused as BOUNDS a struct holding
+	# one, one member down, that all four accept.
+	table = view.image.indexes.get(index)
+	if table is not None:
+		entry_bits, count_code, _measured_from = table
+		if entry_bits == NONE or count_code == NONE:
+			raise Unplaceable(f"placement {index} is an index table this "
+			                  "image does not size")
+		count = _evaluate(view, count_code,
+		                  lambda: offset_bits(view, index) // BITS_PER_BYTE)
+		return min(max(count, 0), 0xFFFFFFFF) * entry_bits
 	if placement.repeat_code != NONE and placement.type_struct != NONE:
 		# A `while` run's extent is however far the walk got. Falling
 		# through to the record's `size_bits` gave the *minimum* -- one
