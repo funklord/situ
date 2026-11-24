@@ -129,3 +129,39 @@ when count(s.n) > 1 refuse bad "no";
 """
 	with pytest.raises(SituError):
 		parse_text(text, path="s.situ")
+
+
+#: (schema, struct, packet, whether the length expert fires), for the
+#: dissector, which reads the content length its own scan left behind.
+DISSECTED = [
+	(PERMIT, "host_rule", b"host:" + KEY, False),
+	(PERMIT, "host_rule", b"host:" + KEY + b" root", False),
+	(PERMIT, "host_rule", b"host:" + KEY + b"a", True),
+	(PERMIT, "host_rule", b"host:" + KEY[:63], True),
+	(PERMIT, "host_rule", b"host:" + KEY[:63] + b" root", True),
+	(GROUP, "member_name", b"x" * 32, False),
+	(GROUP, "member_name", b"x" * 32 + b" y", False),
+	(GROUP, "member_name", b"x" * 33, True),
+	(GROUP, "member_name", b" y", True),
+]
+
+
+def test_the_dissector_counts_a_runs_bytes(tmp_path: Path) -> None:
+	"""The dissector holds the rule too: `count(key)` is the `key_len` its
+	scan of the member declared, asked to exist first, so a member it did
+	not reach leaves the rule silent rather than failing to run."""
+	from situc.dissector import generate
+	from situc.layout import solve
+	from situc.resolve import resolve
+	from test_dissector import LUA, read_back_experts
+	if LUA is None:
+		pytest.skip("no Lua interpreter")
+	for schema, struct, packet, fires in DISSECTED:
+		parsed = parse_text(schema, path="s.situ")
+		lua = tmp_path / "s.lua"
+		lua.write_text(generate(parsed, resolve(parsed, solve(parsed)), "s"),
+		               encoding="ascii")
+		experts = read_back_experts(lua, struct, packet)
+		said = [abbrev for abbrev, _, _ in experts
+		        if abbrev.endswith(("key_length", "name_length"))]
+		assert bool(said) == fires, (struct, packet, experts)

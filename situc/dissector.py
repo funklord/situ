@@ -2506,8 +2506,15 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		expr, same = traverse.run_equalities(when.expr, struct)
 		source = expr_to_source(expr, explicit=True)
 		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
-		extra  = {"remaining": "tvb:len()", **_same_reads(same),
+		lengths = _same_reads(same, struct)
+		extra  = {"remaining": "tvb:len()", **lengths,
 		          **_let_reads(struct)}
+		# A length local the struct's body declared, asked to exist: a
+		# member the body declined, or declared inside a branch, leaves it
+		# nil, and the rule then says nothing rather than failing to run.
+		guards = "".join(f"{read} ~= nil and "
+		                 for read in sorted(set(lengths.values()))
+		                 if read.endswith("_len"))
 		if not lost:
 			local = re.sub(rf"\bsize\(\s*{re.escape(struct.name)}\s*\)",
 			               "situ_struct_extent", local)
@@ -2531,6 +2538,8 @@ def _message_calls(struct: ResolvedStruct, lost: bool = False) -> list[str]:
 		# load, for every message in it and not this one (26.905).
 		shown = translate_operators(shown, conj=" and ", disj=" or ",
 		                            ne=" ~= ", neg="not ")
+		if guards:
+			shown = f"{guards}({shown})"
 		lines.append(f"\tif {shown} then")
 		lines.append(f"\t\tsubtree:add_proto_expert_info("
 		             f"{proto}_e.{_lua(when.name)})")
@@ -2699,8 +2708,8 @@ def _let_reads(struct: ResolvedStruct) -> dict[str, str]:
 	return reads
 
 
-def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]"
-		) -> dict[str, str]:
+def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule | traverse.RunLength]",
+		struct: ResolvedStruct | None = None) -> dict[str, str]:
 	"""Each byte-run comparison of a `when` as Lua (26.1128).
 
 	The runs' raw bytes as Lua strings, which compare by content: `uint`
@@ -2714,6 +2723,18 @@ def _same_reads(same: "dict[str, traverse.RunEquality | traverse.RunRule | trave
 	"""
 	reads = {}
 	for name, held in same.items():
+		# A run's bytes counted (26.1171): a fixed run's count, or the
+		# content length the member's own scan left in `<name>_len` --
+		# only for a delimited member of this struct itself, whose local
+		# the struct's body declares; `_message_calls` asks that it exists.
+		if isinstance(held, traverse.RunLength):
+			run = held.run
+			if run.array_count is not None:
+				reads[name] = str(run.array_count)
+			elif struct is not None and run.delimiters \
+					and run.path == f"{struct.name}.{run.name}":
+				reads[name] = f"{_lua(_local(struct, run))}_len"
+			continue
 		# A rule over a run's elements is not read here (26.1170): left
 		# unread, the caller declines the `when` beside its expert.
 		if not isinstance(held, traverse.RunEquality):
