@@ -11472,6 +11472,11 @@ class Emitter:
 				# A run at a static offset has no `_offset()` of its own --
 				# the first member of a struct is the case -- so its offset
 				# is the constant (26.1170).
+				# A fixed-size element has no `extent()`: its size is the
+				# constant (found 2026-11-24, a bit-field element).
+				measured = (f"{rule.element.layout.size_bytes}u"
+				            if rule.element.layout.is_fixed_size
+				            else f"{inner}(sub).extent()")
 				start = (f"{rule.run.offset_bits // 8}u"
 				         if rule.run.offset_bits is not None
 				         else f"{run}_offset()")
@@ -11481,7 +11486,7 @@ class Emitter:
 					" situ_remaining_u32(raw_.limit, at), &sub) != SITU_OK) {",
 					"\t\t\t\tbreak;",
 					"\t\t\t}",
-					f"\t\t\tconst std::uint32_t size = {inner}(sub).extent();",
+					f"\t\t\tconst std::uint32_t size = {measured};",
 					"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)",
 					"\t\t\t    || situ_view_sub(::situ::rt::view::raw(), at, size,"
 					" &sub) != SITU_OK) {",
@@ -11567,7 +11572,7 @@ class Emitter:
 					" situ_remaining_u32(raw_.limit, at), &sub) != SITU_OK) {",
 					"\t\t\t\tbreak;",
 					"\t\t\t}",
-					f"\t\t\tconst std::uint32_t size = {inner}(sub).extent();",
+					f"\t\t\tconst std::uint32_t size = {measured};",
 					"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)",
 					"\t\t\t    || situ_view_sub(::situ::rt::view::raw(), at, size,"
 					" &sub) != SITU_OK) {",

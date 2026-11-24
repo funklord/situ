@@ -9837,6 +9837,11 @@ class Emitter:
 				# A run at a static offset has no `_offset` of its own --
 				# the first member of a struct is the case -- so its offset
 				# is the constant (26.1170).
+				# A fixed-size element has no `_extent`: its size is the
+				# constant (found 2026-11-24, a bit-field element).
+				measured = (f"{rule.element.layout.size_bytes}"
+				            if rule.element.layout.is_fixed_size
+				            else "_element._extent")
 				start = (f"{rule.run.offset_bits // 8}"
 				         if rule.run.offset_bits is not None
 				         else f"self.{name}_offset")
@@ -9861,7 +9866,7 @@ class Emitter:
 						"\t\twhile len(seen) < total and at < self._len:",
 						f"\t\t\t_element = {inner}(self._msg, self._at + at,"
 						" self._len - at)",
-						"\t\t\tsize = _element._extent",
+						f"\t\t\tsize = {measured}",
 						"\t\t\tif size == 0 or size > self._len - at:",
 						"\t\t\t\tbreak",
 						f"\t\t\t_element = {inner}(self._msg, self._at + at, size)",
@@ -9891,7 +9896,7 @@ class Emitter:
 					"\t\twhile n < total and at < self._len:",
 					f"\t\t\t_element = {inner}(self._msg, self._at + at,"
 					" self._len - at)",
-					"\t\t\tsize = _element._extent",
+					f"\t\t\tsize = {measured}",
 					"\t\t\tif size == 0 or size > self._len - at:",
 					"\t\t\t\tbreak",
 					f"\t\t\t_element = {inner}(self._msg, self._at + at, size)",

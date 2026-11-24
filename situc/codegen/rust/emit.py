@@ -5780,6 +5780,15 @@ class Emitter:
 				# A run at a static offset has no `_offset()` of its own --
 				# the first member of a struct is the case -- so its offset
 				# is the constant (26.1170).
+				# A fixed-size element has no `extent()`: its size is the
+				# constant (found 2026-11-24, a bit-field element).
+				fixed = (rule.element.layout.size_bytes
+				         if rule.element.layout.is_fixed_size else None)
+
+				def measured(at: str, inner: str = inner,
+						fixed: "int | None" = fixed) -> str:
+					return (f"{fixed}usize" if fixed is not None
+					        else f"{inner} {{ bytes: &self.bytes[{at}..] }}.extent()")
 				start = (f"{rule.run.offset_bits // 8}usize"
 				         if rule.run.offset_bits is not None
 				         else f"self.{run}_offset()")
@@ -5796,7 +5805,7 @@ class Emitter:
 						f"\t\tlet mut at = {start};",
 						"\t\tlet mut n = 0usize;",
 						"\t\twhile n < total && at < self.bytes.len() {",
-						f"\t\t\tlet size = {inner} {{ bytes: &self.bytes[at..] }}.extent();",
+						f"\t\t\tlet size = {measured('at')};",
 						"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 						"\t\t\t\tbreak;",
 						"\t\t\t}",
@@ -5804,7 +5813,7 @@ class Emitter:
 						"\t\t\tlet mut bt = at + size;",
 						"\t\t\tlet mut m = n + 1;",
 						"\t\t\twhile m < total && bt < self.bytes.len() {",
-						f"\t\t\t\tlet bsize = {inner} {{ bytes: &self.bytes[bt..] }}.extent();",
+						f"\t\t\t\tlet bsize = {measured('bt')};",
 						"\t\t\t\tif bsize == 0 || bsize > situ_rt::remaining(self.bytes.len(), bt) {",
 						"\t\t\t\t\tbreak;",
 						"\t\t\t\t}",
@@ -5845,7 +5854,7 @@ class Emitter:
 					"\t\tlet mut n = 0usize;",
 					"\t\tlet mut hits = 0usize;",
 					"\t\twhile n < total && at < self.bytes.len() {",
-					f"\t\t\tlet size = {inner} {{ bytes: &self.bytes[at..] }}.extent();",
+					f"\t\t\tlet size = {measured('at')};",
 					"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 					"\t\t\t\tbreak;",
 					"\t\t\t}",

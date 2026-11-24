@@ -1734,7 +1734,8 @@ typedef struct {
 	int      repeated;
 	uint32_t kept;
 	uint32_t key_at[RULE_UNIQUE_MOST];
-	uint32_t key_len[RULE_UNIQUE_MOST];
+	uint32_t key_len[RULE_UNIQUE_MOST];	/* UINT32_MAX: a value, below */
+	int64_t  key_value[RULE_UNIQUE_MOST];
 } rule_tally;
 
 static situ_walk_err run_elements_walk(const situ_walk_image *image,
@@ -7074,9 +7075,33 @@ static situ_walk_err rule_element(const situ_walk_image *elements,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		if (off % 8u != 0u || size % 8u != 0u
-		    || off / 8u + size / 8u > extent
-		    || tally->kept >= RULE_UNIQUE_MOST) {
+		if (tally->kept >= RULE_UNIQUE_MOST) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		/* A key off a byte boundary -- a bit field -- is compared by its
+		 * value, as each backend compares a scalar key; a byte-aligned one
+		 * by its bytes, which a byte run needs and a scalar agrees with. */
+		if (off % 8u != 0u || size % 8u != 0u) {
+			walk_ctx ctx   = {elements, message + at, extent, element,
+			                  depth + 1u};
+			int64_t  value = 0;
+
+			err = ctx_load(&ctx, SITU_WALK_ASK_VALUE, tally->key, 0, &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			for (uint32_t k = 0u; k < tally->kept; k++) {
+				if (tally->key_len[k] == UINT32_MAX
+				    && tally->key_value[k] == value) {
+					tally->repeated = 1;
+				}
+			}
+			tally->key_len[tally->kept]   = UINT32_MAX;
+			tally->key_value[tally->kept] = value;
+			tally->kept += 1u;
+			return SITU_WALK_OK;
+		}
+		if (off / 8u + size / 8u > extent) {
 			return SITU_WALK_UNSUPPORTED;
 		}
 		const uint32_t key_at  = at + off / 8u;

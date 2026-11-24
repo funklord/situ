@@ -227,11 +227,49 @@ def test_a_run_at_a_static_offset_is_walked(tmp_path: Path) -> None:
 			            if one.startswith("validate "))
 			assert line.split()[1] == verdict, (label, name, held)
 
+#: A fixed-size element, which has no `extent` of its own: C measured it by
+#: its size constant, and C++, Rust and Python called the `extent` it does
+#: not have -- found asking the rule against a bit-field element and a lone
+#: `u16` (2026-11-24). `unique` walks the run the same way, twice.
+FIXED = """target buffer;
+endian big;
+bit_order msb_first;
+struct g { u4 kind; u4 flag; }
+struct s { u8 c [max = 8]; g gs[c]; }
+when any(x in s.gs: x.kind == 0) && count(s.gs) > 1
+	refuse none_alone "none stands alone";
+when !unique(x in s.gs: x.kind) refuse twice "a kind twice";
+"""
+
+FIXED_CASES = [
+	("none beside another", bytes([2, 0x05, 0x12]), "2"),
+	("a kind twice", bytes([2, 0x15, 0x12]), "2"),
+	("two kinds", bytes([2, 0x15, 0x23]), "0"),
+	("one", bytes([1, 0x10]), "0"),
+	("three kinds", bytes([3, 0x15, 0x23, 0x31]), "0"),
+	("first and third alike", bytes([3, 0x15, 0x23, 0x14]), "2"),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_a_fixed_size_element_is_measured_by_its_size(tmp_path: Path) -> None:
+	source = tmp_path / "unit.situ"
+	source.write_text(FIXED, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	for label, data, verdict in FIXED_CASES:
+		for name, argv in command.items():
+			held = fourway.answers(argv, data, tmp_path) \
+				.split("-- s\n")[1].split("\n-- ")[0]
+			line = next(one for one in held.splitlines()
+			            if one.startswith("validate "))
+			assert line.split()[1] == verdict, (label, name, held)
+
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
 @pytest.mark.parametrize(("schema", "cases", "shape_name"), [
 	(SCHEMA, CASES, "s"), (UNIQUE, UNIQUE_CASES, "s"),
 	(ENUMERATED, ENUMERATED_CASES, "p"), (FIRST, FIRST_CASES, "p"),
+	(FIXED, FIXED_CASES, "s"),
 ])
 def test_both_walkers_hold_the_rules(tmp_path: Path, schema: str,
                                      cases: list[tuple[str, bytes, str]],
