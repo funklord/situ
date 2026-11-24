@@ -143,6 +143,31 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Runs 17-19 (2026-11-24), rules over lists, folded at 96% of the week:**
+pushed through `2bf095c6`, gate g60 green, openmlx4 and fuzznet's 66
+specs passing.
+
+- Rules over a run's elements (26.1170): `any`, `all`, `count`, `unique`
+  in a `when`, in the four backends, both walkers (image section 36,
+  opcode `RULE`) and the dissector (a second walk of the run, tallies
+  read behind `~= nil`). Asked against fifteen contexts across six
+  readers; faults found and fixed: C++ read the enclosing struct, a run
+  at a static offset or of fixed-size elements did not compile in
+  C++/Rust/Python, the C walker declined a bit-field key.
+- `count(key)` of a run of bytes is its content without a terminator
+  (26.1171), for fuzznet's 64-digit host key and 1-32 names; all seven
+  readers. `unique` over a delimited key compares content in both
+  walkers.
+- Framing a `while` run spun forever in all four backends on an element
+  of zero bytes (`429241a0`); `fourway.answers` bounds a driver at 120 s.
+- `wire --check` reads a composite key as one fact; the Lua test stub has
+  `TvbRange:raw()`, so 26.1128's byte-run comparison runs under it.
+- Chunk interleave is out of scope until a stream needs it (fuzznet).
+- Next, nothing above the bar without input: a token compared inside a
+  rule and rules over `until` runs wait for fuzznet to name a format;
+  the inbox items below (desktop entry, window icon, id rename, manual
+  pages) are open and not started.
+
 **Run 12 (2026-11-22), the walkers held to the backends by fuzzing:**
 
 - The fuzz corpora replayed through the Python walker against C's differ
@@ -581,6 +606,21 @@ both walkers and the dissector. What a user cannot yet do is listed under
   to 41 and variableScope 96 to 33 (26.1107, 26.1108, `runtime/c/situ.h`).
 
 **Open, and what each waits for**:
+
+- From claude-guidelines' inbox messages of 2026-11-24 (20261124T2059Z,
+  T2111Z, T2112Z, T2114Z), the GUI and packaging conventions the holder
+  set that day, none started: (a) `situ-edit-gui`'s icon is SVG only --
+  add PNGs at 16, 22, 32, 48, 64, 128, which TDE prefers
+  (`desktop-entry` skill); (b) `gui/main.cpp`'s `QIcon::fromTheme
+  ("situ-edit-gui")` has no fallback, so a build run from the tree and
+  the GUI tests show no window icon -- a `.qrc` naming
+  `packaging/situ-edit-gui.svg` as `fromTheme`'s fallback, the same file
+  the package installs; (c) rename the desktop id `situ-edit-gui` to
+  `se.vibes.<name>` (the `.desktop` file, the icon files, `Icon=`,
+  `setDesktopFileName`; the binary and `StartupWMClass` keep their name;
+  uninstall removes the old name; the commit says it was renamed); (d)
+  lintian's `no-manual-page` for `situ-edit`, `situ-edit-tui`,
+  `situ-walk` and `situ-edit-gui` (`debian-packaging` skill).
 
 - The rest of the cppcheck noise: 22 `e != SITU_OK` need cppcheck's
   cross-function view of an arm whose `required` cannot fail; 12
