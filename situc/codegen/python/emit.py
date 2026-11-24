@@ -9830,6 +9830,12 @@ class Emitter:
 					continue
 				name  = py_name(local_name(struct, rule.run))
 				inner = self._made(struct, rule.run, py_name(rule.element.name))
+				# A run at a static offset has no `_offset` of its own --
+				# the first member of a struct is the case -- so its offset
+				# is the constant (26.1170).
+				start = (f"{rule.run.offset_bits // 8}"
+				         if rule.run.offset_bits is not None
+				         else f"self.{name}_offset")
 				if rule.kind == "unique":
 					assert rule.key is not None
 					key = rule.key
@@ -9846,7 +9852,7 @@ class Emitter:
 						f'\t\t"""`unique` over `{rule.run.path}` by'
 						f' `{key.name}`, for `{when.name}`."""',
 						f"\t\ttotal = self.{name}_count",
-						f"\t\tat    = self.{name}_offset",
+						f"\t\tat    = {start}",
 						"\t\tseen: list[object] = []",
 						"\t\twhile len(seen) < total and at < self._len:",
 						f"\t\t\t_element = {inner}(self._msg, self._at + at,"
@@ -9875,7 +9881,7 @@ class Emitter:
 					f'\t\t"""`{rule.kind}` over `{rule.run.path}`, for'
 					f' `{when.name}`: the run walked once."""',
 					f"\t\ttotal = self.{name}_count",
-					f"\t\tat    = self.{name}_offset",
+					f"\t\tat    = {start}",
 					"\t\tn     = 0",
 					"\t\thits  = 0",
 					"\t\twhile n < total and at < self._len:",

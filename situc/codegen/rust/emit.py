@@ -5777,6 +5777,12 @@ class Emitter:
 					continue
 				run   = _ident(c_name(local_name(struct, rule.run)))
 				inner = _pascal(rule.element.name)
+				# A run at a static offset has no `_offset()` of its own --
+				# the first member of a struct is the case -- so its offset
+				# is the constant (26.1170).
+				start = (f"{rule.run.offset_bits // 8}usize"
+				         if rule.run.offset_bits is not None
+				         else f"self.{run}_offset()")
 				if rule.kind == "unique":
 					assert rule.key is not None
 					field = _ident(c_name(rule.key.name))
@@ -5787,7 +5793,7 @@ class Emitter:
 						" compared.",
 						f"\tfn {_ident(c_name(rule.helper))}(&self) -> usize {{",
 						f"\t\tlet total = self.{run}_count();",
-						f"\t\tlet mut at = self.{run}_offset();",
+						f"\t\tlet mut at = {start};",
 						"\t\tlet mut n = 0usize;",
 						"\t\twhile n < total && at < self.bytes.len() {",
 						f"\t\t\tlet size = {inner} {{ bytes: &self.bytes[at..] }}.extent();",
@@ -5835,7 +5841,7 @@ class Emitter:
 					f" `{when.name}`: the run walked once.",
 					f"\tfn {_ident(c_name(rule.helper))}(&self) -> usize {{",
 					f"\t\tlet total = self.{run}_count();",
-					f"\t\tlet mut at = self.{run}_offset();",
+					f"\t\tlet mut at = {start};",
 					"\t\tlet mut n = 0usize;",
 					"\t\tlet mut hits = 0usize;",
 					"\t\twhile n < total && at < self.bytes.len() {",

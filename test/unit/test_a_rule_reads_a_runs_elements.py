@@ -194,11 +194,44 @@ def test_an_enum_member_reads_each_element(tmp_path: Path) -> None:
 			assert line.split()[1] == verdict, (label, name, held)
 
 
+#: The run is the struct's first member, so it sits at a static offset and
+#: has no `_offset()` -- which C++ and Rust called, and did not compile
+#: (found 2026-11-24 framing fuzznet's permit shape). A `while` run to the
+#: frame's end, as a permit is.
+FIRST = """target buffer;
+endian big;
+struct grant { u8 kind; u8 n; u8 who[n]; }
+struct p { grant grants[] while (1) | end; }
+when any(g in p.grants: g.kind == 0) && count(p.grants) > 1
+	refuse none_alone "none stands alone";
+"""
+
+FIRST_CASES = [
+	("none beside another", bytes.fromhex("00000100"), "2"),
+	("another, then none", bytes.fromhex("01000000"), "2"),
+	("none alone", bytes.fromhex("0000"), "0"),
+	("no none", bytes.fromhex("01000200"), "0"),
+]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_a_run_at_a_static_offset_is_walked(tmp_path: Path) -> None:
+	source = tmp_path / "unit.situ"
+	source.write_text(FIRST, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	for label, data, verdict in FIRST_CASES:
+		for name, argv in command.items():
+			held = fourway.answers(argv, data, tmp_path) \
+				.split("-- p\n")[1].split("\n-- ")[0]
+			line = next(one for one in held.splitlines()
+			            if one.startswith("validate "))
+			assert line.split()[1] == verdict, (label, name, held)
+
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs a C compiler")
 @pytest.mark.parametrize(("schema", "cases", "shape_name"), [
 	(SCHEMA, CASES, "s"), (UNIQUE, UNIQUE_CASES, "s"),
-	(ENUMERATED, ENUMERATED_CASES, "p"),
+	(ENUMERATED, ENUMERATED_CASES, "p"), (FIRST, FIRST_CASES, "p"),
 ])
 def test_both_walkers_hold_the_rules(tmp_path: Path, schema: str,
                                      cases: list[tuple[str, bytes, str]],

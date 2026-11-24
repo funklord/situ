@@ -11466,6 +11466,12 @@ class Emitter:
 					continue
 				run   = bare_name(local_name(struct, rule.run))
 				inner = f"::{self.namespace}::{self._struct_class(rule.element.name)}"
+				# A run at a static offset has no `_offset()` of its own --
+				# the first member of a struct is the case -- so its offset
+				# is the constant (26.1170).
+				start = (f"{rule.run.offset_bits // 8}u"
+				         if rule.run.offset_bits is not None
+				         else f"{run}_offset()")
 				measure = [
 					"\t\t\tsitu_view_t sub;",
 					"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,"
@@ -11504,7 +11510,7 @@ class Emitter:
 						" const noexcept",
 						"\t{",
 						f"\t\tconst std::uint32_t total = {run}_count();",
-						f"\t\tstd::uint32_t at = {run}_offset();",
+						f"\t\tstd::uint32_t at = {start};",
 						"\t\tstd::uint32_t n = 0u;",
 						"",
 						"\t\twhile (n < total && at < raw_.limit) {",
@@ -11548,7 +11554,7 @@ class Emitter:
 					" const noexcept",
 					"\t{",
 					f"\t\tconst std::uint32_t total = {run}_count();",
-					f"\t\tstd::uint32_t at = {run}_offset();",
+					f"\t\tstd::uint32_t at = {start};",
 					"\t\tstd::uint32_t n = 0u;",
 					"\t\tstd::uint32_t hits = 0u;",
 					"",
