@@ -147,11 +147,11 @@ def test_the_runtime_package_depends_on_nothing() -> None:
 
 
 def test_every_installed_path_belongs_to_exactly_one_package() -> None:
-	"""The `deb` rule splits what `make install` staged, and anything it does
-	not move is a file no package ships. The rule fails loudly on a leftover;
-	this says which paths it is meant to know about, so adding one to
-	`install` without adding it here is a visible edit rather than a silent
-	hole.
+	"""`debian/*.install` splits what `make install` staged, and anything no
+	package claims is a file no package ships. `dh_missing` fails the build
+	on a leftover; this says which paths it is meant to know about, so
+	adding one to `install` without adding it here is a visible edit rather
+	than a silent hole.
 	"""
 	makefile = (ROOT / "Makefile").read_text(encoding="ascii")
 	rule     = makefile[makefile.index("install: runtime"):]
@@ -167,13 +167,16 @@ def test_every_installed_path_belongs_to_exactly_one_package() -> None:
 	             if found.rstrip("/")}
 	# `/lib` bare is the `find situc -exec install` line, whose destination
 	# ends in `{}` and so reads as `$(PREFIX)/lib/` to a regex. It puts the
-	# package under `/lib/situc`, which is named beside it.
+	# package under `/lib/situc`, which is named beside it. `/share/man/man1`
+	# bare is the same shape: the loop installing situ-edit, situ-edit-tui
+	# and situ-walk's pages names its destination `.../man1/$$page.1`, and
+	# the regex stops at the `$`. debian/situc.install claims all four pages.
 	assert installed == {
 		"/lib", "/lib/situc", "/lib/situc/_runtime/situ_runtime.py",
 		"/share/situc/std", "/bin/situc",
 		"/share/situc/example", "/share/situc/example/designed.txt",
 		"/include/situ.h", "/lib/libsitu.a",
-		"/share/man/man1/situc.1",
+		"/share/man/man1", "/share/man/man1/situc.1",
 		"/bin/situ-walk",
 		"/bin/situ-edit", "/bin/situ-edit-tui",
 	}, "install writes somewhere the deb rule has not been told about"
