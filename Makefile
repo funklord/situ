@@ -209,6 +209,28 @@ GUI_SOURCES  = $(wildcard gui/*.cpp gui/*.h gui/*.qrc) \
 GUI_ID         = se.vibes.situ-edit-gui
 GUI_ICON_SIZES = 16 22 32 48 64 128
 
+# What a package build hands the window and qtty, added to what the .pro
+# files say and never replacing it. dh puts Debian's CPPFLAGS, CXXFLAGS and
+# LDFLAGS in the environment, and qmake writes a Makefile that reads none of
+# them, so the shipped window had no _FORTIFY_SOURCE, no stack protector and
+# no -g -- its -dbgsym package held no debug information (lintian:
+# debug-file-with-no-debug-symbols). -O is filtered out because the .pro
+# files own the level (-Os); every other flag adds. A plain build, with all
+# three unset, hands over nothing and qmake's lines are as they were.
+# raidcfgd's handover to qmake is the same shape.
+#
+# From the environment only: a CXXFLAGS on the command line reaches the
+# Makefile qmake writes and replaces its CXXFLAGS -- -Os, -fPIC and every
+# -D with it -- so it is refused. CPPFLAGS and LDFLAGS are safe either way,
+# since the generated Makefile defines neither.
+GUI_HANDED_CXXFLAGS = $(filter-out -O%,$(CPPFLAGS) $(CXXFLAGS))
+GUI_HANDED_LFLAGS   = $(LDFLAGS)
+ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
+ifeq ($(origin CXXFLAGS),command line)
+$(error CXXFLAGS on the command line would replace qmake's own; set it in the environment instead: CXXFLAGS='...' $(MAKE) $(MAKECMDGOALS))
+endif
+endif
+
 ifneq ($(filter gui gui-example install-gui,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(QTTY_DIR)/qtty.pri),)
 ifneq ($(QTTY_DIR),qtty)
@@ -257,6 +279,37 @@ GUI_SOURCES += $(wildcard $(QTKIT_DIR)/src/*.cpp $(QTKIT_DIR)/src/*.h \
 gui: $(GUI_BIN)
 	@$(if $(GUI_QTTY),:,echo 'gui: built without qtty ($(QTTY_DIR) is not checked out): no --tui' >&2)
 
+# The flags handed to qmake, rewritten only when they change. qmake reruns
+# when they do, and what the old ones compiled is cleaned first: an object
+# depends on its sources and not on the flags it was compiled with, so a
+# tree built plainly and then with Debian's flags would otherwise link
+# hardened objects beside unhardened ones. No stamp means a tree from before
+# the handover, which handed nothing. Read from the environment rather than
+# pasted into the shell line, so no quote in a flag can end the string.
+#
+# The guard at the head: make runs a line holding $(MAKE) even under -n, -t
+# or -q, and this one writes (harmonization.md). -o Makefile: after a .pro
+# edit the generated Makefile would regenerate itself before cleaning, with
+# the old flags it recorded, only for the rules below to run qmake again.
+GUI_FLAGS_STAMP = $(BUILD_DIR)/gui/flags.stamp
+$(GUI_FLAGS_STAMP) $(BUILD_DIR)/qtty/Makefile $(BUILD_DIR)/gui/Makefile: \
+	export GUI_HANDED_CXXFLAGS := $(GUI_HANDED_CXXFLAGS)
+$(GUI_FLAGS_STAMP) $(BUILD_DIR)/qtty/Makefile $(BUILD_DIR)/gui/Makefile: \
+	export GUI_HANDED_LFLAGS := $(GUI_HANDED_LFLAGS)
+$(GUI_FLAGS_STAMP): FORCE
+	@case "$(firstword $(MAKEFLAGS))" in -*) ;; *[ntq]*) exit 0 ;; esac; \
+	new="$$GUI_HANDED_CXXFLAGS|$$GUI_HANDED_LFLAGS"; \
+	if [ -f '$@' ]; then old=$$(cat '$@'); else old='|'; fi; \
+	if [ "$$new" != "$$old" ]; then \
+		for d in qtty gui; do \
+			[ -f '$(BUILD_DIR)/'$$d/Makefile ] || continue; \
+			echo "gui: the flags handed to qmake changed; cleaning $$d"; \
+			$(MAKE) --no-print-directory -o Makefile -C '$(BUILD_DIR)/'$$d \
+				clean >/dev/null || exit 1; \
+		done; \
+	elif [ -f '$@' ]; then exit 0; fi; \
+	mkdir -p '$(@D)' && printf '%s\n' "$$new" > '$@'
+
 # Which copy of qtty its Makefile was generated from, rewritten only when
 # that changes. Without it a tree built before 3a6aeada moved qtty from
 # vendor/qtty to the root kept a Makefile naming the old path, which its
@@ -268,10 +321,11 @@ $(QTTY_DIR_STAMP): FORCE
 	@if cmp -s '$@.new' '$@'; then rm -f '$@.new'; else mv '$@.new' '$@'; fi
 
 $(BUILD_DIR)/qtty/Makefile: $(QTTY_DIR)/src/src.pro $(QTTY_DIR)/qtty.pri \
-                            $(QTTY_DIR_STAMP)
+                            $(QTTY_DIR_STAMP) $(GUI_FLAGS_STAMP)
 	@mkdir -p '$(@D)'
 	cd '$(@D)' && $(QMAKE) '$(abspath $(QTTY_DIR))/src/src.pro' \
-	    QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib'
+	    QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib' \
+	    "QMAKE_CXXFLAGS+=$$GUI_HANDED_CXXFLAGS" "QMAKE_LFLAGS+=$$GUI_HANDED_LFLAGS"
 
 # FORCE: only qtty's own make knows whether its sources moved; recursing
 # every time is a no-op sub-make, and the archive's date moves only on a
@@ -293,12 +347,13 @@ $(GUI_DIRS_STAMP): FORCE
 # Written again only when the project, the copies it is built from, or
 # whether qtty is there, changes.
 $(BUILD_DIR)/gui/Makefile: gui/gui.pro $(QTKIT_DIR)/qtkit.pri $(GUI_QTTY) \
-                           $(GUI_DIRS_STAMP)
+                           $(GUI_DIRS_STAMP) $(GUI_FLAGS_STAMP)
 	@mkdir -p '$(@D)'
 	cd '$(@D)' && $(QMAKE) '$(CURDIR)/gui/gui.pro' \
 	    SITU_BUILD='$(abspath $(BUILD_DIR))' \
 	    QTTY_DIR='$(abspath $(QTTY_DIR))' QTKIT_DIR='$(abspath $(QTKIT_DIR))' \
-	    $(if $(GUI_QTTY),QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib')
+	    $(if $(GUI_QTTY),QTTY_LIB_DIR='$(abspath $(BUILD_DIR))/qtty/lib') \
+	    "QMAKE_CXXFLAGS+=$$GUI_HANDED_CXXFLAGS" "QMAKE_LFLAGS+=$$GUI_HANDED_LFLAGS"
 
 $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
 	$(MAKE) -C '$(BUILD_DIR)/gui'

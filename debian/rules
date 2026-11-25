@@ -12,7 +12,10 @@ export DEB_CFLAGS_MAINT_APPEND = -Os
 	dh $@
 
 # The window as well (situ-edit-gui, its own binary package): `make gui`
-# builds it and qtty, and install-gui adds it beside situ-edit.
+# builds it and qtty, and install-gui adds it beside situ-edit. Both take
+# dpkg's CPPFLAGS, CXXFLAGS and LDFLAGS from the environment dh sets, -O
+# dropped (the root Makefile's GUI_HANDED_CXXFLAGS); never pass CXXFLAGS on
+# this command line, which would replace qmake's own.
 override_dh_auto_build:
 	dh_auto_build
 	$(MAKE) gui

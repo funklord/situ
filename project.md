@@ -6360,6 +6360,27 @@ section flags they always had from the root; both package builds compile
 `situ.c` with the required set, dpkg's hardening and a final `-Os`; and
 `test-c` passes compiled with exactly that set.
 
+**And so does the window** (2026-11-25). qmake writes a Makefile that
+reads no `CPPFLAGS`, `CXXFLAGS` or `LDFLAGS`, so `situ-edit-gui` and the
+qtty it links shipped with none of Debian's hardening and no `-g`, and the
+`-dbgsym` package held no debug information (lintian
+`debug-file-with-no-debug-symbols`). The root Makefile now hands qmake
+`$(CPPFLAGS) $(CXXFLAGS)` with `-O` filtered out, and `$(LDFLAGS)`, added
+to what the `.pro` files say. A `CXXFLAGS` on the command line is refused:
+it would reach the generated Makefile and replace its whole line, `-Os`,
+`-fPIC` and every `-D` with it. The flags are a stamp,
+`$(BUILD_DIR)/gui/flags.stamp`, and a change cleans what the old ones
+compiled, since an object does not depend on the flags that built it.
+Proved against `d4cebc5c`: a plain `make gui` runs the same 41 compiler,
+moc, rcc, archive and link lines; in the package the 28 compiles and
+qmake's two `moc_predefs.h` runs gain exactly dpkg's set and lose nothing,
+and the link gains
+`-Wl,-z,relro`; the shipped binary carries `__stack_chk_fail` and the
+`_chk` functions, its debug file 4.8 MB of DWARF, lintian is clean, and it
+is 6% larger (653,168 to 694,128 bytes). A second `make gui` writes no
+file, a changed `CXXFLAGS` cleans and recompiles all 28 sources, and
+`make -n` cleans nothing.
+
 ### 24.1 Packaging
 
 `make deb` produces two packages, and they are two because they do not have the
