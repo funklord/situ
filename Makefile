@@ -102,7 +102,7 @@ help:
 	@echo '  clean      remove the build tree'
 	@echo ''
 	@echo 'Variables: CC AR LD CFLAGS CROSS_COMPILE ARCH BUILD_ROOT PYTHON'
-	@echo '           PREFIX DESTDIR (install)  DEB_MAINTAINER DEB_BUILD_DIR (deb)'
+	@echo '           PREFIX DESTDIR (install)  DEB_BUILD_DIR (deb)'
 
 runtime:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime'
@@ -586,34 +586,23 @@ uninstall:
 
 # -- packaging ---------------------------------------------------------------
 #
-# Two packages, because they do not have the same architecture: `situc` is
-# Python and runs anywhere, `libsitu.a` is compiled objects and does not. One
-# package would have to claim the narrower of the two, which would make the
-# schema compiler uninstallable on every machine it was not built on -- for a
-# tool whose whole purpose is generating code for targets other than the build
-# host, exactly the wrong way round. See packaging/README.md.
+# `situc` and `libsitu-dev` are two packages because they do not have the
+# same architecture: `situc` is Python and runs anywhere, `libsitu.a` is
+# compiled objects and does not. One package would have to claim the
+# narrower of the two, which would make the schema compiler uninstallable on
+# every machine it was not built on -- for a tool whose whole purpose is
+# generating code for targets other than the build host, exactly the wrong
+# way round. `situ-edit-gui` is the window. See packaging/README.md.
 #
-# The version is read from the package rather than kept here, so `situc
-# --version` and the `.deb` can never disagree.
-DEB_VERSION	:= $(shell $(PYTHON) -c "import situc; print(situc.__version__)")
-DEB_ARCH	:= $(shell dpkg --print-architecture 2>/dev/null || echo all)
-DEB_MAINTAINER	?= situ maintainers <noreply@example.invalid>
+# The version is VERSION, and the maintainer is in debian/control and
+# debian/changelog; nothing here overrides either.
 DEB_DIR		:= $(BUILD_ROOT)/deb
-DEB_STAGE	:= $(DEB_DIR)/stage
 # The package build's own object tree, at the root and not under
 # BUILD_ROOT: debian/rules builds with BUILD_ROOT set to it. dpkg's flags
 # are not a plain build's, so sharing build/ would rebuild everything at
 # each switch between `make` and `make deb`. debian/rules states the same
 # default; this one is for `make clean`.
 DEB_BUILD_DIR	?= build-deb
-
-# The changelog needs a date, and `date -R` would put the build clock in the
-# package -- two builds of one commit producing two different files. The last
-# commit's own date is the honest answer and is reproducible; SOURCE_DATE_EPOCH
-# wins where a packaging environment has set one.
-DEB_DATE	:= $(shell \
-	if [ -n "$$SOURCE_DATE_EPOCH" ]; then date -R -d "@$$SOURCE_DATE_EPOCH"; \
-	else git log -1 --format=%cD 2>/dev/null || date -R; fi)
 
 # Removing a directory wholesale is allowed for a staging tree this rule
 # created and nothing else, and only after checking the path resolved to what

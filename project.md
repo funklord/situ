@@ -6410,47 +6410,53 @@ might not. A from-clean package is `make clean deb`.
 
 ### 24.1 Packaging
 
-`make deb` produces two packages, and they are two because they do not have the
-same architecture. `situc` is Python and is `Architecture: all`; `libsitu.a` is
-compiled objects and is not. One package would have to claim the narrower of
-the two, which would make the schema compiler uninstallable on every machine it
-was not built on -- for a tool whose whole purpose is generating code for
-targets other than the build host, exactly the wrong way round. They are
-independent as well: a build machine wants the compiler and no runtime, and a
-target wants the header and no compiler, so neither depends on the other and
-`situc` depends on nothing but `python3`.
+`make deb` produces three packages. `situc` and `libsitu-dev` are two
+because they do not have the same architecture. `situc` is Python and is
+`Architecture: all`; `libsitu.a` is compiled objects and is not. One package
+would have to claim the narrower of the two, which would make the schema
+compiler uninstallable on every machine it was not built on -- for a tool
+whose whole purpose is generating code for targets other than the build host,
+exactly the wrong way round. They are independent as well: a build machine
+wants the compiler and no runtime, and a target wants the header and no
+compiler, so neither depends on the other and `situc` depends on nothing but
+`python3`. The third, `situ-edit-gui`, is the Qt window: compiled, and
+depending on the `situc` of the same version, whose tools it runs. Its
+debug symbols come out as `situ-edit-gui-dbgsym`.
 
-Built by `dpkg-deb --build` over a tree that `make install` staged, rather than
-by `debian/` and `dpkg-buildpackage`. The packages then contain exactly what
-`make install` produces, so a packaging bug and an install bug cannot be
-different bugs -- and the step needs `dpkg-deb` and nothing else, which is the
-same argument the paragraph above makes about `pip`. Anything `install` writes
-that neither package claims stops the build rather than being quietly left out.
+Built by `dpkg-buildpackage -b` driving `debian/rules`, which is `dh` with
+the build and install steps pointed at this Makefile. `dh_auto_install` runs
+`make install` and `make install-gui` into `debian/tmp`, so the packages
+contain exactly what the install rules produce, and a packaging bug and an
+install bug cannot be different bugs. Each package's `debian/*.install`
+claims its files, and anything the install rules write that no package
+claims stops the build (`dh_missing`, failing by default at compat 13)
+rather than being quietly left out. It was `dpkg-deb --build` over a staged
+tree until `d9438023`; `packaging/README.md` keeps what that build was for,
+and the question it leaves open -- whether a packaging step wanting
+`debhelper` is the same problem section 24 raises about `pip`.
 
 **`make deb-check` is the part that matters.** Packages that build are not
-packages that work: it unpacks both into a scratch root and compiles a schema
+packages that work: it unpacks them into a scratch root and compiles a schema
 through the installed `situc` against the installed `situ.h`, which is the
-whole claim either package makes. No root, and nothing touching the machine's
+whole claim the first two make. No root, and nothing touching the machine's
 own `/usr`.
 
-The version is read from `situc/__init__.py`, which is also what `situc
---version` prints, so a package and the binary inside it cannot disagree.
-`test/unit/test_packaging.py` holds the control files to the tree without
-building anything; `lintian` is clean on both packages.
+The version is the `VERSION` file at the root. `situc --version` reads it,
+and `make version-check`, which `make deb` runs first, refuses a build where
+the top of `debian/changelog` names another. `test/unit/test_packaging.py`
+holds `debian/control` to the tree without building anything; `lintian` is
+clean on all four packages.
 
-**`DEB_MAINTAINER` defaults to a placeholder, and a real build must pass
-one.** The default is `situ maintainers <noreply@example.invalid>`, which
-keeps the repository from carrying a maintainer identity nobody agreed to:
-
-```sh
-make deb DEB_MAINTAINER='Nabeel Sowan <nabeel@vibes.se>'
-```
-
-A package built for anyone else to install and left with the placeholder is
-embarrassing rather than merely wrong, so set it whenever the output leaves
-this machine -- and read the licence paragraph below first, because until
-that is settled the packages are not distributable whatever the control
-file says.
+**The maintainer is a placeholder, `situ maintainers
+<noreply@example.invalid>`**, in `debian/control`'s `Maintainer` and the
+`debian/changelog` trailer, which keeps the repository from carrying an
+identity nobody agreed to. Nothing on the command line overrides it: the
+`DEB_MAINTAINER` this section once told a build to pass belonged to the
+`dpkg-deb` build, was read by nothing after `d9438023`, and is gone. A
+package built for anyone else to install needs those two lines changed by
+the copyright holder -- and the licence paragraph below read first, because
+until that is settled the packages are not distributable whatever the
+control file says.
 
 **There is no licence in this tree**, and `packaging/copyright` says so rather
 than choosing one: no `LICENSE` file, no licence field in `pyproject.toml`, and
