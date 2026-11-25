@@ -6341,6 +6341,25 @@ to them, lacked the `-pedantic-errors` they state, so a run from the root
 compiled the generated code without it. All four now say both, and `make
 test-c` and `make cross-test` pass with them.
 
+**And a package build keeps them** (2026-11-25, claude-guidelines' `make
+deb` pass). Everything sat in `CFLAGS ?=`, which an environment `CFLAGS`
+replaces whole, so the two ways of building the package were both wrong:
+`dpkg-buildpackage` run directly -- as any Debian builder runs it -- gave
+dpkg's line alone, no `-std`, no warnings, `-O2`; `make deb` exported this
+tree's `CFLAGS` into it, so dh, which fills in only what is unset, added
+none of the hardening. Now each of the four Makefiles keeps what the code
+requires in `REQUIRED_CFLAGS` (and the root and `test/generated` the
+section collection in `REQUIRED_LDFLAGS`), `CFLAGS` is only `-Os -g`,
+`runtime/c` -- the shipped library -- also takes `CPPFLAGS` for
+`_FORTIFY_SOURCE`, `deb` calls dpkg-buildpackage without the exported
+`CFLAGS` and `LDFLAGS`, and `debian/rules` appends `-Os` so it wins over
+dpkg's `-O2`. Proved against the previous commit: every compile and link
+line from the root (202 under `make -n -B`, 196 run by `test-c`) has the
+same flags as before; `test/generated` and `test/cross` run alone gain the
+section flags they always had from the root; both package builds compile
+`situ.c` with the required set, dpkg's hardening and a final `-Os`; and
+`test-c` passes compiled with exactly that set.
+
 ### 24.1 Packaging
 
 `make deb` produces two packages, and they are two because they do not have the

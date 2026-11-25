@@ -20,11 +20,19 @@ PREFIX		?= /usr/local
 DESTDIR		?=
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-# -pedantic-errors, as test/generated states its own: exported to it, this
-# replaced its CFLAGS, so a run from here compiled the generated code
-# without it (claude-guidelines inbox 20261123T1244Z).
-CFLAGS		?= -std=c11 -pedantic-errors -Os -g -ffunction-sections -fdata-sections $(WARNFLAGS)
-LDFLAGS		?= -Wl,--gc-sections
+# What the code requires, in every build, kept out of CFLAGS: a CFLAGS
+# from the environment replaces a `?=` default whole, and dpkg-buildpackage
+# exports its own (`-g -O2` and the hardening), so with everything in CFLAGS
+# a package built straight from dpkg had no -std, no warnings and -O2
+# (measured 2026-11-25). CFLAGS keeps only what a builder may choose: the
+# optimisation and the debug info.
+# Each sub-project states the same set for itself, so a run from anywhere
+# compiles alike (claude-guidelines inbox 20261123T1244Z); only CFLAGS and
+# LDFLAGS are exported to them.
+REQUIRED_CFLAGS	:= -std=c11 -pedantic-errors -ffunction-sections -fdata-sections $(WARNFLAGS)
+REQUIRED_LDFLAGS := -Wl,--gc-sections
+CFLAGS		?= -Os -g
+LDFLAGS		?=
 
 BUILD_DIR	:= $(BUILD_ROOT)/$(ARCH)
 
@@ -354,8 +362,9 @@ walk-c: $(BUILD_DIR)/situ-walk-c
 
 $(BUILD_DIR)/situ-walk-c: walker/c/situ_walk.c walker/c/main.c walker/c/situ_walk.h
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -Iwalker/c walker/c/situ_walk.c walker/c/main.c \
-		$(LDFLAGS) -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CPPFLAGS) $(CFLAGS) -Iwalker/c \
+		walker/c/situ_walk.c walker/c/main.c \
+		$(REQUIRED_LDFLAGS) $(LDFLAGS) -o $@
 
 test-c: runtime
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' test
@@ -565,7 +574,11 @@ deb_discard = \
 # what the build had just produced and every package survived `veryclean`.
 deb: version-check
 	@test -n "$(DEB_DIR)" || { echo "deb: DEB_DIR is empty, refusing" >&2; exit 1; }
-	dpkg-buildpackage -b -us -uc
+	@# Without CFLAGS and LDFLAGS: this Makefile exports them for its
+	@# sub-projects, and dh hands dpkg's flags only to a build that has none,
+	@# so a package made here got this tree's and none of Debian's hardening.
+	@# Debian's builders call dpkg-buildpackage with neither; so does this.
+	env -u CFLAGS -u LDFLAGS dpkg-buildpackage -b -us -uc
 	@mkdir -p '$(DEB_DIR)'
 	@for f in ../situc_$(VERSION)_*.deb ../libsitu-dev_$(VERSION)_*.deb \
 	          ../situ-edit-gui_$(VERSION)_*.deb \

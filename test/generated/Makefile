@@ -19,7 +19,17 @@ endif
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
 # -Os, as the shipped build is: a suite compiled at another level has never
 # seen the code that ships. Run from the root, the root's CFLAGS win.
-CFLAGS		?= -std=c11 -pedantic-errors -Os -g $(WARNFLAGS)
+# What the code requires, in every build, kept out of CFLAGS: a CFLAGS
+# from the environment replaces a `?=` default whole, and dpkg-buildpackage
+# exports its own (`-g -O2` and the hardening), so with everything in CFLAGS
+# a package built straight from dpkg had no -std, no warnings and -O2
+# (measured 2026-11-25). CFLAGS keeps only what a builder may choose: the
+# optimisation and the debug info.
+# Section collection as the shipped build: run from the root this suite
+# always had it, through the CFLAGS and LDFLAGS exported to it.
+REQUIRED_CFLAGS	:= -std=c11 -pedantic-errors -ffunction-sections -fdata-sections $(WARNFLAGS)
+REQUIRED_LDFLAGS := -Wl,--gc-sections
+CFLAGS		?= -Os -g
 LDFLAGS		?=
 
 BUILD_DIR	?= build
@@ -274,7 +284,7 @@ $(foreach name,$(RELATE_NAMES),\
 	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%.hpp)
 
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
 # The checks and runner every suite here uses, written from the module the
 # generated suites carry them from, so the two cannot drift (26.977). No
@@ -286,14 +296,14 @@ $(GEN_DIR)/situ_check.h: $(REPO_ROOT)/situc/codegen/c/selfcheck.py
 $(BUILD_DIR)/%_checked: %.c $(GEN_DIR)/situ_check.h $(RUNTIME_LIB) $(GEN_OBJS) \
 		$$(OBJS_$$*)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -DSITU_CHECKED -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -DSITU_CHECKED -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(OBJS_$*) $(RUNTIME_LIB) $(REQUIRED_LDFLAGS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/%: %.c $(GEN_DIR)/situ_check.h $(RUNTIME_LIB) $(GEN_OBJS) \
 		$$(OBJS_$$*)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(OBJS_$*) $(RUNTIME_LIB) $(REQUIRED_LDFLAGS) $(LDFLAGS) -o $@
 
 # Standalone fallback: only reached when the parent did not supply a library.
 $(BUILD_DIR)/runtime/libsitu.a:
@@ -314,7 +324,7 @@ $(GEN_DIR)/codecs_codec_tests.c: $(REPO_ROOT)/std/codecs.situ $(SITUC_SOURCES)
 		--out '$(abspath $(GEN_DIR))'
 
 $(GEN_DIR)/codecs_codec_tests.o: $(GEN_DIR)/codecs_codec_tests.c
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
 # The runnable one: `edges.situ` binds `doubling` to `my_doubling`, which
 # `codec_impl.c` implements against 13.2a's ABI.
@@ -331,9 +341,9 @@ $(GEN_DIR)/edges_codec_tests.c: $(REPO_ROOT)/test/schema/edges.situ \
 $(BUILD_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
 		$(GEN_DIR)/edges_derived.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$< codec_impl.c $(GEN_DIR)/edges_derived.o $(RUNTIME_LIB) \
-		$(LDFLAGS) -o $@
+		$(REQUIRED_LDFLAGS) $(LDFLAGS) -o $@
 
 # And the tier-2 half: the property tests for every codec `std/kernels.situ`
 # describes, run against the implementations `gen-derived` writes from the same
@@ -347,8 +357,8 @@ $(GEN_DIR)/kernels_codec_tests.c: $(REPO_ROOT)/std/kernels.situ $(SITUC_SOURCES)
 $(BUILD_DIR)/kernels_codec_tests: $(GEN_DIR)/kernels_codec_tests.c \
 		$(GEN_DIR)/kernels_derived.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_DIR)/kernels_derived.o $(RUNTIME_LIB) $(LDFLAGS) \
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/kernels_derived.o $(RUNTIME_LIB) $(REQUIRED_LDFLAGS) $(LDFLAGS) \
 		-o $@
 
 $(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
@@ -394,7 +404,7 @@ $(GEN_DIR)/%_derived.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 		--out '$(abspath $(GEN_DIR))'
 
 $(GEN_DIR)/%_derived.o: $(GEN_DIR)/%_derived.c
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
 
 $(GEN_DIR)/%_checks.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-checks '$(SCHEMA_$*)' \
@@ -414,19 +424,19 @@ $(GEN_DIR)/%_relate.c $(GEN_DIR)/%_relate.h: $(REPO_ROOT)/$$(SCHEMA_$$*) \
 $(BUILD_DIR)/%_checks: $(GEN_DIR)/%_checks.c $(GEN_DIR)/%.o \
 		$$(RELATE_OBJS_$$*) $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_DIR)/$*.o $(RELATE_OBJS_$*) $(RUNTIME_LIB) $(LDFLAGS) \
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/$*.o $(RELATE_OBJS_$*) $(RUNTIME_LIB) $(REQUIRED_LDFLAGS) $(LDFLAGS) \
 		-o $@
 
 $(BUILD_DIR)/%_vectors: $(GEN_DIR)/%_vectors.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(REQUIRED_LDFLAGS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/%_fuzz: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.o $(RUNTIME_LIB)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -DSITU_FUZZ_STANDALONE -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
-		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(LDFLAGS) -o $@
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -DSITU_FUZZ_STANDALONE -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/$*.o $(RUNTIME_LIB) $(REQUIRED_LDFLAGS) $(LDFLAGS) -o $@
 
 test: all
 	@for t in $(BINS) $(VECTOR_BINS) $(CHECK_BINS) $(CODEC_BINS); do \

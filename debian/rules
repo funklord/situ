@@ -3,6 +3,11 @@
 # The version comes from the VERSION file at the root; `make version-check`
 # gates debian/changelog against it.
 
+# -Os, which the Makefiles default to and dpkg's CFLAGS replace with -O2:
+# appended, so it comes last and wins (ossacli's shape). The rest of what
+# situ's C needs is outside CFLAGS and cannot be replaced.
+export DEB_CFLAGS_MAINT_APPEND = -Os
+
 %:
 	dh $@
 

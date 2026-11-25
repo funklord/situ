@@ -19,7 +19,16 @@ endif
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
 # -Os, as the shipped build is; run from the root, the root's CFLAGS win.
-CFLAGS		?= -std=c11 -pedantic-errors -Os -g $(WARNFLAGS)
+# What the code requires, in every build, kept out of CFLAGS: a CFLAGS
+# from the environment replaces a `?=` default whole, and dpkg-buildpackage
+# exports its own (`-g -O2` and the hardening), so with everything in CFLAGS
+# a package built straight from dpkg had no -std, no warnings and -O2
+# (measured 2026-11-25). CFLAGS keeps only what a builder may choose: the
+# optimisation and the debug info.
+# Section flags as the shipped build: run from the root, this always had
+# them through the CFLAGS exported to it.
+REQUIRED_CFLAGS	:= -std=c11 -pedantic-errors -ffunction-sections -fdata-sections $(WARNFLAGS)
+CFLAGS		?= -Os -g
 
 BUILD_DIR	?= build
 REPO_ROOT	:= $(abspath ../..)
@@ -68,7 +77,7 @@ $(foreach schema,$(SCHEMAS),$(eval $(call situ_generate,$(schema))))
 
 $(BUILD_DIR)/probe_host: probe.c $(GEN_SRCS) $(GEN_HEADERS)
 	@mkdir -p '$(@D)'
-	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		probe.c $(GEN_SRCS) '$(RUNTIME_INC)/situ.c' -o $@
 
 check-host: $(BUILD_DIR)/probe_host
@@ -79,7 +88,7 @@ check-host: $(BUILD_DIR)/probe_host
 
 $(BUILD_DIR)/probe_aarch64: probe.c $(GEN_SRCS) $(GEN_HEADERS)
 	@mkdir -p '$(@D)'
-	$(A64_CC) $(CFLAGS) -static -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+	$(A64_CC) $(REQUIRED_CFLAGS) $(CFLAGS) -static -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		probe.c $(GEN_SRCS) '$(RUNTIME_INC)/situ.c' -o $@
 
 ifeq ($(and $(HAVE_A64),$(HAVE_QEMU)),)
@@ -114,11 +123,11 @@ check-aarch64-be:
 else
 check-aarch64-be: $(GEN_DIR)/be_check.c $(GEN_SRCS) $(GEN_HEADERS)
 	@echo '--- aarch64 (big endian, compile only)'
-	@$(A64_CC) $(CFLAGS) -mbig-endian -ffreestanding \
+	@$(A64_CC) $(REQUIRED_CFLAGS) $(CFLAGS) -mbig-endian -ffreestanding \
 		-I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		-c '$(GEN_DIR)/be_check.c' -o '$(BUILD_DIR)/be_check.o'
 	@for src in $(GEN_SRCS) '$(RUNTIME_INC)/situ.c'; do \
-		$(A64_CC) $(CFLAGS) -mbig-endian -ffreestanding \
+		$(A64_CC) $(REQUIRED_CFLAGS) $(CFLAGS) -mbig-endian -ffreestanding \
 			-I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 			-c "$$src" -o '$(BUILD_DIR)/be_probe.o' || exit 1; \
 	done
