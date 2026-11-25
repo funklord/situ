@@ -102,7 +102,7 @@ help:
 	@echo '  clean      remove the build tree'
 	@echo ''
 	@echo 'Variables: CC AR LD CFLAGS CROSS_COMPILE ARCH BUILD_ROOT PYTHON'
-	@echo '           PREFIX DESTDIR (install)  DEB_MAINTAINER (deb)'
+	@echo '           PREFIX DESTDIR (install)  DEB_MAINTAINER DEB_BUILD_DIR (deb)'
 
 runtime:
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime'
@@ -600,6 +600,12 @@ DEB_ARCH	:= $(shell dpkg --print-architecture 2>/dev/null || echo all)
 DEB_MAINTAINER	?= situ maintainers <noreply@example.invalid>
 DEB_DIR		:= $(BUILD_ROOT)/deb
 DEB_STAGE	:= $(DEB_DIR)/stage
+# The package build's own object tree, at the root and not under
+# BUILD_ROOT: debian/rules builds with BUILD_ROOT set to it. dpkg's flags
+# are not a plain build's, so sharing build/ would rebuild everything at
+# each switch between `make` and `make deb`. debian/rules states the same
+# default; this one is for `make clean`.
+DEB_BUILD_DIR	?= build-deb
 
 # The changelog needs a date, and `date -R` would put the build clock in the
 # package -- two builds of one commit producing two different files. The last
@@ -633,7 +639,23 @@ deb: version-check
 	@# sub-projects, and dh hands dpkg's flags only to a build that has none,
 	@# so a package made here got this tree's and none of Debian's hardening.
 	@# Debian's builders call dpkg-buildpackage with neither; so does this.
-	env -u CFLAGS -u LDFLAGS dpkg-buildpackage -b -us -uc
+	@#
+	@# -nc, so a second `make deb` compiles nothing: without it
+	@# dpkg-buildpackage first runs debian/rules clean, which is this
+	@# file's distclean, and every package was built from nothing -- with
+	@# the previous packages deleted along with build/. The stamp goes
+	@# first: while dh finds it, it skips the whole build sequence and
+	@# packages whatever the last build left, edits or not. And
+	@# debian/.debhelper, debhelper's own working state, which only the
+	@# skipped clean removes: dh_strip adds each build's debug file to
+	@# dbgsym-root there and dh_prep never empties it, so with -nc alone
+	@# situ-edit-gui-dbgsym shipped the debug files of every binary
+	@# built before (four after four builds, measured). Not dh_clean,
+	@# which also deletes every *.orig, *.rej and *~ in the tree. A
+	@# from-clean package is `make clean deb`.
+	rm -f debian/debhelper-build-stamp
+	rm -rf debian/.debhelper
+	env -u CFLAGS -u LDFLAGS dpkg-buildpackage -b -us -uc -nc
 	@mkdir -p '$(DEB_DIR)'
 	@for f in ../situc_$(VERSION)_*.deb ../libsitu-dev_$(VERSION)_*.deb \
 	          ../situ-edit-gui_$(VERSION)_*.deb \
@@ -703,6 +725,17 @@ clean:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' clean
 	@$(MAKE) --no-print-directory -C test/cross BUILD_DIR='$(BUILD_DIR)/cross' clean
 	rm -rf '$(BUILD_ROOT)'
+	@# The package's object tree, removed whole only once the name is
+	@# known to be a relative path below this tree holding nothing tracked.
+	@d='$(DEB_BUILD_DIR)'; \
+	case "$$d" in ''|.|./|..|../*|/*|*/..|*/../*) \
+		echo "clean: DEB_BUILD_DIR='$$d' is not a directory below this tree; not removing it" >&2; \
+		exit 1 ;; \
+	esac; \
+	if [ -n "$$(git ls-files -- "$$d" 2>/dev/null | head -n 1)" ]; then \
+		echo "clean: $$d holds tracked files; not removing it" >&2; exit 1; \
+	fi; \
+	echo "rm -rf '$$d'"; rm -rf "$$d"
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 	rm -rf .mypy_cache .pytest_cache
 

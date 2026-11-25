@@ -1,4 +1,5 @@
 build/
+/build-deb/
 __pycache__/
 *.py[co]
 .mypy_cache/

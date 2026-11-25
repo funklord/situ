@@ -8,6 +8,14 @@
 # situ's C needs is outside CFLAGS and cannot be replaced.
 export DEB_CFLAGS_MAINT_APPEND = -Os
 
+# The package builds in its own object tree, not in build/: dpkg's flags
+# are not a plain build's, so one shared tree would be rebuilt at every
+# switch between `make` and `make deb`. The root Makefile states the same
+# default for `make clean`, which removes it; `make deb DEB_BUILD_DIR=...`
+# reaches here through MAKEFLAGS.
+DEB_BUILD_DIR ?= build-deb
+SITU_TREE = BUILD_ROOT='$(abspath $(DEB_BUILD_DIR))'
+
 %:
 	dh $@
 
@@ -17,12 +25,12 @@ export DEB_CFLAGS_MAINT_APPEND = -Os
 # dropped (the root Makefile's GUI_HANDED_CXXFLAGS); never pass CXXFLAGS on
 # this command line, which would replace qmake's own.
 override_dh_auto_build:
-	dh_auto_build
-	$(MAKE) gui
+	dh_auto_build -- $(SITU_TREE)
+	$(MAKE) gui $(SITU_TREE)
 
 override_dh_auto_install:
-	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr
-	$(MAKE) install-gui DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr $(SITU_TREE)
+	$(MAKE) install-gui DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr $(SITU_TREE)
 
 override_dh_auto_test:
 	# The suite is `make test`; it wants a build tree the packaging does

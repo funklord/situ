@@ -6381,6 +6381,33 @@ is 6% larger (653,168 to 694,128 bytes). A second `make gui` writes no
 file, a changed `CXXFLAGS` cleans and recompiles all 28 sources, and
 `make -n` cleans nothing.
 
+**And a second `make deb` compiles nothing** (2026-11-25, the holder's
+standard for every packaging tree). `dpkg-buildpackage` without `-nc`
+first ran `debian/rules clean`, which is `distclean`, so every package was
+compiled from nothing, the previous packages deleted with `build/`, and a
+`make` after it compiled the window again. Now `deb` runs
+`dpkg-buildpackage -nc`, after removing two pieces of debhelper state the
+skipped clean used to: `debian/debhelper-build-stamp`, without which dh
+skips the build step outright, and `debian/.debhelper`, where `dh_strip`
+collects each build's debug file and `dh_prep` never empties it -- with
+`-nc` alone `situ-edit-gui-dbgsym` held four debug files after four
+builds, three of them for binaries long gone. Not `dh_clean`, which also
+deletes every `*.orig`, `*.rej` and `*~` in the tree. And the package
+builds in its own tree, `build-deb/` (`DEB_BUILD_DIR`, which `make clean`
+removes once it is a relative path holding nothing tracked): `debian/rules`
+hands `BUILD_ROOT` to every make it runs, so dpkg's flags and a plain
+build's never share an object. Measured in scratch clones, compiler
+invocations for `make` and `make gui`, `make deb`, `make` and `make gui`,
+`make deb`, `make deb`: 29, 29, 28, 29, 29 before, 29, 29, 0, 0, 0 after.
+An edit to `situ.c` and to the window reaches the package with exactly
+those two compiles, the `-dbgsym` holds one debug file matching the
+shipped binary's build-id, lintian is clean, and the four packages carry
+the same files and control fields as before. `install` and `install-gui`
+depend on what they install, so here the stamp alone would not have
+shipped a stale binary -- a `-nc` build that kept it skipped
+`dh_auto_build` and still packaged the edit -- but the next install target
+might not. A from-clean package is `make clean deb`.
+
 ### 24.1 Packaging
 
 `make deb` produces two packages, and they are two because they do not have the
