@@ -8534,7 +8534,8 @@ class Emitter:
 			   "\t\t\tOk(arm) => arm.validate_in(msg)?,"]
 			  if placement.located is not None else
 			  [f"\t\tmatch self.{name}() {{",
-			   "\t\t\tOk(arm) => arm.validate()?,"]),
+			   f"\t\t\tOk(arm) => arm."
+			   f"{self._child_validate(struct, placement.type_name)}?,"]),
 			"\t\t\tErr(Error::Version) => {}",
 			"\t\t\tErr(other) => return Err(other),",
 			"\t\t}",
@@ -9202,7 +9203,8 @@ class Emitter:
 			"\t\t\t\tOk(one) => one,",
 			"\t\t\t\tErr(_) => return Err(Error::Bounds),",
 			"\t\t\t};",
-			"\t\t\tif let Err(e) = one.validate() {",
+			"\t\t\tif let Err(e) = one."
+			f"{self._child_validate(struct, element.name)} {{",
 			"\t\t\t\treturn Err(e);",
 			"\t\t\t}",
 			"\t\t}",
@@ -9304,7 +9306,7 @@ class Emitter:
 			   "\t\t\t\tbreak;",
 			   "\t\t\t}"]),
 			f"\t\t\tif let Err(e) = ({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})"
-			".validate() {",
+			f".{self._child_validate(struct, placement.type_name)} {{",
 			"\t\t\t\treturn Err(e);",
 			"\t\t\t}",
 			*step,
@@ -11839,6 +11841,67 @@ class Emitter:
 				"\t}",
 			]
 
+		if self._probes_once(struct):
+			# The probe once, at the top of the cycle (26.1175): the entry
+			# probes and hands on to `_below`, which is everything else and
+			# is what a level below calls.
+			cut  = next((at for at in range(len(body) - len(depth) + 1)
+			             if body[at:at + len(depth)] == depth), None)
+			rest = (body[:cut] + body[cut + len(depth):]
+			        if cut is not None else None)
+			if rest is not None:
+				if not ids:
+					return [
+						*self._nesting_probe(struct),
+						"",
+						"\t/// Every constraint the schema declares, on parse.",
+						"\tpub fn validate(&self) -> Result<()> {",
+						*floor, *ceiling, *depth,
+						"\t\tself.validate_below()",
+						"\t}",
+						"",
+						"\t/// `validate` without the nesting probe, for a level",
+						"\t/// the probe at the cycle's top bounds (26.1175).",
+						"\tpub fn validate_below(&self) -> Result<()> {",
+						*rest,
+					]
+				return [
+					*self._nesting_probe(struct),
+					"",
+					"\t/// The id `check` reports when nothing refused.",
+					f"\tpub const NO_CHECK: u32 = {_NO_CHECK_RS};",
+					*(f"\tpub const CHECK_{member.upper()}: u32 = {at};"
+					  for at, member in enumerate(ids)),
+					"",
+					"\t/// Every constraint the schema declares, naming the",
+					"\t/// member that refused; `*which` is `NO_CHECK` where",
+					"\t/// nothing did.",
+					"\tpub fn check_which(&self, which: &mut u32) -> Result<()> {",
+					"\t\t*which = Self::NO_CHECK;",
+					*floor, *ceiling, *depth,
+					"\t\tself.check_which_below(which)",
+					"\t}",
+					"",
+					"\t/// `check_which` without the nesting probe, for a level",
+					"\t/// the probe at the cycle's top bounds (26.1175).",
+					"\tpub fn check_which_below(&self, which: &mut u32)"
+					" -> Result<()> {",
+					"\t\t*which = Self::NO_CHECK;",
+					*rest,
+					"",
+					"\t/// The verdict alone, which is what most callers want.",
+					"\tpub fn validate(&self) -> Result<()> {",
+					"\t\tlet mut sink = Self::NO_CHECK;",
+					"\t\tself.check_which(&mut sink)",
+					"\t}",
+					"",
+					"\t/// `validate` without the nesting probe (26.1175).",
+					"\tpub fn validate_below(&self) -> Result<()> {",
+					"\t\tlet mut sink = Self::NO_CHECK;",
+					"\t\tself.check_which_below(&mut sink)",
+					"\t}",
+				]
+
 		if not ids:
 			return [
 				*self._nesting_probe(struct),
@@ -12204,6 +12267,31 @@ class Emitter:
 				              or None))
 		return found
 
+	def _probes_once(self, struct: ResolvedStruct) -> bool:
+		"""C's `_probes_once` (26.1175): a recursive struct whose cycle
+		states one bound, and whose checks read nothing placed by `at`
+		(those take the message, and keep their probe)."""
+		if not is_recursive(self.resolved.structs, struct.name) \
+				or not self._depth_checks(struct) \
+				or self._reaches_located(struct):
+			return False
+		bounds = {(declared_depth(self.schema, peer),
+		           depth_limit(self.schema, peer))
+		          for peer in recursion_cycle(self.resolved.structs,
+		                                      struct.name)}
+		return len(bounds) == 1
+
+	def _child_validate(self, struct: ResolvedStruct,
+			inner: str | None) -> str:
+		"""How a check calls a nested struct's: `validate_below()` for a
+		level of this cycle the probe at its top bounds (26.1175)."""
+		held = self.resolved.structs.get(inner or "")
+		if held is not None and self._probes_once(held) \
+				and is_recursive(self.resolved.structs, struct.name) \
+				and descends(self.resolved.structs, struct, held.name):
+			return "validate_below()"
+		return "validate()"
+
 	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""The two depth verdicts, which are different verdicts (0054)."""
 		if not is_recursive(self.resolved.structs, struct.name):
@@ -12529,7 +12617,8 @@ class Emitter:
 		if held_here(struct, placement) is None:
 			return []
 		name = _ident(local_name(struct, placement))
-		return [f"\t\tself.{name}_view()?.validate()?;"]
+		return [f"\t\tself.{name}_view()?."
+		        f"{self._child_validate(struct, held_here(struct, placement))}?;"]
 
 	def _member_checks(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
@@ -12680,7 +12769,8 @@ class Emitter:
 				return out
 			out.extend(self._entering_depth(struct, placement))
 			tail = ("validate_in(msg)" if inner is not None
-			        and self._reaches_located(inner) else "validate()")
+			        and self._reaches_located(inner) else
+			        self._child_validate(struct, placement.type_name))
 			out.append(f"\t\tself.{name}()?.{tail}?;")
 			return out
 

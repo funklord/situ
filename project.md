@@ -149,6 +149,12 @@ shape everywhere in SQLite, protobuf, wasm, DWARF and QUIC. It keeps the
 next element's start, so no element is read twice, and a frame-sized run
 drops its count, whose walk is the one being resumed.
 
+**Run 28 (2026-11-26):** performance, on the holder's word that it is
+live work where a structure has settled. A recursive struct's nesting is
+probed once at the top of its cycle (26.1175): nested JSON validated 3x
+faster in C, 5.5x in C++ (which also probed twice per level), 2.9x in
+Rust. Validation is still O(n * depth) in what it measures.
+
 Also run 26: `required` refuses a message nested past its bound (26.1174),
 fuzznet's 100000 `[` having overflowed the stack framing it; CONSTRAINT
 past `[depth]`, DEPTH past a smaller `[limit]`, as `validate` refuses, and
@@ -10049,6 +10055,17 @@ over bit 63 needs (the first version of 26.1148 broke exactly that). This
 replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
+
+### 26.1175 A recursive struct's nesting is probed once, at the top
+
+Every level of a cycle validated its children through their public
+`validate`, which re-ran the `nesting` probe over its subtree; C++ ran it
+twice per level. A struct whose cycle states one bound now has a `_below`
+check without the probe, and a descending child is checked through it --
+the probe at the top bounds every level below. JSON nested six deep:
+C 0.40 -> 1.21 MB/s, C++ 0.15 -> 0.83, Rust 0.39 -> 1.13. The record is
+`doc/decision/26.1175-a-cycle-is-probed-once.md`; held in
+`test_a_cycle_is_probed_once.py`.
 
 ### 26.1174 `required` refuses a message nested past its bound
 

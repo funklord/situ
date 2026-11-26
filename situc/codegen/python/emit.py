@@ -8899,7 +8899,7 @@ class Emitter:
 			f"\t\t\tif {held}._at + {held}._len > self._at + self._len:",
 			f'\t\t\t\traise BoundsError("{placement.path}: an element its'
 			' table points at runs past the frame")',
-			f"\t\t\t{held}.validate()",
+			f"\t\t\t{held}.{self._child_validate(struct, element.name)}",
 		]
 
 	def _element_refuses(self, element: ResolvedStruct) -> bool:
@@ -8997,7 +8997,7 @@ class Emitter:
 			   "\t\t\t\tbreak"]),
 			f"\t\t\t{held} = {self._made(struct, placement, inner)}(self._msg, self._at + {at},"
 			f" _{local}_size)",
-			f"\t\t\t{held}.validate()",
+			f"\t\t\t{held}.{self._child_validate(struct, element.name)}",
 			*step,
 		]
 
@@ -10045,7 +10045,59 @@ class Emitter:
 			lines.append("\t\treturn")
 		lines.extend(checks)
 		lines.extend(refusals)
-		return lines
+		return self._probed_once(struct, lines)
+
+	def _probes_once(self, struct: ResolvedStruct) -> bool:
+		"""C's `_probes_once` (26.1175): a recursive struct whose cycle
+		states one bound, so the probe at the top bounds every level below."""
+		if not is_recursive(self.resolved.structs, struct.name) \
+				or not self._depth_checks(struct):
+			return False
+		bounds = {(declared_depth(self.schema, peer),
+		           depth_limit(self.schema, peer))
+		          for peer in recursion_cycle(self.resolved.structs,
+		                                      struct.name)}
+		return len(bounds) == 1
+
+	def _child_validate(self, struct: ResolvedStruct,
+			inner: str | None) -> str:
+		"""How a check calls a nested struct's: `validate_below()` for a
+		level of this cycle the probe at its top bounds (26.1175)."""
+		held = self.resolved.structs.get(inner or "")
+		if held is not None and self._probes_once(held) \
+				and is_recursive(self.resolved.structs, struct.name) \
+				and descends(self.resolved.structs, struct, held.name):
+			return "validate_below()"
+		return "validate()"
+
+	def _probed_once(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""`validate` as the probe and a call to `validate_below`, which is
+		everything else (26.1175); where `_probes_once` says so."""
+		if not self._probes_once(struct):
+			return lines
+		depth = self._depth_checks(struct)
+		cut = next((at for at in range(len(lines) - len(depth) + 1)
+		            if lines[at:at + len(depth)] == depth), None)
+		signed = "\tdef validate(self) -> None:"
+		if cut is None or lines.count(signed) != 1:
+			return lines
+		start = lines.index(signed)
+		opened = next((at for at in range(start + 1, cut)
+		               if lines[at].rstrip().endswith('"""')), None)
+		if opened is None:
+			return lines
+		floors = lines[opened + 1:cut]
+		return [
+			*lines[:cut + len(depth)],
+			"\t\tself.validate_below()",
+			"",
+			"\tdef validate_below(self) -> None:",
+			'\t\t"""`validate` without the nesting probe, for a level the',
+			'\t\tprobe at the top of the cycle bounds (26.1175)."""',
+			*floors,
+			*lines[cut + len(depth):],
+		]
 
 	def _rule_methods(self, struct: ResolvedStruct) -> list[str]:
 		"""One method per rule over a run's elements in this struct's
@@ -10584,7 +10636,8 @@ class Emitter:
 		if held_here(struct, placement) is None:
 			return []
 		name = py_name(local_name(struct, placement))
-		return [f"\t\tself.{name}_view.validate()"]
+		return [f"\t\tself.{name}_view."
+		        f"{self._child_validate(struct, held_here(struct, placement))}"]
 
 	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
 		"""One group per member that `validate` says anything about.
@@ -10793,7 +10846,8 @@ class Emitter:
 			"\t\texcept VersionError:",
 			f"\t\t\tpass\t\t# not the arm this message carries",
 			"\t\telse:",
-			f"\t\t\t_arm_{name}.validate()",
+			f"\t\t\t_arm_{name}."
+			f"{self._child_validate(struct, placement.type_name)}",
 		]
 
 	def _arm_member_checks(self, struct: ResolvedStruct, variant: Placement,
@@ -11208,7 +11262,8 @@ class Emitter:
 					f"{self._child(struct, placement)[1]}).validate()",
 				]
 			return [*self._entering_depth(struct, placement),
-			        f"\t\tself.{name}.validate()"]
+			        f"\t\tself.{name}."
+			        f"{self._child_validate(struct, placement.type_name)}"]
 
 		# A VARINT'S VALUE BOUNDS (26.426). It has no `scalar` -- its width
 		# is in the bytes -- so every read below refuses it, and the check

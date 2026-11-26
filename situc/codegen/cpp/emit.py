@@ -11627,7 +11627,9 @@ class Emitter:
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
 			])
-		lines.extend(self._depth_checks(struct))
+		# Not `_depth_checks` again: the first group of `checks` IS the
+		# depth check, and adding it here as well walked every recursive
+		# struct's subtree twice per `check` (26.1175).
 		if not checks and not self._refuse_checks(struct) \
 				and not (struct.layout.size_bytes
 				         and struct.layout.register is None):
@@ -11644,7 +11646,108 @@ class Emitter:
 				"\t\treturn check(nullptr);",
 				"\t}",
 			])
-		return lines
+		return self._probed_once(struct, lines)
+
+	def _probes_once(self, struct: ResolvedStruct) -> bool:
+		"""C's `_probes_once` (26.1175): a recursive struct whose cycle
+		states one bound, so the probe at the top bounds every level below."""
+		if not is_recursive(self.resolved.structs, struct.name) \
+				or not self._depth_checks(struct):
+			return False
+		bounds = {(declared_depth(self.schema, peer),
+		           depth_limit(self.schema, peer))
+		          for peer in recursion_cycle(self.resolved.structs,
+		                                      struct.name)}
+		return len(bounds) == 1
+
+	def _probed_once(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""C's `_probed_once` (26.1175): a descending child is validated
+		through its `_below` form, and this struct's own entry becomes the
+		probe and a call to its `_below` where `_probes_once` says so.
+
+		The child's type is read off the line that declares the variable
+		the call is made on -- `::situ::members arm;` then `arm.validate()`
+		-- or off the temporary the call is made on.
+		"""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return lines
+		spelled = f"::{self.namespace}::"
+		descending = {
+			peer: ("check_below(nullptr)"
+			       if any(member for member, _ in self._check_groups(
+			           self.resolved.structs[peer]))
+			       else "validate_below()")
+			for peer in recursion_cycle(self.resolved.structs, struct.name)
+			if self._probes_once(self.resolved.structs[peer])
+			and descends(self.resolved.structs, struct, peer)}
+		if descending:
+			typed: dict[str, str] = {}
+
+			def _temporary(found: re.Match[str]) -> str:
+				peer = found.group(2)
+				if peer not in descending:
+					return found.group(0)
+				return f"{found.group(1)}.{descending[peer]}"
+
+			def _named(found: re.Match[str]) -> str:
+				peer = typed.get(found.group(1))
+				if peer is None or peer not in descending:
+					return found.group(0)
+				return f"{found.group(1)}.{descending[peer]}"
+
+			rewritten = []
+			for line in lines:
+				declared = re.match(rf"\s*(?:const )?{re.escape(spelled)}(\w+)"
+				                    r" (\w+)[;(]", line)
+				if declared:
+					typed[declared.group(2)] = declared.group(1)
+				line = re.sub(rf"({re.escape(spelled)}(\w+)\(\w+\))\.validate\(\)",
+				              _temporary, line)
+				line = re.sub(r"\b(\w+)\.validate\(\)", _named, line)
+				rewritten.append(line)
+			lines = rewritten
+		if not self._probes_once(struct):
+			return lines
+
+		depth = self._depth_checks(struct)
+		probe = next((at for at in range(len(lines) - len(depth) + 1)
+		              if lines[at:at + len(depth)] == depth), None)
+		if probe is None:
+			return lines
+		start = next((at for at in range(probe, -1, -1)
+		              if lines[at].startswith("\t[[nodiscard]] ::situ::rt::err ")),
+		             None)
+		if start is None or lines[start + 1] != "\t{":
+			return lines
+		end  = lines.index("\t}", probe) + 1
+		head = lines[start + 2:probe]
+		signed = lines[start]
+		if " check(std::uint32_t *which_)" in signed:
+			below  = signed.replace(" check(", " check_below(")
+			called = "check_below(which_)"
+		elif " validate()" in signed:
+			below  = signed.replace(" validate()", " validate_below()")
+			called = "validate_below()"
+		else:
+			return lines
+		return [
+			*lines[:start],
+			"\t/* The checks without the nesting probe, for a level of the",
+			"\t * cycle the probe at its top already bounds (26.1175). */",
+			below,
+			"\t{",
+			*head,
+			*lines[probe + len(depth):end],
+			"",
+			signed,
+			"\t{",
+			*head,
+			*depth,
+			f"\t\treturn {called};",
+			"\t}",
+			*lines[end:],
+		]
 
 	def _refuse_checks(self, struct: ResolvedStruct,
 			named: bool = False) -> list[str]:

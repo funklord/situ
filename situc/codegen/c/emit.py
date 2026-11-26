@@ -13882,6 +13882,16 @@ class Emitter:
 			f'#include "{self.basename}.h"',
 			"",
 		]
+		# `_check_below` is this unit's own and a cycle calls it before it
+		# is defined (26.1175).
+		below = [f"static situ_err_t "
+		         f"{ident(self.prefix, struct.name, 'check_below')}"
+		         f"(situ_view_t view, uint32_t *which"
+		         f"{self._argument_tail(struct)});"
+		         for struct in self.resolved.structs.values()
+		         if struct.layout.is_byte_sized and self._probes_once(struct)]
+		if below:
+			lines.extend([*below, ""])
 
 		for struct in self.resolved.structs.values():
 			# An imported struct's pair is `static inline` in the header, for
@@ -14261,7 +14271,100 @@ class Emitter:
 			f"\treturn {named}(view, NULL{self._argument_args(struct)});",
 			"}", "",
 		])
-		return lines
+		return self._probed_once(struct, lines, linkage)
+
+	def _probes_once(self, struct: ResolvedStruct) -> bool:
+		"""Whether `check` splits into a probe and a `_check_below` (26.1175).
+
+		A recursive struct's `check` asks `nesting` over its whole subtree
+		before anything else, and every level of the cycle below it asked
+		again: a JSON document six brackets deep was probed two dozen times,
+		each probe a walk of what lay under it, and validation ran at 0.40
+		MB/s. The probe at the top bounds every level under it -- a level
+		below nests one less than the one above -- so a parent hands a
+		descending child to `_check_below`, its checks without the probe.
+
+		Only where every struct of the cycle states one bound, which is the
+		condition under which "the top passed" implies "this level passes";
+		and only in the `.c`, where a static helper is one translation
+		unit's own. An imported struct's checks are `static inline` in the
+		header, and keep their probe.
+		"""
+		if not self._recursive(struct.name) or not self._depth_checks(struct) \
+				or self._imported(struct.name) or is_linked(struct.name):
+			return False
+		bounds = {(declared_depth(self.schema, peer),
+		           depth_limit(self.schema, peer))
+		          for peer in recursion_cycle(self.resolved.structs,
+		                                      struct.name)}
+		return len(bounds) == 1
+
+	def _probed_once(self, struct: ResolvedStruct, lines: list[str],
+			linkage: str) -> list[str]:
+		"""`_validate_body`'s lines with the probe hoisted out (26.1174's
+		sibling, 26.1175): calls to a descending child go to its
+		`_check_below`, and this struct's own `check` becomes the probe and
+		a call to its `_check_below` where `_probes_once` says so.
+
+		Derived from the lines rather than written twice, so the two cannot
+		disagree about a check: the depth group is located exactly, and a
+		body without it is left as it was.
+		"""
+		if linkage or not self._recursive(struct.name):
+			return lines
+		named  = ident(self.prefix, struct.name, "check")
+		signed = f"situ_err_t {named}(situ_view_t view, uint32_t *which" \
+		         f"{self._argument_tail(struct)})"
+		if lines.count(signed) != 1:
+			return lines
+		start = lines.index(signed)
+		end   = lines.index("}", start) + 1
+		# The calls inside this `check`, and nowhere else: `validate` below
+		# it calls `check` and is not a level of anything.
+		body  = lines[start + 1:end]
+		for peer in recursion_cycle(self.resolved.structs, struct.name):
+			held = self.resolved.structs[peer]
+			if not self._probes_once(held) or not self._descends(struct, peer):
+				continue
+			below    = ident(self.prefix, peer, "check_below")
+			validate = re.escape(ident(self.prefix, peer, "validate"))
+			check    = re.escape(ident(self.prefix, peer, "check"))
+
+			def lowered(found: re.Match[str], below: str = below) -> str:
+				if found.group(1):
+					return f"{below}({found.group(1)}, NULL)"
+				return f"{below}({found.group(2)}, NULL"
+
+			body = [re.sub(rf"\b(?:{validate}\((\w+)\)|{check}\((\w+), NULL)",
+			               lowered, line)
+			        for line in body]
+		lines = [*lines[:start + 1], *body, *lines[end:]]
+		if not self._probes_once(struct):
+			return lines
+
+		below = ident(self.prefix, struct.name, "check_below")
+		depth = self._depth_checks(struct)
+		probe = next((at for at in range(start, end - len(depth) + 1)
+		              if lines[at:at + len(depth)] == depth), None)
+		if probe is None:
+			return lines
+		head = lines[start + 1:probe]
+		return [
+			*lines[:start],
+			f"static situ_err_t {below}(situ_view_t view, uint32_t *which"
+			f"{self._argument_tail(struct)})",
+			*head,
+			*lines[probe + len(depth):end],
+			"",
+			"/* The probe, once, at the top of the cycle; every level below",
+			" * is bounded by it, and is checked without probing again. */",
+			signed,
+			*head,
+			*depth,
+			f"\treturn {below}(view, which{self._argument_args(struct)});",
+			"}",
+			*lines[end:],
+		]
 
 	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""A `refuse` makes a message illegal, so `validate` says so (0051).
