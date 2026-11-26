@@ -1,0 +1,120 @@
+// ELF, the executable and object format of Linux and the BSDs: the 64-bit
+// little-endian form x86-64, AArch64 and RISC-V use (System V ABI, "ELF-64
+// Object File Format" 1.5, and the gABI's chapter 4).
+//
+// What it demonstrates: the shape most file formats share and the network
+// examples do not. A fixed header names where its tables are -- `phoff`,
+// `shoff` -- and how many entries each holds -- `phnum`, `shnum` -- and the
+// tables sit wherever the header says, not after it. Each table is a struct
+// placed `at` its offset and handed its count as an argument (0050, 0068): a
+// run of structs cannot be placed by `at` on its own (26.1041), and wrapping
+// it is how the count, which lives in the header, reaches it. ZIP's central
+// directory, PE's section table and GPT's partition entries are the same
+// shape.
+//
+// What it does not describe:
+//   - ELF32 and big-endian ELF. `class` and `data` say which this is and
+//     are held to 2 and 1; the other three combinations change every
+//     field's width or byte order.
+//   - Section names. `name` is an offset into the string table at
+//     `sections[shstrndx]`, a lookup through a located table no member can
+//     express; a reader resolves it with the offset this hands back.
+//   - What the sections and segments hold. Their bytes are wherever
+//     `offset` says, of `size` bytes, and `type` says what they mean.
+//   - `e_shnum == 0` with the real count in section 0's `size`, which a
+//     file with 65280 or more sections uses. Such a file reads as holding
+//     no section table.
+
+target buffer;
+endian little;
+
+// e_ident, 16 bytes.
+struct elf_ident {
+	u8  magic[4]   [must_eq = "\x7fELF"];
+	u8  class      [must_eq = 2];    // ELFCLASS64
+	u8  data       [must_eq = 1];    // ELFDATA2LSB
+	u8  version    [must_eq = 1];    // EV_CURRENT
+	u8  osabi;
+	u8  abiversion;
+	u8  pad[7];
+}
+
+// One program header: a segment the loader maps. 56 bytes.
+struct program_header {
+	u32 type;        // PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, ...
+	u32 flags;       // PF_X = 1, PF_W = 2, PF_R = 4
+	u64 offset;      // where its bytes start in the file
+	u64 vaddr;
+	u64 paddr;
+	u64 filesz;
+	u64 memsz;
+	u64 align;
+}
+
+// One section header. 64 bytes.
+struct section_header {
+	u32 name;        // offset into the section-name string table
+	u32 type;        // SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, ...
+	u64 flags;
+	u64 addr;
+	u64 offset;      // where its bytes start in the file
+	u64 size;
+	u32 link;
+	u32 info;
+	u64 addralign;
+	u64 entsize;
+}
+
+// The tables, each holding the count the header states. A struct rather
+// than a bare run, so the count can be handed to it (see the top).
+struct program_table {
+	parameter u16 count [stream];
+	program_header entries[count];
+}
+
+struct section_table {
+	parameter u16 count [stream];
+	section_header entries[count];
+}
+
+struct elf64 {
+	elf_ident ident;
+	u16 type;        // ET_REL = 1, ET_EXEC = 2, ET_DYN = 3, ET_CORE = 4
+	u16 machine;     // EM_X86_64 = 62, EM_AARCH64 = 183, EM_RISCV = 243
+	u32 version      [must_eq = 1];
+	u64 entry;
+	u64 phoff;
+	u64 shoff;
+	u32 flags;
+	u16 ehsize       [must_eq = 64];
+	u16 phentsize;
+	u16 phnum;
+	u16 shentsize;
+	u16 shnum;
+	u16 shstrndx;
+
+	// Placed from the message, not this frame: an object file has no
+	// program table (`phnum = 0`) and an executable stripped of sections
+	// may have none either, and both read as empty tables.
+	program_table(count = phnum) programs at phoff;
+	section_table(count = shnum) sections at shoff;
+}
+
+// What a reader of ELF relies on, held at build time: the three record
+// sizes the gABI fixes, each record readable at a constant offset with no
+// walk, and the entry point patchable in place -- what `patchelf` and a
+// loader's relocation both do.
+require size(elf_ident) == 16;
+require size(program_header) == 56;
+require size(section_header) == 64;
+require absolute_static(program_header);
+require absolute_static(section_header);
+require in_place(elf64.entry);
+
+// The entry sizes are the table layouts above. A file claiming another
+// size would be misread entry by entry, so it is refused -- but only where
+// the table has entries: `ld -r` leaves `phentsize` 0 beside `phnum` 0.
+when elf64.phnum != 0 && elf64.phentsize != 56
+	refuse program_entry_size "a program header is 56 bytes in ELF-64";
+when elf64.shnum != 0 && elf64.shentsize != 64
+	refuse section_entry_size "a section header is 64 bytes in ELF-64";

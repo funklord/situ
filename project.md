@@ -149,7 +149,9 @@ shape everywhere in SQLite, protobuf, wasm, DWARF and QUIC. It keeps the
 next element's start, so no element is read twice, and a frame-sized run
 drops its count, whose walk is the one being resumed.
 
-**Run 28 (2026-11-26):** performance, on the holder's word that it is
+**Run 28 (2026-11-26):** example/elf added (26.1177): the header-names-
+its-tables shape, which found the builders ignoring an argument's count.
+Performance, on the holder's word that it is
 live work where a structure has settled. A recursive struct's nesting is
 probed once at the top of its cycle (26.1175): nested JSON validated 3x
 faster in C, 5.5x in C++ (which also probed twice per level), 2.9x in
@@ -10059,6 +10061,26 @@ over bit 63 needs (the first version of 26.1148 broke exactly that). This
 replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
+
+### 26.1177 ELF in the corpus, and what it found
+
+The commonest binary file formats -- ELF, ZIP, PE, GPT -- were absent from
+the corpus, and they share one shape the network examples lack: a header
+naming where its tables are and how many entries each holds. A run of
+structs cannot be placed `at` on its own (26.1041); a struct holding it,
+placed `at` and handed the count as an argument (0050, 0068), is how the
+header's count reaches it, and that form worked when tried against
+`/bin/true` and readelf, and on a `zipfile` archive (ZIP not added yet).
+`example/elf` carries it, with an executable and an object file `ld` and
+`as` wrote as vectors. Two faults surfaced at once:
+
+- **A built run ignored the count its argument states**, in all four
+  builders: three program headers written under `count = 2`. A count field
+  is written from the elements; an argument is written by nothing, so the
+  plan marks the run (`counted_by`) and the builders refuse a mismatch.
+  Held in `test_a_counted_argument_is_held_by_the_builder.py`.
+- **C++ named a check id with the accessor's keyword escape**:
+  `check_class_` for ELF's `class`, where the other three say `class`.
 
 ### 26.1176 Python reads a variant's discriminant once per chain
 
