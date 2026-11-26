@@ -446,6 +446,9 @@ class Emitter:
 		self._walks: dict[str, tuple[list[CursorStep],
 		                             list[Placement]] | None] = {}
 		self._measures: dict[str, list[str]] = {}
+		#: Whether any run got a `_next`, so the runtime's `Cursor` is
+		#: imported only where something names it (0060).
+		self._next_emitted = False
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
@@ -518,6 +521,7 @@ class Emitter:
 			*(["\tSituError,"] if self._names_a_member() else []),
 			"\tTruncatedError,",
 			"\tVersionError, View,",
+			*(["\tCursor as _situ_cursor,"] if self._next_emitted else []),
 			"\tacquire,",
 			"\tadvance, sum_run,",
 			"\tas_enum,",
@@ -5887,10 +5891,8 @@ class Emitter:
 				"\t\tis no stride to index by.",
 				"",
 				"\t\tO(index). A loop calling this for every element is",
-				"\t\tO(n^2), and there is no cursor here to replace it with",
-				f"\t\t-- hold `at` yourself, build each {inner} over",
-				"\t\t`self._msg` at `self._at + at`, and advance by its",
-				'\t\t`_extent`."""',
+				f"\t\tO(n^2); walk the run with `{name}_next` instead"
+				' (0060)."""',
 			  ]),
 			f"\t\tif not 0 <= index < self.{name}_count:",
 			f"\t\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
@@ -5919,6 +5921,9 @@ class Emitter:
 				f"\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
 			  ]),
 		])
+
+		head = f"\tdef {name}(self, index: int) -> {inner}:"
+		lines.extend(self._cursor_of(name, inner, lines[lines.index(head):]))
 
 		if not nested.layout.is_fixed_size and count is not None:
 			lines.extend(self._counted_run_span(
@@ -6717,13 +6722,94 @@ class Emitter:
 				f" - ({start})",
 			]),
 			"",
-			f"\tdef {name}(self, index: int) -> {inner}:",
-			f"\t\tstarts = self._{name}_walk()",
-			"\t\tif not 0 <= index < len(starts) - 1:",
-			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
-			f"\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + starts[index],",
-			"\t\t\tstarts[index + 1] - starts[index])",
+			*(while_body := [
+				f"\tdef {name}(self, index: int) -> {inner}:",
+				f"\t\tstarts = self._{name}_walk()",
+				"\t\tif not 0 <= index < len(starts) - 1:",
+				f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+				f"\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + starts[index],",
+				"\t\t\tstarts[index + 1] - starts[index])",
+			]),
+			*self._cursor_of(name, inner, while_body),
 			*self._run_index(struct, placement, inner),
+		]
+
+	def _cursor_of(self, name: str, inner: str, body: list[str]) -> list[str]:
+		"""A run's `_next`, derived from its indexed accessor (0060).
+
+		Two shapes, each keyed on lines that must be there exactly once, or
+		nothing is emitted. A run this backend walks in one pass -- `while`
+		and record runs, whose accessor indexes `starts` -- keeps that walk
+		on the cursor from its first call. A counted run walks to `index`
+		as C does, so its cursor is C's: resumed from the element handed
+		out last, read again, and the next handed out. Either way the walk
+		is the accessor's own.
+		"""
+		head  = f"\tdef {name}(self, index: int) -> {inner}:"
+		if not body or body[0] != head:
+			return []
+		code  = body[1:]
+		if code and code[0].startswith('\t\t"""'):
+			close = next((k for k, line in enumerate(code)
+			              if line.rstrip().endswith('"""')), None)
+			if close is None:
+				return []
+			code = code[close + 1:]
+
+		walked = [line for line in code
+		          if re.fullmatch(r"\t\tstarts = self\._\w+_walk\(\)", line)]
+		starts = [line for line in code if line.startswith("\t\tat = ")]
+		counts = [line for line in code if line == "\t\tn  = 0"]
+		yields = "\t\t\tif n == index:"
+		lines  = []
+		if len(walked) == 1 and not starts:
+			returns = [line for line in code if line.startswith("\t\treturn ")]
+			if len(returns) != 1:
+				return []
+			for line in code:
+				if line == walked[0]:
+					lines.extend([
+						"\t\tif cursor.n == 0 or cursor.starts is None:",
+						"\t\t\tcursor.starts = " + line.split(" = ", 1)[1],
+						"\t\tstarts = cursor.starts",
+						"\t\tindex  = cursor.n",
+					])
+				elif line == returns[0]:
+					lines.extend([
+						"\t\tcursor.at = starts[index]",
+						"\t\tcursor.n  = index + 1",
+						line,
+					])
+				else:
+					lines.append(line)
+		elif len(starts) == 1 and len(counts) == 1 and code.count(yields) == 1:
+			base = starts[0].removeprefix("\t\tat = ")
+			lines.append("\t\tindex = cursor.n")
+			for line in code:
+				if line == starts[0]:
+					lines.append(f"\t\tat = {base} if index == 0 else cursor.at")
+				elif line == counts[0]:
+					lines.append("\t\tn  = 0 if index == 0 else index - 1")
+				elif line == yields:
+					lines.extend([
+						yields,
+						"\t\t\t\tcursor.at = at",
+						"\t\t\t\tcursor.n  = index + 1",
+					])
+				else:
+					lines.append(line)
+		else:
+			return []
+
+		self._next_emitted = True
+		return [
+			"",
+			f"\tdef {name}_next(self, cursor: _situ_cursor) -> {inner}:",
+			'\t\t"""The element after the one `cursor` last handed out, or the',
+			"\t\tfirst for a new `Cursor()`; IndexError once the run is over.",
+			"\t\tA pass over the whole run is linear, where one over the",
+			'\t\tindexed accessor walks from the start every call."""',
+			*lines,
 		]
 
 	def _run_index(self, struct: ResolvedStruct, placement: Placement,
@@ -6937,15 +7023,18 @@ class Emitter:
 			' starts."""',
 			f"\t\treturn self.{name}_span_from({start})",
 			"",
-			f"\tdef {name}(self, index: int) -> {inner}:",
-			f'\t\t"""Element `index`. Walked, not indexed: a view is a value and',
-			"\t\tnothing here keeps a table of offsets, which is what",
-			'\t\t`access = Sequential` in the map is telling you."""',
-			f"\t\tstarts = self._{name}_walk()",
-			"\t\tif not 0 <= index < len(starts) - 1:",
-			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
-			f"\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + starts[index],",
-			"\t\t\tstarts[index + 1] - starts[index])",
+			*(record_body := [
+				f"\tdef {name}(self, index: int) -> {inner}:",
+				f'\t\t"""Element `index`. Walked, not indexed: a view is a value and',
+				"\t\tnothing here keeps a table of offsets, which is what",
+				'\t\t`access = Sequential` in the map is telling you."""',
+				f"\t\tstarts = self._{name}_walk()",
+				"\t\tif not 0 <= index < len(starts) - 1:",
+				f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
+				f"\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + starts[index],",
+				"\t\t\tstarts[index + 1] - starts[index])",
+			]),
+			*self._cursor_of(name, inner, record_body),
 		]
 
 	def _required(self, struct: ResolvedStruct) -> list[str]:

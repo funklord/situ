@@ -143,6 +143,11 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 22 (2026-11-26):** every walked run of structs has a `_next`
+cursor in the four backends (26.1172), on the holder's word, for fuzznet
+and raidcfgd's hand-written walks. Derived from each backend's own walking
+accessor, so the two cannot disagree; pinned per corpus schema.
+
 **Run 21 (2026-11-26):** wire signature v4 labels a nested variant by its
 path and types its arms (19.3); every committed `.situ.wire` moves to v4.
 fuzznet and openmlx4 were told before the push (their inboxes) to
@@ -641,18 +646,6 @@ both walkers and the dissector. What a user cannot yet do is listed under
   and `situ-edit-gui` in `packaging/`, installed by `install` and
   `install-gui`, the Debian lists naming each page (`situc.install` had
   claimed all of `usr/share/man`). lintian not rerun on a rebuilt deb.
-
-- **A cursor over a run -- the holder's (0060).** fuzznet is the second
-  consumer to write one by hand (inbox 20261126T1227Z: it walks
-  media/json.situ's `members`/`elements` with `member_extent` and
-  `sep_get`, re-stating the run's `while (sep == ',')` rule outside the
-  schema); raidcfgd was the first. `--materialize` indexes a run with a
-  `max` only, and json's have none. The cheap shape, measured in the C
-  emitter 2026-11-26: every walking `_at` opens `at = base; n = 0` and
-  yields at `n == index`, so a `_next(view, cursor, &out)` resuming from
-  the last element's start (re-reading it to ask its end condition)
-  derives from those lines with the walk shared; a run indexed by stride
-  gets none. Waits on the holder because 0060 calls it a new public API.
 
 - The rest of the cppcheck noise: 22 `e != SITU_OK` need cppcheck's
   cross-function view of an arm whose `required` cannot fail; 12
@@ -10026,6 +10019,18 @@ over bit 63 needs (the first version of 26.1148 broke exactly that). This
 replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
+
+### 26.1172 A run has a cursor
+
+0060 left a cursor owed and the holder's; raidcfgd and then fuzznet
+(inbox 20261126T1227Z) wrote one by hand. On the holder's word
+(2026-11-26) every walked run of structs has `_next(view, &cursor, &out)`
+in C and its spelling in C++, Rust and Python, derived from the lines of
+the backend's own walking accessor: the k-th call answers what `_at(k - 1)`
+answers. The record, with the shapes weighed, is
+`doc/decision/26.1172-a-run-has-a-cursor.md`; held in
+`test_a_cursor_walks_a_run_as_its_index_does.py`, a differential in each
+backend and a count per corpus schema.
 
 ### 26.1171 A `when` counts a run's bytes, its terminator not among them
 

@@ -2867,21 +2867,24 @@ class Emitter:
 			"",
 			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,"
 			f" ::{self.namespace}::{inner} &out) const noexcept",
-			"\t{",
-			*walk,
-			"\t\t\tif (n == index) {",
-			"\t\t\t\tsitu_view_t found;",
-			"\t\t\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), at,"
-			" size, &found);",
-			"",
-			"\t\t\t\tif (e == SITU_OK) {",
-			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found{self._child_args(struct, placement)});",
-			"\t\t\t\t}",
-			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
-			"\t\t\t}",
-			*tail,
-			"\t\treturn ::situ::rt::err::bounds;",
-			"\t}",
+			*(while_body := [
+				"\t{",
+				*walk,
+				"\t\t\tif (n == index) {",
+				"\t\t\t\tsitu_view_t found;",
+				"\t\t\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), at,"
+				" size, &found);",
+				"",
+				"\t\t\t\tif (e == SITU_OK) {",
+				f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found{self._child_args(struct, placement)});",
+				"\t\t\t\t}",
+				"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t\t\t}",
+				*tail,
+				"\t\treturn ::situ::rt::err::bounds;",
+				"\t}",
+			]),
+			*self._cursor_of(name, f"::{self.namespace}::{inner}", while_body),
 			"",
 			"\t/* The walk, from a base the caller already knows: the same",
 			"\t * helper every delimited member has, for the same reason. */",
@@ -3111,23 +3114,26 @@ class Emitter:
 			"",
 			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,"
 			f" ::{self.namespace}::{inner} &out) const noexcept",
-			"\t{",
-			*walk,
-			"\t\t\tif (n == index) {",
-			"\t\t\t\tsitu_view_t found;",
-			"\t\t\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), at, size,"
-			" &found);",
-			"",
-			"\t\t\t\tif (e == SITU_OK) {",
-			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found{self._child_args(struct, placement)});",
-			"\t\t\t\t}",
-			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
-			"\t\t\t}",
-			"\t\t\tat += size;",
-			"\t\t\tn  += 1;",
-			"\t\t}",
-			"\t\treturn ::situ::rt::err::bounds;",
-			"\t}",
+			*(record_body := [
+				"\t{",
+				*walk,
+				"\t\t\tif (n == index) {",
+				"\t\t\t\tsitu_view_t found;",
+				"\t\t\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), at, size,"
+				" &found);",
+				"",
+				"\t\t\t\tif (e == SITU_OK) {",
+				f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found{self._child_args(struct, placement)});",
+				"\t\t\t\t}",
+				"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\treturn ::situ::rt::err::bounds;",
+				"\t}",
+			]),
+			*self._cursor_of(name, f"::{self.namespace}::{inner}", record_body),
 			"",
 			"\t/* The walk, from a base the caller already knows -- the same",
 			"\t * helper every delimited member has. Everything that",
@@ -4463,6 +4469,54 @@ class Emitter:
 			copies.extend(["", *body.split("\n")])
 		self._measures.setdefault(placement.path, []).extend(sorted(names))
 		return copies
+
+	@staticmethod
+	def _cursor_of(name: str, out_type: str, body: list[str]) -> list[str]:
+		"""A run's `_next`, derived from its walking accessor's body (0060).
+
+		The C backend's derivation, for the same reason: every walking
+		accessor opens `at = <base>; n = 0` and hands out the element at
+		`n == index`, so resumed from the cursor the same lines re-read the
+		element handed out last -- where a `while` run asks whether it
+		ended -- and hand out the next. Nothing is emitted for a body
+		without each of those lines exactly once.
+		"""
+		yields = "\t\t\tif (n == index) {"
+		starts = [line for line in body
+		          if line.startswith("\t\tstd::uint32_t at = ")]
+		counts = [line for line in body if line == "\t\tstd::uint32_t n  = 0;"]
+		if len(starts) != 1 or len(counts) != 1 or body.count(yields) != 1:
+			return []
+
+		base  = starts[0].removeprefix("\t\tstd::uint32_t at = ") \
+		                 .removesuffix(";")
+		lines = []
+		for line in body:
+			if line == starts[0]:
+				lines.extend([
+					"\t\tconst std::uint32_t index = cursor.n;",
+					f"\t\tstd::uint32_t at = index == 0u ? {base} : cursor.at;",
+				])
+			elif line == counts[0]:
+				lines.append("\t\tstd::uint32_t n  = index == 0u ? 0u : index - 1u;")
+			elif line == yields:
+				lines.extend([
+					yields,
+					"\t\t\t\tcursor.at = at;",
+					"\t\t\t\tcursor.n  = index + 1u;",
+				])
+			else:
+				lines.append(line)
+		return [
+			"",
+			"\t/* The element after the one `cursor` last handed out, or the",
+			"\t * first for a value-initialised cursor; `bounds` once the run is",
+			"\t * over. A pass over the whole run is linear, where one over the",
+			"\t * indexed accessor walks from the start every call. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_next(::situ::rt::cursor &cursor,",
+			f"\t\t\t{out_type} &out) const noexcept",
+			*lines,
+		]
 
 	def _marked_copy(self, struct: ResolvedStruct,
 			lines: list[str]) -> list[str]:
@@ -6165,66 +6219,55 @@ class Emitter:
 				"\t * size: walked, because there is no stride to index by.",
 				"\t *",
 				"\t * O(index). A loop calling this for every element is",
-				"\t * O(n^2), and there is no cursor here to replace it with",
-				"\t * -- hold `at` yourself, take each element with",
-				"\t * `situ_view_sub(raw(), at, situ_remaining_u32(raw().limit, at), &raw)` and",
-				# Unqualified ON PURPOSE, unlike the call sites: the code
-				# names the base to dodge a member that hides it, and a
-				# qualified name backticked in a doc comment is an explicit
-				# link request Doxygen cannot resolve -- which is the note
-				# below, met again by a pass that qualified 35 spellings
-				# and read one of them as a call site (26.694).
-				# The element class is deliberately NOT named here.
-				# `{inner}(raw).extent()` backticked is an explicit link
-				# request Doxygen cannot resolve, and the bare `::situ::name`
-				# is an automatic one -- the first failed the doc gate on
-				# three schemas. What a reader needs is `extent()`, and the
-				# accessor's own signature already says what it hands back.
-				"\t * advance by the element's own `extent()`.",
+				"\t * O(n^2); walk the run with the cursor below instead",
+				f"\t * ({name}_next, 0060).",
 				"\t */",
 				f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,",
 				f"\t\t\t{inner} &out) const noexcept",
-				"\t{",
-				f"\t\tstd::uint32_t at = {name}_offset();",
-				"\t\tstd::uint32_t n  = 0;",
-				"",
-				*([] if count is None else [
-					f"\t\tif (index >= {name}_count()) {{",
-					"\t\t\treturn ::situ::rt::err::bounds;",
-					"\t\t}",
+				*(counted_body := [
+					"\t{",
+					f"\t\tstd::uint32_t at = {name}_offset();",
+					"\t\tstd::uint32_t n  = 0;",
 					"",
+					*([] if count is None else [
+						f"\t\tif (index >= {name}_count()) {{",
+						"\t\t\treturn ::situ::rt::err::bounds;",
+						"\t\t}",
+						"",
+					]),
+					"\t\twhile (at < raw_.limit) {",
+					"\t\t\tsitu_view_t raw;",
+					"",
+					"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
+					"\t\t\t\t\t!= SITU_OK) {",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					"",
+					f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
+					"\t\t\tconst std::uint32_t size = element.extent();",
+					"",
+					"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
+					"\t\t\t\t/* A zero-extent element would walk here forever,",
+					"\t\t\t\t * and one past the limit was never in this frame. */",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					"\t\t\tif (n == index) {",
+					"\t\t\t\tsitu_view_t narrowed;",
+					"\t\t\t\tconst situ_err_t e =",
+					"\t\t\t\t\tsitu_view_sub(::situ::rt::view::raw(), at, size, &narrowed);",
+					"",
+					"\t\t\t\tif (e == SITU_OK) {",
+					f"\t\t\t\t\tout = {inner}(narrowed{self._child_args(struct, placement)});",
+					"\t\t\t\t}",
+					"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
+					"\t\t\t}",
+					"\t\t\tat += size;",
+					"\t\t\tn  += 1;",
+					"\t\t}",
+					"\t\treturn ::situ::rt::err::bounds;",
+					"\t}",
 				]),
-				"\t\twhile (at < raw_.limit) {",
-				"\t\t\tsitu_view_t raw;",
-				"",
-				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
-				"\t\t\t\t\t!= SITU_OK) {",
-				"\t\t\t\tbreak;",
-				"\t\t\t}",
-				"",
-				f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
-				"\t\t\tconst std::uint32_t size = element.extent();",
-				"",
-				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
-				"\t\t\t\t/* A zero-extent element would walk here forever,",
-				"\t\t\t\t * and one past the limit was never in this frame. */",
-				"\t\t\t\tbreak;",
-				"\t\t\t}",
-				"\t\t\tif (n == index) {",
-				"\t\t\t\tsitu_view_t narrowed;",
-				"\t\t\t\tconst situ_err_t e =",
-				"\t\t\t\t\tsitu_view_sub(::situ::rt::view::raw(), at, size, &narrowed);",
-				"",
-				"\t\t\t\tif (e == SITU_OK) {",
-				f"\t\t\t\t\tout = {inner}(narrowed{self._child_args(struct, placement)});",
-				"\t\t\t\t}",
-				"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
-				"\t\t\t}",
-				"\t\t\tat += size;",
-				"\t\t\tn  += 1;",
-				"\t\t}",
-				"\t\treturn ::situ::rt::err::bounds;",
-				"\t}",
+				*self._cursor_of(name, inner, counted_body),
 				"",
 				"\t/* How far the whole run reaches: the walk above with no",
 				"\t * index to stop at. It is what places every member after",

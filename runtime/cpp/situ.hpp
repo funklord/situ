@@ -35,6 +35,11 @@
  * legitimate schema fail to compile for a reason the author could not see. */
 namespace situ::rt {
 
+/* Where a walk over a run stands, for a run's `_next` (0060): the C
+ * runtime's `situ_cursor_t`, so the two backends hand out one shape.
+ * Value-initialise it to start -- `::situ::rt::cursor c{};`. */
+using cursor = situ_cursor_t;
+
 /* The error codes, scoped. Same values as `situ_err_t`, so the two convert
  * freely and generated code can call the C runtime without translating. */
 enum class err : int {

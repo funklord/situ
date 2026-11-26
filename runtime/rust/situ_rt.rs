@@ -97,6 +97,23 @@ pub enum Framing {
 	Need(usize),
 }
 
+/// Where a walk over a run stands, for a run's `_next` (0060).
+///
+/// A run whose elements have no single size is Sequential: the indexed
+/// accessor reaches element `index` by reading every one before it, so a
+/// loop over it is quadratic. `_next` resumes from here instead. Start from
+/// `Cursor::default()`, and keep it with the view it walks: it holds an
+/// offset, not a borrow.
+///
+/// `at` is where the element `_next` last handed out begins, and `n` how
+/// many it has handed out; the next call reads that element again to ask
+/// whether it ended the run, so the walk is the run's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cursor {
+	pub at: usize,
+	pub n: usize,
+}
+
 /// The obligations outstanding over a buffer: tags that no longer match the
 /// bytes (section 14.2), and fields that no longer equal what they derive
 /// from (section 16.1). One word for both, because a message is either ready

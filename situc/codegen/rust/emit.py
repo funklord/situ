@@ -6352,14 +6352,17 @@ class Emitter:
 			"\t\tn",
 			"\t}",
 			"",
-			f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
-			*walk,
-			"\t\t\tif n == index {",
-			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }});",
-			"\t\t\t}",
-			*tail,
-			"\t\tErr(Error::Bounds)",
-			"\t}",
+			*(while_body := [
+				f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
+				*walk,
+				"\t\t\tif n == index {",
+				f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }});",
+				"\t\t\t}",
+				*tail,
+				"\t\tErr(Error::Bounds)",
+				"\t}",
+			]),
+			*self._cursor_of(_ident(f"{base}_next"), inner, while_body),
 			"",
 			"\t/// The walk, from a base the caller already knows: the same",
 			"\t/// helper every delimited member has, for the same reason.",
@@ -6550,16 +6553,19 @@ class Emitter:
 			"\t\tn",
 			"\t}",
 			"",
-			f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
-			*walk,
-			"\t\t\tif n == index {",
-			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }});",
-			"\t\t\t}",
-			"\t\t\tat += size;",
-			"\t\t\tn  += 1;",
-			"\t\t}",
-			"\t\tErr(Error::Bounds)",
-			"\t}",
+			*(record_body := [
+				f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
+				*walk,
+				"\t\t\tif n == index {",
+				f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }});",
+				"\t\t\t}",
+				"\t\t\tat += size;",
+				"\t\t\tn  += 1;",
+				"\t\t}",
+				"\t\tErr(Error::Bounds)",
+				"\t}",
+			]),
+			*self._cursor_of(_ident(f"{base}_next"), inner, record_body),
 			"",
 			"\t/// Every element plus the terminator: where the next member",
 			"\t/// starts. Where the run ran out of buffer there is none to add.",
@@ -8077,6 +8083,53 @@ class Emitter:
 			copies.extend(["", *body.split("\n")])
 		self._measures.setdefault(placement.path, []).extend(sorted(names))
 		return copies
+
+	@staticmethod
+	def _cursor_of(name: str, inner: str, body: list[str]) -> list[str]:
+		"""A run's `_next`, derived from its walking accessor's body (0060).
+
+		The C backend's derivation: every walking accessor opens `at =
+		<base>; n = 0` and hands out the element at `n == index`, so
+		resumed from the cursor the same lines re-read the element handed
+		out last -- where a `while` run asks whether it ended -- and hand
+		out the next. Nothing is emitted for a body without each of those
+		lines exactly once.
+		"""
+		yields = "\t\t\tif n == index {"
+		starts = [line for line in body if line.startswith("\t\tlet mut at = ")]
+		counts = [line for line in body if line == "\t\tlet mut n  = 0usize;"]
+		if len(starts) != 1 or len(counts) != 1 or body.count(yields) != 1:
+			return []
+
+		base  = starts[0].removeprefix("\t\tlet mut at = ").removesuffix(";")
+		# Bound first: a counted run refuses an index past its count before
+		# it declares `at`.
+		lines = [body[0], "\t\tlet index = cursor.n;"]
+		for line in body[1:]:
+			if line == starts[0]:
+				lines.append(
+					f"\t\tlet mut at = if index == 0 {{ {base} }} else {{ cursor.at }};")
+			elif line == counts[0]:
+				lines.append(
+					"\t\tlet mut n  = if index == 0 { 0 } else { index - 1 };")
+			elif line == yields:
+				lines.extend([
+					yields,
+					"\t\t\t\tcursor.at = at;",
+					"\t\t\t\tcursor.n  = index + 1;",
+				])
+			else:
+				lines.append(line)
+		return [
+			"",
+			"\t/// The element after the one `cursor` last handed out, or the",
+			"\t/// first for a default cursor; `Error::Bounds` once the run is",
+			"\t/// over. A pass over the whole run is linear, where one over the",
+			"\t/// indexed accessor walks from the start every call.",
+			f"\tpub fn {name}(&self, cursor: &mut situ_rt::Cursor)"
+			f" -> Result<{inner}<'_>> {{",
+			*lines[1:],
+		]
 
 	def _marked_copy(self, struct: ResolvedStruct,
 			lines: list[str]) -> list[str]:
@@ -10422,49 +10475,51 @@ class Emitter:
 				"\t/// no stride to index by.",
 				"\t///",
 				"\t/// O(index). A loop calling this for every element is",
-				"\t/// O(n^2), and there is no cursor here to replace it with",
-				f"\t/// -- hold `at` yourself, build each {inner} over",
-				"\t/// `&self.bytes[at..]`, and advance by its `extent()`.",
+				"\t/// O(n^2); walk the run with the cursor below instead",
+				f"\t/// (`{_ident(base + '_next')}`, 0060).",
 			  ]),
-			f"\tpub fn {name}(&self, index: usize) -> Result<{inner}<'_>> {{",
-			*([] if count is None else [
-				f"\t\tif index >= self.{_ident(base + '_count')}() {{",
-				"\t\t\treturn Err(Error::Bounds);",
-				"\t\t}",
+			*(counted_body := [
+				f"\tpub fn {name}(&self, index: usize) -> Result<{inner}<'_>> {{",
+				*([] if count is None else [
+					f"\t\tif index >= self.{_ident(base + '_count')}() {{",
+					"\t\t\treturn Err(Error::Bounds);",
+					"\t\t}",
+				]),
+				*([f"\t\tlet at = self.{_ident(base + '_offset')}()"
+				   f" + index * {inner}::SIZE;",
+				   # The parent's arguments, as the walked form below hands
+				   # them: a fixed element that takes one -- a TIFF directory
+				   # entry in its file's byte order -- was built without and
+				   # did not compile (26.968).
+				   f"\t\t{inner}::new(&self.bytes[at..]"
+				   f"{self._child_args(struct, placement)})"]
+				  if nested.layout.is_fixed_size else [
+					# No stride to index by, so the run is walked -- the
+					# terminated run's walk with the count as its stopping rule.
+					f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
+					"\t\tlet mut n  = 0usize;",
+					"",
+					"\t\twhile at < self.bytes.len() {",
+					f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
+					"\t\t\tlet size    = element.extent();",
+					"",
+					"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
+					"\t\t\t\t// A zero-extent element would walk here forever,",
+					"\t\t\t\t// and one past the end was never in this frame.",
+					"\t\t\t\tbreak;",
+					"\t\t\t}",
+					"\t\t\tif n == index {",
+					f"\t\t\t\treturn {inner}::new(&self.bytes[at..at + size]"
+					f"{self._child_args(struct, placement)});",
+					"\t\t\t}",
+					"\t\t\tat += size;",
+					"\t\t\tn  += 1;",
+					"\t\t}",
+					"\t\tErr(Error::Bounds)",
+				  ]),
+				"\t}",
 			]),
-			*([f"\t\tlet at = self.{_ident(base + '_offset')}()"
-			   f" + index * {inner}::SIZE;",
-			   # The parent's arguments, as the walked form below hands
-			   # them: a fixed element that takes one -- a TIFF directory
-			   # entry in its file's byte order -- was built without and
-			   # did not compile (26.968).
-			   f"\t\t{inner}::new(&self.bytes[at..]"
-			   f"{self._child_args(struct, placement)})"]
-			  if nested.layout.is_fixed_size else [
-				# No stride to index by, so the run is walked -- the
-				# terminated run's walk with the count as its stopping rule.
-				f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
-				"\t\tlet mut n  = 0usize;",
-				"",
-				"\t\twhile at < self.bytes.len() {",
-				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
-				"\t\t\tlet size    = element.extent();",
-				"",
-				"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
-				"\t\t\t\t// A zero-extent element would walk here forever,",
-				"\t\t\t\t// and one past the end was never in this frame.",
-				"\t\t\t\tbreak;",
-				"\t\t\t}",
-				"\t\t\tif n == index {",
-				f"\t\t\t\treturn {inner}::new(&self.bytes[at..at + size]"
-				f"{self._child_args(struct, placement)});",
-				"\t\t\t}",
-				"\t\t\tat += size;",
-				"\t\t\tn  += 1;",
-				"\t\t}",
-				"\t\tErr(Error::Bounds)",
-			  ]),
-			"\t}",
+			*self._cursor_of(_ident(base + "_next"), inner, counted_body),
 		])
 
 		if not nested.layout.is_fixed_size:

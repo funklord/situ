@@ -145,6 +145,24 @@ typedef struct situ_view {
 	const struct situ_msg *owner;
 } situ_view_t;
 
+/* Where a walk over a run stands, for a run's `_next` (0060).
+ *
+ * A run whose elements have no single size is Sequential: `_at(index)`
+ * reaches element `index` by reading every one before it, so a loop over
+ * `_at` is quadratic. `_next` resumes from here instead. Zero it to start
+ * -- `situ_cursor_t c = {0};` -- and keep it with the view it walks: it
+ * holds an offset, not a pointer.
+ *
+ * `at` is where the element `_next` last handed out begins, and `n` how
+ * many it has handed out. The next call reads that element again to ask
+ * whether it ended the run -- a `while` run's condition is a question
+ * about the element just read -- so the cursor need not remember the
+ * answer, and the walk is the run's own, the one `_at` takes. */
+typedef struct situ_cursor {
+	uint32_t at;
+	uint32_t n;
+} situ_cursor_t;
+
 /* One run of bytes a scattered transform runs over (13.2b).
  *
  * `base` is mutable because the scattered form of the tier-1 ABI works in

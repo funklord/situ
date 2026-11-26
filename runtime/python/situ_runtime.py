@@ -222,6 +222,27 @@ class Message:
 		self.generation += 1
 
 
+class Cursor:
+	"""Where a walk over a run stands, for a run's `_next` (0060).
+
+	A run whose elements have no single size is Sequential: `x(index)`
+	reaches element `index` by walking every one before it, so a loop over
+	it is quadratic. `x_next(cursor)` resumes from here instead. Start from
+	`Cursor()`, and keep it with the view it walks.
+
+	`at` is where the element `_next` last handed out begins and `n` how
+	many it has handed out. `starts` is the run's own walk, taken once on
+	the first call, where the run is one this backend walks in a pass.
+	"""
+
+	__slots__ = ("at", "n", "starts")
+
+	def __init__(self) -> None:
+		self.at = 0
+		self.n  = 0
+		self.starts: list[int] | None = None
+
+
 class View:
 	"""A resolved base and extent over a message.
 

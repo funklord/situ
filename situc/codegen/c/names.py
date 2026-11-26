@@ -74,6 +74,7 @@ RUNTIME_SYMBOLS = frozenset({
 	"situ_err_str", "situ_parse_uint_plus", "situ_parse_int_signs",
 	"SITU_SPELL_NO_ZERO", "SITU_SPELL_LOWER", "SITU_SPELL_UPPER",
 	"SITU_SIGN_PLUS", "SITU_SIGN_NEG_ZERO",
+	"situ_cursor_t",
 	"situ_err_t", "situ_fletcher16", "situ_fletcher32",
 	"situ_format_int", "situ_format_uint", "situ_get_be16", "situ_get_be32",
 	"situ_get_be64", "situ_get_le16", "situ_get_le32", "situ_get_le64",

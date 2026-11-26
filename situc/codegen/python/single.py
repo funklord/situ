@@ -58,10 +58,36 @@ def _imported(module: str) -> list[str]:
 	if found is None:
 		return []
 
-	names: list[str] = []
-	for line in found.group(1).splitlines():
-		names.extend(part.strip() for part in line.split(",") if part.strip())
-	return names
+	return [name for name, _alias in _imported_as(found.group(1))]
+
+
+def _imported_as(block: str) -> list[tuple[str, str]]:
+	"""Each runtime name with the name the module binds it to.
+
+	`Cursor as _situ_cursor`, and a runtime name a struct shadows taken as
+	`_situ_<name>`: the runtime defines the first word, and the module
+	reads the last. Read as one name, the import asked the runtime for
+	`Cursor as _situ_cursor` and the inliner refused the schema (26.1172).
+	"""
+	found: list[tuple[str, str]] = []
+	for line in block.splitlines():
+		for part in line.split(","):
+			words = part.split()
+			if len(words) == 3 and words[1] == "as":
+				found.append((words[0], words[2]))
+			elif len(words) == 1:
+				found.append((words[0], words[0]))
+	return found
+
+
+def _aliases(module: str) -> list[str]:
+	"""The bindings an inlined module still needs: `alias = name`."""
+	found = re.search(r"^from situ_runtime import \(\n(.*?)^\)$",
+	                  module, re.M | re.S)
+	if found is None:
+		return []
+	return [f"{alias} = {name}" for name, alias in _imported_as(found.group(1))
+	        if alias != name]
 
 
 def _defines(node: python_ast.stmt) -> list[str]:
@@ -211,6 +237,7 @@ def _assemble(module: str, runtime: str, body: list[str],
 		+ "-" * 52,
 		"",
 		*[one + "\n" for one in body],
+		*(_aliases(module) + [""] if _aliases(module) else []),
 		"# -- generated accessors "
 		+ "-" * 54,
 		"",

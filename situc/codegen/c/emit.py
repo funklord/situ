@@ -7769,6 +7769,60 @@ class Emitter:
 			" * the bytes mean and not when they have all arrived. */",
 		]
 
+	@staticmethod
+	def _cursor_of(name: str, tail: str, body: list[str]) -> list[str]:
+		"""A run's `_next`, derived from the body of its walking `_at` (0060).
+
+		Every walking `_at` opens `at = <base>; n = 0` and hands out the
+		element at `n == index`. Resumed from the cursor, the same lines
+		start at the element handed out last, with `n` one short of the
+		one wanted, so the walk reads that element again -- which is where
+		a `while` run asks whether it ended -- and hands out the next. One
+		element re-read per call keeps a full pass linear, and the walk is
+		the run's own: a cursor written as a second loop would one day
+		disagree with `_at` about where an element starts, which is the
+		reason `_walk_prologue` is shared.
+
+		`body` is the `_at` from its `{` to its `}`; each line the rewrite
+		keys on must be there exactly once, or this is a shape the
+		derivation was not written for and nothing is emitted for it.
+		"""
+		yields = "\t\t\treturn situ_view_sub(view, at, size, out);"
+		starts = [line for line in body if line.startswith("\tuint32_t at = ")]
+		counts = [line for line in body if line == "\tuint32_t n  = 0u;"]
+		if len(starts) != 1 or len(counts) != 1 or body.count(yields) != 1:
+			return []
+
+		base = starts[0].removeprefix("\tuint32_t at = ").removesuffix(";")
+		lines = []
+		for line in body:
+			if line == starts[0]:
+				lines.extend([
+					"\tconst uint32_t index = cursor->n;",
+					f"\tuint32_t at = index == 0u ? {base} : cursor->at;",
+				])
+			elif line == counts[0]:
+				lines.append("\tuint32_t n  = index == 0u ? 0u : index - 1u;")
+			elif line == yields:
+				lines.extend([
+					"\t\t\tcursor->at = at;",
+					"\t\t\tcursor->n  = index + 1u;",
+					yields,
+				])
+			else:
+				lines.append(line)
+		return [
+			"",
+			f"/** The element after the one `cursor` last handed out, or the",
+			" * first for a zeroed cursor: SITU_OK with *out set, SITU_ERR_BOUNDS",
+			" * once the run is over. `_at` walks from the start on every call;",
+			" * this walks from where the last call stopped, so a pass over the",
+			" * whole run is linear. */",
+			f"static inline situ_err_t {name}(situ_view_t view,"
+			f" situ_cursor_t *cursor, situ_view_t *out{tail})",
+			*lines,
+		]
+
 	def _walk_prologue(self, base: str, cap: str, extent: str) -> list[str]:
 		"""The head of a `while` run's loop: one element measured and bounded.
 
@@ -8050,6 +8104,22 @@ class Emitter:
 			"",
 		] if asks_its_end(placement) else []
 
+		at_body = [
+			"{",
+			*walk,
+			"\t\tif (n == index) {",
+			"\t\t\treturn situ_view_sub(view, at, size, out);",
+			"\t\t}",
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			f"\t\tif (!({cond})) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			"\t}",
+			"\treturn SITU_ERR_BOUNDS;",
+			"}",
+		]
+
 		return [
 			*ended,
 			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"
@@ -8074,19 +8144,9 @@ class Emitter:
 			"",
 			f"static inline situ_err_t {at}(situ_view_t view, uint32_t index,"
 			f" situ_view_t *out{reach})",
-			"{",
-			*walk,
-			"\t\tif (n == index) {",
-			"\t\t\treturn situ_view_sub(view, at, size, out);",
-			"\t\t}",
-			"\t\tat = at + size;",
-			"\t\tn  = n + 1u;",
-			f"\t\tif (!({cond})) {{",
-			"\t\t\tbreak;",
-			"\t\t}",
-			"\t}",
-			"\treturn SITU_ERR_BOUNDS;",
-			"}",
+			*at_body,
+			*self._cursor_of(ident(self.prefix, struct.name, local, "next"),
+			                 reach, at_body),
 			"",
 			"/* The walk, from a base the caller already knows: the same",
 			" * helper every delimited member has, for the same reason. */",
@@ -8674,6 +8734,18 @@ class Emitter:
 		syms, tables = self._record_symbols(sym, delims)
 		lead  = traverse.element_lead(self.resolved.structs, placement)
 		walk = self._record_prologue(base, delims, syms, extent, open_, lead)
+		at_body = [
+			"{",
+			*walk,
+			"\t\tif (n == index) {",
+			"\t\t\treturn situ_view_sub(view, at, size, out);",
+			"\t\t}",
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+			"\t}",
+			"\treturn SITU_ERR_BOUNDS;",
+			"}",
+		]
 		from_ = self._record_prologue("start", delims, syms,
 		                              deeper if deep else extent, open_,
 		                              lead)
@@ -8736,16 +8808,9 @@ class Emitter:
 			"",
 			f"static inline situ_err_t {at}(situ_view_t view, uint32_t index,"
 			f" situ_view_t *out{reach})",
-			"{",
-			*walk,
-			"\t\tif (n == index) {",
-			"\t\t\treturn situ_view_sub(view, at, size, out);",
-			"\t\t}",
-			"\t\tat = at + size;",
-			"\t\tn  = n + 1u;",
-			"\t}",
-			"\treturn SITU_ERR_BOUNDS;",
-			"}",
+			*at_body,
+			*self._cursor_of(ident(self.prefix, struct.name, local, "next"),
+			                 reach, at_body),
 			"",
 			"/* The walk, from a base the caller already knows.",
 			" *",
@@ -12170,32 +12235,7 @@ class Emitter:
 					" * measured from its own bytes, so a run of them cannot be"
 					" walked. */",
 				]
-			lines.extend([
-				# WHAT THIS COSTS, because the capability map does not say.
-				# `access=Sequential` is honest about the class and a reader
-				# takes it for a constant: it means reaching element `index`
-				# walks `index` elements, so a loop over every element is
-				# quadratic. Measured on a run of 1024 four-byte elements,
-				# 6.56 ms against 0.0056 ms for a cursor -- 1177 times, on a
-				# four-kilobyte message (0060).
-				#
-				# `raidcfgd` reported the symptom from a tree of these and
-				# wrote the cursor by hand, which is the right answer and is
-				# the one thing this header does not offer.
-				f"/** Element `index`, walked: these have no single size, so",
-				" * there is no stride to index by.",
-				" *",
-				f" * O(index). A loop calling this for every element is",
-				" * O(n^2), and there is no cursor here to replace it with --",
-				" * hold `at` yourself, take each element with",
-				" * `situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)` and",
-				f" * advance by `{ident(self.prefix, nested or '', 'extent')}"
-				"(element)`.",
-				" */",
-				f"static inline situ_err_t "
-				f"{ident(self.prefix, struct.name, local, 'at')}"
-				f"(situ_view_t view, uint32_t index, situ_view_t *out"
-				f"{self._reaching_tail(struct, placement)})",
+			counted_body = [
 				"{",
 				f"\tuint32_t at = {base};",
 				"\tuint32_t n  = 0u;",
@@ -12228,6 +12268,34 @@ class Emitter:
 				"\t}",
 				"\treturn SITU_ERR_BOUNDS;",
 				"}",
+			]
+			lines.extend([
+				# WHAT THIS COSTS, because the capability map does not say.
+				# `access=Sequential` is honest about the class and a reader
+				# takes it for a constant: it means reaching element `index`
+				# walks `index` elements, so a loop over every element is
+				# quadratic. Measured on a run of 1024 four-byte elements,
+				# 6.56 ms against 0.0056 ms for a cursor -- 1177 times, on a
+				# four-kilobyte message (0060).
+				#
+				# `raidcfgd` reported the symptom from a tree of these and
+				# wrote the cursor by hand; fuzznet did the same, and the
+				# holder settled it (0060): `_next` below is that cursor.
+				f"/** Element `index`, walked: these have no single size, so",
+				" * there is no stride to index by.",
+				" *",
+				f" * O(index). A loop calling this for every element is",
+				" * O(n^2); walk the run with "
+				f"`{ident(self.prefix, struct.name, local, 'next')}` instead.",
+				" */",
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'at')}"
+				f"(situ_view_t view, uint32_t index, situ_view_t *out"
+				f"{self._reaching_tail(struct, placement)})",
+				*counted_body,
+				*self._cursor_of(
+					ident(self.prefix, struct.name, local, "next"),
+					self._reaching_tail(struct, placement), counted_body),
 				"",
 				"/* How far the whole run reaches. The count says how many"
 				" elements there",
