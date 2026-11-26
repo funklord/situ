@@ -118,6 +118,26 @@ value escaped_in_array 5B 22 61 5C 22 62 22 5D
 value escaped_backslash 7B 22 61 22 3A 22 62 61 63 6B 5C 5C 73 6C 61 73 68 22 7D
 	kind = 123
 
+# Empty containers. A `while` run is never empty (8.6), so these were all
+# refused until the byte after the brace became a variant's question: `{}`
+# needed five bytes for a member it does not have, and `[]` read its `]` as
+# the start of a value. AcoustID answers a recording it does not know with
+# `"results": []`, which is how fuzznet found it (2026-11-26). The spaced one
+# has whitespace on both sides of each empty pair, which the peek's `skip`
+# owns; `json.loads` accepts all six.
+value empty_array 5B 5D
+	kind = 91
+value empty_object 7B 7D
+	kind = 123
+value empty_results 7B 22 73 74 61 74 75 73 22 3A 22 6F 6B 22 2C 22 72 65 73 75 6C 74 73 22 3A 5B 5D 7D
+	kind = 123
+value empty_member_object 7B 22 61 22 3A 7B 7D 7D
+	kind = 123
+value spaced_empty 7B 20 22 61 22 20 3A 20 5B 20 5D 20 2C 20 22 62 22 20 3A 20 7B 20 7D 20 7D
+	kind = 123
+value nested_empty 5B 5B 5D 2C 7B 7D 2C 5B 5B 5D 5D 5D
+	kind = 91
+
 # The three literal structs, which `situc build --owned` owns because they are
 # the only fixed-size ones here -- a value, an object and a member are all
 # variable. Their bytes are what Python's `json` module emits for the three

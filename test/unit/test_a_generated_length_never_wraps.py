@@ -143,7 +143,11 @@ RUST_CENSUS = {
 	"image.situ": 1,
 	"importer.situ": 2,
 	"ipv4.situ": 4,
-	"json.situ": 5,
+	# 5 -> 7 on 2026-11-26, when `object` and `array` gained an empty arm
+	# (`closed`): read rather than bumped. The two new sites are the two
+	# `body_as_empty` accessors, behind `len() < at` exactly as the three
+	# literal arms' are; the old schema through this emitter still gives 5.
+	"json.situ": 7,
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,

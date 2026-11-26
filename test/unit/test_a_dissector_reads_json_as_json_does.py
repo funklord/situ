@@ -27,6 +27,11 @@ DOCUMENTS = [
 	b'{ "a" :\n [ 1 , 2 ] , "b":true}',
 	b'[{"k":7},{"k":8,"m":[9,[10]]}]',
 	b'\t{"deep":{"er":{"est":[1,2,3]}},"n":null}',
+	# Empty containers, refused by the schema until 2026-11-26: a `while`
+	# run is never empty, so the byte after the brace is a variant now.
+	b'{"status":"ok","results":[]}',
+	b'{ "a" : [ ] , "b" : { } , "c" : [ [ ] , 4 ] }',
+	b'[]',
 ]
 
 

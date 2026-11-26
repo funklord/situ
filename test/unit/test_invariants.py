@@ -215,10 +215,15 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: discriminant is the new part, not the arm.
 #: And 87 -> 90 on 2026-11-19, `classed_arm`'s three byte-run arms
 #: (26.1105): the class is new, the arms are the ordinary shape.
+#: And 126 -> 128 fixed, 86 -> 88 unmeasurable, on 2026-11-26, when
+#: `example/json`'s `object` and `array` learned to be empty: each chooses
+#: by a peeked byte between `closed`, one fixed byte, and the run it held
+#: before, now its own struct. Struct arms, so the declining branch below
+#: is unchanged.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                90,
-	("no-scalar", "struct", "fixed"):            126,
-	("no-scalar", "struct", "unmeasurable"):     86,
+	("no-scalar", "struct", "fixed"):            128,
+	("no-scalar", "struct", "unmeasurable"):     88,
 	("no-scalar", "not-struct", ""):              1,
 }
 

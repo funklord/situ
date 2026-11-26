@@ -2148,8 +2148,9 @@ int main(void)
 def test_a_while_run_is_proved_by_the_reader_s_own_count() -> None:
 	"""The predicate that ends a `while` run is the reader's to evaluate.
 
-	json's `array` is `element entries[] while (sep == ',')`, and the
-	reader tests that AFTER each element: elements 1..N-1 have to satisfy
+	json's `elements` is `element entries[] while (sep == ',')` -- the
+	run an `array` holds once it is not empty -- and the reader tests that
+	AFTER each element: elements 1..N-1 have to satisfy
 	it or the reader stops early. Re-emitting the expression here would be
 	a second derivation of the reader's own loop, and this project's
 	answer to that is to ask the artifact instead -- so the writer walks
@@ -2162,16 +2163,16 @@ def test_a_while_run_is_proved_by_the_reader_s_own_count() -> None:
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "json" / "json.situ")
 	header = _header(parsed, resolved, "json")
-	parts, why = _only(resolved, "array", header, None, parsed)
+	parts, why = _only(resolved, "elements", header, None, parsed)
 	assert why is None, why
 
 	run = [part for part in parts if part.role == build.REPEAT][0]
 	assert run.placement.repeat_while is not None
-	assert run.inner_count == "situ_array_entries_count"
+	assert run.inner_count == "situ_elements_entries_count"
 
 	text = build.generate(parsed, resolved, "json", "situ",
 	                      header)["json_build.h"]
-	assert "situ_array_entries_count(situ_view) != situ_count" in text
+	assert "situ_elements_entries_count(situ_view) != situ_count" in text
 
 
 def test_a_while_run_is_always_a_run_of_structs() -> None:
@@ -2268,6 +2269,10 @@ def test_a_json_array_is_built_and_the_reader_agrees(tmp_path: Path) -> None:
 	because the run ended where the frame did. A `while` run no longer
 	ends there (26.927): `[1,2,` never reads the element whose separator
 	ends the array, so the reader refuses it and so does the build.
+
+	An array is a variant since it may be empty (2026-11-26), so it is
+	built by its arm -- `_build_as_elements`, or `_build_as_empty` for
+	`[]` -- and the reader counts the elements through that arm.
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "json" / "json.situ")
 	files = dict(build.generate(parsed, resolved, "json", "situ",
@@ -2285,29 +2290,37 @@ static void show(const char *items)
 {
 	uint8_t     out[64];
 	uint32_t    n = 0, i;
-	situ_err_t  err = situ_array_build(out, sizeof out, '[',
+	situ_err_t  err = situ_array_build_as_elements(out, sizeof out, '[',
 	                                   (const uint8_t *)items,
 	                                   (uint32_t)strlen(items), &n);
 
 	printf("%d ", (int)err);
 	if (err == SITU_OK) {
 		situ_msg_t  msg;
-		situ_view_t view;
+		situ_view_t view, run;
 
 		for (i = 0; i < n; i++) putchar(out[i]);
 		situ_msg_init(&msg, out, n);
-		if (situ_array_view(&msg, 0, n, &view) == SITU_OK)
-			printf(" %u", situ_array_entries_count(view));
+		if (situ_array_view(&msg, 0, n, &view) == SITU_OK
+		    && situ_array_body_as_elements_view(view, &run) == SITU_OK)
+			printf(" %u", situ_elements_entries_count(run));
 	}
 	printf("\\n");
 }
 
 int main(void)
 {
+	uint8_t    out[8];
+	uint32_t   n = 0;
+	situ_err_t err;
+
 	show("1,2]");
 	show("1]");
 	show("1,2,");
 	show("1]2]");
+	err = situ_array_build_as_empty(out, sizeof out, '[',
+	                                (const uint8_t *)"]", 1u, &n);
+	printf("%d %u\\n", (int)err, n);
 	return 0;
 }
 """, encoding="ascii")
@@ -2333,6 +2346,7 @@ int main(void)
 	assert lines[3] == "2 ", (
 		"the reader stops after the first element here, so the second is "
 		f"bytes nobody reads and the build must refuse: {lines[3]}")
+	assert lines[4] == "0 2", f"`[]` is built by its empty arm: {lines[4]}"
 
 
 def test_a_run_of_wider_elements_is_asked_what_its_element_is() -> None:

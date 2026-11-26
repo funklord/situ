@@ -31,7 +31,7 @@ encoding ascii | utf8 | latin1;
 // nothing, and a compiler that picked one would be wrong about the others.
 //
 // Declared once and reached by a bare `skip` on the members that permit it.
-// Five of them do, which is the whole of what JSON's whitespace rule comes to
+// Seven of them do, which is the whole of what JSON's whitespace rule comes to
 // in a layout: a run of these bytes may precede a token, and it belongs to the
 // token it precedes -- because a struct's members partition its bytes exactly,
 // and the member before it is finished.
@@ -59,8 +59,8 @@ whitespace ' ' | '\t' | '\r' | '\n';
 // same one -- which is the rule rather than a repetition: a walk entering at
 // `member` spends `member`'s number, so two numbers for one cycle would be
 // an ambiguity (17.0). It counts nested STRUCTS, not turns: one level of
-// JSON nesting is value -> object -> member -> value, three structs, so 64
-// here is about twenty-one levels of braces.
+// JSON nesting is value -> object -> members -> member -> value, four
+// structs, so 64 here is sixteen levels of braces.
 //
 // `default:` is the number, and that is the arm this file waited two
 // language changes for. See `number` below.
@@ -88,8 +88,27 @@ struct value [depth = 64] {
 //
 // `open` is the `{` the variant chose this arm by, handed back by `peek`
 // (0057). `array` has the same member for the same reason.
+//
+// AND IT MAY BE EMPTY, which a `while` run may not: its first element is
+// read before its condition is asked (8.6), so `{}` was a member that
+// needed five bytes and had one, and `[]` a value whose kind sat past the
+// frame. Both were refused -- and `{"results":[]}` is how AcoustID answers
+// a recording it does not know, which is what fuzznet met (2026-11-26).
+// 8.6 says whether a run is there at all is `variant`'s question, so the
+// byte after the brace is peeked, whitespace and all, and a closing brace
+// is the empty arm. The run moved into `members` because an arm is a
+// struct; that is one more struct per level of nesting, and the depth
+// note above is counted with it.
 struct object [depth = 64] {
-	u8      open;
+	u8       open;
+	peek u8  next  skip;
+	variant body switch (next) {
+		case '}':  closed   as_empty;
+		default:   members  as_members;
+	}
+}
+
+struct members [depth = 64] {
 	member  entries[] while (sep == ',');
 }
 
@@ -127,8 +146,20 @@ struct member [depth = 64] {
 // An array is the same shape with no keys.
 struct array [depth = 64] {
 	u8       open;
+	peek u8  next  skip;
+	variant body switch (next) {
+		case ']':  closed    as_empty;
+		default:   elements  as_elements;
+	}
+}
+
+struct elements [depth = 64] {
 	element  entries[] while (sep == ',');
 }
+
+// The closing brace or bracket of an empty container. Whitespace between
+// it and the opening one belongs to the container's `next`, which skips.
+struct closed { u8  close; }
 
 struct element [depth = 64] {
 	value  held;
@@ -336,8 +367,8 @@ struct nothing { u8  word[4]  [must_eq = "null"]; }
 // `[depth = 64]` is the format's number; a walker spends its own, because it
 // reads a schema it was handed at run time and the stack is the program's.
 // Both refuse by name rather than measuring short -- so
-// `{"a":["b",{"c":"d"}]}` is nine structs, which a default `situ-walk` build
-// declines and `-DWALK_DEPTH_MAX=64` measures at twenty-one bytes. Summing
+// `{"a":["b",{"c":"d"}]}` is fourteen structs from `value` to the innermost
+// `text`, which a default `situ-walk` build declines and `-DWALK_DEPTH_MAX=64` measures at twenty-one bytes. Summing
 // the largest frame of every function in that walker's recursion cycle,
 // `-Os` on x86-64, one level costs at most 2800 bytes, which is why the
 // default is small and why it is overridable.
@@ -347,7 +378,7 @@ struct nothing { u8  word[4]  [must_eq = "null"]; }
 
 // What framing in text costs, recorded the way `http.situ` records it: each
 // of these fails, and the failure is the measurement.
-assert random_access(object.entries);
+assert random_access(members.entries);
 assert canonical(text.chars);
 
 // And the one that used to be a requirement. A document does start at offset

@@ -20,11 +20,21 @@ target buffer
 
 struct array size=2..
   @0x0000   1         u8         open
-  @0x0001   1..       element    entries  while=sep==44
+  ~         1         u8         next  peek skip=20090d0a
+  ~         1..       variant    body
+  body switch: next
+  body case 93: as_empty closed
+  body case default: as_elements elements
+
+struct closed size=1
+  @0x0000   1         u8         close
 
 struct element size=1..
   @0x0000   0..       value      held
   ~         1         u8         sep  skip=20090d0a
+
+struct elements size=1..
+  @0x0000   1..       element    entries  while=sep==44
 
 struct member size=4..
   ~         1         u8         open  skip=20090d0a
@@ -32,6 +42,9 @@ struct member size=4..
   ~         1         u8         colon  skip=20090d0a
   ~         0..       value      held
   ~         1         u8         sep  skip=20090d0a
+
+struct members size=4..
+  @0x0000   4..       member     entries  big while=sep==44
 
 struct no size=5
   @0x0000   5         u8         word  big must_eq="false"
@@ -42,9 +55,13 @@ struct nothing size=4
 struct number size=0..
   @0x0000   before:2c|5d|7d i64        value  radix=10 scaled trim=20090d0a
 
-struct object size=5..
+struct object size=2..
   @0x0000   1         u8         open
-  @0x0001   4..       member     entries  big while=sep==44
+  ~         1         u8         next  peek skip=20090d0a
+  ~         1..       variant    body
+  body switch: next
+  body case 125: as_empty closed
+  body case default: as_members members
 
 struct text size=2..
   @0x0000   1         u8         open
@@ -61,6 +78,12 @@ struct value size=0..
   body case 116: as_true yes
   body case 123: as_object object
   body case default: as_number number
+  body switch: next
+  body case 125: as_empty
+  body case default: as_members
+  body switch: next
+  body case 93: as_empty
+  body case default: as_elements
 
 struct yes size=4
   @0x0000   4         u8         word  big must_eq="true"

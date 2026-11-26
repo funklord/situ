@@ -143,6 +143,14 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 20 (2026-11-26):** `example/json` frames `[]` and `{}`. fuzznet's
+inbox (20261126T0642Z, its sec 1459) found AcoustID's `"results": []`
+refused: a `while` run is never empty (8.6), so `{}` was a member short of
+its five bytes. Fixed in the schema as 8.6 prescribes -- the byte after the
+brace is peeked, whitespace and all, and a closing one selects an empty arm;
+the run moved into `members`/`elements`, one more struct per nesting level
+(`[depth = 64]` is sixteen levels now). No language change.
+
 **Runs 17-19 (2026-11-24), rules over lists, folded at 96% of the week:**
 pushed through `2bf095c6`, gate g60 green, openmlx4 and fuzznet's 66
 specs passing.
