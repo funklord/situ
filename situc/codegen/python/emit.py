@@ -7447,12 +7447,22 @@ class Emitter:
 		chosen = traverse.discriminant_readable_from(
 			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}" if chosen is not None else cursor
+		# A peeked discriminant behind a lead has to have arrived, as in
+		# C's (`traverse.peeked_at_the_cursor`).
+		peeked = (traverse.peeked_at_the_cursor(struct, placement)
+		          if chosen is None else None)
+		guard  = ([f"\t\tif have < {cursor} + {peeked}:",
+		           f'\t\t\traise TruncatedError("{placement.path}:'
+		           f' incomplete", max(at, {cursor} + {peeked}))']
+		          if peeked else
+		          self._framing_guard(placement, opens, cursor, checked,
+		                              known))
 		lines = [
 			"",
 			f"\t\t# {placement.path}: the arm the discriminant selects",
 			"\t\t# frames itself -- reported by bbq-predictor against a",
 			"\t\t# variant arm, whose extent shrank (26.684).",
-			*self._framing_guard(placement, opens, cursor, checked, known),
+			*guard,
 		]
 		opened = False
 		for case, call, size, handed in plan:

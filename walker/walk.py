@@ -3249,6 +3249,25 @@ def _member_min(view: View, index: int, depth: int) -> int:
 				return left + 1
 		return at - (view.at + here)
 
+	# A VARIANT WHOSE DISCRIMINANT HAS NOT ARRIVED owes the bytes up to
+	# where it ends. `chosen_arm` reads a missing one as zero, as the four
+	# backends do, and with `default: error` that chose nothing and the
+	# variant measured zero: `peek u8 kind skip;` before its variant was
+	# whole at no bytes here and in all four (fixed 2026-11-26, with
+	# `traverse.peeked_at_the_cursor`). Only a discriminant reaching INTO
+	# the variant -- a peek at its start; one before it is owed by its own
+	# member already.
+	arms = view.image.arms.get(index)
+	if arms is not None and arms[0] not in (NONE, REMAINING):
+		try:
+			ends = (offset_bits(view, arms[0])
+			        + content_bits(view, arms[0])
+			        + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+		except (Refused, Unplaceable):
+			ends = None
+		if ends is not None and ends > here \
+				and view.at + ends > view.limit:
+			return ends - here
 	# A NESTED STRUCT or a SELECTED ARM frames itself, which is the whole
 	# of 26.684: its extent shrinks and its own minimum does not.
 	inner = _sub_view(view, index, depth)

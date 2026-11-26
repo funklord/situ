@@ -3694,6 +3694,16 @@ class Emitter:
 		chosen = traverse.discriminant_readable_from(
 			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}u" if chosen is not None else cursor
+		# A peeked discriminant behind a lead has to have arrived, as in
+		# C's (`traverse.peeked_at_the_cursor`).
+		peeked = (traverse.peeked_at_the_cursor(struct, placement)
+		          if chosen is None else None)
+		reach  = f"situ_need_u32({cursor}, {peeked}u)"
+		guard  = ([f"\t\t\tif (have < {reach}) {{",
+		           f"\t\t\t\tneed = {reach} > at ? {reach} : at;",
+		           "\t\t\t\treturn ::situ::rt::err::truncated;",
+		           "\t\t\t}"] if peeked else
+		          self._framing_guard(opens, cursor, checked, known))
 		lines = [
 			"",
 			f"\t\t/* {placement.path}: the arm the discriminant selects",
@@ -3703,7 +3713,7 @@ class Emitter:
 			"\t\t\tstd::uint32_t part = 0;",
 			"\t\t\t::situ::rt::err e = ::situ::rt::err::ok;",
 			"",
-			*self._framing_guard(opens, cursor, checked, known),
+			*guard,
 		]
 		opened = False
 		for case, call, size, handed in plan:

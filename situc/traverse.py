@@ -1152,6 +1152,34 @@ def discriminant_readable_from(struct: ResolvedStruct, placement: Placement,
 	return end
 
 
+def peeked_at_the_cursor(struct: ResolvedStruct,
+		placement: Placement) -> int | None:
+	"""The bytes a variant's discriminant reads where framing's cursor
+	stands, when `discriminant_readable_from` cannot say where it ends.
+
+	`peek u8 kind skip;` straight before its variant: the lead puts the
+	discriminant at a scanned offset, and the peek spans nothing, so it is
+	the variant's first byte -- at the cursor. `required` guarded the
+	variant with `have < pos` and so read a discriminant that had not
+	arrived as zero; with `default: error` no arm matched, and an empty
+	buffer, or one of whitespace alone, was a whole message in all four
+	backends (found 2026-11-24, fixed 2026-11-26).
+	"""
+	if placement.kind != "variant" or not placement.discriminant:
+		return None
+	members = own_members(struct)
+	at = next((index for index, held in enumerate(members)
+	           if held.path == placement.path), None)
+	if not at:
+		return None
+	held = members[at - 1]
+	if not held.peek or held.offset_bits is not None \
+			or held.scalar is None or held.varint is not None \
+			or local_name(struct, held) != placement.discriminant.strip():
+		return None
+	return -(-held.scalar.bits // BITS_PER_BYTE)
+
+
 def _fields_end(struct: ResolvedStruct, source: str,
 		constants: Container[str]) -> int | None:
 	"""Where the last byte an expression reads ends, if it reads only

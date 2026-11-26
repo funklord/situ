@@ -150,6 +150,16 @@ its five bytes. Fixed in the schema as 8.6 prescribes -- the byte after the
 brace is peeked, whitespace and all, and a closing one selects an empty arm;
 the run moved into `members`/`elements`, one more struct per nesting level
 (`[depth = 64]` is sixteen levels now). No language change.
+Closed beside it: `required` over a peeked discriminant behind a lead
+(`peek u8 kind skip;`) answered whole for an empty or all-whitespace
+buffer, the byte read as zero and `default: error` choosing nothing. The
+four backends and the Python walker's `frame_min` now guard the byte's
+arrival at the cursor (`traverse.peeked_at_the_cursor`), answering
+`max(at, pos + width)` -- never above the truth, since an overstated need
+stalls a framer for good. The walker adds the width to its sum instead,
+which is the same answer wherever nothing fixed follows the variant in
+its struct -- true of every corpus shape.
+Five corpus structs take the guard: json's three, sexpr's, matroska's.
 
 **Runs 17-19 (2026-11-24), rules over lists, folded at 96% of the week:**
 pushed through `2bf095c6`, gate g60 green, openmlx4 and fuzznet's 66
@@ -634,16 +644,6 @@ both walkers and the dissector. What a user cannot yet do is listed under
   the size is known nonzero; 33 `pos` scopes per generated function. Each
   is noise in a consumer build, not behaviour -- taken up again when a
   consumer reports one.
-- Framing an element whose discriminant is peeked behind leading
-  whitespace (`peek u8 kind skip;`) with `default: error`: `required`
-  over a buffer holding no discriminant -- empty, or whitespace alone --
-  answers whole at what it has, since the discriminant reads as zero and
-  no arm is chosen; the four agree, and are wrong. Its consequence, a
-  `while` run of it spinning in every backend, is closed: a run's framing
-  ends at an element of nothing (2026-11-24). The element's own answer
-  wants the discriminant's arrival guarded where its offset is not
-  constant, as it already is where it is; no corpus schema has the shape
-  (json and sexpr give the variant a default arm), so it waits for one.
 - The dissector computes a `let` in `UInt64` (26.1112), over a field of up
   to 64 bits, and a `when` reads one of any width (26.1133, 26.1151); a
   `let` over a text number or a token is declined, and so is a rule that

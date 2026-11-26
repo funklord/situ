@@ -7307,6 +7307,20 @@ class Emitter:
 		chosen = traverse.discriminant_readable_from(
 			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}u" if chosen is not None else cursor
+		# A peeked discriminant behind a lead is at the cursor and has to
+		# have ARRIVED, not merely its offset: guarded at `have < pos` it
+		# read as zero, and with `default: error` an empty buffer was whole
+		# (`traverse.peeked_at_the_cursor`). The answer is never below
+		# `at`, nor below the byte, and never above either.
+		peeked = (traverse.peeked_at_the_cursor(struct, placement)
+		          if chosen is None else None)
+		arrived = f"situ_need_u32({cursor}, {peeked}u)"
+		guard  = ([f"\t\tif (have < {arrived}) {{",
+		           f"\t\t\t*need = {arrived} > at ? {arrived} : at;",
+		           "\t\t\treturn SITU_ERR_TRUNCATED;",
+		           "\t\t}"] if peeked else
+		          self._framing_guard(opens, cursor, checked, known,
+		                              established))
 		lines = [
 			"",
 			f"\t/* {placement.path}: the arm the discriminant selects frames",
@@ -7317,7 +7331,7 @@ class Emitter:
 			"\t\tuint32_t   part = 0u;",
 			"\t\tsitu_err_t e = SITU_OK;",
 			"",
-			*self._framing_guard(opens, cursor, checked, known, established),
+			*guard,
 		]
 		opened = False
 		for case, call, size, handed in plan:
