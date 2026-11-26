@@ -11469,7 +11469,12 @@ class Emitter:
 			if not any(_REFUSES.match(one) for one in lines):
 				groups.append(("", lines))
 				continue
-			groups.append((bare_name(local_name(struct, entry.placement)),
+			# `c_name`, not `bare_name`: the id is `check_<member>`, which
+			# no member name makes a keyword, and the escape published
+			# `check_class_` for a field named `class` -- ELF's EI_CLASS --
+			# where the other three name it `class` (found adding
+			# example/elf, 2026-11-26).
+			groups.append((c_name(local_name(struct, entry.placement)),
 			               lines))
 		return groups
 
