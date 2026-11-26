@@ -28,7 +28,7 @@ from situc.codegen.c.emit import Emitter
 from situc.codegen.c.names import ident, macro, header_guard
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import frameable
+from situc.traverse import frameable, reaches_a_cycle
 from situc import __version__
 
 __all__ = ["framed_structs", "generate"]
@@ -154,7 +154,12 @@ def _one(struct: ResolvedStruct, prefix: str,
 		" *",
 		" * SITU_ERR_BOUNDS where a whole one needs more than this buffer can",
 		" * ever hold. That never becomes true by waiting, so it is reported",
-		" * rather than left to spin on a stream that will never satisfy it. */",
+		" * rather than left to spin on a stream that will never satisfy it.",
+		*([" * SITU_ERR_CONSTRAINT or SITU_ERR_DEPTH where the message nests"
+		   " past",
+		   " * its bound, which no byte to come can mend (26.1174)."]
+		  if reaches_a_cycle(emitter.resolved.structs, struct.name) else []),
+		" */",
 		f"static inline situ_err_t {name}_next({name}_t *reader,",
 		"                                     situ_msg_t *msg, situ_view_t *out)",
 		"{",

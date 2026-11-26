@@ -108,6 +108,7 @@ from situc.traverse import (arm_remaining_strides,
 	indexed_elements,
 	is_counted_run,
 	is_own_member,
+	carries_framing_depth,
 	descends,
 	enters_a_cycle,
 	handed_range,
@@ -7335,7 +7336,7 @@ class Emitter:
 				f"{self._version_tail(trailing, 'probe')});",
 			])
 
-		return [
+		return self._bounded_framing(struct, [
 			*head,
 			# `mut` only where something adds to it. A schema whose only
 			# variable member is a versioned one resolves entirely to
@@ -7376,7 +7377,73 @@ class Emitter:
 			"\t\t}",
 			"\t\tsitu_rt::Framing::Complete(at)",
 			"\t}",
+		])
+
+	def _bounded_framing(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""`required` carrying the depth, for a recursive struct (26.1174).
+
+		C's `_required_at`: each level of the cycle is a call, so a hostile
+		message nested a frame per byte until the stack ran out, where
+		`validate` refuses it at the format's bound. `required_at` takes the
+		depth and answers `Refused` past the bound; `required` starts it at
+		zero.
+		"""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return lines
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
+		refused  = "Depth" if limit < declared else "Constraint"
+		signed   = (f"\tpub fn required(data: &[u8]"
+		            f"{self._argument_signature(struct)}) -> situ_rt::Framing {{")
+		have     = "\t\tlet have = data.len();"
+		if lines.count(signed) != 1 or lines.count(have) != 1:
+			return lines
+		out: list[str] = []
+		for line in lines:
+			if line == signed:
+				out.append(f"\tpub fn required_at(data: &[u8]"
+				           f"{self._argument_signature(struct)}, depth: usize)"
+				           " -> situ_rt::Framing {")
+			elif line == have:
+				out.extend([
+					line,
+					f"\t\t// `{struct.name}` nests at most {min(declared, limit)}"
+					" deep and each level is",
+					"\t\t// a call: past the bound the message is refused,"
+					" which no",
+					"\t\t// further byte can change, and the stack stays"
+					" bounded (20.1).",
+					f"\t\tif depth > {min(declared, limit)} {{",
+					f"\t\t\treturn situ_rt::Framing::Refused(Error::{refused});",
+					"\t\t}",
+				])
+			else:
+				out.append(line)
+		return [
+			*out,
+			"",
+			"\t/// As `required_at`, from the top: `Refused` where the message",
+			"\t/// nests past its bound.",
+			signed,
+			f"\t\tSelf::required_at(data{self._argument_fields(struct)}, 0)",
+			"\t}",
 		]
+
+	def _framed_call(self, struct: ResolvedStruct,
+			inner: ResolvedStruct) -> str:
+		"""The `required` a framing step calls: C's `_framed_call`, through
+		the same `descends` (26.1174)."""
+		if is_recursive(self.resolved.structs, struct.name) \
+				and carries_framing_depth(self.resolved.structs, inner) \
+				and descends(self.resolved.structs, struct, inner.name):
+			return f"{_pascal(inner.name)}::required_at"
+		return f"{_pascal(inner.name)}::required"
+
+	def _deeper(self, struct: ResolvedStruct, inner: ResolvedStruct) -> str:
+		"""The depth `_framed_call`'s `required_at` is handed."""
+		return (", depth + 1" if self._framed_call(struct, inner)
+		        .endswith("::required_at") else "")
 
 	def _frames_itself(self, struct: ResolvedStruct) -> bool:
 		"""Whether `required` is emitted for this struct at all."""
@@ -7428,10 +7495,12 @@ class Emitter:
 			"\t\t// itself. Its EXTENT shrinks when the bytes run out, so",
 			"\t\t// adding that reported a complete message (26.684).",
 			*self._framing_guard(placement, cursor, cursor, checked, known),
-			f"\t\tlet len_ = match {_pascal(inner.name)}"
-			f"::required(&data[{cursor}..]"
-			f"{self._child_args(struct, placement, 'probe')}) {{",
+			f"\t\tlet len_ = match {self._framed_call(struct, inner)}"
+			f"(&data[{cursor}..]"
+			f"{self._child_args(struct, placement, 'probe')}"
+			f"{self._deeper(struct, inner)}) {{",
 			"\t\t\tsitu_rt::Framing::Complete(n) => n,",
+			"\t\t\tsitu_rt::Framing::Refused(e) => return situ_rt::Framing::Refused(e),",
 			"\t\t\tsitu_rt::Framing::Need(n) =>",
 			"\t\t\t\treturn situ_rt::Framing::Need("
 			"situ_rt::need(at, n)),",
@@ -7483,8 +7552,9 @@ class Emitter:
 					and not is_counted_run(self.resolved.structs, member) \
 					and frameable(self.resolved.structs, inner) \
 					and self._frames_itself(inner):
-				plan.append((arm, _pascal(inner.name), "",
-				             self._child_args(struct, member, "probe")))
+				plan.append((arm, self._framed_call(struct, inner), "",
+				             self._child_args(struct, member, "probe")
+				             + self._deeper(struct, inner)))
 			elif member.is_fixed_size:
 				plan.append((arm, None,
 				             str(member.size_bits // BITS_PER_BYTE), ""))
@@ -7533,9 +7603,10 @@ class Emitter:
 				lines.append(f"\t\t\tlen_ = {size};")
 			else:
 				lines.extend([
-					f"\t\t\tlen_ = match {call}::required"
+					f"\t\t\tlen_ = match {call}"
 					f"(&data[{cursor}.min(data.len())..]{handed}) {{",
 					"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
+					"\t\t\t\tsitu_rt::Framing::Refused(e) => return situ_rt::Framing::Refused(e),",
 					"\t\t\t\tsitu_rt::Framing::Need(n) =>",
 					"\t\t\t\t\treturn situ_rt::Framing::Need("
 					"situ_rt::need(at, n)),",
@@ -7596,6 +7667,8 @@ class Emitter:
 			return None
 
 		inner = _pascal(element.name)
+		called = self._framed_call(struct, element)
+		deeper = self._deeper(struct, element)
 		# THE STRUCTURAL MINIMUM, not `SIZE_MIN` (26.724). `SIZE_MIN` is
 		# `layout.size_bytes` and is derived from the declared constraints,
 		# so quoting it for the elements this walk has not reached made the
@@ -7614,8 +7687,9 @@ class Emitter:
 			"\t\t\tif have < pos {",
 			"\t\t\t\treturn situ_rt::Framing::Need(at);",
 			"\t\t\t}",
-			f"\t\t\tlet part = match {inner}::required(&data[pos..]{self._child_args(struct, placement, 'probe')}) {{",
+			f"\t\t\tlet part = match {called}(&data[pos..]{self._child_args(struct, placement, 'probe')}{deeper}) {{",
 			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
+			"\t\t\t\tsitu_rt::Framing::Refused(e) => return situ_rt::Framing::Refused(e),",
 			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
 			"\t\t\t\t\treturn situ_rt::Framing::Need("
 				"situ_rt::need(at, n)),",
@@ -7686,8 +7760,9 @@ class Emitter:
 				"\t\t\t\treturn situ_rt::Framing::Need(situ_rt::need(at,",
 				f"\t\t\t\t\tsitu_rt::need_mul({count} - seen, {floor})));",
 				"\t\t\t}",
-				f"\t\t\tlet part = match {inner}::required(&data[pos..]{self._child_args(struct, placement, 'probe')}) {{",
+				f"\t\t\tlet part = match {called}(&data[pos..]{self._child_args(struct, placement, 'probe')}{deeper}) {{",
 				"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
+				"\t\t\t\tsitu_rt::Framing::Refused(e) => return situ_rt::Framing::Refused(e),",
 				"\t\t\t\tsitu_rt::Framing::Need(n) => {",
 				"\t\t\t\t\t// The element is short, so its own lower bound"
 				" is part",

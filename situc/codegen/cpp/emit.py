@@ -114,7 +114,9 @@ from situc.traverse import (arm_remaining_strides,
 	invalidating_members,
 	is_counted_run,
 	is_own_member,
+	carries_framing_depth,
 	descends,
+	reaches_a_cycle,
 	enters_a_cycle,
 	handed_range,
 	is_recursive,
@@ -3544,7 +3546,7 @@ class Emitter:
 				f"\t\tat = situ_need_u32(at, {self._version_tail(trailing)});",
 			])
 
-		return [
+		return self._bounded_framing(struct, [
 			*head,
 			f"\t\tstd::uint32_t at = {constant + sum(floors)}u;",
 			*([f"\t\tstd::uint32_t {cursor} = {gaps[0]}u;"]
@@ -3564,7 +3566,103 @@ class Emitter:
 			"\t\t                  : ::situ::rt::err::truncated;",
 			"\t}",
 			*tail,
+		])
+
+	def _bounded_framing(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""`framed` and `required` carrying the depth, for a recursive struct.
+
+		C's `_required_at` (26.1174): each level of the cycle is a call, so
+		a hostile message nested a frame per byte until the stack ran out,
+		where `validate` refuses it at the format's bound. `framed_at` and
+		`required_at` take the depth and refuse past the bound; `framed` and
+		`required` start it at zero, so a caller sees no change.
+		"""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return lines
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
+		refused  = "depth" if limit < declared else "constraint"
+		signed   = ("\t[[nodiscard]] ::situ::rt::err framed(std::uint32_t &need)"
+		            " const noexcept")
+		have     = "\t\tconst std::uint32_t have = raw_.limit;"
+		asked    = "\t[[nodiscard]] static ::situ::rt::err required(" \
+		           "const std::uint8_t *data,"
+		if not all(lines.count(line) == 1 for line in (signed, have, asked)):
+			return lines
+		top = lines.index(asked)
+		while top > 0 and lines[top - 1].startswith("\t/*") \
+				or top > 0 and lines[top - 1].startswith("\t *"):
+			top -= 1
+		start = top
+		end   = lines.index("\t}", lines.index(asked)) + 1
+		call  = lines[start:end]
+		at    = [line.replace("required(", "required_at(")
+		             .replace("std::uint32_t &need) noexcept",
+		                      "std::uint32_t &need, std::uint32_t depth) noexcept")
+		             .replace(".framed(need);", ".framed_at(need, depth);")
+		         for line in call if not line.startswith("\t/*")
+		         and not line.startswith("\t *")]
+		out: list[str] = []
+		for line in lines[:start]:
+			if line == signed:
+				out.append("\t[[nodiscard]] ::situ::rt::err framed_at("
+				           "std::uint32_t &need, std::uint32_t depth)"
+				           " const noexcept")
+			elif line == have:
+				out.extend([
+					line,
+					"",
+					f"\t\t/* `{struct.name}` nests at most {min(declared, limit)}"
+					" deep and each level is a",
+					"\t\t * call: past the bound the message is refused,"
+					" which no further",
+					"\t\t * byte can change, and the stack stays bounded"
+					" (20.1, 26.1174). */",
+					f"\t\tif (depth > {min(declared, limit)}u) {{",
+					"\t\t\tneed = have;",
+					f"\t\t\treturn ::situ::rt::err::{refused};",
+					"\t\t}",
+				])
+			else:
+				out.append(line)
+		return [
+			*out,
+			"",
+			f"\t/* As `framed_at`, from the top: `{refused}` where the message"
+			" nests",
+			"\t * past its bound. */",
+			signed,
+			"\t{",
+			"\t\treturn framed_at(need, 0u);",
+			"\t}",
+			*call,
+			"",
+			"\t/* `required` one level of the cycle down (26.1174). */",
+			*at,
+			*lines[end:],
 		]
+
+	def _framed_call(self, struct: ResolvedStruct,
+			inner: ResolvedStruct) -> tuple[str, str]:
+		"""The `required` a framing step calls, and the depth it hands on:
+		C's `_framed_call`, through the same `descends` (26.1174)."""
+		call = f"::{self.namespace}::{class_name(inner)}::required"
+		if is_recursive(self.resolved.structs, struct.name) \
+				and carries_framing_depth(self.resolved.structs, inner) \
+				and descends(self.resolved.structs, struct, inner.name):
+			return f"{call}_at", ", depth + 1u"
+		return call, ""
+
+	def _refusal_passed(self, inner: ResolvedStruct, indent: str) -> list[str]:
+		"""C's `_refusal_passed`: a nested refusal handed up (26.1174)."""
+		if not reaches_a_cycle(self.resolved.structs, inner.name):
+			return []
+		return [f"{indent}if (e == ::situ::rt::err::constraint"
+		        " || e == ::situ::rt::err::depth) {",
+		        f"{indent}\tneed = have;",
+		        f"{indent}\treturn e;",
+		        f"{indent}}}"]
 
 	def _frames_itself(self, struct: ResolvedStruct) -> bool:
 		"""Whether `required` is emitted for this struct at all.
@@ -3614,7 +3712,7 @@ class Emitter:
 				or not self._frames_itself(inner):
 			return None
 
-		call = f"::{self.namespace}::{class_name(inner)}::required"
+		call, deeper = self._framed_call(struct, inner)
 		return [
 			"",
 			f"\t\t/* {placement.path}: a nested `{inner.name}` frames",
@@ -3627,7 +3725,8 @@ class Emitter:
 			f"\t\t\tconst ::situ::rt::err e = {call}(",
 			f"\t\t\t\tsitu_base(raw_) + {cursor},",
 			f"\t\t\t\tsitu_remaining_u32(have, {cursor})"
-			f"{self._child_args(struct, placement)}, part);",
+			f"{self._child_args(struct, placement)}, part{deeper});",
+			*self._refusal_passed(inner, "\t\t\t"),
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -3673,7 +3772,7 @@ class Emitter:
 
 		# What the arm hands its type travels with the call, as in C's: the
 		# four other `required` sites here pass it (26.904).
-		plan: list[tuple[object, str | None, str, str]] = []
+		plan: list[tuple[object, str | None, str, str, str, list[str]]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
 			if inner is not None and not member.delimiters \
@@ -3681,16 +3780,17 @@ class Emitter:
 					and not is_counted_run(self.resolved.structs, member) \
 					and frameable(self.resolved.structs, inner) \
 					and self._frames_itself(inner):
-				plan.append((arm,
-				             f"::{self.namespace}::{class_name(inner)}"
-				             "::required", "",
-				             self._child_args(struct, member)))
+				called, deeper = self._framed_call(struct, inner)
+				plan.append((arm, called, "",
+				             self._child_args(struct, member), deeper,
+				             self._refusal_passed(inner, "\t\t\t\t")))
 			elif member.is_fixed_size:
 				plan.append((arm, None,
-				             f"{member.size_bits // BITS_PER_BYTE}u", ""))
+				             f"{member.size_bits // BITS_PER_BYTE}u", "", "",
+				             []))
 			else:
 				return None
-		if not any(call for _, call, _, _ in plan):
+		if not any(call for _, call, _, _, _, _ in plan):
 			return None
 
 		disc  = self._disc(struct, placement)
@@ -3722,7 +3822,7 @@ class Emitter:
 			*guard,
 		]
 		opened = False
-		for case, call, size, handed in plan:
+		for case, call, size, handed, deeper, passed in plan:
 			value = getattr(case, "value", None)
 			if value is None:
 				head = "\t\t\t} else {" if opened else "\t\t\t{"
@@ -3738,7 +3838,8 @@ class Emitter:
 				lines.extend([
 					f"\t\t\t\te = {call}(situ_base(raw_) + {cursor},",
 					"\t\t\t\t\tsitu_remaining_u32(have,"
-					f" {cursor}){handed}, part);",
+					f" {cursor}){handed}, part{deeper});",
+					*passed,
 					"\t\t\t\tif (e != ::situ::rt::err::ok) {",
 					"\t\t\t\t\tneed = situ_need_u32(at, part);",
 					"\t\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -3786,8 +3887,9 @@ class Emitter:
 			return None
 
 		inner = class_name(element)
-		call  = (f"\t\t\tconst ::situ::rt::err e = ::{self.namespace}::{inner}"
-		         "::required(")
+		called, deeper = self._framed_call(struct, element)
+		passed = self._refusal_passed(element, "\t\t\t")
+		call  = f"\t\t\tconst ::situ::rt::err e = {called}("
 		read  = [
 			# The guard above covers reading the LENGTH; this covers using
 			# it. `at` has since been advanced by a length the message
@@ -3802,7 +3904,8 @@ class Emitter:
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
 			"\t\t\t}",
 			call + "situ_base(raw_) + pos,",
-			f"\t\t\t\tsitu_remaining_u32(have, pos){self._child_args(struct, placement)}, part);",
+			f"\t\t\t\tsitu_remaining_u32(have, pos){self._child_args(struct, placement)}, part{deeper});",
+			*passed,
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -3877,7 +3980,8 @@ class Emitter:
 				"\t\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t\t}",
 				call + "situ_base(raw_) + pos,",
-				f"\t\t\t\tsitu_remaining_u32(have, pos){self._child_args(struct, placement)}, part);",
+				f"\t\t\t\tsitu_remaining_u32(have, pos){self._child_args(struct, placement)}, part{deeper});",
+				*passed,
 				"\t\t\tif (e != ::situ::rt::err::ok) {",
 				"\t\t\t\t/* The element is short, so its own lower bound is"
 				" part",

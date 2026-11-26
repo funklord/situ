@@ -110,6 +110,7 @@ from situc.traverse import (arm_remaining_strides,
 	invalidating_members,
 	is_counted_run,
 	is_own_member,
+	carries_framing_depth,
 	descends,
 	enters_a_cycle,
 	handed_range,
@@ -7425,7 +7426,7 @@ class Emitter:
 				f"{self._version_tail(trailing, 'probe')}, 0xFFFFFFFF)",
 			])
 
-		return [
+		return self._bounded_framing(struct, [
 			*head,
 			f"\t\tat = {constant + sum(floors)}",
 			*([f"\t\t{cursor} = {gaps[0]}"]
@@ -7455,7 +7456,70 @@ class Emitter:
 			"\t\tif have < at:",
 			f'\t\t\traise TruncatedError("{struct.name}: incomplete", at)',
 			"\t\treturn at",
+		])
+
+	def _bounded_framing(self, struct: ResolvedStruct,
+			lines: list[str]) -> list[str]:
+		"""`required` carrying the depth, for a recursive struct (26.1174).
+
+		C's `_required_at`: each level of the cycle is a call, so a hostile
+		message nested a frame per byte -- here until `RecursionError`,
+		where `validate` refuses it at the format's bound. `required_at`
+		takes the depth and refuses past the bound; `required` starts it at
+		zero.
+		"""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return lines
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
+		refused  = "DepthError" if limit < declared else "ConstraintError"
+		bound    = min(declared, limit)
+		signed   = (f"\tdef required(cls, data: bytes | bytearray | memoryview"
+		            f"{self._argument_signature(struct)}) -> int:")
+		have     = "\t\thave = len(data)"
+		if lines.count(signed) != 1 or lines.count(have) != 1:
+			return lines
+		out: list[str] = []
+		for line in lines:
+			if line == signed:
+				out.append(f"\tdef required_at(cls, data: bytes | bytearray"
+				           f" | memoryview{self._argument_signature(struct)},"
+				           " depth: int) -> int:")
+			elif line == have:
+				out.extend([
+					line,
+					f"\t\t# `{struct.name}` nests at most {bound} deep and each"
+					" level is a call:",
+					"\t\t# past the bound the message is refused, which no"
+					" further byte",
+					"\t\t# can change, and the stack stays bounded (20.1).",
+					f"\t\tif depth > {bound}:",
+					f'\t\t\traise {refused}("{struct.name}: nested past'
+					f' {bound} levels")',
+				])
+			else:
+				out.append(line)
+		given = "".join(f", {self._argument_ident(one)}={self._argument_ident(one)}"
+		                for one in self._arguments(struct))
+		return [
+			*out,
+			"",
+			"\t@classmethod",
+			signed,
+			'\t\t"""`required_at` from the top: refused where the message nests',
+			'\t\tpast its bound."""',
+			f"\t\treturn cls.required_at(data{given}, depth=0)",
 		]
+
+	def _framed_call(self, struct: ResolvedStruct,
+			inner: ResolvedStruct) -> tuple[str, str]:
+		"""The `required` a framing step calls, and the depth it hands on:
+		C's `_framed_call`, through the same `descends` (26.1174)."""
+		if is_recursive(self.resolved.structs, struct.name) \
+				and carries_framing_depth(self.resolved.structs, inner) \
+				and descends(self.resolved.structs, struct, inner.name):
+			return f"{py_name(inner.name)}.required_at", ", depth=depth + 1"
+		return f"{py_name(inner.name)}.required", ""
 
 	def _gap_step(self, cursor: str | None, gaps: list[int] | None,
 			index: int) -> list[str]:
@@ -7499,8 +7563,9 @@ class Emitter:
 			"\t\t# adding that reported a complete message (26.684).",
 			*self._framing_guard(placement, cursor, cursor, checked, known),
 			"\t\ttry:",
-			f"\t\t\tlen_ = {py_name(inner.name)}.required"
-			f"(data[{cursor}:]{self._child(struct, placement, 'probe')[1]})",
+			f"\t\t\tlen_ = {self._framed_call(struct, inner)[0]}"
+			f"(data[{cursor}:]{self._child(struct, placement, 'probe')[1]}"
+			f"{self._framed_call(struct, inner)[1]})",
 			"\t\texcept TruncatedError as short:",
 			f'\t\t\traise TruncatedError("{placement.path}: incomplete",',
 			"\t\t\t\tmin(at + short.needed, 0xFFFFFFFF)) from None",
@@ -7562,8 +7627,9 @@ class Emitter:
 					and frameable(self.resolved.structs, inner):
 				# What the arm hands its type travels with the call, as in
 				# C's (26.904).
-				plan.append((arm, py_name(inner.name), "",
-				             self._child(struct, member, "probe")[1]))
+				called, deeper = self._framed_call(struct, inner)
+				plan.append((arm, called, "",
+				             self._child(struct, member, "probe")[1] + deeper))
 			elif member.is_fixed_size:
 				plan.append((arm, None,
 				             str(member.size_bits // BITS_PER_BYTE), ""))
@@ -7628,7 +7694,7 @@ class Emitter:
 			else:
 				lines.extend([
 					"\t\t\ttry:",
-					f"\t\t\t\tlen_ = {call}.required(data[{cursor}:]{handed})",
+					f"\t\t\t\tlen_ = {call}(data[{cursor}:]{handed})",
 					"\t\t\texcept TruncatedError as short:",
 					f'\t\t\t\traise TruncatedError("{placement.path}:'
 					' incomplete",',
@@ -7676,6 +7742,7 @@ class Emitter:
 			return None
 
 		inner = py_name(element.name)
+		called, deeper = self._framed_call(struct, element)
 		# THE STRUCTURAL MINIMUM, not `SIZE_MIN` (26.724). `SIZE_MIN` is
 		# `layout.size_bytes` and is derived from the declared constraints,
 		# so quoting it for the elements this walk has not reached made the
@@ -7695,7 +7762,7 @@ class Emitter:
 			'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
 				'f"{have} here", at)',
 			"\t\t\ttry:",
-			f"\t\t\t\tpart = {inner}.required(data[pos:]{self._child(struct, placement, 'probe')[1]})",
+			f"\t\t\t\tpart = {called}(data[pos:]{self._child(struct, placement, 'probe')[1]}{deeper})",
 			"\t\t\texcept TruncatedError as short:",
 			f'\t\t\t\traise TruncatedError("{placement.path}: incomplete",',
 			"\t\t\t\t\tmin(at + short.needed, 0xFFFFFFFF)) from None",
@@ -7753,7 +7820,7 @@ class Emitter:
 				'\t\t\t\traise TruncatedError(f"{owed} bytes needed, "'
 					'f"{have} here", owed)',
 				"\t\t\ttry:",
-				f"\t\t\t\tpart = {inner}.required(data[pos:]{self._child(struct, placement, 'probe')[1]})",
+				f"\t\t\t\tpart = {called}(data[pos:]{self._child(struct, placement, 'probe')[1]}{deeper})",
 				"\t\t\texcept TruncatedError as short:",
 				"\t\t\t\t# The element is short, so its own lower bound is"
 				" part of",

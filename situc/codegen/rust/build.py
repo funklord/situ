@@ -666,6 +666,7 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        "&situ_out[..situ_at]) {",
 		        "\t\tsitu_rt::Framing::Complete(n) | situ_rt::Framing::Need(n)"
 		        " => n,",
+		        "\t\tsitu_rt::Framing::Refused(e) => return Err(e),",
 		        "\t};",
 		        "\tif situ_end < situ_at {",
 		        "\t\treturn Err(Error::Constraint);", "\t}",

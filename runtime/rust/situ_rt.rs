@@ -95,6 +95,10 @@ pub enum Framing {
 	/// Not yet. At least this many bytes are needed in total -- not this
 	/// many more.
 	Need(usize),
+	/// Never: the bytes so far already break the format -- a recursive
+	/// struct nested past its `[depth]` (`Constraint`) or past this build's
+	/// `[limit]` (`Depth`) -- and no further byte can mend that (26.1174).
+	Refused(Error),
 }
 
 /// Where a walk over a run stands, for a run's `_next` (0060).

@@ -149,6 +149,11 @@ shape everywhere in SQLite, protobuf, wasm, DWARF and QUIC. It keeps the
 next element's start, so no element is read twice, and a frame-sized run
 drops its count, whose walk is the one being resumed.
 
+Also run 26: `required` refuses a message nested past its bound (26.1174),
+fuzznet's 100000 `[` having overflowed the stack framing it; CONSTRAINT
+past `[depth]`, DEPTH past a smaller `[limit]`, as `validate` refuses, and
+handed up through every level rather than read as short.
+
 **Run 22 (2026-11-26):** every walked run of structs has a `_next`
 cursor in the four backends (26.1172), on the holder's word, for fuzznet
 and raidcfgd's hand-written walks. Derived from each backend's own walking
@@ -10044,6 +10049,20 @@ over bit 63 needs (the first version of 26.1148 broke exactly that). This
 replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
+
+### 26.1174 `required` refuses a message nested past its bound
+
+fuzznet (inbox 20261126T1843Z) framed 100000 `[` with json's generated
+`value_required` and the process died: framing recursed a call chain per
+bracket and only `validate` spent `[depth]`. A recursive struct's
+`required` now carries the depth through `descends`, as `nesting` does,
+and refuses where `validate` does -- CONSTRAINT past `[depth]`, DEPTH past
+a smaller `[limit]` -- handing the refusal up through every level, since
+"send more" cannot mend it. Rust's `Framing` gains `Refused(Error)`. The
+record, with the extent's "the rest" rule weighed and refused (it stalls a
+framer on the parent's closing byte), is
+`doc/decision/26.1174-required-refuses-past-the-depth.md`; held in
+`test_required_holds_to_its_depth.py`.
 
 ### 26.1173 A run of varints has a cursor
 

@@ -256,6 +256,9 @@ fn ask(who: &str, f: impl Fn(&[u8]) -> situ_rt::Framing) {{
 					line.push_str(&format!(" *{{}}", k)),
 				situ_rt::Framing::Need(k) =>
 					line.push_str(&format!(" {{}}", k)),
+				// Nested past its bound (26.1174): C and C++ print the
+				// same for any other answer.
+				situ_rt::Framing::Refused(_) => line.push_str(" x"),
 			}}
 		}}
 		println!("{{}}", line);

@@ -4505,6 +4505,34 @@ def _steps_over(struct: "ResolvedStruct", own: list[Placement],
 	return steps
 
 
+def reaches_a_cycle(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
+	"""Whether `name` is recursive or holds, at any depth, one that is.
+
+	Such a struct's `required` can refuse a message too deep to frame
+	(26.1174) rather than only answer how many bytes it needs, so a caller
+	framing it has a third answer to hand on.
+	"""
+	return is_recursive(structs, name) or any(
+		is_recursive(structs, other) for other in _reaches(structs, name))
+
+
+def carries_framing_depth(structs: dict[str, "ResolvedStruct"],
+		struct: "ResolvedStruct") -> bool:
+	"""Whether this struct's `required` takes the depth (26.1174).
+
+	A recursive struct framed by walking its members does; one whose
+	`required` answers from a fixed size or a version does not, having no
+	member to descend into -- `chain [depth = 8]` whose recursion is placed
+	`at` an offset outside its frame is fixed-size, and its `required_at`
+	was declared and never defined. The four backends ask this one
+	question, so the call and the definition cannot disagree.
+	"""
+	return is_recursive(structs, struct.name) \
+		and struct.layout.register is None \
+		and not (struct.layout.is_fixed_size and struct.layout.is_byte_sized) \
+		and version_steps(struct) is None
+
+
 def enters_a_cycle(structs: dict[str, "ResolvedStruct"],
 		parent: "ResolvedStruct", placement: Placement) -> bool:
 	"""Whether a member is where a message enters a cycle from outside it."""

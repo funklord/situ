@@ -119,6 +119,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\tFraming::Complete(n) => Ok(n),",
 			"\t\t\tFraming::Need(n) if n > self.buf.len() => Err(Error::Bounds),",
 			"\t\t\tFraming::Need(_) => Err(Error::Truncated),",
+			# Nested past its bound: no read can mend it (26.1174).
+			"\t\t\tFraming::Refused(e) => Err(e),",
 			"\t\t}",
 			"\t}",
 			"",

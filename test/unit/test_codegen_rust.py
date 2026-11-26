@@ -739,6 +739,7 @@ fn main() {
 	for have in 0..whole.len() {
 		match unit::S::required(&whole[..have]) {
 			Framing::Complete(_) => panic!("complete at {}", have),
+			Framing::Refused(e) => panic!("refused at {}: {:?}", have, e),
 			Framing::Need(n) => {
 				assert!(n > have && n <= whole.len());
 				// `n` not wholly here: the minimum is all that can be said.
@@ -1816,6 +1817,7 @@ fn main() {
 	for i in 0..whole {
 		match unit::RequestHead::required(&req[..i]) {
 			situ_rt::Framing::Complete(_) => panic!("complete at {}", i),
+			situ_rt::Framing::Refused(e) => panic!("refused at {}: {:?}", i, e),
 			situ_rt::Framing::Need(n) => assert!(n > i && n <= whole,
 				"have {} need {}", i, n),
 		}

@@ -2757,6 +2757,7 @@ def _rust_framing(name: str) -> list[str]:
 		' line.push_str(&format!(" *{}", at)),',
 		"\t\t\t\tsitu_rt::Framing::Need(at) =>"
 		' line.push_str(&format!(" {}", at)),',
+		'\t\t\t\tsitu_rt::Framing::Refused(_) => line.push_str(" x"),',
 		"\t\t\t}",
 		"\t\t}",
 		'\t\tprintln!("{}", line);',
