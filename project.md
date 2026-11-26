@@ -642,6 +642,18 @@ both walkers and the dissector. What a user cannot yet do is listed under
   `install-gui`, the Debian lists naming each page (`situc.install` had
   claimed all of `usr/share/man`). lintian not rerun on a rebuilt deb.
 
+- **A cursor over a run -- the holder's (0060).** fuzznet is the second
+  consumer to write one by hand (inbox 20261126T1227Z: it walks
+  media/json.situ's `members`/`elements` with `member_extent` and
+  `sep_get`, re-stating the run's `while (sep == ',')` rule outside the
+  schema); raidcfgd was the first. `--materialize` indexes a run with a
+  `max` only, and json's have none. The cheap shape, measured in the C
+  emitter 2026-11-26: every walking `_at` opens `at = base; n = 0` and
+  yields at `n == index`, so a `_next(view, cursor, &out)` resuming from
+  the last element's start (re-reading it to ask its end condition)
+  derives from those lines with the walk shared; a run indexed by stride
+  gets none. Waits on the holder because 0060 calls it a new public API.
+
 - The rest of the cppcheck noise: 22 `e != SITU_OK` need cppcheck's
   cross-function view of an arm whose `required` cannot fail; 12
   `size == 0u` guard an empty struct's walk from looping and stay unless
