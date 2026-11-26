@@ -5937,6 +5937,19 @@ class Emitter:
 			         if descends(self.resolved.structs, struct, nested.name)
 			         else f"self.{name}_span_from(self.{name}_offset,"
 			              " count_only=True)")
+		if count is None:
+			# Declined, as C++ and Rust decline it. This emitted `return None`
+			# under `-> int` and an indexed accessor comparing an index with
+			# it, a TypeError at the first call: a run of ISO-BMFF boxes,
+			# whose `size = 0` arm runs to the end of the frame, so one box
+			# cannot be measured as an element (found 2026-11-27).
+			return lines + [
+				"",
+				f"	# No {name}_count: one `{nested.name}` cannot be measured"
+				" from its own",
+				"	# bytes, so a run of them can neither be counted nor"
+				" walked.",
+			]
 
 		lines.extend([
 			"", "\t@property", f"\tdef {name}_count(self) -> int:",
