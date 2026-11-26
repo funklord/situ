@@ -16391,6 +16391,16 @@ class Emitter:
 		"""
 		if not self._arguments(struct):
 			return False
+		# And a run of structs COUNTED by an argument: its walk stops at
+		# the count, so `_at`, `_next`, `_span_from` and `_fits` all call
+		# `_count(view, arg_n)` -- under signatures that declared nothing,
+		# in the one shape no corpus schema had until ZIP's central
+		# directory, `parameter u16 count; cd_entry entries[count];`
+		# (26.1177).
+		if placement.type_name in self.structs and placement.sized_by \
+				and any(held.name == placement.sized_by
+				        for held in self._arguments(struct)):
+			return True
 		text = "\n".join([self._child_args(struct, placement),
 		                  self._base_expression(struct, placement)])
 		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
