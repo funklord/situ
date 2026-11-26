@@ -248,6 +248,10 @@ class Part:
 		#: What a run of an argued struct hands each element, as C values
 		#: in the element's parameter order (26.1017).
 		self.args: tuple[str, ...] = ()
+		#: The argument a run's count is, by the writer's own parameter
+		#: name: nothing in the message states it, so the elements the
+		#: caller hands over must number exactly that (26.1177).
+		self.counted_by = ""
 		#: A MARKER's literals for each order (26.1007).
 		self.little: tuple[int, ...] = ()
 		self.big: tuple[int, ...] = ()
@@ -2109,6 +2113,16 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				                  else 0))
 				parts[-1].inner_count = counts
 				parts[-1].args = args or ()
+				# A count that is an ARGUMENT -- `parameter u16 count;
+				# entry entries[count];`, ELF's tables -- is written by no
+				# member, so nothing ties the elements to it: four
+				# builders wrote three program headers under `count = 2`
+				# and the reader saw two and a tail (26.1177).
+				given = next((one for one in parts if one.role == ARG
+				              and one.placement.name == held.sized_by), None)
+				if held.sized_by and given is not None:
+					parts[-1].counted_by = traverse.argument_name(
+						given.placement)
 				continue
 			if not repeats and held.type_name:
 				if not frames_itself(header,
@@ -3061,7 +3075,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# counted into a variable it never declared.
 		*([f"\tuint32_t    {COUNT} = 0u;"]
 		  if any(part.role == REPEAT
-		         and (part.digits or part.value == 1
+		         and (part.digits or part.value == 1 or part.counted_by
 		              or part.inner in [other.inner for other in parts
 		                                if other.role == SIZE])
 		         for part in parts)
@@ -3785,7 +3799,8 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"",
 			]
 		elif part.role == REPEAT:
-			counted = part.digits > 0 or part.value == 1
+			counted = part.digits > 0 or part.value == 1 \
+				or bool(part.counted_by)
 			walked  = any(other.role == SIZE and other.inner == part.inner
 			              for other in parts)
 			lines += [
@@ -3802,6 +3817,9 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				*([f"\tif ({COUNT} != {part.digits}u) {{",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
 				   "\t}"] if part.digits > 0 else []),
+				*([f"\tif ({COUNT} != (uint32_t){part.counted_by}) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if part.counted_by else []),
 				*_room(f"{part.local}_len"),
 				f"\tif ({part.local}_len != 0u) {{",
 				f"\t\tif ({part.local} == NULL) {{",

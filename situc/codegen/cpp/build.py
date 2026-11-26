@@ -514,6 +514,9 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		  else _walk(structs, part, parts)),
 		*([f"\tif (situ_count != {part.digits}u) {{", CONSTRAINT, "\t}"]
 		  if part.digits > 0 else []),
+		*([f"\tif (situ_count != static_cast<std::uint32_t>"
+		   f"({part.counted_by})) {{", CONSTRAINT, "\t}"]
+		  if part.counted_by else []),
 		*_room(f"{local}_len"),
 		f"\tif ({local}_len != 0u) {{",
 		f"\t\tif (situ_out + situ_at != {local}) {{ std::memmove(situ_out + situ_at, {local}, {local}_len); }}",

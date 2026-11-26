@@ -325,6 +325,11 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		*([f"\tif situ_count != {part.digits}:",
 		   f'\t\traise ConstraintError("{path}: not {part.digits} elements")']
 		  if part.digits > 0 else []),
+		# The count an argument states, which no member writes (26.1177).
+		*([f"\tif situ_count != {part.counted_by}:",
+		   f'\t\traise ConstraintError("{path}: not `{part.counted_by}`'
+		   ' elements")']
+		  if part.counted_by else []),
 		*_room(f"len({local})", path),
 		f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
 		f"\tsitu_at += len({local})",

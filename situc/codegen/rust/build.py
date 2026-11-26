@@ -432,6 +432,9 @@ def _repeat(part: Part, parts: list[Part]) -> list[str]:
 		*([f"\tif situ_count != {part.digits} {{",
 		   "\t\treturn Err(Error::Constraint);", "\t}"]
 		  if part.digits > 0 else []),
+		*([f"\tif situ_count != {_ident(part.counted_by)} as usize {{",
+		   "\t\treturn Err(Error::Constraint);", "\t}"]
+		  if part.counted_by else []),
 		*_room(f"{local}.len()"),
 		f"\tsitu_out[situ_at..situ_at + {local}.len()]"
 		f".copy_from_slice({local});",

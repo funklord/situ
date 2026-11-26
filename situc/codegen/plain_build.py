@@ -129,7 +129,8 @@ def walked_at_size(part: Part, parts: list[Part]) -> bool:
 
 def counts_elements(part: Part, parts: list[Part]) -> bool:
 	"""Whether the walk over this run has to keep a count."""
-	return part.digits > 0 or part.value == 1 or walked_at_size(part, parts)
+	return part.digits > 0 or part.value == 1 or bool(part.counted_by) \
+		or walked_at_size(part, parts)
 
 
 def shape(schema: ast.Schema, resolved: ResolvedSchema) -> Shape:
