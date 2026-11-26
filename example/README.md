@@ -34,6 +34,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. The first directory too, placed by `ifd_offset` and handed the header's byte order as an argument, which no marker of its own could give it. |
 | [elf](elf/) | A header naming where its tables are and how many entries each holds, the tables placed `at` those offsets and handed the counts as arguments: the shape of ELF, ZIP, PE and GPT. An executable and an object file `ld` and `as` wrote, read back by readelf. |
+| [zip](zip/) | A format read from its end: the 22-byte end record states where the central directory is and how many entries it holds, and the directory is placed there and handed the count. Archives Info-ZIP wrote, read back by CPython's `zipfile`. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |
 | [protobuf](protobuf/) | The language's hardest conformance test: the worst case on every axis, and five independent causes of non-canonicity. project.md section 9.7. |
 | [sqlite](sqlite/) | An offset table: pointers in key order, cells filling the page backwards, and the two things a real one asked for that situ has not got. Also the file header, whose sixteen-byte magic is the longest pinned byte run here. project.md section 9.3. |

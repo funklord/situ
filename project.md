@@ -10070,7 +10070,7 @@ naming where its tables are and how many entries each holds. A run of
 structs cannot be placed `at` on its own (26.1041); a struct holding it,
 placed `at` and handed the count as an argument (0050, 0068), is how the
 header's count reaches it, and that form worked when tried against
-`/bin/true` and readelf, and on a `zipfile` archive (ZIP not added yet).
+`/bin/true` and readelf, and on a `zipfile` archive.
 `example/elf` carries it, with an executable and an object file `ld` and
 `as` wrote as vectors. Two faults surfaced at once:
 
@@ -10081,6 +10081,15 @@ header's count reaches it, and that form worked when tried against
   Held in `test_a_counted_argument_is_held_by_the_builder.py`.
 - **C++ named a check id with the accessor's keyword escape**:
   `check_class_` for ELF's `class`, where the other three say `class`.
+
+`example/zip` followed, read from its end: the 22-byte end record places
+the central directory and states its count. It found a third fault, C's
+walk of a run of variable structs counted by an argument declaring no
+argument, and a limit: the packed image cannot name a field of a struct
+placed after a run of unknown length (`end.total_entries` is
+"unencodable"), so the schema states the end record's fields in
+`archive` itself. Lifting that needs an opcode reading a field at a
+member's dynamic offset, in the packer and both walkers -- open.
 
 ### 26.1176 Python reads a variant's discriminant once per chain
 

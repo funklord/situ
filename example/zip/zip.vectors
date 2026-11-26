@@ -1,0 +1,42 @@
+# Golden vectors for the ZIP worked example.
+#
+# Laid out by Info-ZIP's zip 3.0, never by situ, from two small text files
+# dated 2026-01-01 00:00 UTC:
+#
+#   printf 'situ\n' > a.txt; printf 'hello, zip\n' > b.txt
+#   zip -X -0 stored.zip a.txt b.txt   (stored, no extra fields: 210 bytes)
+#   zip -0 extra.zip a.txt             (stored, Info-ZIP's timestamp and
+#                                       Unix uid/gid extra fields: 165 bytes)
+#
+# The expected values are CPython's `zipfile`'s reading of the same bytes,
+# and `zipinfo -v` agrees: a second reader, not situ's own.
+
+# Two entries, stored. The directory is 102 bytes at 86.
+archive stored 50 4B 03 04 0A 00 00 00 00 00 00 08 21 5C AA 71 1B DF 05 00 00 00 05 00 00 00 05 00 00 00 61 2E 74 78 74 73 69 74 75 0A 50 4B 03 04 0A 00 00 00 00 00 00 08 21 5C 1B 38 72 CB 0B 00 00 00 0B 00 00 00 05 00 00 00 62 2E 74 78 74 68 65 6C 6C 6F 2C 20 7A 69 70 0A 50 4B 01 02 1E 03 0A 00 00 00 00 00 00 08 21 5C AA 71 1B DF 05 00 00 00 05 00 00 00 05 00 00 00 00 00 00 00 00 00 00 00 B4 81 00 00 00 00 61 2E 74 78 74 50 4B 01 02 1E 03 0A 00 00 00 00 00 00 08 21 5C 1B 38 72 CB 0B 00 00 00 0B 00 00 00 05 00 00 00 00 00 00 00 00 00 00 00 B4 81 28 00 00 00 62 2E 74 78 74 50 4B 05 06 00 00 00 00 02 00 02 00 66 00 00 00 56 00 00 00 00 00
+	total_entries = 2
+	disk_entries  = 2
+	cd_size       = 102
+	cd_offset     = 86
+	comment_len   = 0
+
+# One entry whose central record carries 24 bytes of extra fields.
+archive extra 50 4B 03 04 0A 00 00 00 00 00 00 08 21 5C AA 71 1B DF 05 00 00 00 05 00 00 00 05 00 1C 00 61 2E 74 78 74 55 54 09 00 03 00 B9 55 69 00 B9 55 69 75 78 0B 00 01 04 E8 03 00 00 04 E8 03 00 00 73 69 74 75 0A 50 4B 01 02 1E 03 0A 00 00 00 00 00 00 08 21 5C AA 71 1B DF 05 00 00 00 05 00 00 00 05 00 18 00 00 00 00 00 00 00 00 00 B4 81 00 00 00 00 61 2E 74 78 74 55 54 05 00 03 00 B9 55 69 75 78 0B 00 01 04 E8 03 00 00 04 E8 03 00 00 50 4B 05 06 00 00 00 00 01 00 01 00 4B 00 00 00 44 00 00 00 00 00
+	total_entries = 1
+	cd_size       = 75
+	cd_offset     = 68
+
+# The stored archive's end record alone.
+end_record stored_end 50 4B 05 06 00 00 00 00 02 00 02 00 66 00 00 00 56 00 00 00 00 00
+	total_entries = 2
+	cd_size       = 102
+	cd_offset     = 86
+
+# Its first central entry: a.txt, five bytes, CRC as zipfile computes it.
+cd_entry first 50 4B 01 02 1E 03 0A 00 00 00 00 00 00 08 21 5C AA 71 1B DF 05 00 00 00 05 00 00 00 05 00 00 00 00 00 00 00 00 00 00 00 B4 81 00 00 00 00 61 2E 74 78 74
+	method       = 0
+	crc          = 3743117738
+	compressed   = 5
+	uncompressed = 5
+	name_len     = 5
+	extra_len    = 0
+	local_offset = 0

@@ -1,0 +1,102 @@
+// ZIP, the archive under .jar, .docx, .apk, .epub and .whl (PKWARE's
+// APPNOTE.TXT 6.3.10, sections 4.3.12 and 4.3.16).
+//
+// What it demonstrates: a format read from its END. A reader does not
+// start at the first local file header -- those may be anything, and a
+// self-extracting archive puts a program in front of them -- but at the
+// end-of-central-directory record, the last 22 bytes when the archive
+// carries no comment, which states where the central directory is and how
+// many entries it holds. So the archive is everything before that record,
+// then the record, and the directory is a struct placed `at` the offset
+// the record states and handed its count, as ELF's tables are
+// (example/elf).
+//
+// What it does not describe:
+//   - An archive comment. With one, the record is not the last 22 bytes
+//     and a reader scans backwards for its signature, which no member can
+//     express; `comment_len` is held to 0 so such an archive is refused
+//     rather than misread.
+//   - ZIP64, split archives, encryption: the record's 0xFFFF and
+//     0xFFFFFFFF escapes and the disk numbers say where those begin.
+//   - The local file headers and the data. Each is at its central entry's
+//     `local_offset`, a place per element that a run cannot hand out; a
+//     reader goes there with the offset this hands back.
+
+target buffer;
+endian little;
+
+// One central directory entry (4.3.12): 46 bytes and the three runs.
+struct cd_entry {
+	u32 signature     [must_eq = 0x02014b50];
+	u16 made_by;
+	u16 needed;
+	u16 flags;
+	u16 method;              // 0 stored, 8 deflated
+	u16 mod_time;            // MS-DOS time
+	u16 mod_date;            // MS-DOS date
+	u32 crc;
+	u32 compressed;
+	u32 uncompressed;
+	u16 name_len;
+	u16 extra_len;
+	u16 comment_len;
+	u16 disk;
+	u16 internal_attrs;
+	u32 external_attrs;
+	u32 local_offset;        // where its local file header is
+	u8  name[name_len];
+	u8  extra[extra_len];
+	u8  comment[comment_len];
+}
+
+// The directory, holding the count the end record states.
+struct central_directory {
+	parameter u16 count [stream];
+	cd_entry entries[count];
+}
+
+// The end-of-central-directory record (4.3.16), 22 bytes.
+struct end_record {
+	u32 signature     [must_eq = 0x06054b50];
+	u16 disk;
+	u16 cd_disk;
+	u16 disk_entries;
+	u16 total_entries;
+	u32 cd_size;
+	u32 cd_offset;           // from the start of the archive
+	u16 comment_len   [must_eq = 0];
+}
+
+// The archive: everything before the end record, then the record's own
+// fields, then the directory where they place it.
+//
+// The record's fields are restated here rather than held as `end_record
+// end;`. That spelling generates and reads alike in all four backends, but
+// the packed image a walker reads cannot yet name a field of a struct that
+// sits after a run of unknown length -- `end.total_entries` is
+// "unencodable" to it (26.1177) -- so neither walker could follow the
+// directory's argument. `end_record` above is the same 22 bytes, for a
+// reader that takes the tail of a file on its own.
+struct archive {
+	u8   body[max(remaining, 22) - 22];
+	u32  end_signature  [must_eq = 0x06054b50];
+	u16  disk;
+	u16  cd_disk;
+	u16  disk_entries;
+	u16  total_entries;
+	u32  cd_size;
+	u32  cd_offset;
+	u16  comment_len    [must_eq = 0];
+	central_directory(count = total_entries) directory at cd_offset;
+}
+
+// What a reader relies on: the end record is a fixed 22 bytes it can read
+// in one go, and an entry's fixed part sits at constant offsets.
+require size(end_record) == 22;
+require absolute_static(end_record);
+require in_place(end_record.cd_offset);
+
+// A single-disk archive states its entries twice; two numbers that differ
+// would have a reader trust one and an attacker the other.
+when archive.disk_entries != archive.total_entries
+	refuse entry_counts "a single-disk archive states its entries once";

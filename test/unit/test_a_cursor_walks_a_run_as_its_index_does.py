@@ -86,6 +86,7 @@ CURSORS = {
 	"example/radiotap/radiotap.situ": 1, "example/riff/riff.situ": 1,
 	"example/sexpr/sexpr.situ": 1, "example/tcp/tcp.situ": 1,
 	"example/tls/tls.situ": 1, "example/wasm/wasm.situ": 7,
+	"example/zip/zip.situ": 1,
 	"test/schema/edges.situ": 22,
 }
 

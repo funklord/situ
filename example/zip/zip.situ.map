@@ -1,0 +1,104 @@
+# situ capability map v1
+# schema: zip.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct archive size=22.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  archive.body                           offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  archive.end_signature                  offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.disk                           offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.cd_disk                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.disk_entries                   offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.total_entries                  offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.cd_size                        offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.cd_offset                      offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.comment_len                    offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.directory                      offset=DataPlaced size=Bounded(0, 12887523285) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  archive.directory.count                parameter
+  archive.directory.entries              offset=FrameStatic(0x00) size=Bounded(0, 12887523285) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable
+  archive.directory.entries[]            offset=FrameStatic(0x00) size=Bounded(46, 196651) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  archive.directory.entries[].signature  offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].made_by    offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].needed     offset=FrameStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].flags      offset=FrameStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].method     offset=FrameStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].mod_time   offset=FrameStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].mod_date   offset=FrameStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].crc        offset=FrameStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].compressed offset=FrameStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].uncompressed offset=FrameStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].name_len   offset=FrameStatic(0x1C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].extra_len  offset=FrameStatic(0x1E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].comment_len offset=FrameStatic(0x20) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].disk       offset=FrameStatic(0x22) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].internal_attrs offset=FrameStatic(0x24) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.directory.entries[].external_attrs offset=FrameStatic(0x26) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic address=FrameStable
+  archive.directory.entries[].local_offset offset=FrameStatic(0x2A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic address=FrameStable
+  archive.directory.entries[].name       offset=FrameStatic(0x2E) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  archive.directory.entries[].extra      offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  archive.directory.entries[].comment    offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct cd_entry size=46..196651 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  cd_entry.signature                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  cd_entry.made_by                       offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  cd_entry.needed                        offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  cd_entry.flags                         offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  cd_entry.method                        offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  cd_entry.mod_time                      offset=AbsoluteStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  cd_entry.mod_date                      offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  cd_entry.crc                           offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  cd_entry.compressed                    offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  cd_entry.uncompressed                  offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  cd_entry.name_len                      offset=AbsoluteStatic(0x1C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  cd_entry.extra_len                     offset=AbsoluteStatic(0x1E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  cd_entry.comment_len                   offset=AbsoluteStatic(0x20) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  cd_entry.disk                          offset=AbsoluteStatic(0x22) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  cd_entry.internal_attrs                offset=AbsoluteStatic(0x24) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  cd_entry.external_attrs                offset=AbsoluteStatic(0x26) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  cd_entry.local_offset                  offset=AbsoluteStatic(0x2A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  cd_entry.name                          offset=AbsoluteStatic(0x2E) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  cd_entry.extra                         offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  cd_entry.comment                       offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct central_directory size=0..12887523285 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  central_directory.count                parameter
+  central_directory.entries              offset=AbsoluteStatic(0x00) size=Bounded(0, 12887523285) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  central_directory.entries[]            offset=FrameStatic(0x00) size=Bounded(46, 196651) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  central_directory.entries[].signature  offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].made_by    offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].needed     offset=FrameStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].flags      offset=FrameStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].method     offset=FrameStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].mod_time   offset=FrameStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].mod_date   offset=FrameStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].crc        offset=FrameStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].compressed offset=FrameStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].uncompressed offset=FrameStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].name_len   offset=FrameStatic(0x1C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].extra_len  offset=FrameStatic(0x1E) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].comment_len offset=FrameStatic(0x20) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].disk       offset=FrameStatic(0x22) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].internal_attrs offset=FrameStatic(0x24) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  central_directory.entries[].external_attrs offset=FrameStatic(0x26) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  central_directory.entries[].local_offset offset=FrameStatic(0x2A) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  central_directory.entries[].name       offset=FrameStatic(0x2E) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  central_directory.entries[].extra      offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  central_directory.entries[].comment    offset=Dynamic size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct end_record size=22 repr=ValueConverted
+  end_record.signature                   offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  end_record.disk                        offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  end_record.cd_disk                     offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  end_record.disk_entries                offset=AbsoluteStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  end_record.total_entries               offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  end_record.cd_size                     offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  end_record.cd_offset                   offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  end_record.comment_len                 offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord

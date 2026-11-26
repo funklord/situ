@@ -1,0 +1,68 @@
+# situ wire signature v4
+# schema: zip.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian little
+target buffer
+
+struct archive size=22..
+  @0x0000   0..       u8         body  sized-by=max(remaining,22)-22
+  ~         4         u32        end_signature  little must_eq=101010256
+  ~         2         u16        disk  little
+  ~         2         u16        cd_disk  little
+  ~         2         u16        disk_entries  little
+  ~         2         u16        total_entries  little
+  ~         4         u32        cd_size  little
+  ~         4         u32        cd_offset  little
+  ~         2         u16        comment_len  little must_eq=0
+  ~         0..12887523285 central_directory directory  args count=total_entries at=cd_offset
+  archive refuses: entry_counts when archive.disk_entries != archive.total_entries
+
+struct cd_entry size=46..196651
+  @0x0000   4         u32        signature  little must_eq=33639248
+  @0x0004   2         u16        made_by  little
+  @0x0006   2         u16        needed  little
+  @0x0008   2         u16        flags  little
+  @0x000a   2         u16        method  little
+  @0x000c   2         u16        mod_time  little
+  @0x000e   2         u16        mod_date  little
+  @0x0010   4         u32        crc  little
+  @0x0014   4         u32        compressed  little
+  @0x0018   4         u32        uncompressed  little
+  @0x001c   2         u16        name_len  little
+  @0x001e   2         u16        extra_len  little
+  @0x0020   2         u16        comment_len  little
+  @0x0022   2         u16        disk  little
+  @0x0024   2         u16        internal_attrs  little
+  @0x0026   4         u32        external_attrs  little
+  @0x002a   4         u32        local_offset  little
+  @0x002e   0..65535  u8         name  sized-by=name_len
+  ~         0..65535  u8         extra  sized-by=extra_len
+  ~         0..65535  u8         comment  sized-by=comment_len
+
+struct central_directory size=0..12887523285
+  parameter -         u16        count [stream]
+  @0x0000   0..12887523285 cd_entry   entries  sized-by=count
+
+struct end_record size=22
+  @0x0000   4         u32        signature  little must_eq=101010256
+  @0x0004   2         u16        disk  little
+  @0x0006   2         u16        cd_disk  little
+  @0x0008   2         u16        disk_entries  little
+  @0x000a   2         u16        total_entries  little
+  @0x000c   4         u32        cd_size  little
+  @0x0010   4         u32        cd_offset  little
+  @0x0014   2         u16        comment_len  little must_eq=0
