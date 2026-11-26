@@ -656,6 +656,19 @@ both walkers and the dissector. What a user cannot yet do is listed under
 
 **Open, and what each waits for**:
 
+- **Validation as one pass, for deep recursion -- the holder's call**
+  (run 28, 2026-11-26). After 26.1175, generated C validates binary
+  formats at 0.36-38 GB/s (bitcoin, pcap, ZIP, x509, ELF vectors) and
+  JSON nested six deep at 1.2 MB/s. What is left there is measuring:
+  each level measures its children's extents by walking their subtrees,
+  65% of a nested JSON validate, and the one probe at the top another
+  25%, so the cost is O(n * depth). The fix is a `check` that walks once
+  and returns where it ended, the parent using that rather than an
+  extent -- a rewrite of `validate` in four backends and the walkers'
+  agreement with it, not a hoisting. Worth it for CBOR- and JSON-like
+  data at depth; not for the flat formats every consumer reads today.
+  Generated Python is the same shape at a larger constant (2 KB/s).
+
 - From claude-guidelines' inbox messages of 2026-11-24 (20261124T2059Z,
   T2111Z, T2112Z, T2114Z), the GUI and packaging conventions the holder
   set that day. Done: (a) PNGs at 16, 22, 32, 48, 64, 128 beside the
