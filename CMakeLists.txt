@@ -70,9 +70,13 @@ install(DIRECTORY example/ DESTINATION share/situc/example
 	PATTERN "*.situ.wire")
 install(FILES example/designed.txt DESTINATION share/situc/example)
 
-# The manual page, from the same source the Makefile and the deb use. One
+# The manual pages, from the same sources the Makefile and the deb use. One
 # copy, three installers -- the arrangement test_cmake.py exists to keep.
-install(FILES packaging/situc.1 DESTINATION share/man/man1)
+# A page per command in bin/, as `make install` installs them (d69f3efb);
+# the GUI's page goes with the GUI, which this build does not make.
+install(FILES packaging/situc.1 packaging/situ-edit.1
+	packaging/situ-edit-tui.1 packaging/situ-walk.1
+	DESTINATION share/man/man1)
 
 # -- running the compiler from a consuming build ----------------------------
 
