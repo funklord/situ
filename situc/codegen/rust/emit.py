@@ -2856,6 +2856,16 @@ class Emitter:
 				" the",
 				"\t/// count the message declares, bounded (14.2b).",
 			]
+		at_body = [
+			*walk("raw"),
+			*refuse,
+			"\t\t\tif seen == index {",
+			f"\t\t\t\treturn Ok({decoded});",
+			"\t\t\t}",
+			*advance,
+			"\t\tErr(Error::Bounds)",
+			"\t}",
+		]
 		return [
 			"",
 			*says,
@@ -2898,20 +2908,68 @@ class Emitter:
 			f" `{placement.path}`,",
 			"\t/// reached by walking: this run is Sequential and the walk"
 			" is",
-			"\t/// the cost the capability names.",
+			"\t/// the cost the capability names; `_next` walks the whole run",
+			"\t/// in one pass.",
 			"\t///",
 			"\t/// `Error::Bounds` where `index` is past the count or the",
 			"\t/// frame ends mid-element; `Error::Constraint` where an",
 			"\t/// element is padded and `minimal` is declared.",
 			f"\tpub fn {at_fn}(&self, index: usize) -> Result<{rtype}> {{",
-			*walk("raw"),
-			*refuse,
-			"\t\t\tif seen == index {",
-			f"\t\t\t\treturn Ok({decoded});",
-			"\t\t\t}",
-			*advance,
-			"\t\tErr(Error::Bounds)",
-			"\t}",
+			*at_body,
+			*self._varint_cursor_of(_ident(name + "_next"),
+			                        rtype, at_body,
+			                        walks_to_the_frame_end(placement)),
+		]
+
+	@staticmethod
+	def _varint_cursor_of(name: str, rtype: str, body: list[str],
+			to_frame_end: bool) -> list[str]:
+		"""A varint run's `_next`, derived from its `_at` (26.1173).
+
+		The C backend's derivation: resumed where the element after the
+		one handed out last starts, with `seen = index`; a run sized by
+		the frame leaves out the count, whose walk stops exactly where
+		this one does. Nothing is emitted for a body without each keyed
+		line exactly once.
+		"""
+		starts = [line for line in body if line == "\t\tlet mut at = start;"]
+		counts = [line for line in body if line.startswith("\t\tlet n = ")]
+		seens  = [line for line in body if line == "\t\tlet mut seen: usize = 0;"]
+		yields = [line for line in body if line.startswith("\t\t\t\treturn Ok(")]
+		if not all(len(found) == 1 for found in (starts, counts, seens, yields)):
+			return []
+
+		lines = ["\t\tlet index = cursor.n;"]
+		for line in body:
+			if line == starts[0]:
+				lines.append(
+					"\t\tlet mut at = if index == 0 { start } else { cursor.at };")
+			elif line == counts[0] and to_frame_end:
+				lines.extend([
+					"\t\t// No count: counting walks to the frame's end, and the",
+					"\t\t// walk below stops exactly where counting would.",
+					"\t\tlet n = usize::MAX;",
+				])
+			elif line == seens[0]:
+				lines.append("\t\tlet mut seen: usize = index;")
+			elif line == yields[0]:
+				lines.extend([
+					"\t\t\t\tcursor.at = at + used;",
+					"\t\t\t\tcursor.n  = index + 1;",
+					line,
+				])
+			else:
+				lines.append(line)
+		return [
+			"",
+			"\t/// The element after the one `cursor` last handed out, or the",
+			"\t/// first for a default cursor; `Error::Bounds` once the run is",
+			"\t/// over, and whatever `_at` refuses an element for. A pass over",
+			"\t/// the whole run is linear, where one over the indexed accessor",
+			"\t/// walks from the start every call.",
+			f"\tpub fn {name}(&self, cursor: &mut situ_rt::Cursor)"
+			f" -> Result<{rtype}> {{",
+			*lines,
 		]
 
 	def _varint_field(self, struct: ResolvedStruct,

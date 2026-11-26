@@ -8854,6 +8854,18 @@ class Emitter:
 			"\t\t\tseen += 1u;",
 			"\t\t}",
 		]
+		at_body = [
+			"\t{",
+			*walk,
+			*refuse,
+			"\t\t\tif (seen == index) {",
+			f"\t\t\t\tout = {decoded};",
+			"\t\t\t\treturn ::situ::rt::err::ok;",
+			"\t\t\t}",
+			*advance,
+			"\t\treturn ::situ::rt::err::bounds;",
+			"\t}",
+		]
 		return [
 			"",
 			*says,
@@ -8899,23 +8911,73 @@ class Emitter:
 			"",
 			f"\t/* The `index`th `{placement.varint}` of {placement.path},",
 			"\t * reached by walking: this run is Sequential and the walk is",
-			"\t * the cost the capability names.",
+			"\t * the cost the capability names; `_next` walks the whole run",
+			"\t * in one pass.",
 			"\t *",
 			"\t * `bounds` where `index` is past the count or the frame ends",
 			"\t * mid-element; `constraint` where an element is padded and",
 			"\t * `minimal` is declared. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,"
 			f" {ctype} &out) const noexcept",
-			"\t{",
-			*walk,
-			*refuse,
-			"\t\t\tif (seen == index) {",
-			f"\t\t\t\tout = {decoded};",
-			"\t\t\t\treturn ::situ::rt::err::ok;",
-			"\t\t\t}",
-			*advance,
-			"\t\treturn ::situ::rt::err::bounds;",
-			"\t}",
+			*at_body,
+			*self._varint_cursor_of(name, ctype, at_body,
+			                        walks_to_the_frame_end(placement)),
+		]
+
+	@staticmethod
+	def _varint_cursor_of(name: str, ctype: str, body: list[str],
+			to_frame_end: bool) -> list[str]:
+		"""A varint run's `_next`, derived from its `_at` (26.1173).
+
+		The C backend's derivation: resumed where the element after the
+		one handed out last starts, with `seen = index`; a run sized by
+		the frame leaves out the count, whose walk stops exactly where
+		this one does. Nothing is emitted for a body without each keyed
+		line exactly once.
+		"""
+		starts = [line for line in body
+		          if line.startswith("\t\tstd::uint32_t at = ")]
+		counts = [line for line in body
+		          if line.startswith("\t\tconst std::uint32_t n = ")]
+		seens  = [line for line in body if line == "\t\tstd::uint32_t seen = 0u;"]
+		yields = [line for line in body if line.startswith("\t\t\t\tout = ")]
+		if not all(len(found) == 1 for found in (starts, counts, seens, yields)):
+			return []
+
+		base  = starts[0].removeprefix("\t\tstd::uint32_t at = ").removesuffix(";")
+		lines = []
+		for line in body:
+			if line == starts[0]:
+				lines.extend([
+					"\t\tconst std::uint32_t index = cursor.n;",
+					f"\t\tstd::uint32_t at = index == 0u ? {base} : cursor.at;",
+				])
+			elif line == counts[0] and to_frame_end:
+				lines.extend([
+					"\t\t/* No count: counting walks to the frame's end, and",
+					"\t\t * the walk below stops exactly where counting would. */",
+					"\t\tconst std::uint32_t n = UINT32_MAX;",
+				])
+			elif line == seens[0]:
+				lines.append("\t\tstd::uint32_t seen = index;")
+			elif line == yields[0]:
+				lines.extend([
+					line,
+					"\t\t\t\tcursor.at = at + used;",
+					"\t\t\t\tcursor.n  = index + 1u;",
+				])
+			else:
+				lines.append(line)
+		return [
+			"",
+			"\t/* The element after the one `cursor` last handed out, or the",
+			"\t * first for a value-initialised cursor; `bounds` once the run is",
+			"\t * over, and whatever `_at` refuses an element for. A pass over",
+			"\t * the whole run is linear, where one over the indexed accessor",
+			"\t * walks from the start every call. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_next(::situ::rt::cursor &cursor,",
+			f"\t\t\t{ctype} &out) const noexcept",
+			*lines,
 		]
 
 	def _varint_field(self, struct: ResolvedStruct,

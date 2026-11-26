@@ -4671,6 +4671,20 @@ class Emitter:
 			"\t\t\tbreak;",
 			"\t\t}",
 		]
+		at_body = [
+			"{",
+			*walk,
+			*refuse,
+			"\t\tif (seen == index) {",
+			f"\t\t\t*out = {decoded};",
+			"\t\t\treturn SITU_OK;",
+			"\t\t}",
+			"\t\tat   += used;",
+			"\t\tseen += 1u;",
+			"\t}",
+			"\treturn SITU_ERR_BOUNDS;",
+			"}",
+		]
 		return [
 			*says,
 			f"static inline uint32_t {count}({taken})",
@@ -4727,7 +4741,7 @@ class Emitter:
 			" reached by",
 			" * walking: this run is Sequential and the walk is the cost"
 			" the",
-			" * capability names.",
+			" * capability names; `_next` walks the whole run in one pass.",
 			" *",
 			" * SITU_OK            decoded; *out is the value",
 			" * SITU_ERR_BOUNDS    `index` is past the count, or the frame"
@@ -4738,18 +4752,10 @@ class Emitter:
 			" *                    declared */",
 			f"static inline situ_err_t {at_fn}({taken}, uint32_t index,"
 			f" {ctype} *out)",
-			"{",
-			*walk,
-			*refuse,
-			"\t\tif (seen == index) {",
-			f"\t\t\t*out = {decoded};",
-			"\t\t\treturn SITU_OK;",
-			"\t\t}",
-			"\t\tat   += used;",
-			"\t\tseen += 1u;",
-			"\t}",
-			"\treturn SITU_ERR_BOUNDS;",
-			"}",
+			*at_body,
+			*self._varint_cursor_of(
+				ident(self.prefix, struct.name, local, "next"), taken, ctype,
+				at_body, walks_to_the_frame_end(placement)),
 		]
 
 
@@ -7820,6 +7826,69 @@ class Emitter:
 			" * whole run is linear. */",
 			f"static inline situ_err_t {name}(situ_view_t view,"
 			f" situ_cursor_t *cursor, situ_view_t *out{tail})",
+			*lines,
+		]
+
+	@staticmethod
+	def _varint_cursor_of(name: str, taken: str, ctype: str,
+			body: list[str], to_frame_end: bool) -> list[str]:
+		"""A varint run's `_next`, derived from the body of its `_at` (26.1173).
+
+		The varint `_at` opens `at = <base>; n = <count>; seen = 0` and
+		hands out the element at `seen == index`. An element is whole
+		once decoded, so nothing about it needs asking again: the cursor
+		keeps where the NEXT element starts, and the same lines resume
+		there with `seen = index`. A run sized by the frame counts by
+		walking to its end; the walk stops exactly where that count
+		would, so `_next` leaves the count out rather than walking the
+		run once per call.
+
+		Nothing is emitted for a body without each keyed line exactly once.
+		"""
+		starts = [line for line in body if line.startswith("\tuint32_t at = ")]
+		counts = [line for line in body if line.startswith("\tuint32_t n = ")]
+		seens  = [line for line in body if line == "\tuint32_t seen = 0u;"]
+		yields = [line for line in body if line.startswith("\t\t\t*out = ")]
+		if not all(len(found) == 1 for found in (starts, counts, seens, yields)):
+			return []
+
+		base  = starts[0].removeprefix("\tuint32_t at = ").removesuffix(";")
+		lines = []
+		for line in body:
+			if line == starts[0]:
+				lines.extend([
+					"\tconst uint32_t index = cursor->n;",
+					f"\tuint32_t at = index == 0u ? {base} : cursor->at;",
+				])
+			elif line == counts[0] and to_frame_end:
+				lines.extend([
+					"\t/* No count: counting walks to the frame's end, and the"
+					" walk",
+					"\t * below stops exactly where counting would. */",
+					"\tconst uint32_t n = UINT32_MAX;",
+				])
+			elif line == seens[0]:
+				lines.append("\tuint32_t seen = index;")
+			elif line == yields[0]:
+				lines.extend([
+					line,
+					"\t\t\tcursor->at = at + used;",
+					"\t\t\tcursor->n  = index + 1u;",
+				])
+			else:
+				lines.append(line)
+		return [
+			"",
+			"/** The element after the one `cursor` last handed out, or the",
+			" * first for a zeroed cursor: SITU_OK with *out set, SITU_ERR_BOUNDS",
+			" * once the run is over, and whatever `_at` refuses an element"
+			" for.",
+			" * `_at` walks from the start on every call; this walks from"
+			" where",
+			" * the last call stopped, so a pass over the whole run is"
+			" linear. */",
+			f"static inline situ_err_t {name}({taken},"
+			f" situ_cursor_t *cursor, {ctype} *out)",
 			*lines,
 		]
 

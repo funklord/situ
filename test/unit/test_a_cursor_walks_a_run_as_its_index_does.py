@@ -69,7 +69,8 @@ HOST_CXX = shutil.which("g++") or shutil.which("clang++")
 RUSTC    = shutil.which("rustc")
 
 #: How many runs get a cursor, per schema, measured 2026-11-26 when it
-#: landed: every walked run of structs in the corpus. Each backend must
+#: landed: every walked run of structs in the corpus (26.1172), and every
+#: run of varints (26.1173): quic's one, wasm's seventh, edges' two. Each backend must
 #: emit exactly this many, so a derivation that stops matching its
 #: accessor's lines -- and so emits nothing -- fails here by name.
 CURSORS = {
@@ -81,17 +82,28 @@ CURSORS = {
 	"example/json/json.situ": 2, "example/matroska/matroska.situ": 3,
 	"example/mqtt/mqtt.situ": 2, "example/netlink/netlink.situ": 1,
 	"example/pcap/pcap.situ": 1, "example/png/png.situ": 1,
+	"example/quic/quic.situ": 1,
 	"example/radiotap/radiotap.situ": 1, "example/riff/riff.situ": 1,
 	"example/sexpr/sexpr.situ": 1, "example/tcp/tcp.situ": 1,
-	"example/tls/tls.situ": 1, "example/wasm/wasm.situ": 6,
-	"test/schema/edges.situ": 20,
+	"example/tls/tls.situ": 1, "example/wasm/wasm.situ": 7,
+	"test/schema/edges.situ": 22,
 }
 
 #: The differential's schemas: json's `while` runs, cbor's record runs
 #: (`until "\xff"`) and counted ones (`items[count]`), and edges, which
-#: carries every shape including recursive and argument-taking runs.
+#: carries every shape including recursive and argument-taking runs, and
+#: a counted run of varints and one sized by the frame; quic and wasm for
+#: varint runs in a real format.
+#: How many of each WALKED schema's cursors walk varints and take nothing
+#: but the view, so a probe that stops finding them fails rather than
+#: passing on the struct runs beside them.
+VARINT_RUNS = {"example/json/json.situ": 0, "example/cbor/cbor.situ": 0,
+               "test/schema/edges.situ": 2, "example/quic/quic.situ": 1,
+               "example/wasm/wasm.situ": 1}
+
 WALKED = ["example/json/json.situ", "example/cbor/cbor.situ",
-          "test/schema/edges.situ"]
+          "test/schema/edges.situ", "example/quic/quic.situ",
+          "example/wasm/wasm.situ"]
 
 #: Bytes a run's own grammar is made of, mixed half and half with random
 #: ones, so walks of more than one element happen at all: uniform bytes
@@ -265,6 +277,22 @@ C_CALL = """	{ situ_cursor_t c = {0u, 0u}; situ_view_t a, b; uint32_t got = 0u;
 	  if (got >= 2u) { multi++; } }
 """
 
+#: The same for a run of varints, whose element is a value.
+C_VALUE_CALL = """	{ situ_cursor_t c = {0u, 0u}; %(t)s a = 0, b = 0; uint32_t got = 0u;
+	  walks++;
+	  for (uint32_t i = 0u; i < len + 2u; i++) {
+		situ_err_t ea = %(f)s_at(view, i, &a);
+		situ_err_t eb = %(f)s_next(view, &c, &b);
+		if (ea != eb || (ea == SITU_OK && a != b)) {
+			fprintf(stderr, "%(f)s len=%%u i=%%u\\n", (unsigned)len, (unsigned)i);
+			bad++;
+			break;
+		}
+		if (ea == SITU_OK) { got++; }
+	  }
+	  if (got >= 2u) { multi++; } }
+"""
+
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
 @pytest.mark.parametrize("path", WALKED)
@@ -278,7 +306,12 @@ def test_c_next_answers_as_at_does(path: str, tmp_path: Path) -> None:
 	# argument has nothing a random buffer can supply.
 	found = re.findall(r"static inline situ_err_t (\w+)_next\(situ_view_t view, "
 	                   r"situ_cursor_t \*cursor, situ_view_t \*out\)", built.header)
-	c_calls = "".join(C_CALL % {"f": name} for name in found)
+	valued = re.findall(r"static inline situ_err_t (\w+)_next\(situ_view_t view, "
+	                    r"situ_cursor_t \*cursor, (u?int64_t) \*out\)",
+	                    built.header)
+	c_calls = ("".join(C_CALL % {"f": name} for name in found)
+	           + "".join(C_VALUE_CALL % {"f": name, "t": kind}
+	                     for name, kind in valued))
 	probe = tmp_path / "probe.c"
 	probe.write_text(f"""#include <stdio.h>
 #include "{stem}.h"
@@ -308,7 +341,8 @@ int main(void)
 	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
 	                     text=True, timeout=600)
 	assert ran.returncode == 0, ran.stderr[-2000:]
-	_tally(ran.stdout, path, len(found))
+	_tally(ran.stdout, path, len(found) + len(valued))
+	assert len(valued) == VARINT_RUNS[path], valued
 	assert "past" not in ran.stderr and ran.stderr == "", ran.stderr[-2000:]
 
 
@@ -317,6 +351,20 @@ CPP_CALL = """	{ const ::situ::%(cls)s obj(view); ::situ::rt::cursor c{}; %(out)
 		auto ea = obj.%(at)s(i, a);
 		auto eb = obj.%(nx)s(c, b);
 		if (ea != eb || (ea == ::situ::rt::err::ok && (a.raw().base != b.raw().base || a.raw().limit != b.raw().limit))) {
+			std::fprintf(stderr, "%(cls)s::%(nx)s len=%%u i=%%u\\n", (unsigned)len, (unsigned)i);
+			bad++;
+			break;
+		}
+		if (ea == ::situ::rt::err::ok) { got++; }
+	  }
+	  if (got >= 2) { multi++; } }
+"""
+
+CPP_VALUE_CALL = """	{ const ::situ::%(cls)s obj(view); ::situ::rt::cursor c{}; %(out)s a = 0, b = 0; std::uint32_t got = 0; walks++;
+	  for (std::uint32_t i = 0; i < len + 2u; i++) {
+		auto ea = obj.%(at)s(i, a);
+		auto eb = obj.%(nx)s(c, b);
+		if (ea != eb || (ea == ::situ::rt::err::ok && a != b)) {
 			std::fprintf(stderr, "%(cls)s::%(nx)s len=%%u i=%%u\\n", (unsigned)len, (unsigned)i);
 			bad++;
 			break;
@@ -345,6 +393,13 @@ def _cpp_calls(header: str) -> list[str]:
 		found = re.match(r"\t\[\[nodiscard\]\] ::situ::rt::err (\w+)_next"
 		                 r"\(::situ::rt::cursor &cursor,", line)
 		if not found or indexed is None or owner is None:
+			continue
+		owned = f"explicit constexpr {owner}(situ_view_t raw) noexcept" in header
+		if indexed[1] in ("std::uint64_t", "std::int64_t"):
+			if owned:
+				calls.append(CPP_VALUE_CALL % {"cls": owner, "out": indexed[1],
+				                               "at": indexed[0],
+				                               "nx": found.group(1) + "_next"})
 			continue
 		out   = indexed[1] if "::" in indexed[1] else f"::situ::{indexed[1]}"
 		plain = (f"explicit constexpr {owner}(situ_view_t raw) noexcept" in header
@@ -405,6 +460,7 @@ int main()
 	                     text=True, timeout=600)
 	assert ran.returncode == 0 and ran.stderr == "", ran.stderr[-2000:]
 	_tally(ran.stdout, path, len(calls))
+	assert sum("a = 0, b = 0" in call for call in calls) == VARINT_RUNS[path]
 
 
 RUST_PROBE = """
@@ -434,7 +490,7 @@ RUST_CALL = """		if let Ok(obj) = %(cls)s::new(bytes) {
 				match (&a, &b) {
 					(Ok(x), Ok(y)) => {
 						got += 1;
-						if x.bytes.as_ptr() != y.bytes.as_ptr() || x.bytes.len() != y.bytes.len() {
+						if %(differ)s {
 							eprintln!("%(cls)s.%(nx)s len={} i={}", len, i); bad += 1; break;
 						}
 					}
@@ -455,17 +511,27 @@ def test_rust_next_answers_as_at_does(path: str, tmp_path: Path) -> None:
 	module = rust_generate(schema, resolved, stem).module
 	calls: list[str] = []
 	owner, plain = None, False
+	valued_runs = 0
 	for line in module.splitlines():
 		found = re.match(r"impl<'a> (\w+)<'a> \{", line)
 		if found:
 			owner, plain = found.group(1), False
 		if line == "\tpub fn new(bytes: &'a [u8]) -> Result<Self> {":
 			plain = True
-		found = re.match(r"\tpub fn (\w+)_next\(&self, cursor: &mut situ_rt::Cursor\)",
-		                 line)
-		if found and plain and f"\tpub fn {found.group(1)}(&self, index: usize)" in module:
-			calls.append(RUST_CALL % {"cls": owner, "at": found.group(1),
-			                          "nx": found.group(1) + "_next"})
+		found = re.match(r"\tpub fn (\w+)_next\(&self, cursor: &mut situ_rt::Cursor\)"
+		                 r" -> Result<(\w+)", line)
+		valued = found is not None and found.group(2) in ("u64", "i64")
+		differ = ("x != y" if valued else
+		          "x.bytes.as_ptr() != y.bytes.as_ptr() || x.bytes.len() != y.bytes.len()")
+		# A run of structs is indexed by `x(i)`, one of varints by `x_at(i)`.
+		at = next((name for name in (found.group(1), found.group(1) + "_at")
+		           if f"\tpub fn {name}(&self, index: usize)" in module),
+		          None) if found else None
+		if found and plain and at is not None:
+			valued_runs += valued
+			calls.append(RUST_CALL % {"cls": owner, "at": at,
+			                          "nx": found.group(1) + "_next",
+			                          "differ": differ})
 	# Appended to the module, so the probe can read each element's bytes.
 	(tmp_path / f"{stem}.rs").write_text(module + RUST_PROBE % {
 		"picks": len(PICK), "pick": ", ".join(str(one) for one in PICK),
@@ -483,6 +549,7 @@ def test_rust_next_answers_as_at_does(path: str, tmp_path: Path) -> None:
 	                     text=True, timeout=600)
 	assert ran.returncode == 0 and ran.stderr == "", ran.stderr[-2000:]
 	_tally(ran.stdout, path, len(calls))
+	assert valued_runs == VARINT_RUNS[path], valued_runs
 
 
 @pytest.mark.parametrize("path", WALKED)
@@ -511,7 +578,11 @@ def test_python_next_answers_as_at_does(path: str, tmp_path: Path) -> None:
 			# `x_first()` and `x_next(item)`, a different API.
 			if name.endswith("_next") and "cursor" in \
 					getattr(kind, name).__code__.co_varnames[:2]:
-				pairs.append((kind, name.removesuffix("_next")))
+				# A run of structs is indexed by `x(i)`, one of varints
+				# by `x_at(i)`.
+				base = name.removesuffix("_next")
+				pairs.append((kind, base if base in vars(kind)
+				              else base + "_at", base))
 
 	draw  = random.Random(7)
 	walks = multi = 0
@@ -520,7 +591,7 @@ def test_python_next_answers_as_at_does(path: str, tmp_path: Path) -> None:
 		data   = bytearray(draw.choice(PICK) if draw.random() < 0.5
 		                   else draw.randrange(256) for _ in range(length))
 		message = rt.Message(data)
-		for kind, name in pairs:
+		for kind, name, base in pairs:
 			try:
 				view = kind(message, 0, length)
 			except rt.SituError:
@@ -531,17 +602,18 @@ def test_python_next_answers_as_at_does(path: str, tmp_path: Path) -> None:
 			for index in range(length + 2):
 				expected = _answer(lambda: getattr(view, name)(index),
 				                   rt.SituError)
-				answered = _answer(lambda: getattr(view, name + "_next")(cursor),
+				answered = _answer(lambda: getattr(view, base + "_next")(cursor),
 				                   rt.SituError)
 				assert expected == answered, (kind.__name__, name, bytes(data), index)
 				got += expected[0] is None
 			multi += got >= 2
 	assert pairs and walks > 0, f"{path}: no cursor was asked anything"
+	assert sum(name != base for _, name, base in pairs) == VARINT_RUNS[path]
 	assert multi > 0, f"{path}: no walk reached a second element"
 
 
 def _answer(call: Callable[[], Any], refusal: type[BaseException]
-		) -> tuple[type | None, tuple[int, int] | None]:
+		) -> tuple[type | None, tuple[int, int] | int | None]:
 	"""What one call hands back. Only the two refusals are answers; any
 	other exception is a crash and propagates, rather than agreeing with
 	the same crash on the other side."""
@@ -549,4 +621,6 @@ def _answer(call: Callable[[], Any], refusal: type[BaseException]
 		element = call()
 	except (IndexError, refusal) as refused:
 		return type(refused), None
+	if isinstance(element, int):
+		return None, element
 	return None, (element._at, element._len)

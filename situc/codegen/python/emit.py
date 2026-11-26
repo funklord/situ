@@ -3540,6 +3540,15 @@ class Emitter:
 			"\t\t\tat   += used",
 			"\t\t\tseen += 1",
 		]
+		at_body = [
+			*walk,
+			*refuse,
+			"\t\t\tif seen == index:",
+			f"\t\t\t\treturn {decoded}",
+			*advance,
+			f'\t\traise BoundsError(f"{placement.path}[{{index}}] is past'
+			' its {n} elements")',
+		]
 		return [
 			"",
 			"\t@property",
@@ -3577,7 +3586,8 @@ class Emitter:
 			f'\t\t"""The `index`th `{placement.varint}` of'
 			f' {placement.path},',
 			"\t\treached by walking: this run is Sequential and the walk is",
-			"\t\tthe cost the capability names.",
+			"\t\tthe cost the capability names; `_next` walks the whole run",
+			"\t\tin one pass.",
 			"",
 			"\t\tRaises BoundsError where `index` is past the count or the",
 			"\t\tframe ends mid-element"
@@ -3585,13 +3595,63 @@ class Emitter:
 			   " `minimal` is declared."
 			   if declared.minimal else ".")
 			+ '"""',
-			*walk,
-			*refuse,
-			"\t\t\tif seen == index:",
-			f"\t\t\t\treturn {decoded}",
-			*advance,
-			f'\t\traise BoundsError(f"{placement.path}[{{index}}] is past'
-			' its {n} elements")',
+			*at_body,
+			*self._varint_cursor_of(name, at_body,
+			                        walks_to_the_frame_end(placement)),
+		]
+
+	def _varint_cursor_of(self, name: str, body: list[str],
+			to_frame_end: bool) -> list[str]:
+		"""A varint run's `_next`, derived from its `_at` (26.1173).
+
+		The C backend's derivation: resumed where the element after the
+		one handed out last starts, with `seen = index`; a run sized by
+		the frame leaves out the count, whose walk stops exactly where
+		this one does. Nothing is emitted for a body without each keyed
+		line exactly once.
+		"""
+		starts = [line for line in body if line == "\t\tat    = start"]
+		counts = [line for line in body if line.startswith("\t\tn     = ")]
+		seens  = [line for line in body if line == "\t\tseen  = 0"]
+		yields = [line for line in body if line.startswith("\t\t\t\treturn ")]
+		if not all(len(found) == 1 for found in (starts, counts, seens, yields)):
+			return []
+
+		lines = ["\t\tindex = cursor.n"]
+		for line in body:
+			if line == starts[0]:
+				lines.append("\t\tat    = start if index == 0 else cursor.at")
+			elif line == counts[0] and to_frame_end:
+				lines.extend([
+					"\t\t# No count: counting walks to the frame's end, and the",
+					"\t\t# walk below stops exactly where counting would.",
+					"\t\tn     = index + 1",
+				])
+			elif line == seens[0]:
+				lines.append("\t\tseen  = index")
+			elif to_frame_end and line.startswith("\t\traise ") \
+					and "{n}" in line:
+				# Every element before `index` was whole, so where this
+				# walk stops `index` IS the count `_at` names.
+				lines.append(line.replace("{n}", "{index}"))
+			elif line == yields[0]:
+				lines.extend([
+					"\t\t\t\tcursor.at = at + used",
+					"\t\t\t\tcursor.n  = index + 1",
+					line,
+				])
+			else:
+				lines.append(line)
+		self._next_emitted = True
+		return [
+			"",
+			f"\tdef {name}_next(self, cursor: _situ_cursor) -> int:",
+			'\t\t"""The element after the one `cursor` last handed out, or the',
+			"\t\tfirst for a new `Cursor()`; BoundsError once the run is over,",
+			"\t\tand whatever `_at` refuses an element for. A pass over the",
+			"\t\twhole run is linear, where one over the indexed accessor",
+			'\t\twalks from the start every call."""',
+			*lines,
 		]
 
 	def _varint_field(self, struct: ResolvedStruct,

@@ -143,6 +143,12 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 26 (2026-11-26):** a run of varints has `_next` too (26.1173), on
+the holder's word after a census found none in any consumer but the
+shape everywhere in SQLite, protobuf, wasm, DWARF and QUIC. It keeps the
+next element's start, so no element is read twice, and a frame-sized run
+drops its count, whose walk is the one being resumed.
+
 **Run 22 (2026-11-26):** every walked run of structs has a `_next`
 cursor in the four backends (26.1172), on the holder's word, for fuzznet
 and raidcfgd's hand-written walks. Derived from each backend's own walking
@@ -645,7 +651,10 @@ both walkers and the dissector. What a user cannot yet do is listed under
   a hand-written manual page for `situ-edit`, `situ-edit-tui`, `situ-walk`
   and `situ-edit-gui` in `packaging/`, installed by `install` and
   `install-gui`, the Debian lists naming each page (`situc.install` had
-  claimed all of `usr/share/man`). lintian not rerun on a rebuilt deb.
+  claimed all of `usr/share/man`). lintian over a deb rebuilt from
+  d7e3ce5b, `-I --pedantic`: no warning or error in the four packages;
+  info only, the window's `hardening-no-bindnow` and an example's
+  `designed.txt` under `/usr/share/situc`.
 
 - The rest of the cppcheck noise: 22 `e != SITU_OK` need cppcheck's
   cross-function view of an arm whose `required` cannot fail; 12
@@ -10019,6 +10028,17 @@ over bit 63 needs (the first version of 26.1148 broke exactly that). This
 replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
+
+### 26.1173 A run of varints has a cursor
+
+26.1172 left a run of varints without `_next`. No consumer schema has one
+(census of the generated C, 2026-11-26: 53 walked runs in 83 consumer
+schemas, all with cursors), but the formats situ is for are full of them,
+and the quadratic loop over `_at` is one no schema can avoid. On the
+holder's word, each backend derives it from its varint `_at`; the record
+is `doc/decision/26.1173-a-run-of-varints-has-a-cursor.md`, held by the
+same test as 26.1172. A run that is a variant's arm still has none, by
+choice: a one-member struct around it gives it one today.
 
 ### 26.1172 A run has a cursor
 
