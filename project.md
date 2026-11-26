@@ -10056,6 +10056,18 @@ replaces 26.1148's bare-field rule, which it covers. Held in
 `test_walker_c.py` (`test_a_count_over_a_huge_unsigned_is_past_the_frame`),
 failing on the old walker.
 
+### 26.1176 Python reads a variant's discriminant once per chain
+
+A variant's length is a conditional chain, one comparison per arm, and in
+Python each comparison read the discriminant afresh -- a property that
+scans the whitespace before it: json's `value` read `kind` seven times per
+measurement, about 200 reads per value over a validate. The outermost
+comparison binds it (`(_situ_dN := self.kind) == 123`) and the rest
+compare the name; a conditional evaluates its condition before either
+branch, so nothing reads the name unbound. A json validate makes 30% fewer
+calls. C needed no change: `-O2` merges the reads already (instruction
+counts equal with and without a local).
+
 ### 26.1175 A recursive struct's nesting is probed once, at the top
 
 Every level of a cycle validated its children through their public

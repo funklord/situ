@@ -9432,6 +9432,17 @@ class Emitter:
 			return None
 
 		held  = self._disc(struct, placement, "self")
+		# The discriminant read ONCE, by the first comparison, and named for
+		# the rest (26.1176): `held` is a property that scans the lead before
+		# it, and the chain asked it once per arm -- json's `value` seven
+		# times per element measured, a fifth of all the time `validate`
+		# spent. A conditional evaluates its condition before either branch,
+		# so the outermost comparison binds it before any other reads it.
+		self._disc_names = getattr(self, "_disc_names", 0) + 1
+		named = f"_situ_d{self._disc_names}"
+		valued = [arm for arm, member in arm_members(struct, placement)
+		          if member is not None and arm.value is not None]
+		first = valued[0] if valued else None
 		chain = "0"
 		for arm, member in reversed(arm_members(struct, placement)):
 			if member is None:
@@ -9455,8 +9466,9 @@ class Emitter:
 			if member.since is not None and member.version_field:
 				version = self._over_fields(struct, member.version_field, "self")
 				length = f"(({length}) if {version} >= {member.since} else 0)"
+			asked = (f"({named} := {held})" if arm is first else named)
 			chain = (length if arm.value is None
-			         else f"({length} if {held} == {arm.value} else {chain})")
+			         else f"({length} if {asked} == {arm.value} else {chain})")
 		return chain
 
 	def _offset_body(self, struct: ResolvedStruct,
