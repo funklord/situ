@@ -143,6 +143,11 @@ end of /go run 7. Run 6 ended at `4b766d8b` with every batch through the
 full gate and both live consumers (openmlx4's `schema_check`, fuzznet's
 `map --check`/`wire --check`) passing against it.
 
+**Run 21 (2026-11-26):** wire signature v4 labels a nested variant by its
+path and types its arms (19.3); every committed `.situ.wire` moves to v4.
+fuzznet and openmlx4 were told before the push (their inboxes) to
+regenerate: their `--check` reads format-only, 0 breaking, 0 compatible.
+
 **Run 20 (2026-11-26):** `example/json` frames `[]` and `{}`. fuzznet's
 inbox (20261126T0642Z, its sec 1459) found AcoustID's `"results": []`
 refused: a `while` run is never empty (8.6), so `{}` was a member short of
@@ -5418,6 +5423,22 @@ reported rather than waved through.
 `default = error` -- which is the default (8.7), so the common case is the
 surprising one. The two schemas differ by one word and could not differ more
 in a deployment.
+
+**A variant is labelled by its path from the struct listing it** (format
+v4, 2026-11-26). A struct's own variant is its name, `body switch: kind`; one
+inside a nested struct is `body.as_object.body switch: next`, and its arms
+name their type as a struct's own always did. v3 used the bare name, so
+json's `value` listed three blocks headed `body switch:`, and `--check`,
+keyed by the label, kept the last of each and compared `as_elements` with
+`as_number` -- BREAKING, for a change of nothing. Nested arms named no type,
+so swapping one for another struct of the same size left the file
+unchanged. Labelling by the inner struct's name instead was rejected: a
+struct used twice (cbor's four `form`s, under four arms) would still
+collide. A nested tlv or indexed region is labelled the same way; no
+measured contract has one. A v3 file is read through `_qualified_from_v3`,
+matching variant blocks in order where each old label is the new one's
+last step, so a consumer's committed contract reads as the format notice
+alone: measured over all 63 contracts here, fuzznet's 73 and openmlx4's.
 
 ### 19.4 More than one version in one file
 

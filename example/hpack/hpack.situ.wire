@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: hpack.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -29,34 +29,34 @@ varint prefix7 : hpack bits=32 bytes=6 prefix=7
 
 struct block size=0..
   @0x0000   0..       field      fields  sized-by=remaining
-  body switch: kind
-  body case 0: plain
-  body case 1: sensitive
-  body case 2: resize
-  body case 3: resize_high
-  body case 4: added
-  body case 5: added_5
-  body case 6: added_6
-  body case 7: added_7
-  body case default: from_table
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
+  fields[].body switch: kind
+  fields[].body case 0: plain without_indexing
+  fields[].body case 1: sensitive never_indexed
+  fields[].body case 2: resize size_update
+  fields[].body case 3: resize_high size_update
+  fields[].body case 4: added incremental
+  fields[].body case 5: added_5 incremental
+  fields[].body case 6: added_6 incremental
+  fields[].body case 7: added_7 incremental
+  fields[].body case default: from_table table_entry
+  fields[].body.plain.name switch: index
+  fields[].body.plain.name case 0: named literal_name
+  fields[].body.plain.name case default: by_index nothing
+  fields[].body.sensitive.name switch: index
+  fields[].body.sensitive.name case 0: named literal_name
+  fields[].body.sensitive.name case default: by_index nothing
+  fields[].body.added.name switch: index
+  fields[].body.added.name case 0: named literal_name
+  fields[].body.added.name case default: by_index nothing
+  fields[].body.added_5.name switch: index
+  fields[].body.added_5.name case 0: named literal_name
+  fields[].body.added_5.name case default: by_index nothing
+  fields[].body.added_6.name switch: index
+  fields[].body.added_6.name case 0: named literal_name
+  fields[].body.added_6.name case default: by_index nothing
+  fields[].body.added_7.name switch: index
+  fields[].body.added_7.name case 0: named literal_name
+  fields[].body.added_7.name case default: by_index nothing
 
 struct field size=1..8589934608
   @0x0000   4bit      u4         kind  msb_first peek
@@ -71,24 +71,24 @@ struct field size=1..8589934608
   body case 6: added_6 incremental
   body case 7: added_7 incremental
   body case default: from_table table_entry
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
-  name switch: index
-  name case 0: named
-  name case default: by_index
+  body.plain.name switch: index
+  body.plain.name case 0: named literal_name
+  body.plain.name case default: by_index nothing
+  body.sensitive.name switch: index
+  body.sensitive.name case 0: named literal_name
+  body.sensitive.name case default: by_index nothing
+  body.added.name switch: index
+  body.added.name case 0: named literal_name
+  body.added.name case default: by_index nothing
+  body.added_5.name switch: index
+  body.added_5.name case 0: named literal_name
+  body.added_5.name case default: by_index nothing
+  body.added_6.name switch: index
+  body.added_6.name case 0: named literal_name
+  body.added_6.name case default: by_index nothing
+  body.added_7.name switch: index
+  body.added_7.name case 0: named literal_name
+  body.added_7.name case default: by_index nothing
 
 struct incremental size=2..8589934608
   @0x0000   2bit      u2         pattern  msb_first shares-byte must_eq=1

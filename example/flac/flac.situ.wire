@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: flac.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -54,15 +54,15 @@ struct frame_fields size=5..15
 struct frame_header size=6..16
   @0x0000   5..15     frame_fields fields  big
   ~         1         u8         crc  codec=crc8_smbus
-  block switch: block_code
-  block case 6: as_u8
-  block case 7: as_u16
-  block case default: block_implied
-  rate switch: rate_code
-  rate case 12: as_khz
-  rate case 13: as_hz
-  rate case 14: as_daz
-  rate case default: rate_implied
+  fields.block switch: block_code
+  fields.block case 6: as_u8 block_u8
+  fields.block case 7: as_u16 block_u16
+  fields.block case default: block_implied nothing
+  fields.rate switch: rate_code
+  fields.rate case 12: as_khz rate_khz
+  fields.rate case 13: as_hz rate_hz
+  fields.rate case 14: as_daz rate_daz
+  fields.rate case default: rate_implied nothing
   crc covers: fields fields.block fields.block.as_u16 fields.block.as_u16.size_less_one fields.block.as_u8 fields.block.as_u8.size_less_one fields.block.block_implied fields.block_code fields.channels fields.number fields.rate fields.rate.as_daz fields.rate.as_daz.tens_of_hz fields.rate.as_hz fields.rate.as_hz.hz fields.rate.as_khz fields.rate.as_khz.khz fields.rate.rate_implied fields.rate_code fields.reserved fields.reserved_too fields.sample_size fields.sync fields.variable_blocks summed
 
 struct info_body size=34
@@ -95,9 +95,9 @@ struct rate_khz size=1
 struct stream_head size=8..
   @0x0000   4         u8         marker  big must_eq="fLaC"
   @0x0004   4..       metadata_block blocks  big while=last==0
-  body switch: type
-  body case 0: as_info
-  body case default: as_other
+  blocks[].body switch: type
+  blocks[].body case 0: as_info info_body
+  blocks[].body case default: as_other other_body
 
 struct stream_info size=34
   @0x0000   2         u16        min_block  big

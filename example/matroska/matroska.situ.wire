@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: matroska.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -29,24 +29,24 @@ struct cluster size=2..
   body switch: width
   body case 1: eight wide_cluster
   body case default: sized sized_cluster
-  body switch: written
-  body case 144115188075855871: open
-  body case default: sized
+  body.eight.body switch: written
+  body.eight.body case 144115188075855871: open open_cluster
+  body.eight.body case default: sized sized_cluster
 
 struct document size=4..
   @0x0000   2..72057594037927947 ebml_header header  big
   ~         1..4      element_id segment  varint=element_id must_eq=408125543
   ~         1..8      element_size segment_size  varint=element_size
   ~         0..       segment_child children  sized-by=remaining
-  body switch: lead
-  body case 31: cluster
-  body case default: other
-  body switch: width
-  body case 1: eight
-  body case default: sized
-  body switch: written
-  body case 144115188075855871: open
-  body case default: sized
+  children[].body switch: lead
+  children[].body case 31: cluster cluster
+  children[].body case default: other element
+  children[].body.cluster.body switch: width
+  children[].body.cluster.body case 1: eight wide_cluster
+  children[].body.cluster.body case default: sized sized_cluster
+  children[].body.cluster.body.eight.body switch: written
+  children[].body.cluster.body.eight.body case 144115188075855871: open open_cluster
+  children[].body.cluster.body.eight.body case default: sized sized_cluster
 
 struct ebml_header size=2..72057594037927947
   @0x0000   1..4      element_id id  varint=element_id must_eq=440786851
@@ -71,12 +71,12 @@ struct segment_child size=2..
   body switch: lead
   body case 31: cluster cluster
   body case default: other element
-  body switch: width
-  body case 1: eight
-  body case default: sized
-  body switch: written
-  body case 144115188075855871: open
-  body case default: sized
+  body.cluster.body switch: width
+  body.cluster.body case 1: eight wide_cluster
+  body.cluster.body case default: sized sized_cluster
+  body.cluster.body.eight.body switch: written
+  body.cluster.body.eight.body case 144115188075855871: open open_cluster
+  body.cluster.body.eight.body case default: sized sized_cluster
 
 struct sized_cluster size=1..72057594037927943
   @0x0000   1..8      element_size size  varint=element_size

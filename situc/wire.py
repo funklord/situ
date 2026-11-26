@@ -61,7 +61,13 @@ from situc.timespec import spec_of
 #: Bumping it while that was true would have been a second inert value.
 #:
 #: **v3 adds a kind of line again**, the kernel block, for v1's reason.
-FORMAT_VERSION = 3
+#:
+#: **v4 renames lines rather than adding any**: a variant inside a nested
+#: struct is labelled by its path from the struct listing it, and its arms
+#: name their type, as a struct's own variant's always did. A v3 signature
+#: is read through `_qualified_from_v3`, so a tree regenerating its
+#: contract sees the format notice and no finding the bytes do not make.
+FORMAT_VERSION = 4
 
 
 def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
@@ -834,9 +840,9 @@ def _composites(struct: ResolvedStruct) -> list[str]:
 		if held.kind == "variant":
 			lines.extend(_arms(struct, held))
 		elif held.kind == "tlv":
-			lines.extend(_tlv(held))
+			lines.extend(_tlv(held, struct))
 		elif held.kind == "indexed":
-			lines.extend(_index(held))
+			lines.extend(_index(held, struct))
 	return lines
 
 
@@ -850,24 +856,33 @@ def _arms(struct: ResolvedStruct, placement: Placement) -> list[str]:
 	same worst case would otherwise be invisible too.
 	"""
 	by_path = {entry.placement.path: entry.placement for entry in struct.entries}
-	lines   = [f"  {placement.name} switch: {placement.discriminant}"]
+
+	# A variant inside an arm's struct is labelled by its path from this
+	# struct, not by its own name: json's `value` holds `object` and `array`,
+	# each with a `body`, and three blocks headed `body switch:` left a reader
+	# -- and any diff keyed by the label -- unable to tell which arm a line
+	# belonged to. A variant of this struct's own is its name, as before.
+	# The arm's members are named in the frame of the struct declaring the
+	# variant, so its type is found by this placement's path, not by them.
+	label   = placement.path.removeprefix(f"{struct.name}.")
+	lines   = [f"  {label} switch: {placement.discriminant}"]
 
 	# By the value on the wire rather than by declaration order, `default`
 	# last. Reordering the `case` clauses changes nothing a peer can observe,
 	# and a signature that churns for it teaches people to skim the diff --
 	# which is the one thing this file cannot survive.
 	for arm in sorted(placement.arm_cases, key=_arm_order):
-		label = "default" if arm.value is None else str(arm.value)
+		value = "default" if arm.value is None else str(arm.value)
 		if arm.member is None:
 			# `default: error` selects nothing, and that is a wire fact in its
 			# own right: a discriminant with no arm is a message this build
 			# refuses rather than one it reads short.
-			lines.append(f"  {placement.name} case {label}: error")
+			lines.append(f"  {label} case {value}: error")
 			continue
 
-		picked = by_path.get(arm.member)
 		named  = arm.member.rpartition(".")[2]
-		lines.append(f"  {placement.name} case {label}: {named}"
+		picked = by_path.get(f"{placement.path}.{named}")
+		lines.append(f"  {label} case {value}: {named}"
 		             + (f" {picked.type_name}" if picked is not None else ""))
 	return lines
 
@@ -881,7 +896,7 @@ def _rule_order(rule: ValueRule) -> tuple[int, int]:
 	return (1, 0) if rule.label is None else (0, rule.label)
 
 
-def _tlv(placement: Placement) -> list[str]:
+def _tlv(placement: Placement, struct: ResolvedStruct) -> list[str]:
 	"""How a tlv region's items are found, and what its tags mean.
 
 	Rendered in full rather than digested. A digest would say that the grammar
@@ -893,7 +908,7 @@ def _tlv(placement: Placement) -> list[str]:
 	tags would be a hundred lines, and would deserve them, being a hundred
 	separate promises.
 	"""
-	name    = placement.name
+	name    = placement.path.removeprefix(f"{struct.name}.")
 	grammar = placement.tlv_grammar
 	lines   = []
 
@@ -971,7 +986,7 @@ def _known_tag(known: KnownTag) -> str:
 	return " ".join(parts)
 
 
-def _index(placement: Placement) -> list[str]:
+def _index(placement: Placement, struct: ResolvedStruct) -> list[str]:
 	"""How an `indexed` region's offset table is read (section 9.3).
 
 	Two lines, which are the two facts the member line has no room for. The
@@ -998,7 +1013,7 @@ def _index(placement: Placement) -> list[str]:
 	if table is None:
 		return []
 
-	name = placement.name
+	name = placement.path.removeprefix(f"{struct.name}.")
 	# In bytes, the unit every width in this file is written in. Always whole:
 	# `place_indexed` refuses an offset type that is not a whole-byte scalar,
 	# so there is no bit-width form to render here.
@@ -1158,6 +1173,8 @@ def compare(before: str, after: str) -> Verdict:
 	"""Classify what changed between two committed signatures, with each
 	side's enum arms in reach of the constraint comparison (26.1095)."""
 	global _ARMS, _ENUM_LINES, _STRUCT_LINES
+	if _format_version(before) < 4 <= _format_version(after):
+		before = _qualified_from_v3(before, after)
 	_ARMS = (_enum_arms(before), _enum_arms(after))
 	_ENUM_LINES = (_enum_lines(before), _enum_lines(after))
 	_STRUCT_LINES = (_parse_signature(before), _parse_signature(after))
@@ -1167,6 +1184,75 @@ def compare(before: str, after: str) -> Verdict:
 		_ARMS = ({}, {})
 		_ENUM_LINES = ({}, {})
 		_STRUCT_LINES = ({}, {})
+
+
+def _switch_blocks(text: str) -> dict[str, list[str]]:
+	"""Each struct's variant labels, in the order the signature lists them."""
+	blocks: dict[str, list[str]] = {}
+	current: list[str] | None = None
+	for line in text.splitlines():
+		if line.startswith("struct "):
+			current = blocks.setdefault(line.split()[1], [])
+		elif not line.startswith("  "):
+			current = None
+		elif current is not None and " switch: " in line:
+			current.append(line.split()[0])
+	return blocks
+
+
+def _qualified_from_v3(before: str, after: str) -> str:
+	"""A v3 signature with its nested variants labelled as v4 labels them.
+
+	v3 headed a variant inside a nested struct with its bare name, so json's
+	`value` listed three blocks headed `body switch:`, and the comparison --
+	keyed by everything left of the colon -- kept the last of each key and
+	compared `as_elements` with `as_number`: BREAKING, for a file whose bytes
+	had not moved. Its nested arms named no type either.
+
+	Both sides list a struct's variants in the order of its entries, so the
+	n-th block of the old struct is the n-th of the new one wherever the old
+	label is the new one's last step. Where the counts or a label disagree,
+	the struct is left as it was and the comparison says what it sees. A
+	nested arm the old file could not type takes the new type when the arm's
+	name is the same: v3 made no promise about it, so there is nothing to
+	break. A nested tlv or indexed region, labelled by path in v4 too, is
+	not relabelled: no contract measured here, in fuzznet or in openmlx4
+	has one.
+	"""
+	labels  = _switch_blocks(after)
+	cases   = {(struct, line.split(": ", 1)[0]): line.split(": ", 1)[1]
+	           for struct, lines in _parse_signature(after).items()
+	           for line in lines if " case " in line.split(": ", 1)[0]}
+	out     = []
+	renamed: dict[str, str] = {}
+	struct  = ""
+	order   = 0
+	for line in before.splitlines():
+		if line.startswith("struct "):
+			struct  = line.split()[1]
+			order   = 0
+			renamed = {}
+			was     = _switch_blocks(before).get(struct, [])
+			now     = labels.get(struct, [])
+			if len(was) != len(now) or any(
+					new != old and not new.endswith(f".{old}")
+					for old, new in zip(was, now)):
+				was = now = []
+		elif not line.startswith("  "):
+			struct = ""
+		elif struct and " switch: " in line and order < len(now):
+			renamed = {line.split()[0]: now[order]}
+			order  += 1
+		label = line.split()[0] if line.startswith("  ") and struct else ""
+		if label in renamed and renamed[label] != label:
+			head, _, value = line.strip().partition(": ")
+			head  = renamed[label] + head[len(label):]
+			typed = cases.get((struct, head), "")
+			if typed.startswith(f"{value} ") and len(value.split()) == 1:
+				value = typed
+			line = f"  {head}: {value}"
+		out.append(line)
+	return "\n".join(out) + "\n"
 
 
 #: Each side's structs as `_parse_signature` reads them, so a member whose

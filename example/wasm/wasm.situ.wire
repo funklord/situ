@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: wasm.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -64,16 +64,16 @@ struct function_body size=2..
   @0x0000   1..5      uleb       groups  varint=uleb
   ~         0..25769803770 locals     local  sized-by=groups
   ~         until:0b  instruction code
-  immediate switch: op
-  immediate case 32: local_get
-  immediate case 65: as_i32
-  immediate case 66: as_i64
-  immediate case 106: i32_add
-  immediate case 108: i32_mul
-  immediate case 124: i64_add
-  immediate case 126: i64_mul
-  immediate case 172: i64_extend_i32_s
-  immediate case default: error
+  code[].immediate switch: op
+  code[].immediate case 32: local_get local_index
+  code[].immediate case 65: as_i32 i32_const
+  code[].immediate case 66: as_i64 i64_const
+  code[].immediate case 106: i32_add nothing
+  code[].immediate case 108: i32_mul nothing
+  code[].immediate case 124: i64_add nothing
+  code[].immediate case 126: i64_mul nothing
+  code[].immediate case 172: i64_extend_i32_s nothing
+  code[].immediate case default: error
 
 struct function_list size=0..4294967295
   parameter -         u32        size [stream]
@@ -121,13 +121,13 @@ struct module size=8..
   @0x0000   4         u8         magic  little must_eq="\0asm"
   @0x0004   4         u32        version  little must_eq=1
   @0x0008   0..       section    sections  sized-by=remaining
-  body switch: id
-  body case 0: custom
-  body case 1: types
-  body case 3: functions
-  body case 10: code
-  body case 11: data
-  body case default: other
+  sections[].body switch: id
+  sections[].body case 0: custom custom_body
+  sections[].body case 1: types type_body
+  sections[].body case 3: functions function_list
+  sections[].body case 10: code code_body
+  sections[].body case 11: data data_body
+  sections[].body case default: other other_body
 
 struct name size=1..4294967300
   @0x0000   1..5      uleb       length  varint=uleb

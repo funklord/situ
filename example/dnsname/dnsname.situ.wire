@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: dnsname.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -53,10 +53,10 @@ struct label size=1..64
 struct mail_exchange size=3..8194
   @0x0000   2         u16        preference  big
   @0x0002   1..8192   name       exchange
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
+  exchange.labels[].body switch: form
+  exchange.labels[].body case 0: text u8
+  exchange.labels[].body case 3: pointer_low u8
+  exchange.labels[].body case default: error
 
 struct message size=12..15034187757
   @0x0000   12        header     head  big
@@ -64,43 +64,43 @@ struct message size=12..15034187757
   ~         0..4832354295 resource   answers  sized-by=head.ancount
   ~         0..4832354295 resource   authority  sized-by=head.nscount
   ~         0..4832354295 resource   additional  sized-by=head.arcount
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
-  rdata switch: rtype
-  rdata case 1: a
-  rdata case 2: ns
-  rdata case 5: cname
-  rdata case 15: mx
-  rdata case 28: aaaa
-  rdata case default: other
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
-  rdata switch: rtype
-  rdata case 1: a
-  rdata case 2: ns
-  rdata case 5: cname
-  rdata case 15: mx
-  rdata case 28: aaaa
-  rdata case default: other
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
-  rdata switch: rtype
-  rdata case 1: a
-  rdata case 2: ns
-  rdata case 5: cname
-  rdata case 15: mx
-  rdata case 28: aaaa
-  rdata case default: other
+  questions[].qname.labels[].body switch: form
+  questions[].qname.labels[].body case 0: text u8
+  questions[].qname.labels[].body case 3: pointer_low u8
+  questions[].qname.labels[].body case default: error
+  answers[].owner.labels[].body switch: form
+  answers[].owner.labels[].body case 0: text u8
+  answers[].owner.labels[].body case 3: pointer_low u8
+  answers[].owner.labels[].body case default: error
+  answers[].rdata switch: rtype
+  answers[].rdata case 1: a a_data
+  answers[].rdata case 2: ns name_data
+  answers[].rdata case 5: cname name_data
+  answers[].rdata case 15: mx mx_data
+  answers[].rdata case 28: aaaa aaaa_data
+  answers[].rdata case default: other other_data
+  authority[].owner.labels[].body switch: form
+  authority[].owner.labels[].body case 0: text u8
+  authority[].owner.labels[].body case 3: pointer_low u8
+  authority[].owner.labels[].body case default: error
+  authority[].rdata switch: rtype
+  authority[].rdata case 1: a a_data
+  authority[].rdata case 2: ns name_data
+  authority[].rdata case 5: cname name_data
+  authority[].rdata case 15: mx mx_data
+  authority[].rdata case 28: aaaa aaaa_data
+  authority[].rdata case default: other other_data
+  additional[].owner.labels[].body switch: form
+  additional[].owner.labels[].body case 0: text u8
+  additional[].owner.labels[].body case 3: pointer_low u8
+  additional[].owner.labels[].body case default: error
+  additional[].rdata switch: rtype
+  additional[].rdata case 1: a a_data
+  additional[].rdata case 2: ns name_data
+  additional[].rdata case 5: cname name_data
+  additional[].rdata case 15: mx mx_data
+  additional[].rdata case 28: aaaa aaaa_data
+  additional[].rdata case default: other other_data
 
 struct mx_data size=0..65535
   parameter -         u16        size [stream]
@@ -108,10 +108,10 @@ struct mx_data size=0..65535
 
 struct name size=1..8192
   @0x0000   1..8192   label      labels  while=form==0&&rest!=0 while-max=128
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
+  labels[].body switch: form
+  labels[].body case 0: text u8
+  labels[].body case 3: pointer_low u8
+  labels[].body case default: error
 
 struct name_data size=0..65535
   parameter -         u16        size [stream]
@@ -125,10 +125,10 @@ struct question size=5..8196
   @0x0000   1..8192   name       qname
   ~         2         u16        qtype  big
   ~         2         u16        qclass  big
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
+  qname.labels[].body switch: form
+  qname.labels[].body case 0: text u8
+  qname.labels[].body case 3: pointer_low u8
+  qname.labels[].body case default: error
 
 struct resource size=11..73737
   @0x0000   1..8192   name       owner
@@ -137,10 +137,10 @@ struct resource size=11..73737
   ~         4         u32        ttl  big
   ~         2         u16        rdlength  big
   ~         0..65535  variant    rdata
-  body switch: form
-  body case 0: text
-  body case 3: pointer_low
-  body case default: error
+  owner.labels[].body switch: form
+  owner.labels[].body case 0: text u8
+  owner.labels[].body case 3: pointer_low u8
+  owner.labels[].body case default: error
   rdata switch: rtype
   rdata case 1: a a_data
   rdata case 2: ns name_data

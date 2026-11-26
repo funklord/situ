@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: tiff.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -22,9 +22,9 @@ struct ifd size=6..786426
   @0x0000   2         u16        count  endian-from=order
   @0x0002   0..786420 ifd_entry  entries  args order=order endian-from=order sized-by=count
   ~         4         u32        next  endian-from=order
-  value switch: type
-  value case 3: shorts
-  value case default: long
+  entries[].value switch: type
+  entries[].value case 3: shorts u16
+  entries[].value case default: long u32
 
 struct ifd_entry size=12
   parameter -         byte_order order [stream]
@@ -41,9 +41,9 @@ struct tiff_file size=8
   @0x0002   2         u16        magic  endian-from=byte_order must_eq=42
   @0x0004   4         u32        ifd_offset  endian-from=byte_order
   ~         6..786426 ifd        first  args order=byte_order endian-from=byte_order at=ifd_offset
-  value switch: type
-  value case 3: shorts
-  value case default: long
+  first.entries[].value switch: type
+  first.entries[].value case 3: shorts u16
+  first.entries[].value case default: long u32
 
 struct tiff_header size=8
   @0x0000   2         byte_order byte_order

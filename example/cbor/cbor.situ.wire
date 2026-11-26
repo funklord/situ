@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: cbor.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -53,28 +53,28 @@ struct array size=1..
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=4
   @0x0000   1..9      head       count  varint=head
   ~         0..       item       items  sized-by=count
-  body switch: major
-  body case 0: as_unsigned
-  body case 1: as_negative
-  body case 2: as_bytes
-  body case 3: as_text
-  body case 4: as_array
-  body case 5: as_map
-  body case 6: as_tagged
-  body case 7: as_simple
-  body case default: error
-  form switch: lead
-  form case 95: chunked
-  form case default: counted
-  form switch: lead
-  form case 127: chunked
-  form case default: counted
-  form switch: lead
-  form case 159: open
-  form case default: counted
-  form switch: lead
-  form case 191: open
-  form case default: counted
+  items[].body switch: major
+  items[].body case 0: as_unsigned unsigned_integer
+  items[].body case 1: as_negative negative_integer
+  items[].body case 2: as_bytes any_bytes
+  items[].body case 3: as_text any_text
+  items[].body case 4: as_array any_array
+  items[].body case 5: as_map any_map
+  items[].body case 6: as_tagged tagged
+  items[].body case 7: as_simple simple
+  items[].body case default: error
+  items[].body.as_bytes.form switch: lead
+  items[].body.as_bytes.form case 95: chunked chunked_bytes
+  items[].body.as_bytes.form case default: counted byte_string
+  items[].body.as_text.form switch: lead
+  items[].body.as_text.form case 127: chunked chunked_text
+  items[].body.as_text.form case default: counted text_string
+  items[].body.as_array.form switch: lead
+  items[].body.as_array.form case 159: open open_array
+  items[].body.as_array.form case default: counted array
+  items[].body.as_map.form switch: lead
+  items[].body.as_map.form case 191: open open_map
+  items[].body.as_map.form case default: counted map
 
 struct byte_string size=1..18446744073709551624
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=2
@@ -102,18 +102,18 @@ struct item size=1..
   body case 6: as_tagged tagged
   body case 7: as_simple simple
   body case default: error
-  form switch: lead
-  form case 95: chunked
-  form case default: counted
-  form switch: lead
-  form case 127: chunked
-  form case default: counted
-  form switch: lead
-  form case 159: open
-  form case default: counted
-  form switch: lead
-  form case 191: open
-  form case default: counted
+  body.as_bytes.form switch: lead
+  body.as_bytes.form case 95: chunked chunked_bytes
+  body.as_bytes.form case default: counted byte_string
+  body.as_text.form switch: lead
+  body.as_text.form case 127: chunked chunked_text
+  body.as_text.form case default: counted text_string
+  body.as_array.form switch: lead
+  body.as_array.form case 159: open open_array
+  body.as_array.form case default: counted array
+  body.as_map.form switch: lead
+  body.as_map.form case 191: open open_map
+  body.as_map.form case default: counted map
 
 struct map size=1..
   @0x0000   3bit      u3         major  msb_first shares-byte must_eq=5

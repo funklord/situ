@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: edges.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -63,9 +63,9 @@ enum shade_kind : u8 unknown=error
 struct after_opaque_arm size=3..258
   @0x0000   2..257    opaque_arm_section one  big
   ~         1         u8         tail  must_eq=126
-  payload switch: kind
-  payload case 0: raw
-  payload case default: error
+  one.payload switch: kind
+  one.payload case 0: raw u8
+  one.payload case default: error
 
 struct ahead_held size=5..260
   @0x0000   2         u16        lead  big
@@ -134,10 +134,10 @@ struct blocked_arg size=10..521
   @0x0000   1         u8         block
   @0x0001   5..516    negotiated one  args block=block big
   ~         4         u8         tag
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  one.carried switch: kind
+  one.carried case 1: marker kinded_a
+  one.carried case 2: flag u8
+  one.carried case default: error
   tag covers: body one one.block one.carried one.carried.flag one.carried.marker one.carried.marker.body one.carried.marker.tag one.checksum one.kind one.payload one.trailer
 
 struct bounded_varint size=3..19
@@ -170,10 +170,10 @@ struct chain_link size=3..
   body switch: kind
   body case 0: byte u8
   body case default: rest negotiated
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  body.rest.carried switch: kind
+  body.rest.carried case 1: marker kinded_a
+  body.rest.carried case 2: flag u8
+  body.rest.carried case default: error
   tail switch: next
   tail case 7: more chain_link
   tail case default: stop u8
@@ -182,16 +182,16 @@ struct chains size=5..
   @0x0000   1         u8         first
   @0x0001   3..       chain_link head  args kind=first big
   ~         1         u8         after
-  body switch: kind
-  body case 0: byte
-  body case default: rest
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
-  tail switch: next
-  tail case 7: more
-  tail case default: stop
+  head.body switch: kind
+  head.body case 0: byte u8
+  head.body case default: rest negotiated
+  head.body.rest.carried switch: kind
+  head.body.rest.carried case 1: marker kinded_a
+  head.body.rest.carried case 2: flag u8
+  head.body.rest.carried case default: error
+  head.tail switch: next
+  head.tail case 7: more chain_link
+  head.tail case default: stop u8
 
 struct classed size=4..
   @0x0000   2         u8         tag  big chars="A-Z"
@@ -378,14 +378,14 @@ struct hands_on size=12..1034
   @0x0001   5..516    negotiated carried  args block=block big
   ~         5..516    negotiated fixed  args block=2 big
   ~         1         u8         after
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  carried.carried switch: kind
+  carried.carried case 1: marker kinded_a
+  carried.carried case 2: flag u8
+  carried.carried case default: error
+  fixed.carried switch: kind
+  fixed.carried case 1: marker kinded_a
+  fixed.carried case 2: flag u8
+  fixed.carried case default: error
 
 struct hands_on_arms size=4..2068
   @0x0000   1         u8         block  max=16
@@ -397,14 +397,14 @@ struct hands_on_arms size=4..2068
   body case 1: one negotiated
   body case 2: many negotiated
   body case default: raw u8
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  body.one.carried switch: kind
+  body.one.carried case 1: marker kinded_a
+  body.one.carried case 2: flag u8
+  body.one.carried case default: error
+  body.many[].carried switch: kind
+  body.many[].carried case 1: marker kinded_a
+  body.many[].carried case 2: flag u8
+  body.many[].carried case default: error
 
 struct hands_on_indexed size=2..
   @0x0000   1         u8         block  max=16
@@ -418,14 +418,14 @@ struct hands_on_runs size=2..
   @0x0001   1         u8         n  max=4
   @0x0002   0..2064   negotiated counted  args block=block sized-by=n
   ~         0..       negotiated rest  args block=1 sized-by=remaining
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  counted[].carried switch: kind
+  counted[].carried case 1: marker kinded_a
+  counted[].carried case 2: flag u8
+  counted[].carried case default: error
+  rest[].carried switch: kind
+  rest[].carried case 1: marker kinded_a
+  rest[].carried case 2: flag u8
+  rest[].carried case default: error
 
 struct held_box size=2..257
   @0x0000   1         u8         kind  max=9
@@ -771,10 +771,10 @@ struct relays_on size=6..517
   parameter -         u8         block [stream]
   @0x0000   5..516    negotiated one  args block=block big
   ~         1         u8         after
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  one.carried switch: kind
+  one.carried case 1: marker kinded_a
+  one.carried case 2: flag u8
+  one.carried case default: error
 
 struct relays_on_divided size=0..
   parameter -         u8         block [stream]
@@ -785,29 +785,29 @@ struct relays_on_fixed size=21..2065
   parameter -         u8         block [stream]
   @0x0000   20..2064  negotiated four  args block=block big
   ~         1         u8         after
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  four[].carried switch: kind
+  four[].carried case 1: marker kinded_a
+  four[].carried case 2: flag u8
+  four[].carried case default: error
 
 struct relays_on_rest size=1..
   parameter -         u8         block [stream]
   @0x0000   1         u8         lead
   @0x0001   0..       negotiated rest  args block=block sized-by=remaining
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  rest[].carried switch: kind
+  rest[].carried case 1: marker kinded_a
+  rest[].carried case 2: flag u8
+  rest[].carried case default: error
 
 struct relays_on_runs size=2..2066
   parameter -         u8         block [stream]
   @0x0000   1         u8         n  max=4
   @0x0001   0..2064   negotiated counted  args block=block sized-by=n
   ~         1         u8         after
-  carried switch: kind
-  carried case 1: marker
-  carried case 2: flag
-  carried case default: error
+  counted[].carried switch: kind
+  counted[].carried case 1: marker kinded_a
+  counted[].carried case 2: flag u8
+  counted[].carried case default: error
 
 struct scoped_text size=22
   @0x0000   16        u8         name  big nul_terminated encoding=utf8
@@ -1022,9 +1022,9 @@ struct turns size=4..
   @0x0000   1         u8         w  max=2
   @0x0001   2..       turn_out   h  args w=w big
   ~         1         u8         after
-  v switch: more
-  v case 7: p
-  v case default: stop
+  h.v switch: more
+  h.v case 7: p turn_back
+  h.v case default: stop u8
 
 struct twin_sigs size=6
   @0x0000   3         inner_left left  big

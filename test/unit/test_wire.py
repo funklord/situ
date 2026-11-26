@@ -1178,7 +1178,118 @@ def test_a_signature_from_another_format_version_says_so() -> None:
 	found = wire.compare(_as_version(now, 1), now)
 
 	assert "format" in kinds(found)
-	assert "v1, compared against v3" in detail(found)
+	assert f"v1, compared against v{wire.FORMAT_VERSION}" in detail(found)
+
+
+# -- a variant inside a nested struct, labelled by its path (v4) -----------
+
+NESTED = """
+struct pa { u32 x; }
+struct pb { u32 y; }
+struct one {
+	u8 v;
+	variant body switch (v) { case 1: pa first; default: error; }
+}
+struct two {
+	u8 v;
+	variant body switch (v) { case 1: pb second; default: error; }
+}
+struct s { one a; two b; }
+"""
+
+
+def _listed_by(text: str, struct: str) -> list[str]:
+	"""One struct's lines of a signature, without their indent."""
+	lines, inside = [], False
+	for line in text.splitlines():
+		if line.startswith("struct "):
+			inside = line.split()[1] == struct
+		elif inside and line.startswith("  "):
+			lines.append(line.strip())
+	return lines
+
+
+def test_a_nested_variant_is_labelled_by_its_path() -> None:
+	"""v3 headed both of `s`'s nested variants `body switch: v`, so a reader
+	could not say which member a `body case 1` belonged to, and the
+	comparison, keyed by the label, kept only the last of each. Their arms
+	named no type either, which a struct's own variant always did."""
+	listed = _listed_by(signature(NESTED), "s")
+
+	assert "a.body switch: v" in listed
+	assert "a.body case 1: first pa" in listed
+	assert "b.body case 1: second pb" in listed
+	assert not [line for line in listed if line.startswith("body ")], listed
+	assert "body case 1: first pa" in _listed_by(signature(NESTED), "one")
+
+
+def test_swapping_a_nested_arms_type_is_visible() -> None:
+	"""`pa` and `pb` are both four bytes, so every member line is the same
+	either way; under v3 the nested arm named no type and this edit left the
+	signature of `s` byte-identical."""
+	swapped = NESTED.replace("case 1: pa first;", "case 1: pb first;")
+	found   = verdict(NESTED, swapped)
+
+	assert "breaking" in kinds(found), detail(found)
+	assert any(finding.subject == "s" for finding in found.findings), [
+		(finding.subject, finding.detail) for finding in found.findings]
+
+
+def test_a_nested_tlv_region_is_labelled_by_its_path() -> None:
+	"""The same collision for a tlv region: two members of one type each
+	holding `fields` listed two blocks headed `fields tlv`. No committed
+	contract here, in fuzznet or in openmlx4 has one, so the label costs no
+	file anything today."""
+	twice = TLV.replace("struct s {", "struct inner {") \
+		+ "struct s { inner a; inner b; }\n"
+	listed = _listed_by(signature(twice), "s")
+
+	assert "a.fields tlv tag: pv" in listed, listed
+	assert "b.fields tlv tag: pv" in listed, listed
+	assert "fields tlv tag: pv" in _listed_by(signature(twice), "inner")
+
+
+def _as_v3(text: str) -> str:
+	"""A v4 signature written as v3 wrote it: `s`'s nested labels bare and
+	their arms untyped -- the shape every committed v3 file has."""
+	out, inside = [], False
+	for line in _as_version(text, 3).splitlines():
+		if line.startswith("struct "):
+			inside = line.split()[1] == "s"
+		elif inside and line.startswith(("  a.body ", "  b.body ")):
+			head, _, value = line.strip().partition(": ")
+			head = head.split(".", 1)[1]
+			if " case " in head and value != "error":
+				value = value.split()[0]
+			line = f"  {head}: {value}"
+		out.append(line)
+	return "\n".join(out) + "\n"
+
+
+def test_a_v3_signature_reads_as_the_same_contract() -> None:
+	"""A consumer's committed v3 file against this build: without reading
+	the old labels as the new ones, json's said BREAKING for bytes that had
+	not moved, and every nested arm was "gone" and "gained" at once."""
+	now = signature(NESTED)
+	old = _as_v3(now)
+	assert "  body case 1: first\n" in old, old	# the doctoring took
+
+	assert kinds(wire.compare(old, now)) == {"format"}, detail(
+		wire.compare(old, now))
+
+
+def test_a_v3_signature_still_shows_a_real_change() -> None:
+	"""The control: the relabelling reads the old file, it does not excuse
+	it. An arm renamed in a v3 file is still a finding."""
+	now = signature(NESTED)
+	old = _as_v3(now).replace("  body case 1: second\n",
+	                          "  body case 1: other\n")
+	found = wire.compare(old, now)
+
+	assert kinds(found) - {"format"}, detail(found)
+	assert "b.body case 1" in " ".join(f.detail + f.subject
+	                                   for f in found.findings) or \
+		"b.body case 1" in wire.render_verdict(found)
 
 
 def test_the_same_version_says_nothing_about_the_format() -> None:
@@ -1195,7 +1306,7 @@ def test_a_signature_with_no_version_line_reads_as_v0() -> None:
 	found = wire.compare(_as_version(now, None), now)
 
 	assert "format" in kinds(found)
-	assert "v0, compared against v3" in detail(found)
+	assert f"v0, compared against v{wire.FORMAT_VERSION}" in detail(found)
 
 
 def test_the_format_notice_is_not_a_break_and_is_not_tallied() -> None:

@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: ipv4.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -58,10 +58,10 @@ struct nothing size=0
 
 struct option_list size=0..
   @0x0000   0..       ipv4_option all  sized-by=remaining
-  body switch: kind
-  body case 0: end_of_list
-  body case 1: no_operation
-  body case default: sized
+  all[].body switch: kind
+  all[].body case 0: end_of_list nothing
+  all[].body case 1: no_operation nothing
+  all[].body case default: sized sized_option
 
 struct sized_option size=1..254
   @0x0000   1         u8         length  min=2

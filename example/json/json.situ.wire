@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: json.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -78,12 +78,12 @@ struct value size=0..
   body case 116: as_true yes
   body case 123: as_object object
   body case default: as_number number
-  body switch: next
-  body case 125: as_empty
-  body case default: as_members
-  body switch: next
-  body case 93: as_empty
-  body case default: as_elements
+  body.as_object.body switch: next
+  body.as_object.body case 125: as_empty closed
+  body.as_object.body case default: as_members members
+  body.as_array.body switch: next
+  body.as_array.body case 93: as_empty closed
+  body.as_array.body case default: as_elements elements
 
 struct yes size=4
   @0x0000   4         u8         word  big must_eq="true"

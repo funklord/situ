@@ -1,4 +1,4 @@
-# situ wire signature v3
+# situ wire signature v4
 # schema: mqtt.situ
 #
 # What the bytes mean, and nothing about what they cost. Committed and
@@ -98,23 +98,23 @@ struct packet size=2..268435460
   body case 13: pingresp nothing
   body case 14: disconnect nothing
   body case default: error
-  will switch: will_flag
-  will case 0: will_absent
-  will case 1: will_present
-  will case default: error
-  user_name switch: user_name_flag
-  user_name case 0: user_absent
-  user_name case 1: user_present
-  user_name case default: error
-  password switch: password_flag
-  password case 0: password_absent
-  password case 1: password_present
-  password case default: error
-  ident switch: qos
-  ident case 0: at_most_once
-  ident case 1: at_least_once
-  ident case 2: exactly_once
-  ident case default: error
+  body.connect.will switch: will_flag
+  body.connect.will case 0: will_absent nothing
+  body.connect.will case 1: will_present will_message
+  body.connect.will case default: error
+  body.connect.user_name switch: user_name_flag
+  body.connect.user_name case 0: user_absent nothing
+  body.connect.user_name case 1: user_present mqtt_string
+  body.connect.user_name case default: error
+  body.connect.password switch: password_flag
+  body.connect.password case 0: password_absent nothing
+  body.connect.password case 1: password_present mqtt_string
+  body.connect.password case default: error
+  body.publish.ident switch: qos
+  body.publish.ident case 0: at_most_once nothing
+  body.publish.ident case 1: at_least_once ident_body
+  body.publish.ident case 2: exactly_once ident_body
+  body.publish.ident case default: error
 
 struct publish_body size=2..
   parameter -         u2         qos [stream]
