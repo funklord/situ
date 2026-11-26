@@ -39,6 +39,10 @@ ARG_FIELD = 7
 #: the read lands at the right offset of the wrong struct, which is right
 #: only where the nested struct is at offset 0 (26.184).
 FIELD_IN = 8
+#: `FIELD_IN` for a struct at a dynamic offset: the member holding it, the
+#: field, and the field's struct's static base inside it. The member's
+#: offset is measured at walk time and added to the base (26.1178).
+FIELD_AT = 0x1C
 #: The raw tag of the `tlv` item being measured (section 9.5). Ambient, the
 #: way `REMAINING` is: a selector is arithmetic over the tag -- protobuf's is
 #: `tag & 0x7` -- and the tag is not a field anything can be addressed by, so
@@ -238,6 +242,17 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			if load_field_in is None:
 				raise VmError("field_in needs a base-aware loader")
 			stack.append(load_field_in(index, base))
+			continue
+		if op == FIELD_AT:
+			# `FIELD_IN` whose base is where a member sits, measured now
+			# rather than packed: a struct after a run (26.1178).
+			holder = _struct.unpack_from("<I", code, pc)[0]
+			index  = _struct.unpack_from("<I", code, pc + 4)[0]
+			base   = _struct.unpack_from("<i", code, pc + 8)[0]
+			pc += 12
+			if load_field_in is None:
+				raise VmError("field_at needs a base-aware loader")
+			stack.append(load_field_in(index, offset_of(holder) + base))
 			continue
 		if op == ARG_FIELD:
 			if load_arg is None:

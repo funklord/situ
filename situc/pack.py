@@ -359,6 +359,12 @@ class Op:
 	# nesting offset is static; where it is not, the expression is refused
 	# and reported in `Coverage.unencodable` rather than encoded wrongly.
 	FIELD_IN	= 0x08		# + u32 placement index, i32 byte base
+	# A field of a nested struct whose OWN offset is dynamic -- an end
+	# record after a run of unknown length, ZIP's -- which `FIELD_IN`
+	# cannot carry, its base being a constant: the member holding the
+	# struct, then `FIELD_IN`'s two operands. A walker adds the member's
+	# offset to the base and reads as `FIELD_IN` does (26.1178).
+	FIELD_AT	= 0x1C		# + u32 member, u32 placement, i32 base
 	# The raw tag of the `tlv` item being measured (9.5). Ambient like
 	# `REMAINING`: a selector is arithmetic over the tag and the tag is not
 	# a field anything can be addressed by, so there is no index to load it
@@ -438,7 +444,8 @@ def _path_of(expr: ast.Expr) -> str | None:
 #: A path to (placement index, base). The base is the byte offset the
 #: field's struct sits at in the frame being walked, and is zero for a
 #: field of the struct itself (26.184).
-Resolver = Callable[[str | None], "tuple[int, int] | None"]
+Resolver = Callable[[str | None],
+                    "tuple[int, int] | tuple[int, int, int] | None"]
 #: A relation path resolves to the parameter it names and the placement
 #: within that parameter's struct.
 RelationResolver = Callable[[str], "tuple[int, int] | None"]
@@ -570,6 +577,11 @@ class Program:
 					self.emit(Op.RULE, self.rules[path])
 					return
 				raise PackError(f"no placement for `{path or expr}`")
+			if len(found) == 3:
+				field, start, holder = found
+				self.emit(Op.FIELD_AT, holder)
+				self.code += _struct.pack("<Ii", field, start)
+				return
 			index, base = found
 			if base:
 				self.emit(Op.FIELD_IN, index)
@@ -663,7 +675,8 @@ class Program:
 				raise PackError(f"`{expr.name}` takes one path")
 			path  = _path_of(expr.args[0])
 			found = resolve_path(path) if path else None
-			if found is None:
+			if found is None or len(found) == 3:
+				# `size(end.x)` through a dynamic step has no operand form.
 				raise PackError(f"no placement for `{path}` in `{expr.name}`")
 			index, base = found
 			if base:
@@ -1503,8 +1516,38 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			return None
 		return index, base + here.offset_bits // BITS_PER_BYTE
 
+	def resolve_through(owner: str,
+			parts: list[str]) -> tuple[int, int, int] | None:
+		"""A field of a nested struct whose own offset is dynamic, as
+		`FIELD_AT` reads it: the field, its static base inside the struct,
+		and the member holding the struct (26.1178).
+
+		One dynamic step and no more -- the member's offset is computed at
+		walk time, and everything past it has to be static, which is what
+		`resolve_in` answers or refuses. A plain nested struct only: a run,
+		an arm or a located member has no one place to read from.
+		"""
+		if len(parts) < 2:
+			return None
+		here = own_of.get(owner, {}).get(parts[0])
+		if here is None or here.offset_bits is not None \
+				or here.type_name not in own_of \
+				or here.array_count is not None or here.sized_by \
+				or here.size_expr is not None or here.repeat_while \
+				or here.delimiters or here.located is not None:
+			return None
+		member = placement_index.get(here.path)
+		deeper = resolve_in(here.type_name, parts[1:])
+		if member is None or deeper is None:
+			return None
+		index, base = deeper
+		if rows[index][1].offset_bits is None:
+			return None
+		return index, base, member
+
 	def resolve_path(path: str | None,
-			owner: str | None = None) -> tuple[int, int] | None:
+			owner: str | None = None
+			) -> tuple[int, int] | tuple[int, int, int] | None:
 		if path is None:
 			return None
 		if path in placement_index:
@@ -1529,6 +1572,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				found = resolve_in(name, parts[1:])
 				if found is not None:
 					return found
+		# Last: a struct at a dynamic offset, which only a program's own
+		# field read can carry (`FIELD_AT`); every other caller takes a
+		# pair, and a triple there is one it cannot encode.
+		if owner is not None:
+			return resolve_through(owner, parts)
+		for name, _ in order:
+			if parts[0] == name and len(parts) > 2:
+				through = resolve_through(name, parts[1:])
+				if through is not None:
+					return through
 		return None
 
 	# A `const` is a compile-time constant, so it becomes a literal in the
@@ -1817,7 +1870,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			program.emit(Op.PUSH, table.count_fixed, "<q")
 		else:
 			found = resolve_path(table.count_path, owner)
-			if found is None:
+			if found is None or len(found) == 3:
 				# Named rather than dropped, for the reason the region loop
 				# above gives: a silently absent program is a check that
 				# reports clean.
@@ -2032,8 +2085,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			continue
 		owner_name = let_owner.name
 
-		def in_owner(path: str | None,
-				owner: str = owner_name) -> tuple[int, int] | None:
+		def in_owner(path: str | None, owner: str = owner_name
+				) -> tuple[int, int] | tuple[int, int, int] | None:
 			return resolve_path(path, owner)
 
 		for let in let_owner.lets:
@@ -2093,8 +2146,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			body_start = len(program.code)
 			element_name = run_rule.element.name
 
-			def in_element(path: str | None,
-					element: str = element_name) -> tuple[int, int] | None:
+			def in_element(path: str | None, element: str = element_name
+					) -> tuple[int, int] | tuple[int, int, int] | None:
 				return resolve_path(path, element)
 			try:
 				program.compile(run_rule.body, in_element, consts,

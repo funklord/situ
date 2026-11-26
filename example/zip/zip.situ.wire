@@ -20,16 +20,9 @@ target buffer
 
 struct archive size=22..
   @0x0000   0..       u8         body  sized-by=max(remaining,22)-22
-  ~         4         u32        end_signature  little must_eq=101010256
-  ~         2         u16        disk  little
-  ~         2         u16        cd_disk  little
-  ~         2         u16        disk_entries  little
-  ~         2         u16        total_entries  little
-  ~         4         u32        cd_size  little
-  ~         4         u32        cd_offset  little
-  ~         2         u16        comment_len  little must_eq=0
-  ~         0..12887523285 central_directory directory  args count=total_entries at=cd_offset
-  archive refuses: entry_counts when archive.disk_entries != archive.total_entries
+  ~         22        end_record end  little
+  ~         0..12887523285 central_directory directory  args count=end.total_entries at=end.cd_offset
+  archive refuses: entry_counts when archive.end.disk_entries != archive.end.total_entries
 
 struct cd_entry size=46..196651
   @0x0000   4         u32        signature  little must_eq=33639248

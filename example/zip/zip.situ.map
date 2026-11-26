@@ -13,14 +13,15 @@
 
 struct archive size=22.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   archive.body                           offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  archive.end_signature                  offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.disk                           offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.cd_disk                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.disk_entries                   offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.total_entries                  offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.cd_size                        offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.cd_offset                      offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
-  archive.comment_len                    offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.end                            offset=Dynamic size=Fixed(22) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  archive.end.signature                  offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.disk                       offset=FrameStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.cd_disk                    offset=FrameStatic(0x06) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.disk_entries               offset=FrameStatic(0x08) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.total_entries              offset=FrameStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.cd_size                    offset=FrameStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.cd_offset                  offset=FrameStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  archive.end.comment_len                offset=FrameStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord address=FrameStable
   archive.directory                      offset=DataPlaced size=Bounded(0, 12887523285) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   archive.directory.count                parameter
   archive.directory.entries              offset=FrameStatic(0x00) size=Bounded(0, 12887523285) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=FrameStable

@@ -67,27 +67,14 @@ struct end_record {
 	u16 comment_len   [must_eq = 0];
 }
 
-// The archive: everything before the end record, then the record's own
-// fields, then the directory where they place it.
-//
-// The record's fields are restated here rather than held as `end_record
-// end;`. That spelling generates and reads alike in all four backends, but
-// the packed image a walker reads cannot yet name a field of a struct that
-// sits after a run of unknown length -- `end.total_entries` is
-// "unencodable" to it (26.1177) -- so neither walker could follow the
-// directory's argument. `end_record` above is the same 22 bytes, for a
-// reader that takes the tail of a file on its own.
 struct archive {
-	u8   body[max(remaining, 22) - 22];
-	u32  end_signature  [must_eq = 0x06054b50];
-	u16  disk;
-	u16  cd_disk;
-	u16  disk_entries;
-	u16  total_entries;
-	u32  cd_size;
-	u32  cd_offset;
-	u16  comment_len    [must_eq = 0];
-	central_directory(count = total_entries) directory at cd_offset;
+	// Everything before the end record: local headers, data, and the
+	// central directory, which `directory` reads where `cd_offset` says.
+	// `end` follows a run of unknown length, so its offset is measured; a
+	// walker reads `end.total_entries` through `FIELD_AT` (26.1178).
+	u8          body[max(remaining, 22) - 22];
+	end_record  end;
+	central_directory(count = end.total_entries) directory at end.cd_offset;
 }
 
 // What a reader relies on: the end record is a fixed 22 bytes it can read
@@ -98,5 +85,5 @@ require in_place(end_record.cd_offset);
 
 // A single-disk archive states its entries twice; two numbers that differ
 // would have a reader trust one and an attacker the other.
-when archive.disk_entries != archive.total_entries
+when archive.end.disk_entries != archive.end.total_entries
 	refuse entry_counts "a single-disk archive states its entries once";

@@ -10085,11 +10085,25 @@ header's count reaches it, and that form worked when tried against
 `example/zip` followed, read from its end: the 22-byte end record places
 the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
-argument, and a limit: the packed image cannot name a field of a struct
-placed after a run of unknown length (`end.total_entries` is
-"unencodable"), so the schema states the end record's fields in
-`archive` itself. Lifting that needs an opcode reading a field at a
-member's dynamic offset, in the packer and both walkers -- open.
+argument, and a limit the next entry lifts.
+
+### 26.1178 A walker reads a field of a struct placed after a run
+
+The packed image named a nested field with `FIELD_IN`, a placement and a
+constant base -- the struct's offset in the frame. ZIP's end record follows
+a run of unknown length, so its offset is not a constant, and
+`end.total_entries` was "unencodable": the packer left the central
+directory's argument out and neither walker could follow it. `FIELD_AT`
+(0x1C) carries the member holding the struct beside `FIELD_IN`'s operands;
+a walker measures where that member sits and reads at that base plus the
+static one. One measured step only -- everything inside the struct must be
+static, as `FIELD_IN` already asks -- and only for a program's own field
+read; `size`, `offset` and `count` of such a field stay unencodable, having
+no operand for it. `example/zip` holds the end record as `end_record end;`
+again. Held in `test_a_field_after_a_run_reaches_the_walkers.py`, which
+asks both walkers over Info-ZIP's two archives where the directory is and
+how long, because the walker comparison over random bytes never meets a
+ZIP: dropping the measured offset in either walker fails it.
 
 ### 26.1176 Python reads a variant's discriminant once per chain
 

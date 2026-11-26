@@ -9073,6 +9073,10 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_LET 0x0Eu
 /* A rule over a run's elements (26.1170): + u32 row. */
 #define OP_RULE 0x0Fu
+/* `OP_FIELD_IN` for a struct at a dynamic offset (26.1178): + u32 member,
+ * u32 placement, i32 base -- the member's offset, asked now, joins the
+ * base. */
+#define OP_FIELD_AT 0x1Cu
 
 /* Whether a run's size program states BYTES rather than a count of
  * elements. The bare `x[remaining]` is the only form that does, and it
@@ -9300,6 +9304,39 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			}
 			stack[depth++] = value;
 			pc += 8u;
+			continue;
+		}
+
+		/* A field of a struct whose own offset is dynamic -- an end record
+		 * after a run of unknown length: where the member holding it sits,
+		 * asked as `offset(f)` is, then the read `OP_FIELD_IN` makes at
+		 * that base (26.1178). */
+		if (op == OP_FIELD_AT) {
+			if (pc + 12u > image->code_len || depth >= STACK_DEPTH) {
+				return SITU_WALK_MALFORMED;
+			}
+			if (load == NULL) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			int64_t at = 0;
+			int64_t value = 0;
+			const uint8_t *arg = image->code + pc;
+			situ_walk_err err = load(ctx, SITU_WALK_ASK_OFFSET,
+			                         u32_at(arg), 0, &at);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			const int64_t base = at + (int32_t)u32_at(arg + 8u);
+			if (base < INT32_MIN || base > INT32_MAX) {
+				return SITU_WALK_BOUNDS;
+			}
+			err = load(ctx, SITU_WALK_ASK_VALUE, u32_at(arg + 4u),
+			           (int32_t)base, &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = value;
+			pc += 12u;
 			continue;
 		}
 
