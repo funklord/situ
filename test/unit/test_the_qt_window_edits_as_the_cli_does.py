@@ -479,3 +479,28 @@ def test_the_window_has_an_icon_with_no_theme(window_binary: Path,
 	                      capture_output=True, text=True, timeout=60,
 	                      env=environment)
 	assert done.stdout.strip() == "present", done.stderr
+
+
+def test_the_window_grabs_itself(window_binary: Path, tmp_path: Path) -> None:
+	"""`--grab FILE` is how `make screenshots` makes the README's picture:
+	the window opened on a message, drawn headless and saved as a PNG of
+	the size the README shows. A grab that wrote nothing, or an empty
+	window, would put a broken image in the README."""
+	schema  = tmp_path / "label.situ"
+	message = tmp_path / "label.bin"
+	picture = tmp_path / "window.png"
+	schema.write_text(SCHEMA)
+	message.write_bytes(MESSAGE)
+	done = subprocess.run(
+		[str(window_binary), "--grab", str(picture), str(schema),
+		 str(message)],
+		capture_output=True, text=True, timeout=120, cwd=ROOT,
+		env=dict(os.environ, QT_QPA_PLATFORM="offscreen",
+		         SITU_BIN=str(ROOT / "bin")))
+	assert done.returncode == 0, done.stderr
+	png = picture.read_bytes()
+	assert png[:8] == b"\x89PNG\r\n\x1a\n"
+	width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+	assert (width, height) == (960, 720)
+	# A window with its table drawn is far from one flat colour.
+	assert len(png) > 8000, len(png)

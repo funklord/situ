@@ -93,6 +93,24 @@ Nothing about that is a lint. `offset = Scanned` is why `version()` costs a
 scan rather than a load, and every backend emits exactly the operations the
 vector supports.
 
+The editor shows the same verdicts on a real message -- here a TCP SYN, every
+field at its offset to the bit, and in the Write column what a store would do:
+the fields under the checksum go stale with it, and the checksum is computed
+rather than written.
+
+![situ-edit-gui with a TCP SYN header open: offset, size, field and value for
+each member, bit fields at offsets such as 12.4 and 13.6, a Write column
+marking the fields the checksum covers as [tag] and the checksum itself as
+[read-only], and the options as a nested list that
+moves](doc/screenshot/situ-edit-gui.png)
+
+And the advisor says what to change, and what each change costs:
+
+![situc advise on example/tcp: an atomic-write requirement the bit-packed
+flags fail, with its cause and remedy, then suggestions to bound the option
+list and the payload, each with its cost and what it
+yields](doc/screenshot/situc-advise.svg)
+
 ## The shape of it
 
 A schema is the format, not a description of a language's objects:

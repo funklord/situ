@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="868" height="514" viewBox="0 0 868 514" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-size="14">
+<rect width="868" height="514" rx="6" fill="#1e1e1e"/>
+<text x="14" y="28" fill="#8ab4f8" xml:space="preserve">$ situc advise example/tcp/tcp.situ</text>
+<text x="14" y="46" fill="#d6d6d6" xml:space="preserve">warning: requirement not satisfied</text>
+<text x="14" y="64" fill="#d6d6d6" xml:space="preserve">   --&gt; example/tcp/tcp.situ:131:8</text>
+<text x="14" y="82" fill="#d6d6d6" xml:space="preserve">    |</text>
+<text x="14" y="100" fill="#d6d6d6" xml:space="preserve">131 | assert atomic(tcp_header.syn);</text>
+<text x="14" y="118" fill="#d6d6d6" xml:space="preserve">    |        ^^^^^^^^^^^^^^^^^^^^^^ atomic is NonAtomic</text>
+<text x="14" y="136" fill="#d6d6d6" xml:space="preserve">   --&gt; example/tcp/tcp.situ:41:3</text>
+<text x="14" y="154" fill="#d6d6d6" xml:space="preserve">    |</text>
+<text x="14" y="172" fill="#d6d6d6" xml:space="preserve"> 41 |   bit       syn;</text>
+<text x="14" y="190" fill="#d6d6d6" xml:space="preserve">    |   ^^^^^^^^^^^^^^ bit-field applies here</text>
+<text x="14" y="208" fill="#d6d6d6" xml:space="preserve">    |</text>
+<text x="14" y="226" fill="#d6d6d6" xml:space="preserve">    = atomic(tcp_header.syn) is NonAtomic, required AtomicWord</text>
+<text x="14" y="244" fill="#d6d6d6" xml:space="preserve">    = `atomic` asks that the access fits in a single instruction</text>
+<text x="14" y="262" fill="#d6d6d6" xml:space="preserve">    = caused by: a bit-packed field -- writing it is a read-modify-write of the containing byte</text>
+<text x="14" y="280" fill="#d6d6d6" xml:space="preserve">    = 21 other field(s) share this weakness: tcp_header.summed, tcp_header.data_offset, tcp_header.&lt;</text>
+<text x="14" y="298" fill="#d6d6d6" xml:space="preserve">reserved0&gt;, tcp_header.cwr, ...</text>
+<text x="14" y="316" fill="#d6d6d6" xml:space="preserve">    = remedy: widen the field to a whole number of bytes to regain atomic access</text>
+<text x="14" y="334" fill="#d6d6d6" xml:space="preserve">5 suggestion(s), highest-yield class first.</text>
+<text x="14" y="352" fill="#d6d6d6" xml:space="preserve"></text>
+<text x="14" y="370" fill="#d6d6d6" xml:space="preserve">option_list.all: put an upper bound on this region</text>
+<text x="14" y="388" fill="#d6d6d6" xml:space="preserve">    its size is Unbounded, so no caller can size a buffer for the struct that holds it; bound the en</text>
+<text x="14" y="406" fill="#d6d6d6" xml:space="preserve">closing frame, or size this from a length field instead of `remaining`</text>
+<text x="14" y="424" fill="#d6d6d6" xml:space="preserve">    cost: depends on the bound chosen (the bound is the cost, and it is unchosen)</text>
+<text x="14" y="442" fill="#d6d6d6" xml:space="preserve">    yields: a worst-case extent, so the struct becomes statically allocatable</text>
+<text x="14" y="460" fill="#d6d6d6" xml:space="preserve"></text>
+<text x="14" y="478" fill="#d6d6d6" xml:space="preserve">tcp_header.payload: put an upper bound on this region</text>
+<text x="14" y="496" fill="#d6d6d6" xml:space="preserve">    its size is Unbounded, so no caller can size a buffer for the struct that holds it; bound the en</text>
+</svg>

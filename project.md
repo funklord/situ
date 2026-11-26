@@ -423,6 +423,10 @@ without huge dependencies kept, and the pertinent code shared:
   root (moved from `vendor/qtty` 2026-11-23, as harmonization.md settled):
   `--tui` is the same window on a terminal; `make gui-example` opens it on
   NTP's server reply. `situ-edit-tui` stays curses, needing only Python.
+  `--grab FILE` saves the window as a PNG and exits; `make screenshots`
+  uses it headless for the README's picture of a TCP SYN, beside
+  `situc advise` on TCP rendered as SVG (`tool/screenshot.py`,
+  `doc/screenshot/`, harmonization's "Show it", 2026-11-26).
 - The holder's earlier question -- vendor qtty for the window? -- is
   settled by that request: yes, beside the curses TUI, not instead of it.
 - Later in the run, for fuzznet: replay windows (26.1120) in all four

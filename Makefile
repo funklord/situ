@@ -64,7 +64,7 @@ export RUNTIME_INC RUNTIME_LIB
 	fuzz fuzz-generated fuzz-cpp fuzz-walker fuzz-walker-differ \
 	fuzz-walker-c-differ fuzz-python \
 	fuzz-rust test-codec-san \
-	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example install-gui FORCE \
+	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example install-gui screenshots FORCE \
 	cross cross-test install uninstall clean deb-clean help deb deb-check
 
 all: runtime
@@ -86,6 +86,7 @@ help:
 	@echo '  gui        build the Qt window: situ-edit-gui, --tui with qtty (0034)'
 	@echo '  gui-example  open the window on an NTP reply (GUI_FLAGS=--tui on a terminal)'
 	@echo '  install-gui  install situ-edit-gui beside situ-edit (after install)'
+	@echo '  screenshots  the README pictures, from this build (doc/screenshot/)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
 	@echo '  fuzz-python  the Python harnesses under atheris (pip install --user atheris)'
@@ -362,6 +363,12 @@ $(GUI_BIN): $(BUILD_DIR)/gui/Makefile $(GUI_QTTY) $(GUI_SOURCES)
 # to itself first, so it goes in the same bin/ as `make install` puts them.
 # Its own target, as hull's and netcfgd's are, so installing situ never
 # needs Qt; `make install` first, since the window is nothing without them.
+# The README's pictures (harmonization: "Show it"), made from this build
+# rather than by hand: the window grabbed headless and `situc advise` as
+# SVG text. Overwritten when what they show changes, not per build.
+screenshots: gui
+	$(PYTHON) tool/screenshot.py '$(GUI_BIN)'
+
 install-gui: gui
 	install -Dm755 '$(GUI_BIN)' '$(DESTDIR)$(PREFIX)/bin/situ-edit-gui'
 	install -Dm644 packaging/situ-edit-gui.1 \

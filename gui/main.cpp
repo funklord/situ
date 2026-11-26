@@ -275,6 +275,10 @@ int main(int argc, char **argv)
 	    QStringLiteral("with --tui: print the window as the terminal shows "
 	                   "it, COLSxROWS, after --open and --set, and exit"),
 	    QStringLiteral("COLSxROWS"));
+	const QCommandLineOption grab_option(QStringLiteral("grab"),
+	    QStringLiteral("save the window as a PNG, after --open and --set, "
+	                   "and exit: the README's picture, `make screenshots`"),
+	    QStringLiteral("FILE"));
 	const QCommandLineOption scheme_option(QStringLiteral("scheme"),
 	    QStringLiteral("print whether the desktop reads as dark, light or "
 	                   "unknown -- what the window follows -- and exit"));
@@ -286,7 +290,7 @@ int main(int argc, char **argv)
 	parser.addOptions({structure, offset, length, argument, hex, set,
 	                   set_bytes, insert, remove, out, open_field, no_ui, keys_option,
 	                   tui_option,
-	                   gui_option, snapshot});
+	                   gui_option, snapshot, grab_option});
 	parser.process(application);
 	if (parser.isSet(scheme_option)) {
 		std::printf("%s\n", qPrintable(qtkit_scheme_name(
@@ -327,7 +331,8 @@ int main(int argc, char **argv)
 	if (!window.open(options, parser.value(out))) {
 		std::fprintf(stderr, "situ-edit-gui: %s\n",
 		             qPrintable(window.error()));
-		if (parser.isSet(no_ui) || parser.isSet(snapshot))
+		if (parser.isSet(no_ui) || parser.isSet(snapshot)
+		    || parser.isSet(grab_option))
 			return 1;
 	}
 
@@ -434,7 +439,8 @@ int main(int argc, char **argv)
 	}
 	if (!applied) {
 		std::fprintf(stderr, "situ-edit-gui: %s\n", qPrintable(why));
-		if (parser.isSet(no_ui) || parser.isSet(snapshot))
+		if (parser.isSet(no_ui) || parser.isSet(snapshot)
+		    || parser.isSet(grab_option))
 			return 1;
 	}
 
@@ -522,6 +528,23 @@ int main(int argc, char **argv)
 		             "with qtty\n");
 		return 2;
 #endif
+	}
+
+	// The window as a person sees it, drawn once the event loop has laid it
+	// out: under `-platform offscreen` this is how `make screenshots` makes
+	// the README's picture from the build rather than by hand.
+	if (parser.isSet(grab_option)) {
+		const QString path = parser.value(grab_option);
+		here->resize(960, 720);
+		here->show();
+		QTimer::singleShot(0, here, [here, path] {
+			const bool saved = here->grab().save(path, "PNG");
+			if (!saved)
+				std::fprintf(stderr, "situ-edit-gui: cannot write %s\n",
+				             qPrintable(path));
+			QCoreApplication::exit(saved ? 0 : 1);
+		});
+		return application.exec();
 	}
 
 	if (parser.isSet(no_ui)) {
