@@ -156,9 +156,8 @@ buffer, the byte read as zero and `default: error` choosing nothing. The
 four backends and the Python walker's `frame_min` now guard the byte's
 arrival at the cursor (`traverse.peeked_at_the_cursor`), answering
 `max(at, pos + width)` -- never above the truth, since an overstated need
-stalls a framer for good. The walker adds the width to its sum instead,
-which is the same answer wherever nothing fixed follows the variant in
-its struct -- true of every corpus shape.
+stalls a framer for good. The walker takes the same larger of the two,
+so the five readers agree with a fixed member after the variant as well.
 Five corpus structs take the guard: json's three, sexpr's, matroska's.
 
 **Runs 17-19 (2026-11-24), rules over lists, folded at 96% of the week:**

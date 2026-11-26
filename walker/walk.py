@@ -3153,12 +3153,46 @@ def frame_min(view: View, depth: int = 0) -> int:
 	if shape.fixed:
 		return (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 
-	total = 0
+	total = owed = 0
 	for member in view.image.members(shape):
 		if view.image.placements[member].located_code != NONE:
 			continue
+		ends = _undelivered_discriminant(view, member)
+		if ends is not None:
+			owed = max(owed, ends)
+			continue
 		total += _member_min(view, member, depth)
-	return total
+	return max(total, owed)
+
+
+def _undelivered_discriminant(view: View, index: int) -> int | None:
+	"""Where a variant's discriminant ends, if it reaches into the variant
+	and has not arrived; None otherwise.
+
+	`chosen_arm` reads a missing discriminant as zero, as the four
+	backends do, and with `default: error` that chose nothing and the
+	variant measured zero: `peek u8 kind skip;` before its variant was
+	whole at no bytes here and in all four (fixed 2026-11-26, with
+	`traverse.peeked_at_the_cursor`). The struct then needs at least the
+	bytes through the discriminant, and at least what its other members
+	need -- the larger, as the backends answer `max(at, pos + width)`.
+	Adding the two instead would overstate by the discriminant's width
+	wherever an arm may be empty and a fixed member follows, and an
+	overstated need stalls a framer. A discriminant before the variant is
+	owed by its own member already.
+	"""
+	arms = view.image.arms.get(index)
+	if arms is None or arms[0] in (NONE, REMAINING):
+		return None
+	try:
+		here = offset_bits(view, index) // BITS_PER_BYTE
+		ends = (offset_bits(view, arms[0]) + content_bits(view, arms[0])
+		        + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+	except (Refused, Unplaceable):
+		return None
+	if ends <= here or view.at + ends <= view.limit:
+		return None
+	return ends
 
 
 def _member_min(view: View, index: int, depth: int) -> int:
@@ -3249,25 +3283,6 @@ def _member_min(view: View, index: int, depth: int) -> int:
 				return left + 1
 		return at - (view.at + here)
 
-	# A VARIANT WHOSE DISCRIMINANT HAS NOT ARRIVED owes the bytes up to
-	# where it ends. `chosen_arm` reads a missing one as zero, as the four
-	# backends do, and with `default: error` that chose nothing and the
-	# variant measured zero: `peek u8 kind skip;` before its variant was
-	# whole at no bytes here and in all four (fixed 2026-11-26, with
-	# `traverse.peeked_at_the_cursor`). Only a discriminant reaching INTO
-	# the variant -- a peek at its start; one before it is owed by its own
-	# member already.
-	arms = view.image.arms.get(index)
-	if arms is not None and arms[0] not in (NONE, REMAINING):
-		try:
-			ends = (offset_bits(view, arms[0])
-			        + content_bits(view, arms[0])
-			        + BITS_PER_BYTE - 1) // BITS_PER_BYTE
-		except (Refused, Unplaceable):
-			ends = None
-		if ends is not None and ends > here \
-				and view.at + ends > view.limit:
-			return ends - here
 	# A NESTED STRUCT or a SELECTED ARM frames itself, which is the whole
 	# of 26.684: its extent shrinks and its own minimum does not.
 	inner = _sub_view(view, index, depth)

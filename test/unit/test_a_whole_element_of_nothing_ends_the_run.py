@@ -101,3 +101,36 @@ def test_the_walker_frames_it_as_the_four_do(tmp_path: Path) -> None:
 		walked = [frame_min(acquire(image, data[:length], grant))
 		          for length in range(len(data) + 1)]
 		assert walked == answers, (data, walked)
+
+
+#: The same element with a fixed member after its variant, where the
+#: walker once added the discriminant's byte to the trailer's and the four
+#: took the larger: both lower bounds, and the readers disagreed.
+TRAILED = SCHEMA.replace("""		default: error;
+	}
+}""", """		default: error;
+	}
+	u8 end;
+}""")
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_a_trailer_after_the_variant_frames_alike(tmp_path: Path) -> None:
+	assert "u8 end;" in TRAILED
+	source = tmp_path / "unit.situ"
+	source.write_text(TRAILED, encoding="ascii")
+	command = fourway.build(tmp_path, source)
+	parsed, resolved = analysed(source)
+	image = load(pack(parsed, resolved, metadata=True)[0])
+	grant = next(index for index in range(len(image.structs))
+	             if image.struct_name(index) == "grant")
+	for data in (b"", b"  n", b" none!", b"user:rw."):
+		walked = [frame_min(acquire(image, data[:length], grant))
+		          for length in range(len(data) + 1)]
+		for name, argv in command.items():
+			text = fourway.answers(argv, data, tmp_path)
+			section = text.split("-- grant\n")[1].split("\n-- ")[0]
+			line = next(one for one in section.splitlines()
+			            if one.startswith("required()"))
+			assert [int(word.lstrip("*")) for word in line.split()[1:]] \
+				== walked, (name, data, line, walked)
