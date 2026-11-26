@@ -1083,8 +1083,13 @@ def test_c_and_rust_validate_the_same_arms(path: Path) -> None:
 	built = generate_c(schema, resolved, name)
 	# `(arm` and then `)` or `,`: an arm whose struct takes arguments is
 	# validated with them, `_validate(arm, <value>)` (0068).
-	in_c  = len(re.findall(r"_validate\(arm[,)]", built.header + built.source))
-	in_rs = generate_rs(schema, resolved, name).module.count("arm.validate()?")
+	# And a level of a cycle is validated without the nesting probe its top
+	# already ran -- `_check_below(arm, NULL` and `arm.validate_below()?`
+	# (26.1175) -- which validates the arm all the same.
+	in_c  = len(re.findall(r"_validate\(arm[,)]|_check_below\(arm, NULL[,)]",
+	                       built.header + built.source))
+	in_rs = len(re.findall(r"arm\.validate(?:_below)?\(\)\?",
+	                       generate_rs(schema, resolved, name).module))
 
 	assert in_c == in_rs, (
 		f"{path.name}: C validates {in_c} variant arms and Rust {in_rs}; "

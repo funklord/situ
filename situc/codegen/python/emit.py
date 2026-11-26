@@ -315,8 +315,10 @@ _REFUSES = re.compile(r"\s*raise \w+Error\(")
 #: And a third, an element of a run, held under a local named for the run
 #: (26.789).
 _PROPAGATES = re.compile(
-	r"\s*(?:self\.[\w.]+(?:\(\))?\.validate\(\)|_ = self\.\w+"
-	r"|_\w+_element\.validate\(\)"
+	# `validate_below` too: a level of a cycle checked without the probe its
+	# top already ran (26.1175) refuses exactly as `validate` does.
+	r"\s*(?:self\.[\w.]+(?:\(\))?\.validate(?:_below)?\(\)|_ = self\.\w+"
+	r"|_\w+_element\.validate(?:_below)?\(\)"
 	# A struct placed by `at`: its bytes from the message, then the struct
 	# taken over them and validated (26.967) -- both name the member.
 	r"|_bytes = self\.\w+|\w+\.at\(self\._msg, .*\)\.validate\(\))\s*$")
