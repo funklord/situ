@@ -65,7 +65,7 @@ export RUNTIME_INC RUNTIME_LIB
 	fuzz-walker-c-differ fuzz-python \
 	fuzz-rust test-codec-san \
 	veryclean distclean style style-source style-tool style-docs hooks walk-c gui gui-example install-gui FORCE \
-	cross cross-test install uninstall clean help deb deb-check
+	cross cross-test install uninstall clean deb-clean help deb deb-check
 
 all: runtime
 
@@ -709,24 +709,28 @@ deb-check: deb
 		'$(CURDIR)/example/arp/arp.situ' '$(CURDIR)/example/arp/arp.vectors'
 	@echo 'deb-check: the installed situc built a schema against the installed runtime'
 
-clean:
+clean: deb-clean
 	@$(MAKE) --no-print-directory -C runtime/c BUILD_DIR='$(BUILD_DIR)/runtime' clean
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' clean
 	@$(MAKE) --no-print-directory -C test/cross BUILD_DIR='$(BUILD_DIR)/cross' clean
 	rm -rf '$(BUILD_ROOT)'
-	@# The package's object tree, removed whole only once the name is
-	@# known to be a relative path below this tree holding nothing tracked.
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+	rm -rf .mypy_cache .pytest_cache
+
+# The package's object tree alone: what debian/rules' clean runs, so a bare
+# dpkg-buildpackage no longer takes the plain build (and every package in
+# it) through `distclean`. Removed whole only once the name is known to be
+# a relative path below this tree holding nothing tracked.
+deb-clean:
 	@d='$(DEB_BUILD_DIR)'; \
 	case "$$d" in ''|.|./|..|../*|/*|*/..|*/../*) \
-		echo "clean: DEB_BUILD_DIR='$$d' is not a directory below this tree; not removing it" >&2; \
+		echo "deb-clean: DEB_BUILD_DIR='$$d' is not a directory below this tree; not removing it" >&2; \
 		exit 1 ;; \
 	esac; \
 	if [ -n "$$(git ls-files -- "$$d" 2>/dev/null | head -n 1)" ]; then \
-		echo "clean: $$d holds tracked files; not removing it" >&2; exit 1; \
+		echo "deb-clean: $$d holds tracked files; not removing it" >&2; exit 1; \
 	fi; \
 	echo "rm -rf '$$d'"; rm -rf "$$d"
-	find . -name __pycache__ -type d -prune -exec rm -rf {} +
-	rm -rf .mypy_cache .pytest_cache
 
 # The shared style gate: one tool, copied verbatim from
 # ~/.claude/tool/style_gate.py into every private project. It refuses to

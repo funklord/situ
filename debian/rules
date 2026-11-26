@@ -32,6 +32,17 @@ override_dh_auto_install:
 	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr $(SITU_TREE)
 	$(MAKE) install-gui DESTDIR=$(CURDIR)/debian/tmp PREFIX=/usr $(SITU_TREE)
 
+# dh_auto_clean would run the Makefile's distclean, the first of distclean,
+# realclean and clean it finds -- `rm -rf build`, the plain build and every
+# package collected in it, from a dpkg-buildpackage run only to make one
+# more. The package's own tree, and the Python caches distclean took, which
+# a source package built afterwards would otherwise carry. `make deb` passes
+# -nc and runs none of this.
+override_dh_auto_clean:
+	$(MAKE) deb-clean DEB_BUILD_DIR='$(DEB_BUILD_DIR)'
+	find . -name .git -prune -o \( -name __pycache__ -o -name .pytest_cache \) \
+		-type d -prune -exec rm -rf {} +
+
 override_dh_auto_test:
 	# The suite is `make test`; it wants a build tree the packaging does
 	# not keep.

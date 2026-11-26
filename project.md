@@ -6450,6 +6450,22 @@ shipped a stale binary -- a `-nc` build that kept it skipped
 `dh_auto_build` and still packaged the edit -- but the next install target
 might not. A from-clean package is `make clean deb`.
 
+**And a bare `dpkg-buildpackage` keeps `build/`** (2026-11-26, the same
+fault bbq-predictor and apt-emerge had). `make deb` passes `-nc`;
+Debian's builders and anybody typing the command do not, and with no
+`override_dh_auto_clean` dh ran this Makefile's `distclean` -- `rm -rf`
+of the whole build root, the plain build and every package collected in
+it. `debian/rules` now runs `deb-clean`, the guarded removal of
+`DEB_BUILD_DIR` that `clean` used to hold inline and now depends on,
+plus the `__pycache__` and `.pytest_cache` sweep `distclean` did, since
+`dpkg-source -b` puts a cache into the source tarball when one is there.
+Measured in a scratch clone, compiler invocations for `make`, `make
+gui`, `make deb`, `make deb`, `make`, `make gui`, an edit, `make deb`,
+`make`: 1, 28, 29, 0, 0, 0, 1, 1; a bare `dpkg-buildpackage` then
+rebuilt `build-deb` alone and a file planted under `build/` survived it;
+the window carries `_chk` imports and one debug file named for its
+build-id; lintian shows nothing above info.
+
 ### 24.1 Packaging
 
 `make deb` produces three packages. `situc` and `libsitu-dev` are two
