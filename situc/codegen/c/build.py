@@ -2029,9 +2029,27 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			continue
 
 		if held.located:
-			# `late_position_refusals` let it through: the struct's last
-			# member, a byte run (26.1015).
+			# `late_position_refusals` let it through: the struct's
+			# trailing members, each placed by an expression (26.1015).
+			if held.element_bits == BITS_PER_BYTE and held.scalar is not None:
+				parts.append(Part(LOCATED, held, local))
+				continue
+			# A struct, or a run of them -- ELF's tables, TIFF's first
+			# directory -- whose extent is in its own bytes, so the reader
+			# cannot say where it ends before they are down. Placed where
+			# the field the caller handed says, and the reader asked
+			# afterwards, over what was written, where it finds it and how
+			# long it is (26.1190). Only an offset that is one such field.
+			offset = next((one for one in parts
+			               if one.placement.name == held.located
+			               and one.role == SCALAR), None)
+			if held.type_name not in (structs or {}) or offset is None:
+				return [], f"`{traverse.local_name(struct, held)}` is " \
+				           "located by an expression that is not a field " \
+				           "the caller hands, so where it lands is not " \
+				           "known until the reader is asked"
 			parts.append(Part(LOCATED, held, local))
+			parts[-1].equals = offset.local
 			continue
 
 		if held.kind == "marker":
@@ -4140,6 +4158,47 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				# Used, even where nothing in its scope is stored: a TLV
 				# region the caller hands encoded reads it in no store.
 				f"\t(void)situ_little_{held.name};",
+				"",
+			]
+		elif part.role == LOCATED and part.equals:
+			struct_view = ident(prefix, struct.name, "view")
+			run_view = ident(prefix, struct.name, local, "view")
+			lines += [
+				f"\t/* {local}: at `{held.located}`, which the caller handed,",
+				"\t * and its extent is in its own bytes: they go down there,",
+				"\t * zeros before them, and the reader is then asked where it",
+				"\t * finds them and how long they are (26.1190). */",
+				"\t{",
+				f"\t\tconst uint64_t {NEED}_to = (uint64_t){part.equals};",
+				f"\t\tsitu_msg_t  {NEED}_msg;",
+				f"\t\tsitu_view_t {NEED}_whole;",
+				f"\t\tsitu_view_t {NEED}_run;",
+				"",
+				f"\t\tif ({NEED}_to < {AT}) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				f"\t\tif ({NEED}_to > {CAP} || {CAP} - {NEED}_to < {part.local}_len) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemset({OUT} + {AT}, 0, (uint32_t){NEED}_to - {AT});",
+				f"\t\tif ({part.local}_len != 0u) {{",
+				f"\t\t\tsitu_put({OUT} + {NEED}_to, {part.local}, {part.local}_len);",
+				"\t\t}",
+				f"\t\t{AT} = (uint32_t){NEED}_to + {part.local}_len;",
+				f"\t\tsitu_msg_init(&{NEED}_msg, {OUT}, {AT});",
+				f"\t\tif ({struct_view}(&{NEED}_msg, 0, "
+				+ ("" if struct.layout.is_fixed_size else f"{AT}, ")
+				+ f"&{NEED}_whole) != SITU_OK",
+				f"\t\t    || {run_view}(&{NEED}_msg, {NEED}_whole, &{NEED}_run)"
+				" != SITU_OK",
+				f"\t\t    || (uint64_t)({NEED}_run.base - {OUT}) != {NEED}_to",
+				f"\t\t    || {NEED}_run.limit != {part.local}_len) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				"\t}",
 				"",
 			]
 		elif part.role == LOCATED:

@@ -1814,6 +1814,14 @@ def late_position_refusals(struct: "ResolvedStruct") -> list[str]:
 		if held.located and held is members[-1] \
 				and held.element_bits == 8 and held.scalar is not None:
 			continue
+		# And members placed at the END in order, every one after it
+		# located too: ELF's program and section tables. Every byte
+		# before each is down when the writer reaches it, so the same
+		# argument holds; what each may be is the writer's question
+		# (26.1190).
+		if held.located and all(one.located
+		                        for one in members[members.index(held):]):
+			continue
 		if held.located:
 			bad.append(f"`{local_name(struct, held)}` is located by an "
 			           f"expression, so where it lands is not where the "

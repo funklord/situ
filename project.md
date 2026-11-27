@@ -10100,6 +10100,32 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1190 A builder places a located table
+
+From the goal-gap walk after 26.1189: an ELF or TIFF file could not be
+built at all. Every member located by an expression was refused but a
+last byte run (26.1015, BMP's pixels), and ELF's program and section
+tables are two located structs, TIFF's first directory one. A table's
+extent is in its own bytes -- a count the header hands it, a count it
+starts with -- so the reader cannot say where it ends before it is down,
+and C's located view computes it from whatever the buffer held there.
+
+Trailing located members are taken now, each in order. Where the offset
+is one field the caller hands (`phoff`, `shoff`, `ifd_offset`), C puts
+the caller's bytes there, zeros before them, and asks the reader
+afterwards, over what was written, where it finds them and how long they
+are: a table longer than its count, an offset behind what is written, or
+one past the buffer is refused. An ELF built so is read by `readelf`. The
+bytes between ELF's tables, section contents the schema does not model,
+are zeros for the caller to fill.
+
+C alone: the other three read a located member as bytes, and a struct's
+accessor differs in each, so they decline it by name, as they do other
+parts C writes first. ZIP stays refused: its directory sits inside the
+body before it, at an offset read from the end record, which no caller
+field states -- placing that needs the writer to check bytes already
+written rather than write them, a different operation.
+
 ### 26.1189 A builder holds an arm to what its reader reads
 
 The open item 26.1182 left, taken up at the holder's word: a builder
