@@ -10100,6 +10100,19 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1185 `max(A, S) - S` is proved non-negative
+
+The range check reads a size by interval, term by term, so "what the
+parent leaves less a field" -- `max(n, 1 + p) - 1 - p` -- read as possibly
+negative, and HTTP/2 and pcapng both spelt `max(n - 1 - p, 0)` around the
+refusal. `expr._subtracts_a_max_argument` grants the lower bound 0 where the
+terms subtracted are exactly one of `max`'s arguments, compared as source
+in any order. A proof rather than a widening -- the trap `Interval`'s own
+docstring records, an approximation that happens to satisfy the predicate
+about to be tested -- so `max(n, p) - q`, one term too many, and `min` are
+refused as before. All four read it alike, pinned in
+`test_a_max_less_its_argument_is_not_negative`.
+
 ### 26.1184 pcapng joins the corpus
 
 pcapng is the capture file Wireshark and tcpdump write by default: blocks
@@ -10114,7 +10127,8 @@ the first run: the sizes of 26.1182 and 26.1183 at work.
 The options' length is spelt `max(body_length - 20 - padded, 0)` where
 `max(body_length, 20 + padded) - 20 - padded` says the same thing: the
 range check reads an expression by interval and cannot see that the second
-is never negative (26.1182). Two protocols in a day spelt around it.
+is never negative (26.1182). Two protocols in a day spelt around it, and
+26.1185 proves the second form.
 
 ### 26.1183 gzip joins the corpus, and the vector suites read an arm
 
@@ -10163,9 +10177,9 @@ What it took, and what it found:
   call). "The parent's length less a field, held at zero" --
   `max(length - 1 - pad_length, 0)` -- is how a padded payload hands its
   inner part a length, and sizes have always taken both in every reader.
-  A `let` still cannot read a parameter, and the range check is by
-  interval, so `max(length, 1 + p) - 1 - p` reads as possibly negative;
-  `max(x, 0)` is the spelling that says it.
+  A `let` still cannot read a parameter. The range check read
+  `max(length, 1 + p) - 1 - p` as possibly negative until 26.1185, so
+  the example spells `max(x, 0)`.
 - **C's arm accessors over a parameter-switched variant did not compile.**
   The byte-run arms' `_ptr` named `arg_padded` without taking it, the
   validate fit check called them without it, and the extent helper took

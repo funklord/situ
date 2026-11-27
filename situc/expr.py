@@ -263,6 +263,30 @@ INTERVAL_RULES: dict[str, Callable[[Interval, Interval], Interval]] = {
 }
 
 
+def _subtracts_a_max_argument(expr: ast.Binary) -> bool:
+	"""Whether `expr` is `max(A, S) - s1 - s2 ...` with S the sum s1 + s2 ...
+
+	Terms are compared as source text, in any order, so `max(n, 1 + p) - 1
+	- p` and `max(n, p + 1) - p - 1` both qualify and `max(n, p) - q` does
+	not."""
+	from situc.unparse import expr_to_source
+
+	taken: list[str] = []
+	head: ast.Expr = expr
+	while isinstance(head, ast.Binary) and head.op == "-":
+		taken.append(expr_to_source(head.right))
+		head = head.left
+	if not isinstance(head, ast.Call) or head.name != "max":
+		return False
+
+	def addends(one: ast.Expr) -> list[str]:
+		if isinstance(one, ast.Binary) and one.op == "+":
+			return addends(one.left) + addends(one.right)
+		return [expr_to_source(one)]
+
+	return any(sorted(addends(arg)) == sorted(taken) for arg in head.args)
+
+
 def interval_of(expr: ast.Expr, env: Env) -> Interval:
 	"""The range an expression can take, given what is known about its inputs.
 
@@ -416,7 +440,17 @@ def interval_of(expr: ast.Expr, env: Env) -> Interval:
 		rule = INTERVAL_RULES.get(expr.op)
 		if rule is None:
 			return Interval.unknown()
-		return rule(left, right)
+		found = rule(left, right)
+		# `max(A, S) - S` is never below zero, whatever A and S are, and an
+		# interval read term by term cannot see it: HTTP/2's padded payload
+		# and pcapng's options both spelt `max(x - s, 0)` around a refusal
+		# of `max(n, 1 + p) - 1 - p` (26.1182, 26.1184). A proof, not a
+		# widening: it is granted only where the subtracted terms are the
+		# terms of one of `max`'s arguments, compared as written.
+		if expr.op == "-" and _subtracts_a_max_argument(expr):
+			found = Interval(max(found.lo, 0) if found.lo_known else 0,
+			                 None if found.hi is None else max(found.hi, 0))
+		return found
 
 	if isinstance(expr, ast.Call):
 		return _call_interval(expr, env)
