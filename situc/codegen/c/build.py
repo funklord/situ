@@ -1043,6 +1043,8 @@ def _arm_refusal(placement: Placement, header: str, prefix: str,
 			return f"holds a run of {placement.array_count} " \
 			       f"{placement.scalar.bits}-bit elements, and an arm " \
 			       "places a run of bytes but not of wider elements"
+		if _arm_ended(placement):
+			return _delimited_refusal(placement)
 		if placement.radix is None and placement.element_bits \
 				!= BITS_PER_BYTE and (placement.sized_by
 				                      or placement.size_expr):
@@ -1105,7 +1107,27 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 	# to its reader's extent where it cannot.
 	if _arm_span(placement):
 		return Part(SPAN, placement, local)
+	# And a run its delimiter ends, as a member's is: `u8 line[] until
+	# ","` was ONE byte as well, before the delimiter the reader needs
+	# (26.1189). `_arm_refusal` has settled the shape.
+	if _arm_ended(placement):
+		part = Part(ENDED, placement, local,
+		            delimiter=placement.delimiters[0],
+		            digits=placement.delimiter_cap or 0)
+		part.trim = tuple(placement.trim_set)
+		# Several delimiters: where the reader stops depends on the
+		# content too, and an arm has no `_len` to ask, so the message is
+		# held to its extent instead (below).
+		part.held = len(placement.delimiters) > 1
+		return part
 	return _value_part(SCALAR, placement, local)
+
+
+def _arm_ended(placement: Placement) -> bool:
+	"""Whether an arm is a run of bytes its delimiter ends."""
+	return bool(placement.delimiters) and placement.radix is None \
+		and placement.array_count is None and placement.scalar is not None \
+		and placement.element_bits == BITS_PER_BYTE
 
 
 def _arm_span(placement: Placement) -> bool:
@@ -1165,7 +1187,7 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	# -- MQTT's PUBLISH, whose packet has a `_required` and no `_extent`.
 	found = traverse.enclosing_arm(struct, inner)
 	sized = found is not None and found[0].size_expr is not None
-	part.held = not sized and (part.deferred or (
+	part.held = not sized and (part.deferred or part.held or (
 		part.role == SPAN and inner.sized_by != "remaining"))
 	if argued is not None:
 		part.equals = _local(struct, argued)

@@ -10116,7 +10116,11 @@ the third was the one a user would meet first.
   every size field is -- DNS's `rest`, the frame's `length` for its
   default arm -- and where a parameter or an expression does, the
   message is held as below. A run of wider elements (`u16 wide[n]`) is
-  refused, as a fixed one already was.
+  refused, as a fixed one already was. Asking the same of every arm's
+  part found one more: a run its delimiter ends, `u8 line[] until ","`,
+  was one byte with no delimiter after it. It is written as a member's
+  run is, through the member's refusals, so a `before` run is still
+  declined for the reason it is at the top level.
 - **An arm only the whole message measures is held to the reader's
   extent.** SETTINGS is `length / 6` entries and GOAWAY
   `max(length, 8) - 8` bytes, handed the frame's `length`; `_validate`

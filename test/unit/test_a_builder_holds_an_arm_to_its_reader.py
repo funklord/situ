@@ -127,3 +127,32 @@ def test_a_dns_label_is_as_long_as_its_text(tmp_path: Path) -> None:
 	         _case(label, text=b"a" * 64)]
 	assert _said(DNS, tmp_path, cases) == [
 		"07" + b"example".hex(), "3f" + "61" * 63, "refused"]
+
+
+DELIMITED_ARM = """target buffer;
+endian big;
+struct delimited_arm {
+	u8 pick;
+	variant held switch (pick) {
+		case 1:  u8  line[] until ",";
+		case 2:  u8  fixed[3];
+		default: error;
+	}
+	u8  after;
+}
+"""
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_a_delimited_arm_is_written_with_its_delimiter(tmp_path: Path) -> None:
+	"""`u8 line[] until ","` in an arm was one byte too, with no
+	delimiter after it; it is written as a member's run is, and content
+	holding the delimiter is refused."""
+	schema = tmp_path / "delimited_arm.situ"
+	schema.write_text(DELIMITED_ARM, encoding="ascii")
+	line = _units(schema)["delimited_arm.line"]
+	cases = [_case(line, line=b"ab", after=7), _case(line, line=b"",
+	                                                 after=7),
+	         _case(line, line=b"a,b", after=7)]
+	assert _said(schema, tmp_path, cases) == [
+		"016162" + "2c" + "07", "01" + "2c" + "07", "refused"]
