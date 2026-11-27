@@ -635,9 +635,19 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		# C's: a struct argument is no byte, and where it is a byte order
 		# the fields in its scope are stored in the order it says
 		# (26.1018).
-		return [f"\tsitu_little_{part.placement.name} = "
-		        f"{traverse.argument_name(part.placement)} in "
-		        f"{part.little!r}"] if part.little else []
+		name = traverse.argument_name(part.placement)
+		# C's: one that chooses the arm this builder writes is held to
+		# it, or the reader reads the arm it names (26.1189).
+		test = (f"{name} != {py_name(part.chooser.local)}.situ_tag"
+		        if part.chooser is not None
+		        else f"{name} != {part.stated}" if part.stated is not None
+		        else f"{name} in {tuple(part.others)!r}" if part.others
+		        else "")
+		return [*([f"\tif {test}:",
+		           f'\t\traise ConstraintError("{part.placement.path}: '
+		           'chooses another arm")'] if test else []),
+		        *([f"\tsitu_little_{part.placement.name} = {name} in "
+		           f"{part.little!r}"] if part.little else [])]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\ttry:",
@@ -780,10 +790,18 @@ def _closing(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	truncation -- and a writer holding the whole message reports that as
 	the caller's length disagreeing with their bytes."""
 	held = _held_to_the_reader(struct, parts)
-	if not any(part.verify for part in parts):
-		return [*held, "\tsitu_view.validate()"]
+	if any(part.held for part in _every(parts)):
+		# C's: an arm only the whole message measures, so the message is
+		# held to the extent its reader states (26.1189).
+		held = [*held, "\tsitu_view.validate()",
+		        "\tif situ_view._extent != situ_at:",
+		        f'\t\traise ConstraintError("{struct.name}: read as ending '
+		        'elsewhere than it was written")']
+	else:
+		held = [*held, "\tsitu_view.validate()"]
+	if not any(part.verify or part.held for part in _every(parts)):
+		return held
 	return ["\ttry:", *("\t" + line for line in held),
-	        "\t\tsitu_view.validate()",
 	        "\texcept (BoundsError, TruncatedError) as situ_short:",
 	        f'\t\traise ConstraintError("{struct.name}: the message states '
 	        'more than was written") from situ_short']

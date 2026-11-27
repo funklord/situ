@@ -10100,6 +10100,52 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1189 A builder holds an arm to what its reader reads
+
+The open item 26.1182 left, taken up at the holder's word: a builder
+could hold a nested part to the extent its reader states, and a parameter
+that chooses an arm to that arm's case. Doing it found a third shape, and
+the third was the one a user would meet first.
+
+- **An arm that is a byte run as long as something it names was written
+  as ONE byte**, in C; the other three left it out. DNS's `u8 text[rest]`
+  could build only one-letter labels, and HTTP/2's default arm
+  `u8 other[length]` only one-byte payloads: every other length was
+  refused by the closing validation. Such an arm is a span now. Where a
+  field of the struct counts it, the field is computed from the bytes as
+  every size field is -- DNS's `rest`, the frame's `length` for its
+  default arm -- and where a parameter or an expression does, the
+  message is held as below. A run of wider elements (`u16 wide[n]`) is
+  refused, as a fixed one already was.
+- **An arm only the whole message measures is held to the reader's
+  extent.** SETTINGS is `length / 6` entries and GOAWAY
+  `max(length, 8) - 8` bytes, handed the frame's `length`; `_validate`
+  takes bytes past what an arm reads as trailing, so `length = 3` over
+  one byte validated as a nine-byte frame with a byte belonging to
+  nothing. 26.1182 declined these builders; they are built now, and once
+  the message is whole its `_extent`, with the struct's arguments, must
+  equal what was written. Not where the variant states its size: that
+  field is computed from the arm, so MQTT's PUBLISH ends where its bytes
+  do by construction (and its packet has a `_required`, no `_extent`).
+  A struct with no `_extent` to ask is refused by name; two edge shapes
+  are, both one-byte writers before.
+- **A parameter that chooses the arm is held to it.** A builder per arm
+  writes the arm it was called for, and `header_block` handed
+  `priority = 0` for its prioritized arm wrote bytes the reader read as
+  the other arm. 26.1182 recorded that declining it undid MQTT's
+  `publish_body` (26.1022); a check is not a refusal, and the builders
+  now refuse another arm's case, or a named case for the default arm. A
+  builder taking each arm as a value holds the argument to the tag of the
+  arm it is handed (`edges.chain_link`, built unchecked until now).
+
+All four builders, and the agreement harness hands such an argument the
+case of the arm it builds -- the help 26.1182 gave it is now what a caller
+would do rather than what the builders fail to. `example/http2` gains RFC
+9113 6.5's rule that a SETTINGS length is a multiple of six: the reader
+took `length = 7` as one entry, and the builder, holding to the reader,
+agreed with it. `test_a_builder_holds_an_arm_to_its_reader` pins the bytes
+in all four.
+
 ### 26.1188 Two runs that share a total, and the advice built on them
 
 Walking the aims after the corpus run: every `situc` command was asked of
@@ -10256,7 +10302,8 @@ What it took, and what it found:
   parameter has none to write, so the caller's argument can name another
   arm. Declining that undid MQTT's `publish_body` builders, built that way
   on purpose with the closing validation as the check (26.1022), so it
-  stands; the four-builders harness hands the arm's own case.
+  stood; the four-builders harness handed the arm's own case. 26.1189
+  holds both halves instead.
 - **A located arm was framed as bytes in sequence.** Once a sized arm
   could be framed, a variant beside a located arm (`t far at n`) added
   `far`'s size to what follows it; a variant with a located arm keeps the
@@ -10272,10 +10319,9 @@ What it took, and what it found:
 
 `situ_frame_required` joins `READS_LATE`: the variant is guarded on every
 byte any arm's arguments read, so the flags byte is awaited for a type
-whose arm reads only the length. Open, as backlog rather than a decision:
-a builder could hold every nested part to the extent its reader states,
-and a parameter that chooses an arm to that arm's case, which would replace
-the refusal above and the harness's help.
+whose arm reads only the length. The builders hold every such arm to the
+extent its reader states, and a parameter that chooses an arm to that
+arm's case, since 26.1189, which replaced the refusal above.
 
 ### 26.1181 WebSocket's length is a marked integer, and the corpus has one
 

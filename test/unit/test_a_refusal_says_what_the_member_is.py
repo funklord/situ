@@ -48,16 +48,21 @@ Claim = Callable[[Placement, ResolvedSchema], bool]
 CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("repeats while a condition holds and this schema emits no count",
 	 lambda pl, res: pl.repeat_while is not None),
+	# A fixed count, or one a value states (26.1189): wider than bytes
+	# either way, which is what an arm cannot place.
 	("holds a run of",
-	 lambda pl, res: pl.scalar is not None and pl.array_count is not None),
+	 lambda pl, res: pl.scalar is not None and (pl.array_count is not None
+	                                            or pl.element_bits != 8)),
 	("is a run of",
 	 lambda pl, res: pl.element_bits != 8),
 	("is a run whose element",
 	 lambda pl, res: pl.scalar is not None and pl.element_bits != 8),
 	("states its size, which is the arm's length and computed only",
 	 lambda pl, res: pl.kind == "variant" and pl.size_expr is not None),
-	("a field the caller supplies, and is not measured by it alone",
-	 lambda pl, res: bool(pl.arguments)),
+	# An arm the whole message measures, where the struct states no
+	# extent to hold the message to (26.1189).
+	("is measured only by the whole message",
+	 lambda pl, res: pl.array_count is None),
 	("is a sealed region", lambda pl, res: pl.kind == "sealed"),
 	("is a coded region", lambda pl, res: pl.kind == "coded"),
 	("is a TLV region", lambda pl, res: pl.kind == "tlv"),

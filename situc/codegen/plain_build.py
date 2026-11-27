@@ -56,7 +56,7 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False		# checked against the reader's accessor of
 					# the member's own name, which a member in
 					# an arm is not (26.1016, 26.1019)
-	if part.others and part.role not in (BITS, NESTED, SCALAR, VARINT):
+	if part.others and part.role not in (ARG, BITS, NESTED, SCALAR, VARINT):
 		return False
 	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field" \
 			and not (part.role == ENDED and part.code):

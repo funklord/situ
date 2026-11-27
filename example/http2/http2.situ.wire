@@ -164,3 +164,4 @@ struct setting size=6
 struct settings_payload size=0..4294967292
   parameter -         u32        length [stream]
   @0x0000   0..4294967292 setting    entries  sized-by=length/6
+  settings_payload refuses: settings_size when settings_payload.length % 6 != 0

@@ -31,7 +31,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -240,6 +239,13 @@ class Part:
 		#: backwards: checked against the reader's `_len` once the message
 		#: is whole (26.1016).
 		self.verify = False
+		#: An arm whose bytes only the whole message measures -- a tail
+		#: handed arguments, a run a parameter or an expression sizes:
+		#: the message is held to the extent its reader states once it is
+		#: whole, since `_validate` takes trailing bytes it never reads.
+		#: HTTP/2's SETTINGS is `length / 6` entries, and `length = 3`
+		#: over one byte validated as a frame of nine (26.1189).
+		self.held = False
 		#: A tag packed into bits -- USB's five-bit CRC -- by its reader's
 		#: `_store`: written as zeros with its group, then computed over
 		#: the whole message and stored (26.1027).
@@ -1037,6 +1043,14 @@ def _arm_refusal(placement: Placement, header: str, prefix: str,
 			return f"holds a run of {placement.array_count} " \
 			       f"{placement.scalar.bits}-bit elements, and an arm " \
 			       "places a run of bytes but not of wider elements"
+		if placement.radix is None and placement.element_bits \
+				!= BITS_PER_BYTE and (placement.sized_by
+				                      or placement.size_expr):
+			# Written as ONE element until 26.1189, which the closing
+			# validation refused for every length but one.
+			return f"holds a run of {placement.scalar.bits}-bit " \
+			       f"elements as long as `{placement.size_expr or placement.sized_by}`, and an " \
+			       "arm places a run of bytes but not of wider elements"
 		return _scalar_refusal(placement)
 
 	inner = (structs or {}).get(placement.type_name or "")
@@ -1083,7 +1097,23 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 	# that did not compile (26.1096's `opaque_arm_section`).
 	if placement.sized_by == "remaining" and placement.radix is None:
 		return Part(SPAN, placement, local)
+	# And so is one a field, a parameter or an expression sizes: DNS's
+	# `u8 text[rest]` took ONE byte, so a label of any other length was
+	# refused by the closing validation and the builder could write only
+	# one-letter labels (26.1189). Its length is the caller's bytes; the
+	# plan computes the field from them where it can and holds the message
+	# to its reader's extent where it cannot.
+	if _arm_span(placement):
+		return Part(SPAN, placement, local)
 	return _value_part(SCALAR, placement, local)
+
+
+def _arm_span(placement: Placement) -> bool:
+	"""Whether an arm is a run of bytes as long as something it names."""
+	return placement.array_count is None and placement.radix is None \
+		and placement.element_bits == BITS_PER_BYTE \
+		and placement.scalar is not None \
+		and bool(placement.sized_by or placement.size_expr)
 
 
 def _claimed_by(variant: Placement) -> tuple[int, ...]:
@@ -1111,29 +1141,6 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	tail = argued is None and _ends_the_message(struct, inner, shape)
 	why = None if tail or argued else _arm_refusal(inner, shape.header,
 	                                               shape.prefix, shape.structs)
-	# Handed a FIELD the caller supplies, and not measured by it alone (which
-	# `argued_bytes` would have tied): nothing holds the field to the bytes,
-	# the closing validation included when the arm ends the message.
-	# HTTP/2's SETTINGS is `length / 6` entries, and a builder handed
-	# `length = 3` and one byte wrote a frame the reader measures as nine
-	# (26.1182).
-	#
-	# Only where the argument reaches a SIZE in the arm's struct: one that
-	# chooses an arm there, MQTT's `qos`, is held by the closing validation
-	# the arm's bytes go through (26.1022), and declining it undid that.
-	child = (shape.structs or {}).get(inner.type_name or "")
-	sizing = {name for name, _source in inner.arguments
-	          if child is not None and any(
-	              re.search(rf"\b{re.escape(name)}\b",
-	                        str(held.size_expr or held.sized_by or ""))
-	              for held in child.layout.placements)}
-	handed = [field for name, source in inner.arguments if name in sizing
-	          for field in traverse.fields_named(struct, source)
-	          if not field.parameter]
-	if not why and argued is None and handed:
-		why = (f"is handed `{traverse.local_name(struct, handed[0])}`, a "
-		       "field the caller supplies, and is not measured by it alone, "
-		       "so nothing holds the two together")
 	if why:
 		# The LOCAL name, as every other member-level message uses: this
 		# quoted the full dotted path including the struct, so one reader
@@ -1147,6 +1154,19 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	held = (shape.structs or {}).get(inner.type_name or "")
 	part.deferred = tail and held is not None and bool(
 		traverse.arguments(held))
+	# Its content is the closing validation's, which descends with the
+	# arguments the reader derives -- and takes bytes past what the arm
+	# then reads as trailing. So the whole message is held to its extent
+	# as well: SETTINGS handed `length = 3` and one byte reads as nine
+	# bytes of frame, the tenth belonging to nothing (26.1189).
+	#
+	# Not where the variant states its size: that field is computed from
+	# the arm's bytes, so the message ends where they do by construction
+	# -- MQTT's PUBLISH, whose packet has a `_required` and no `_extent`.
+	found = traverse.enclosing_arm(struct, inner)
+	sized = found is not None and found[0].size_expr is not None
+	part.held = not sized and (part.deferred or (
+		part.role == SPAN and inner.sized_by != "remaining"))
 	if argued is not None:
 		part.equals = _local(struct, argued)
 	# Where the discriminant is peeked, nothing was written for it and
@@ -1441,6 +1461,22 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "arm's length and computed only where one arm " \
 				           "is written and a field states it"
 			measures[str(held.sized_by)] = written_arm
+			continue
+		if held.kind == "variant" and isinstance(arm, Arm) \
+				and arm.member is not None:
+			# The arm this builder writes, where it is bytes a field of
+			# this struct counts: DNS's `rest`, computed from the label
+			# like any other size field rather than a second number the
+			# caller could get wrong (26.1189).
+			written_arm = _arm_placement(struct, str(arm.member))
+			field = by_name.get(written_arm.sized_by or "") \
+				if written_arm is not None else None
+			if written_arm is not None and _arm_span(written_arm) \
+					and written_arm.path.startswith(f"{held.path}.") \
+					and field is not None and not field.parameter \
+					and field.scalar is not None \
+					and field.name not in measures:
+				measures[field.name] = written_arm
 			continue
 		if not held.sized_by or held.sized_by not in by_name:
 			# `sized_by` also carries `remaining`, which names no member:
@@ -1741,6 +1777,22 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "struct argument that is not a scalar, so there " \
 				           "is no value to take"
 			parts.append(Part(ARG, held, local))
+			if held.name in tags and arm is not None:
+				# It chooses the arm, and a builder per arm writes the
+				# one it was called for: the caller's argument naming
+				# another had the reader read that one -- HTTP/2's
+				# `header_block` handed `priority = 0` for its
+				# prioritized arm (26.1189). Held to the case here, as a
+				# written discriminant is held by writing it.
+				# Taking each arm as a value, the arm handed says: held to
+				# its tag, as a written discriminant is (`chooser`, below).
+				case, claimed = tags[held.name]
+				if case is None:
+					pass
+				elif case.value is None:
+					parts[-1].others = claimed
+				else:
+					parts[-1].stated = int(case.value)
 			marked = (shape.markers or {}).get(held.type_name or "")
 			if marked is not None:
 				# An order handed down as an argument -- TIFF's directory
@@ -1812,6 +1864,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			if why:
 				return [], why
 			assert body is not None
+			if body.role == SPAN and any(one is body.placement
+			                             for one in measures.values()):
+				body.held = False	# its field is computed from it
 			parts.append(body)
 			continue
 
@@ -2244,7 +2299,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				part.agrees = held_by
 				continue
 			for one in parts:
-				if one.role in (ARMTAG, BITS) and \
+				if one.role in (ARMTAG, ARG, BITS) and \
 						one.placement.name == part.placement.discriminant:
 					one.chooser = part
 
@@ -2252,7 +2307,47 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		# Every byte is a fact the schema states, so there is nothing for a
 		# caller to supply and `_encode` of a constant is not a builder.
 		return [], "is entirely literal, so there is nothing to build"
+	holding = next((one for one in every_part(parts) if one.held), None)
+	if holding is not None and not holds_to_its_extent(
+			header, ident(prefix, struct.name), struct):
+		return [], f"`{traverse.local_name(struct, holding.placement)}` " \
+		           "is measured only by the whole message, and the " \
+		           "reader states no extent to hold it to"
 	return _held_to_its_version(struct, parts)
+
+
+def _chooses(part: Part, name: str) -> list[str]:
+	"""An argument that chooses the arm this builder writes, held to it."""
+	if part.chooser is not None:
+		test = (f"(uint64_t){name} != "
+		        f"(uint64_t){part.chooser.local}.situ_tag")
+	elif part.stated is not None:
+		test = f"(uint64_t){name} != {part.stated}u"
+	elif part.others:
+		test = " || ".join(f"(uint64_t){name} == {v}u" for v in part.others)
+	else:
+		return []
+	return [
+		"\t/* It chooses the arm, and this builder writes one: an",
+		"\t * argument naming another has the reader read that one",
+		"\t * (26.1189). */",
+		f"\tif ({test}) {{",
+		"\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t}",
+	]
+
+
+def holds_to_its_extent(header: str, name: str,
+		struct: ResolvedStruct) -> bool:
+	"""Whether the header declares the `_extent` a held message is
+	checked against, with the struct's arguments (26.1189)."""
+	opening = f"static inline uint32_t {name}_extent(situ_view_t view"
+	at = header.find(opening)
+	if at < 0:
+		return False
+	declared = header[at + len(opening):header.index(")", at)]
+	wanted = [traverse.argument_name(one) for one in traverse.arguments(struct)]
+	return [one.split()[-1] for one in declared.split(",")[1:]] == wanted
 
 
 def buildable(resolved: ResolvedSchema,
@@ -3154,6 +3249,16 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW}"
 		+ "".join(f", {traverse.argument_name(held)}"
 		          for held in traverse.arguments(struct)) + ");",
+		*([f"\tif ({ERR} == SITU_OK && "
+		   f"{ident(prefix, struct.name, 'extent')}({VIEW}"
+		   + "".join(f", {traverse.argument_name(held)}"
+		             for held in traverse.arguments(struct))
+		   + f") != {AT}) {{",
+		   "\t\t/* Read as ending elsewhere than it was written: an",
+		   "\t\t * arm only the whole message measures (26.1189). */",
+		   "\t\treturn SITU_ERR_CONSTRAINT;",
+		   "\t}"] if any(part.held for part in every_part(parts))
+		  else []),
 		# The reader's `_len` stops at the bytes there are, so a stated
 		# length running PAST a checked span's bytes passes the check
 		# above and reaches here as truncation. A writer holds the whole
@@ -3162,7 +3267,8 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# (26.1016) -- the same answer as the disagreement the other way.
 		*([f"\tif ({ERR} == SITU_ERR_BOUNDS) {{",
 		   "\t\treturn SITU_ERR_CONSTRAINT;",
-		   "\t}"] if any(part.verify for part in every_part(parts))
+		   "\t}"] if any(part.verify or part.held
+		                for part in every_part(parts))
 		  else []),
 		f"\tif ({ERR} != SITU_OK) {{",
 		f"\t\treturn {ERR};",
@@ -4091,6 +4197,7 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				   + " || ".join(f"{traverse.argument_name(held)} == {v:#x}u"
 				                 for v in part.little) + ");"]
 				  if part.little else []),
+				*_chooses(part, traverse.argument_name(held)),
 				"",
 			]
 		else:

@@ -660,9 +660,19 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		# C's: no byte, and where it is a byte order the fields in its
 		# scope are stored in the order it says (26.1018).
 		name = _ident(traverse.argument_name(part.placement))
-		return [f"\tlet situ_little_{part.placement.name} = "
-		        + " || ".join(f"{name} == {v:#x}" for v in part.little)
-		        + ";"] if part.little else []
+		# C's: one that chooses the arm this builder writes is held to
+		# it, or the reader reads the arm it names (26.1189).
+		test = (f"u64::from({name}) != u64::from({_tag(part)})"
+		        if part.chooser is not None
+		        else f"u64::from({name}) != {part.stated}"
+		        if part.stated is not None else
+		        " || ".join(f"u64::from({name}) == {v}" for v in part.others))
+		return [*([f"\tif {test} {{",
+		           "\t\treturn Err(Error::Constraint);", "\t}"]
+		          if test else []),
+		        *([f"\tlet situ_little_{part.placement.name} = "
+		           + " || ".join(f"{name} == {v:#x}" for v in part.little)
+		           + ";"] if part.little else [])]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return [f"\tlet situ_end = match {_pascal(struct.name)}::required("
@@ -913,8 +923,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			# truncation, which a whole message cannot be (26.1016).
 			("\tsitu_view.validate().map_err(|situ_e| match situ_e {"
 			 " Error::Bounds => Error::Constraint, other => other })?;"
-			 if any(one.verify for one in parts)
+			 if any(one.verify or one.held for one in _every(parts))
 			 else "\tsitu_view.validate()?;"),
+			# C's: an arm only the whole message measures, so the message
+			# is held to the extent its reader states (26.1189).
+			*(["\tif situ_view.extent() != situ_at {",
+			   "\t\treturn Err(Error::Constraint);", "\t}"]
+			  if any(one.held for one in _every(parts)) else []),
 			"\tOk(situ_at)",
 			"}",
 		])

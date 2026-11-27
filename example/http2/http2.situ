@@ -144,6 +144,11 @@ when prioritized_block.length < 5
 	refuse short_priority "PRIORITY needs its five bytes";
 when goaway_payload.length < 8
 	refuse short_goaway "GOAWAY is at least eight bytes";
+// A SETTINGS length that is no multiple of six is a FRAME_SIZE_ERROR (6.5):
+// without this the reader took `length = 7` as one entry and a frame one
+// byte short of what its header says.
+when settings_payload.length % 6 != 0
+	refuse settings_size "SETTINGS is a whole number of six-byte entries";
 
 // What a receiver relies on: the nine-byte header at constant offsets, read
 // before anything else to know how much to buffer, and SETTINGS' six-byte

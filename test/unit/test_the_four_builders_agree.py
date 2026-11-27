@@ -204,24 +204,31 @@ def _called(unit: Unit, values: list[tuple[Part, list[str]]],
 def _for_the_arm(unit: Unit, given: Given) -> Given:
 	"""A parameter that chooses the unit's arm, handed that arm's case.
 
-	A builder per arm writes the discriminant it was called for, and a
-	parameter is not written: the caller hands it, and the reader told it
-	reads the arm it names. HTTP/2's `header_block` builders were handed
-	`priority = 0` for the prioritized arm, and the reader read the other
-	one (26.1182). The builders do not hold the two together -- MQTT's
-	`publish_body` is built that way on purpose (26.1022) and its closing
-	validation is the check -- so the harness hands what a caller would.
+	The caller hands it and the builders hold it to the arm they write,
+	refusing another (26.1189): HTTP/2's `header_block` handed
+	`priority = 0` for the prioritized arm had the reader read the other
+	one. Handed the raw value every other argument gets, every such
+	builder would be compared on all four refusing, so the harness hands
+	what a caller would -- for a builder taking each arm as a value, the
+	case of the arm picked, or the default arm's own tag.
 	"""
-	if not unit.suffix:
-		return given
-	case = next((one for one in arms(unit.struct)
-	             if arm_name(one) == unit.suffix), None)
-	value = getattr(case, "value", None)
-	if not isinstance(value, int):
-		return given
-	chooses = {held.discriminant for held in unit.struct.layout.placements
-	           if held.kind == "variant" and held.discriminant}
-	return [(part, value if part.role == ARG and part.placement.name in chooses
+	chosen: dict[str, int] = {}
+	if unit.suffix:
+		case = next((one for one in arms(unit.struct)
+		             if arm_name(one) == unit.suffix), None)
+		value = getattr(case, "value", None)
+		chooses = {held.discriminant for held in unit.struct.layout.placements
+		           if held.kind == "variant" and held.discriminant}
+		if isinstance(value, int):
+			chosen = dict.fromkeys(chooses, value)
+	values = {id(part): held for part, held in given}
+	for part, arm in getattr(unit, "picks", ()):
+		tag = values.get(id(arm.tag)) if arm.tag is not None else None
+		value = arm.value if arm.value is not None else tag
+		if part.placement.discriminant and isinstance(value, int):
+			chosen[part.placement.discriminant] = value
+	return [(part, chosen[part.placement.name]
+	         if part.role == ARG and part.placement.name in chosen
 	         else held) for part, held in given]
 
 

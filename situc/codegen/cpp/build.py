@@ -747,9 +747,19 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		# C's: no byte, and where it is a byte order the fields in its
 		# scope are stored in the order it says (26.1018).
 		name = traverse.argument_name(part.placement)
-		return [f"\tconst bool situ_little_{part.placement.name} = ("
-		        + " || ".join(f"{name} == {v:#x}u" for v in part.little)
-		        + ");"] if part.little else []
+		# C's: one that chooses the arm this builder writes is held to
+		# it, or the reader reads the arm it names (26.1189).
+		got  = f"static_cast<std::uint64_t>({name})"
+		test = (f"{got} != static_cast<std::uint64_t>("
+		        f"{part.chooser.local}.situ_tag)" if part.chooser is not None
+		        else f"{got} != {part.stated}u" if part.stated is not None
+		        else " || ".join(f"{got} == {v}u" for v in part.others))
+		return [*([f"\tif ({test}) {{",
+		           "\t\treturn ::situ::rt::err::constraint;",
+		           "\t}"] if test else []),
+		        *([f"\tconst bool situ_little_{part.placement.name} = ("
+		           + " || ".join(f"{name} == {v:#x}u" for v in part.little)
+		           + ");"] if part.little else [])]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\t{",
@@ -1048,8 +1058,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			# truncation, which a whole message cannot be (26.1016).
 			*(["\t\tif (situ_e == ::situ::rt::err::bounds) {",
 			   "\t\t\tsitu_e = ::situ::rt::err::constraint;",
-			   "\t\t}"] if any(one.verify for one in parts) else []),
+			   "\t\t}"] if any(one.verify or one.held
+			                  for one in _every(parts)) else []),
 			"\t}",
+			# C's: an arm only the whole message measures, so the message
+			# is held to the extent its reader states (26.1189).
+			*(["\tif (situ_e == ::situ::rt::err::ok",
+			   "\t    && situ_view.extent() != situ_at) {",
+			   "\t\tsitu_e = ::situ::rt::err::constraint;",
+			   "\t}"] if any(one.held for one in _every(parts)) else []),
 			"\tif (situ_e == ::situ::rt::err::ok) {",
 			"\t\tsitu_wrote = situ_at;",
 			"\t}",
