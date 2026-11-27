@@ -81,6 +81,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/flac/flac.situ \
 		   example/git/git.situ \
 		   example/riff/riff.situ \
+		   example/elf/elf.situ example/zip/zip.situ \
 		   example/mqtt/mqtt.situ \
 		   example/quic/quic.situ \
 		   example/x509/x509.situ \
