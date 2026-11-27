@@ -1,0 +1,53 @@
+# situ wire signature v4
+# schema: mpegts.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct adaptation_and_payload size=2..366
+  @0x0000   1         u8         length  max=182
+  @0x0001   0..182    u8         field  sized-by=length
+  ~         1..183    u8         payload  sized-by=183-length
+
+struct adaptation_only size=184
+  @0x0000   1         u8         length  must_eq=183
+  @0x0001   183       u8         field  big
+
+struct transport_stream size=0..
+  @0x0000   0..       ts_packet  packets  sized-by=remaining
+  packets[].body switch: adaptation_control
+  packets[].body case 1: payload u8
+  packets[].body case 2: adaptation adaptation_only
+  packets[].body case 3: both adaptation_and_payload
+  packets[].body case default: error
+
+struct ts_packet size=6..370
+  @0x0000   1         u8         sync  must_eq=71
+  @0x0001   1bit      bit        transport_error  msb_first
+  @0x0001:1 1bit      bit        payload_unit_start  msb_first
+  @0x0001:2 1bit      bit        transport_priority  msb_first
+  @0x0001:3 13bit     u13        pid  big msb_first
+  @0x0003   2bit      u2         scrambling  msb_first
+  @0x0003:2 2bit      u2         adaptation_control  msb_first
+  @0x0003:4 4bit      u4         continuity  msb_first
+  @0x0004   2..366    variant    body
+  body switch: adaptation_control
+  body case 1: payload u8
+  body case 2: adaptation adaptation_only
+  body case 3: both adaptation_and_payload
+  body case default: error

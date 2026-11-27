@@ -1,0 +1,61 @@
+# situ capability map v1
+# schema: mpegts.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct adaptation_and_payload size=2..366 mutate=Shifting address=Unstable
+  adaptation_and_payload.length          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  adaptation_and_payload.field           offset=AbsoluteStatic(0x01) size=Bounded(0, 182) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  adaptation_and_payload.payload         offset=Dynamic size=Bounded(1, 183) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct adaptation_only size=184 atomic=NonAtomic
+  adaptation_only.length                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  adaptation_only.field                  offset=AbsoluteStatic(0x01) size=Fixed(183) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
+struct transport_stream size=0.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets               offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  transport_stream.packets[]             offset=FrameStatic(0x00) size=Bounded(6, 370) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  transport_stream.packets[].sync        offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  transport_stream.packets[].transport_error offset=FrameStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].payload_unit_start offset=FrameStatic(0x01:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].transport_priority offset=FrameStatic(0x01:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].pid         offset=FrameStatic(0x01:3) size=Fixed(13bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].scrambling  offset=FrameStatic(0x03) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].adaptation_control offset=FrameStatic(0x03:2) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].continuity  offset=FrameStatic(0x03:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  transport_stream.packets[].body        offset=FrameStatic(0x04) size=Bounded(2, 366) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  transport_stream.packets[].body.payload offset=FrameStatic(0x04) size=Fixed(184) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  transport_stream.packets[].body.adaptation offset=FrameStatic(0x04) size=Fixed(184) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  transport_stream.packets[].body.adaptation.length offset=FrameStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  transport_stream.packets[].body.adaptation.field offset=FrameStatic(0x05) size=Fixed(183) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  transport_stream.packets[].body.both   offset=FrameStatic(0x04) size=Bounded(2, 366) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  transport_stream.packets[].body.both.length offset=FrameStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  transport_stream.packets[].body.both.field offset=FrameStatic(0x05) size=Bounded(0, 182) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  transport_stream.packets[].body.both.payload offset=Dynamic size=Bounded(1, 183) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct ts_packet size=6..370 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  ts_packet.sync                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  ts_packet.transport_error              offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.payload_unit_start           offset=AbsoluteStatic(0x01:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.transport_priority           offset=AbsoluteStatic(0x01:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.pid                          offset=AbsoluteStatic(0x01:3) size=Fixed(13bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.scrambling                   offset=AbsoluteStatic(0x03) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.adaptation_control           offset=AbsoluteStatic(0x03:2) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.continuity                   offset=AbsoluteStatic(0x03:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  ts_packet.body                         offset=AbsoluteStatic(0x04) size=Bounded(2, 366) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  ts_packet.body.payload                 offset=AbsoluteStatic(0x04) size=Fixed(184) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  ts_packet.body.adaptation              offset=AbsoluteStatic(0x04) size=Fixed(184) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
+  ts_packet.body.adaptation.length       offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  ts_packet.body.adaptation.field        offset=AbsoluteStatic(0x05) size=Fixed(183) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  ts_packet.body.both                    offset=AbsoluteStatic(0x04) size=Bounded(2, 366) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  ts_packet.body.both.length             offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  ts_packet.body.both.field              offset=AbsoluteStatic(0x05) size=Bounded(0, 182) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  ts_packet.body.both.payload            offset=Dynamic size=Bounded(1, 183) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

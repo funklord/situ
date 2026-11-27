@@ -45,7 +45,7 @@ from situc.propagate import Resolved
 from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (Obligation, covered_run, data_sized,
-	enclosing_arm, has_computable_extent, indexed_elements,
+	enclosing_arm, selected_arm, has_computable_extent, indexed_elements,
 	inside_a_nested_member, inside_an_unresolved_arm, invalidating_members,
 	is_varint_run, local_name, measured_from_a_moving_base, obligations,
 	recursion_is_not_in_the_minimum, selected_by_a_peek,
@@ -2477,7 +2477,7 @@ def _select_arm(struct: ResolvedStruct, placement: Placement,
 	grew one. None where the arm cannot be selected from here, so the caller
 	drops the check rather than asserting about bytes nobody selected.
 	"""
-	found = enclosing_arm(struct, placement)
+	found = selected_arm(struct, placement)
 	if found is None:
 		return []
 

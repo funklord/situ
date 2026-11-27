@@ -162,6 +162,8 @@ RUST_CENSUS = {
 	# Read 2026-11-27 (26.1183): the four `nothing` arms' bounds, each
 	# `len() - at` behind `len() < at`.
 	"gzip.situ": 4,
+	# Read 2026-11-27 (26.1186): `adaptation`'s bound behind `len() < at`.
+	"mpegts.situ": 1,
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,

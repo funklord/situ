@@ -10100,6 +10100,22 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1186 MPEG-TS joins the corpus, and a check selects an arm zero refuses
+
+The transport stream under DVB, ATSC, IPTV and HLS: 188-byte packets whose
+two control bits choose payload, an adaptation field, or both. Each case is
+an arm of exactly 184 bytes, so a stream is indexable. FFmpeg's mux is
+oracled by tshark's mp2t dissector, packet by packet.
+
+It found one fault. `adaptation_control = 0` is reserved -- `default:
+error` -- so a zeroed fixture holds no arm, and the checks of a member
+outside every arm (`sync`'s `must_eq`) had a baseline `validate` refused:
+C declined them, and C++, Rust and Python reported the baseline. Refusing
+the whole struct's baseline undid the checks of members inside arms,
+which select their own (`test_two_arms_pinning_one_name_keep_both_checks`),
+so `traverse.selected_arm` picks the first case instead, where the member
+is in none and zero would be refused; all four checks suites use it.
+
 ### 26.1185 `max(A, S) - S` is proved non-negative
 
 The range check reads a size by interval, term by term, so "what the

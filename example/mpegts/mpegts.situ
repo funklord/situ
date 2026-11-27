@@ -1,0 +1,61 @@
+// The MPEG-2 transport stream, ISO/IEC 13818-1 section 2.4.3: what DVB,
+// ATSC and IPTV broadcast, what HLS segments and Blu-ray `.m2ts` carry, and
+// what example/pes is cut into.
+//
+// What it demonstrates: a fixed-size packet whose inside is chosen by two
+// bits. Every packet is 188 bytes; `adaptation_control` says whether its 184
+// after the header are payload, an adaptation field, or both, and in the last
+// case the field's own length says where the payload starts. Each case is an
+// arm of exactly 184 bytes, so a stream is packets back to back and a reader
+// can index the thousandth without reading the others.
+//
+// What it does not describe:
+//   - The adaptation field's insides -- the discontinuity and random-access
+//     flags, the PCR, splicing -- which are `field`'s bytes here.
+//   - Reassembling PES packets and sections from payloads, which is a walk
+//     across packets of one PID: `payload_unit_start` marks where one
+//     begins, and example/pes reads what it reassembles to.
+//   - The 192-byte `.m2ts` form, which puts four bytes of timestamp in front
+//     of each packet.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct adaptation_only {
+	u8 length [must_eq = 183];
+	u8 field[183];
+}
+
+struct adaptation_and_payload {
+	u8 length [max = 182];
+	u8 field[length];
+	u8 payload[183 - length];
+}
+
+struct ts_packet [allow_straddle] {
+	u8   sync [must_eq = 0x47];
+	bit  transport_error;
+	bit  payload_unit_start;
+	bit  transport_priority;
+	u13  pid;
+	u2   scrambling;
+	u2   adaptation_control;
+	u4   continuity;
+	variant body switch (adaptation_control) {
+		case 1:  u8                     payload[184];
+		case 2:  adaptation_only        adaptation;
+		case 3:  adaptation_and_payload both;
+		default: error;
+	}
+}
+
+struct transport_stream {
+	ts_packet packets[remaining];
+}
+
+// What a reader relies on: the PID and the counter at constant offsets, so
+// a demultiplexer routes a packet on its first four bytes.
+require absolute_static(ts_packet.pid);
+require absolute_static(ts_packet.continuity);
+require size(adaptation_only) == 184;

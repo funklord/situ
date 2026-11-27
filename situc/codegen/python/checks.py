@@ -37,7 +37,7 @@ from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (data_sized, enclosing_arm,
+from situc.traverse import (data_sized, enclosing_arm, selected_arm,
                             has_computable_extent, indexed_elements,
                             inside_an_unresolved_arm,
                             measured_from_a_moving_base, own_entries,
@@ -307,7 +307,7 @@ def _select_arm(struct: ResolvedStruct, placement: Placement,
 	`None` where the arm cannot be selected from here, so the caller drops
 	the check rather than asserting about bytes nobody selected.
 	"""
-	found = enclosing_arm(struct, placement)
+	found = selected_arm(struct, placement)
 	if found is None:
 		return []
 

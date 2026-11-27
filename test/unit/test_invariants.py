@@ -231,10 +231,12 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: four flag-chosen parts, each beside a `nothing`, and the header CRC.
 #: And 96 -> 97, 100 -> 101 with pcapng's block (26.1184): an Enhanced
 #: Packet Block, and every other block's bytes.
+#: And 97 -> 98, 134 -> 135, 101 -> 102 with MPEG-TS's packet (26.1186):
+#: a payload run, a fixed adaptation-only arm and one sized by its field.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                97,
-	("no-scalar", "struct", "fixed"):            134,
-	("no-scalar", "struct", "unmeasurable"):     101,
+	("scalar", "not-struct", ""):                98,
+	("no-scalar", "struct", "fixed"):            135,
+	("no-scalar", "struct", "unmeasurable"):     102,
 	("no-scalar", "not-struct", ""):              1,
 }
 

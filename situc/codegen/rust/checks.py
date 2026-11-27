@@ -32,7 +32,7 @@ from situc.codegen.rust.emit import _ident, _pascal
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (data_sized, enclosing_arm,
+from situc.traverse import (data_sized, enclosing_arm, selected_arm,
                             inside_an_unresolved_arm,
                             measured_from_a_moving_base, own_entries,
                             recursion_is_not_in_the_minimum,
@@ -401,7 +401,7 @@ def _break_to(placement: Placement, wrong: int) -> list[str] | None:
 def _select_arm(struct: ResolvedStruct, placement: Placement,
 		extent: int) -> list[str] | None:
 	"""Statements putting the discriminant where this member exists."""
-	found = enclosing_arm(struct, placement)
+	found = selected_arm(struct, placement)
 	if found is None:
 		return []
 

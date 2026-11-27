@@ -5192,6 +5192,38 @@ def length_is_transform_output(placement: Placement) -> bool:
 	        or placement.repeat_while is not None)
 
 
+def selected_arm(struct: ResolvedStruct,
+		placement: Placement) -> tuple[Placement, Arm] | None:
+	"""The arm a fixture selects to check this member.
+
+	`enclosing_arm` where the member is inside one. Where it is not, and a
+	variant's discriminant is a field whose zero is `default: error`, the
+	first case: a zeroed fixture otherwise holds no arm at all and
+	`validate` refuses it before a check breaks anything. MPEG-TS reserves
+	`adaptation_control = 0`, and C++, Rust and Python reported the baseline
+	of `sync`'s check as not validating (26.1186).
+	"""
+	found = enclosing_arm(struct, placement)
+	if found is not None:
+		return found
+	for variant in own_members(struct):
+		if variant.kind != "variant" or variant.discriminant is None:
+			continue
+		chooser = next((held for held in own_members(struct)
+		                if held.name == variant.discriminant), None)
+		if chooser is None or chooser.parameter \
+				or chooser.pinned_bits is not None:
+			continue
+		cases = variant.arm_cases
+		if any(arm.value == 0 for arm in cases) or not any(
+				arm.value is None and arm.member is None for arm in cases):
+			continue
+		first = next((arm for arm in cases if arm.value is not None), None)
+		if first is not None:
+			return variant, first
+	return None
+
+
 def enclosing_arm(struct: ResolvedStruct,
 		placement: Placement) -> tuple[Placement, Arm] | None:
 	"""The arm this member is *inside*, which is not the same question.

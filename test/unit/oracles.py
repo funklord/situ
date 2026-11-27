@@ -302,6 +302,53 @@ def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
 	return found
 
 
+# -- mpegts -------------------------------------------------------------------
+#
+# FFmpeg muxes a few frames into a transport stream and tshark's mp2t
+# dissector reads every packet: its PID, counter, adaptation control,
+# adaptation-field length and unit-start bit (26.1186).
+
+def mpegts_corpus(tmp: Path) -> bytes:
+	"""Three frames of video, muxed by FFmpeg."""
+	made = tmp / "oracle.ts"
+	_run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+	      "color=c=black:s=16x16:d=0.12", "-frames:v", "3", "-c:v",
+	      "libx264", "-pix_fmt", "yuv420p", "-f", "mpegts", str(made)])
+	return made.read_bytes()
+
+
+def mpegts_says(data: bytes, tmp: Path) -> list[tuple[int, int, int, int, int]]:
+	"""Each packet as tshark reads it."""
+	path = tmp / "oracle-in.ts"
+	path.write_bytes(data)
+	said = _run(["tshark", "-r", str(path), "-T", "fields", "-e", "mp2t.pid",
+	             "-e", "mp2t.cc", "-e", "mp2t.afc", "-e", "mp2t.af.length",
+	             "-e", "mp2t.pusi"])
+	found = []
+	for line in said.splitlines():
+		pid, counter, control, length, start = line.split("\t")
+		found.append((int(pid, 16), int(counter), int(control, 16),
+		              int(length) if length else -1, int(start)))
+	return found
+
+
+def mpegts_situ(module: object, data: bytes) -> list[tuple[int, int, int, int, int]]:
+	"""The same through situ's packets."""
+	from situ_runtime import Message
+
+	whole = module.transport_stream.at(Message(bytearray(data)), 0, len(data))   # type: ignore[attr-defined]
+	whole.validate()
+	found = []
+	for index in range(whole.packets_count):
+		one = whole.packets(index)
+		control = one.adaptation_control
+		length = (one.body_both.length if control == 3
+		          else one.body_adaptation.length if control == 2 else -1)
+		found.append((one.pid, one.continuity, control, length,
+		              one.payload_unit_start))
+	return found
+
+
 # -- pcapng -------------------------------------------------------------------
 #
 # editcap converts a classic capture to pcapng and tshark reads each packet
@@ -1735,6 +1782,15 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "mpegts",
+		schema = ROOT / "example" / "mpegts" / "mpegts.situ",
+		tool   = "tshark",
+		why    = ("FFmpeg muxes the stream and tshark's mp2t dissector reads "
+		          "each packet's header and adaptation field. The two "
+		          "control bits choose the packet's inside, so a header bit "
+		          "read one place off reads every packet as another case."),
+	),
+	Oracle(
 		name   = "pcapng",
 		schema = ROOT / "example" / "pcapng" / "pcapng.situ",
 		tool   = "tshark",
@@ -1985,6 +2041,10 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# The scrambling and adaptation-control bits: every packet chooses its
+	# arm from the bits beside the right ones.
+	"mpegts": ("\tu2   scrambling;\n\tu2   adaptation_control;",
+	           "\tu2   adaptation_control;\n\tu2   scrambling;"),
 	# The timestamp's two halves: every packet keeps its place and its
 	# length, and every time moves by 2^32 microseconds.
 	"pcapng": ("\tu32 timestamp_high;\n\tu32 timestamp_low;",
@@ -2086,6 +2146,7 @@ DRIVERS = {
 	"websocket": (websocket_corpus, websocket_says, websocket_situ),
 	"gzip": (gzip_corpus, gzip_says, gzip_situ),
 	"pcapng": (pcapng_corpus, pcapng_says, pcapng_situ),
+	"mpegts": (mpegts_corpus, mpegts_says, mpegts_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),

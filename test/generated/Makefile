@@ -84,7 +84,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/elf/elf.situ example/zip/zip.situ \
 		   example/isobmff/isobmff.situ example/websocket/websocket.situ \
 		   example/http2/http2.situ example/gzip/gzip.situ \
-		   example/pcapng/pcapng.situ \
+		   example/pcapng/pcapng.situ example/mpegts/mpegts.situ \
 		   example/mqtt/mqtt.situ \
 		   example/quic/quic.situ \
 		   example/x509/x509.situ \
