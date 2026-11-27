@@ -57,6 +57,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		_check(resolved, case)
 
 	constants = enum_constants(schema, prefix)
+	# The varints read as a signed number, whose getter's out-parameter is
+	# an `int64_t` rather than a `uint64_t`.
+	signed    = {decl.name for decl in schema.varints()
+	             if decl.transform is not None
+	             or decl.encoding is ast.VarintEncoding.SLEB128}
 	# `nested=True`: C++ reaches a nested field by declaring a view and
 	# passing it, its accessor taking an out-parameter rather than
 	# returning one -- where Rust chains an `expect` and Python chains a
@@ -70,7 +75,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
-		lines.extend(_case_body(resolved, constants, case))
+		lines.extend(_case_body(resolved, constants, case, signed))
 
 	lines.extend(_main(cases))
 	return "\n".join(lines) + "\n"
@@ -136,7 +141,7 @@ def _preamble(basename: str, compared: int,
 
 
 def _case_body(resolved: ResolvedSchema, constants: dict[str, int],
-		case: Case) -> list[str]:
+		case: Case, signed: set[str]) -> list[str]:
 	name = _symbol(case)
 	body = ", ".join(f"0x{byte:02X}" for byte in case.data)
 
@@ -170,7 +175,7 @@ def _case_body(resolved: ResolvedSchema, constants: dict[str, int],
 		"\t\tsitu_failures++;",
 		"\t\treturn;",
 		"\t}",
-		*_expectations(resolved, constants, case),
+		*_expectations(resolved, constants, case, signed),
 		"}",
 		"",
 	]
@@ -222,7 +227,7 @@ def _reach(resolved: ResolvedSchema, case: Case,
 
 
 def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
-		case: Case) -> list[str]:
+		case: Case, signed: set[str]) -> list[str]:
 	"""What the vector says about each field, where this target can say it.
 
 	A printed comparison rather than an `assert`: this suite has no
@@ -275,12 +280,24 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 		# and the parse failing is a finding rather than a mismatch -- a
 		# vector whose digits are not digits is a vector claiming something
 		# the bytes do not say.
+		#
+		# A varint's getter is the same shape: the bytes may end mid-value or
+		# hold a padded encoding a `minimal` type refuses. No vector asserted
+		# one until example/websocket's `length`, and the call did not
+		# compile (26.1181).
 		found = resolved.find(f"{case.struct}.{path}")
-		if (found is not None and found.placement.radix is not None
-		    and found.placement.scalar is not None):
+		varint = None if found is None else found.placement.varint
+		if found is not None and (varint is not None
+		                          or (found.placement.radix is not None
+		                              and found.placement.scalar is not None)):
 			if not lines:
 				lines.append("")
-			kind = ctype(found.placement.scalar)
+			if varint is not None:
+				kind = ("std::int64_t" if varint in signed
+				        else "std::uint64_t")
+			else:
+				assert found.placement.scalar is not None
+				kind = ctype(found.placement.scalar)
 			lines.extend([
 				"\t{",
 				*reach,

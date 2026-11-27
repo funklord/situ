@@ -317,6 +317,14 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 				continue
 			right = variant
 
+		# A varint's getter returns `Result`: the bytes may end mid-value or
+		# hold a padded encoding a `minimal` type refuses. No vector asserted
+		# one until example/websocket's `length`, and the comparison did not
+		# typecheck (26.1181).
+		found = resolved.find(f"{case.struct}.{path}")
+		if found is not None and found.placement.varint is not None:
+			right = f"Ok({right})"
+
 		if not lines:
 			lines.append("")
 		# `_ident` and not `c_name`: a field called `type` is a Rust keyword
