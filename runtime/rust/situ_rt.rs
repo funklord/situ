@@ -80,6 +80,23 @@ impl Error {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// What a builder hands the caller's seal (26.1192).
+///
+/// situ never sees a key or runs a cipher (14.6): the primitive and the key
+/// are the caller's, in the closure. What situ states is which bytes are
+/// which: `aad` is the tag's coverage before the region, `text` the
+/// plaintext to encrypt where it lies, `tag` the slot to write, and
+/// `key_id` the value of the field the region's `key =` names. `nonce` is
+/// empty where the region names none. A seal returning `false` refuses the
+/// build with `Error::Tag`, and the region is zeroed.
+pub struct Sealing<'a> {
+	pub key_id: Option<u64>,
+	pub nonce: &'a [u8],
+	pub aad: &'a [u8],
+	pub text: &'a mut [u8],
+	pub tag: &'a mut [u8],
+}
+
 /// The answer to "is a whole message here yet, and if not how many bytes?"
 ///
 /// Its own type rather than `Result<usize>`, because both arms carry a number

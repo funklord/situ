@@ -22,7 +22,7 @@ import re
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, BETWEEN, INSIDE, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, INSIDE, LOCATED, SEALED, SEALTAG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
 from situc.codegen.plain_build import plain
@@ -625,6 +625,17 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        f"\tlet _ = situ_little_{part.placement.name};"]
 	if part.role == INSIDE:
 		return []		# read by the closing validation (26.1191)
+	if part.role == SEALED:
+		# C's: the plaintext, sealed once the tag's slot is down (26.1192).
+		local = _ident(part.local)
+		return [f"\tif situ_out.len() - situ_at < {local}.len() {{",
+		        "\t\treturn Err(Error::Bounds);", "\t}",
+		        "\tlet situ_sealed_at = situ_at;",
+		        f"\tsitu_out[situ_at..situ_at + {local}.len()]"
+		        f".copy_from_slice({local});",
+		        f"\tsitu_at += {local}.len();"]
+	if part.role == SEALTAG:
+		return _seal(struct, part, parts)
 	if part.role == BETWEEN:
 		# C's: zeros to where the reader puts the member after it, every
 		# field that offset reads being down (26.1024, 26.1026).
@@ -810,7 +821,7 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 		if part.role == CHOSEN:
 			found.append(f"{name}: {_arm_type(struct, part)}"
 			             f"{_elided(struct, part)}")
-		elif part.role == LOCATED:
+		elif part.role in (LOCATED, SEALED):
 			found.append(f"{name}: &[u8]")
 		elif part.role == ARG:
 			found.append(f"{_ident(traverse.argument_name(part.placement))}"
@@ -828,7 +839,74 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{name}: &[{_scalar(part.placement)}]")
 		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
+	if any(part.role == SEALED for part in parts):
+		found.append("situ_seal: &mut dyn FnMut(&mut situ_rt::Sealing<'_>) "
+		             "-> bool")
 	return found
+
+
+def _seal(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
+	"""C's: the tag's slot, then the caller's seal over the region before
+	it, the reader asked which bytes are which (26.1192). The reader's
+	answers are offsets, taken while it borrows the buffer, so that the
+	seal can be handed the region and the tag mutably once it is gone."""
+	region = part.region
+	assert region is not None
+	local = _ident(region.local)
+	held  = _pascal(struct.name)
+	tag   = _ident(traverse.local_name(struct, part.placement))
+	if region.nonce_inside is not None:
+		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
+		nonce = [f"\t\tlet situ_inner = situ_whole.{_ident(outer)}()?;",
+		         f"\t\tlet situ_nonce = situ_inner.{_ident(inner)}();"]
+	elif region.nonce is not None:
+		nonce = [f"\t\tlet situ_nonce = "
+		         f"situ_whole.{_ident(region.nonce.placement.name)}();"]
+	else:
+		nonce = ["\t\tlet situ_nonce = &situ_out[..0];"]
+	key = (f"Some(u64::from(situ_whole.{_ident(region.key.placement.name)}()))"
+	       if region.key is not None else "None")
+	wipe = "\t\tsitu_out[situ_sealed_at..situ_at].fill(0);"
+	return [f"\tif situ_out.len() - situ_at < {part.bytes} {{",
+	        "\t\treturn Err(Error::Bounds);", "\t}",
+	        f"\tsitu_out[situ_at..situ_at + {part.bytes}].fill(0);",
+	        f"\tsitu_at += {part.bytes};",
+	        f"\tlet situ_end = situ_sealed_at + {local}.len();",
+	        "\tlet situ_found = (|| -> Result<(usize, usize, usize, usize, "
+	        "Option<u64>)> {",
+	        f"\t\tlet situ_whole = {held}::new(&situ_out[..situ_at])?;",
+	        f"\t\tlet (situ_cover, situ_span) = situ_whole.{tag}_covered()?;",
+	        *nonce,
+	        "\t\tOk((situ_cover, situ_span,",
+	        "\t\t    situ_nonce.as_ptr() as usize - situ_out.as_ptr() as usize,",
+	        f"\t\t    situ_nonce.len(), {key}))",
+	        "\t})();",
+	        "\tlet (situ_cover, situ_nonce_at, situ_nonce_len, situ_key) = "
+	        "match situ_found {",
+	        "\t\tOk((situ_cover, situ_span, situ_nonce_at, situ_nonce_len, "
+	        "situ_key))",
+	        "\t\t\tif situ_cover <= situ_sealed_at "
+	        "&& situ_cover + situ_span == situ_end",
+	        "\t\t\t   && situ_nonce_at + situ_nonce_len <= situ_sealed_at =>",
+	        "\t\t\t(situ_cover, situ_nonce_at, situ_nonce_len, situ_key),",
+	        "\t\t_ => {",
+	        "\t" + wipe,
+	        "\t\t\treturn Err(Error::Constraint);",
+	        "\t\t}",
+	        "\t};",
+	        "\tlet (situ_head, situ_rest) = situ_out.split_at_mut(situ_sealed_at);",
+	        f"\tlet (situ_text, situ_tail) = situ_rest.split_at_mut({local}.len());",
+	        "\tlet mut situ_sealing = situ_rt::Sealing {",
+	        "\t\tkey_id: situ_key,",
+	        "\t\tnonce: &situ_head[situ_nonce_at..situ_nonce_at + situ_nonce_len],",
+	        "\t\taad: &situ_head[situ_cover..],",
+	        "\t\ttext: situ_text,",
+	        f"\t\ttag: &mut situ_tail[..{part.bytes}],",
+	        "\t};",
+	        "\tif !situ_seal(&mut situ_sealing) {",
+	        wipe,
+	        "\t\treturn Err(Error::Tag);",
+	        "\t}"]
 
 
 def _filled(struct: ResolvedStruct, held: str,

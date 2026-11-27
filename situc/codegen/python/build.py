@@ -34,7 +34,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, BETWEEN, INSIDE, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, INSIDE, LOCATED, SEALED, SEALTAG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
                                    every_part)
@@ -595,6 +595,15 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"{local} in {part.little!r}"]
 	if part.role == INSIDE:
 		return []		# read by the closing validation (26.1191)
+	if part.role == SEALED:
+		# C's: the plaintext, sealed once the tag's slot is down (26.1192).
+		local = py_name(part.local)
+		return [*_room(f"len({local})", part.placement.path),
+		        "\tsitu_sealed_at = situ_at",
+		        f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
+		        f"\tsitu_at += len({local})"]
+	if part.role == SEALTAG:
+		return _seal(struct, part)
 	if part.role == BETWEEN:
 		# C's: zeros to where the reader puts the member after it, every
 		# field that offset reads being down (26.1024, 26.1026).
@@ -778,7 +787,7 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}: {_arm_type(struct, part)}")
 		elif plain_build.takes_value(part):
 			found.append(f"{py_name(part.local)}: int")
-		elif part.role == LOCATED:
+		elif part.role in (LOCATED, SEALED):
 			found.append(f"{py_name(part.local)}: bytes")
 		elif part.role == ARG:
 			# The reader's keyword, so one value has one spelling.
@@ -790,7 +799,59 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}_prefix: bytes")
 		elif part.role == WIDE:
 			found.append(f"{py_name(part.local)}: list[int]")
+	if any(part.role == SEALED for part in parts):
+		found.append("situ_seal: Callable[[Sealing], object]")
 	return found
+
+
+def _seal(struct: ResolvedStruct, part: Part) -> list[str]:
+	"""C's: the tag's slot, then the caller's seal over the region before
+	it, the reader asked which bytes are which (26.1192)."""
+	region = part.region
+	assert region is not None
+	local = py_name(region.local)
+	path  = region.placement.path
+	held  = f"situ_schema.{py_name(struct.name)}"
+	tag   = py_name(traverse.local_name(struct, part.placement))
+	if region.nonce_inside is not None:
+		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
+		nonce = f"bytes(situ_whole.{py_name(outer)}.{py_name(inner)})"
+	elif region.nonce is not None:
+		nonce = f"bytes(situ_whole.{py_name(region.nonce.placement.name)})"
+	else:
+		nonce = "None"
+	key = (f"int(situ_whole.{py_name(region.key.placement.name)})"
+	       if region.key is not None else "None")
+	end = f"situ_sealed_at + len({local})"
+	wipe = [f"\t\tsitu_out[situ_sealed_at:situ_at] = "
+	        "bytes(situ_at - situ_sealed_at)"]
+	return [*_room(str(part.bytes), part.placement.path),
+	        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = bytes({part.bytes})",
+	        f"\tsitu_at += {part.bytes}",
+	        "\ttry:",
+	        f"\t\tsitu_whole = {held}.at(Message(memoryview(situ_out)"
+	        "[:situ_at]), 0"
+	        + ("" if struct.layout.is_fixed_size else ", situ_at") + ")",
+	        f"\t\tsitu_cover, situ_span = situ_whole.{tag}_covered()",
+	        f"\t\tsitu_nonce = {nonce}",
+	        f"\t\tsitu_key = {key}",
+	        "\texcept SituError:",
+	        "\t\tsitu_cover, situ_span = -1, 0",
+	        f"\tif situ_cover < 0 or situ_cover > situ_sealed_at "
+	        f"or situ_cover + situ_span != {end}:",
+	        *wipe,
+	        f'\t\traise ConstraintError("{path}: not where, or not as long '
+	        'as, the message puts it")',
+	        "\tsitu_window = memoryview(situ_out)",
+	        "\ttry:",
+	        "\t\tsitu_seal(Sealing(situ_key, situ_nonce,",
+	        "\t\t                  bytes(situ_window[situ_cover:situ_sealed_at]),",
+	        f"\t\t                  situ_window[situ_sealed_at:{end}],",
+	        f"\t\t                  situ_window[{end}:situ_at]))",
+	        "\texcept Exception as situ_refused:",
+	        *wipe,
+	        f'\t\traise TagError("{path}: the seal refused") '
+	        "from situ_refused"]
 
 
 def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
@@ -946,7 +1007,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			one.placement.endian is ast.Endian.NATIVE
 			for unit in built for one in every_part(list(unit.parts))
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
+		*(["from collections.abc import Callable", ""] if any(
+			one.role == SEALED for unit in built for one in unit.parts)
+		  else []),
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
+		"                          Sealing, TagError,",
 		"                          bcd_encode,",
 		"                          TruncatedError, View, format_int,",
 		"                          format_uint, varint_be_put, varint_put,",

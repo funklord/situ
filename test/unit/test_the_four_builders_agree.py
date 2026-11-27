@@ -32,7 +32,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (ARG, LOCATED, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
+from situc.codegen.c.build import (ARG, LOCATED, SEALED, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                                    Part, arm_name, arms)
 from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
@@ -268,6 +268,10 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			found.append((part, _run_bytes(part.bytes, at)))
 		elif part.role == SPAN:
 			found.append((part, _run_bytes(_span_length(part, parts), at)))
+		elif part.role == SEALED:
+			# The plaintext; the seal each driver hands is a no-op, the
+			# sealing itself being `test_a_builder_seals_a_region`'s.
+			found.append((part, _run_bytes(4, at)))
 		elif part.role == LOCATED:
 			# Where the offset already written puts it; its length is the
 			# one a nested header states, which a generic value rarely is,
@@ -307,6 +311,12 @@ def _varied(given: Given, inner: dict[str, list[bytes]],
 			held  = inner.get(part.placement.type_name or "", [b"\x00"])
 			value = b"".join(rng.choice(held) for _ in range(
 				part.digits or rng.randrange(4)))
+		elif part.role == SEALED:
+			# As long as a header's length leaves it: `22 + hdr.length`,
+			# DTLS's `length - 24`, a keystore's `length` and its key.
+			value = bytes(rng.choice((0, 1, 2, 4, 8, 16, 22, 23, 24, 25,
+			                          26, 30, 32, 33, 34, 36, 38, 40, 48,
+			                          104, 231)))
 		elif isinstance(value, int):
 			bits  = (part.placement.scalar.bits if part.radix
 			         and part.placement.scalar
@@ -327,6 +337,12 @@ def _label(unit: Unit) -> str:
 	return f"{unit.struct.name}.{picks or unit.suffix}"
 
 
+def _seals(cases: list[tuple[Unit, Given]]) -> bool:
+	"""Whether a builder here takes a seal (26.1192)."""
+	return any(part.role == SEALED for unit, _ in cases
+	           for part in unit.parts)
+
+
 def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	lines = ["#include <stdio.h>", f'#include "{stem}_build.h"',
 	         f"static uint8_t buf[{ROOM}];", "static uint32_t n;",
@@ -334,7 +350,10 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	         '\tprintf("%s ", name);',
 	         '\tif (e != SITU_OK) { puts("refused"); return; }',
 	         '\tfor (uint32_t i = 0; i < n; i++) printf("%02x", buf[i]);',
-	         '\tputs("");', "}"]
+	         '\tputs("");', "}",
+	         *(["static int noseal(void *ctx, const situ_sealing_t *s) {",
+	            "\t(void)ctx;", "\t(void)s;", "\treturn 0;", "}"]
+	           if _seals(cases) else [])]
 	calls = []
 	for index, (unit, given) in enumerate(cases):
 		spelt: list[tuple[Part, list[str]]] = []
@@ -353,7 +372,7 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			lines.append(_array(name, value, "uint8_t"))
 			spelt.append((part, [name, *(
 				[f"{len(value)}u"]
-				if part.role in (*plain_build.MEASURED, TAG, LOCATED)
+				if part.role in (*plain_build.MEASURED, TAG, LOCATED, SEALED)
 				 else [])]))
 
 		def arm_value(part: Part, arm: ArmOf, args: list[str],
@@ -363,9 +382,10 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			        f'({", ".join(args)})')
 
 		values = _called(unit, spelt, arm_value)
+		seal = ["noseal", "NULL"] if _seals([(unit, given)]) else []
 		calls.append(f'\tshow("{_label(unit)}", '
 		             f'{ident("situ", unit.struct.name, "build", unit.suffix)}'
-		             f'(buf, {ROOM}u, {", ".join([*values, "&n"])}));')
+		             f'(buf, {ROOM}u, {", ".join([*values, *seal, "&n"])}));')
 	return "\n".join([*lines, "int main(void) {", *calls, "\treturn 0;",
 	                  "}", ""])
 
@@ -379,7 +399,9 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	         '\t\tstd::puts("refused");', "\t\treturn;", "\t}",
 	         '\tfor (std::uint32_t i = 0; i < n; i++) '
 	         'std::printf("%02x", buf[i]);',
-	         '\tstd::puts("");', "}"]
+	         '\tstd::puts("");', "}",
+	         *(["static int noseal(void *, const situ_sealing_t *) {",
+	            "\treturn 0;", "}"] if _seals(cases) else [])]
 	calls = []
 	for index, (unit, given) in enumerate(cases):
 		spelt: list[tuple[Part, list[str]]] = []
@@ -402,7 +424,7 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			lines.append(_array(name, value, "std::uint8_t"))
 			spelt.append((part, [name, *(
 				[f"{len(value)}u"]
-				if part.role in (*plain_build.MEASURED, TAG, LOCATED)
+				if part.role in (*plain_build.MEASURED, TAG, LOCATED, SEALED)
 				 else [])]))
 
 		def arm_value(part: Part, arm: ArmOf, args: list[str],
@@ -414,9 +436,10 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 		held = class_name(unit.struct)
 		if unit.suffix:
 			held = f"{held}_{c_name(unit.suffix)}"
+		seal = ["noseal", "nullptr"] if _seals([(unit, given)]) else []
 		calls.append(f'\tshow("{_label(unit)}", '
 		             f"::situ_build::{held}"
-		             f'(buf, {ROOM}u, {", ".join([*values, "n"])}));')
+		             f'(buf, {ROOM}u, {", ".join([*values, *seal, "n"])}));')
 	return "\n".join([*lines, "int main() {", *calls, "}", ""])
 
 
@@ -459,8 +482,10 @@ def _rust_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 		name = _ident(unit.struct.name).removeprefix("r#")
 		if unit.suffix:
 			name = f"{name}_{_ident(unit.suffix).removeprefix('r#')}"
+		seal = (["&mut |_s: &mut situ_rt::Sealing<'_>| true"]
+		        if _seals([(unit, given)]) else [])
 		lines.extend([f"\tlet got = {stem}_build::build_{name}"
-		              f'({", ".join(["&mut buf", *values])});',
+		              f'({", ".join(["&mut buf", *values, *seal])});',
 		              f'\tshow("{_label(unit)}", &buf, got);'])
 	return "\n".join([*lines, "}", ""])
 
@@ -483,6 +508,8 @@ def _build_one(module: object, base: object, unit: Unit,
 		               py_name(arm.name))
 		values.append(made(*(held[id(one)] for one in (arm.tag, arm.part)
 		                     if one is not None)))
+	if any(part.role == SEALED for part in unit.parts):
+		values.append(lambda sealing: None)
 	buf  = bytearray(ROOM)
 	name = py_name(unit.struct.name)
 	if unit.suffix:

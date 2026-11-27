@@ -10144,7 +10144,12 @@ Decided with it, each for a reason a reader could otherwise reverse:
   convention behind them, and a builder linking a symbol by that name
   would fix one for every consumer. A function pointer fixes nothing.
 
-C first. Refused by name: several sealed regions in one struct, a tag
+In all four builders, each with the reader's own answers: C++ takes the
+same `situ_seal_fn` C does, Rust a closure over a `situ_rt::Sealing` that
+borrows the region and the tag mutably once the reader's borrow is over,
+and Python a callable over a `Sealing` whose `text` and `tag` are views of
+the message, a seal that raises being `TagError`. Refused by name:
+several sealed regions in one struct, a tag
 not directly after its region or members after the tag, a nonce or key
 that is a struct argument rather than a member written before
 (`edges.held_material`), and a region whose reader states no coverage
@@ -10152,7 +10157,11 @@ that is a struct argument rather than a member written before
 OpenSSL's AES-128-GCM and opens what was built with Python's
 `cryptography`, using the additional data and nonce where the reader puts
 them; a flipped header byte fails the tag, and no refused build leaves
-plaintext behind.
+plaintext behind. The four builders seal alike with a toy seal written in
+each language, for a packet, a DTLS record under its epoch and a nonce
+inside a header, checked against the toy computed in the test; and the
+agreement harness hands each a no-op seal and plaintext of the lengths a
+header leaves, so `packet` and `keystore` are compared there too.
 
 ### 26.1191 A builder checks a table the message already holds
 

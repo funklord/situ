@@ -21,10 +21,10 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARG, BETWEEN, INSIDE, LOCATED, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, INSIDE, LOCATED, SEALED, SEALTAG, WRITABLE_CODES, FRAMED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
-from situc.codegen.c.names import bare_name, c_name
+from situc.codegen.c.names import KEYWORDS, bare_name, c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
 from situc.codegen.cpp.names import class_name
@@ -695,6 +695,19 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        f"\tstatic_cast<void>(situ_little_{part.placement.name});"]
 	if part.role == INSIDE:
 		return []		# read by the closing validation (26.1191)
+	if part.role == SEALED:
+		# C's: the plaintext, sealed once the tag's slot is down (26.1192).
+		local = part.local
+		return [*_room(f"{local}_len"),
+		        f"\tif ({local}_len != 0u && {local} == nullptr) {{",
+		        "\t\treturn ::situ::rt::err::bounds;", "\t}",
+		        "\tconst std::uint32_t situ_sealed_at = situ_at;",
+		        f"\tif ({local}_len != 0u) {{",
+		        f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		        "\t}",
+		        f"\tsitu_at += {local}_len;"]
+	if part.role == SEALTAG:
+		return _seal(struct, structs, part, parts)
 	if part.role == BETWEEN:
 		# C's: zeros to where the reader puts the member after it, every
 		# field that offset reads being down (26.1024, 26.1026).
@@ -908,7 +921,7 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	for part in parts:
 		if part.role == CHOSEN:
 			found.append(f"{_arm_type(struct, part)} {part.local}")
-		elif part.role == LOCATED:
+		elif part.role in (LOCATED, SEALED):
 			found.extend([f"const std::uint8_t *{part.local}",
 			              f"std::uint32_t {part.local}_len"])
 		elif part.role == ARG:
@@ -932,7 +945,83 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 		elif part.role in plain_build.MEASURED:
 			found.extend([f"const std::uint8_t *{part.local}",
 			              f"std::uint32_t {part.local}_len"])
+	if any(part.role == SEALED for part in parts):
+		found.extend(["situ_seal_fn situ_seal", "void *situ_seal_ctx"])
 	return found
+
+
+def _member(name: str) -> str:
+	"""The reader's accessor for a member: a keyword takes an underscore."""
+	return f"{name}_" if name in KEYWORDS else name
+
+
+def _seal(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
+		part: Part, parts: list[Part]) -> list[str]:
+	"""C's: the tag's slot, then the caller's seal over the region before
+	it, the reader asked which bytes are which (26.1192)."""
+	region = part.region
+	assert region is not None
+	local = region.local
+	held  = f"::situ::{class_name(struct)}"
+	tag   = _member(traverse.local_name(struct, part.placement))
+	size  = "" if struct.layout.is_fixed_size else " situ_at,"
+	end   = f"situ_sealed_at + {local}_len"
+	wipe  = ["\t\t\tstd::memset(situ_out + situ_sealed_at, 0, "
+	         "situ_at - situ_sealed_at);"]
+	nonce: list[str] = []
+	if region.nonce_inside is not None:
+		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
+		nested = next(one for one in parts
+		              if one.placement.name == outer).placement
+		within = structs[nested.type_name or ""]
+		nonce = [f"\t\t::situ::{class_name(within)} situ_inner;",
+		         f"\t\tif (situ_ok && situ_whole.{_member(outer)}(situ_inner)"
+		         " != ::situ::rt::err::ok) {",
+		         "\t\t\tsitu_ok = false;", "\t\t}",
+		         f"\t\tconst ::situ::rt::bytes situ_nonce = situ_ok ? "
+		         f"situ_inner.{_member(inner)}() : ::situ::rt::bytes();"]
+	elif region.nonce is not None:
+		nonce = [f"\t\tconst ::situ::rt::bytes situ_nonce = "
+		         f"situ_whole.{_member(region.nonce.placement.name)}();"]
+	key = region.key
+	return [*_room(f"{part.bytes}u"),
+	        f"\tstd::memset(situ_out + situ_at, 0, {part.bytes}u);",
+	        f"\tsitu_at += {part.bytes}u;",
+	        "\t{",
+	        "\t\t::situ::rt::message situ_backing(situ_out, situ_at);",
+	        f"\t\t{held} situ_whole;",
+	        "\t\tstd::uint32_t situ_cover = 0;",
+	        "\t\tstd::uint32_t situ_span = 0;",
+	        "\t\tsitu_sealing_t situ_sealing{};",
+	        f"\t\tbool situ_ok = {held}::at(situ_backing, 0,{size} situ_whole)"
+	        " == ::situ::rt::err::ok",
+	        f"\t\t    && situ_whole.{tag}_covered(situ_cover, situ_span)"
+	        " == ::situ::rt::err::ok",
+	        "\t\t    && situ_cover <= situ_sealed_at",
+	        f"\t\t    && situ_cover + situ_span == {end};",
+	        *nonce,
+	        "\t\tif (!situ_ok) {",
+	        *wipe,
+	        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+	        *([f"\t\tsitu_sealing.key_id = static_cast<std::uint64_t>("
+	           f"situ_whole.{_member(key.placement.name)}());",
+	           "\t\tsitu_sealing.has_key_id = 1;"] if key is not None
+	          else []),
+	        *(["\t\tsitu_sealing.nonce = situ_nonce.data();",
+	           "\t\tsitu_sealing.nonce_len = "
+	           "static_cast<std::uint32_t>(situ_nonce.size());"]
+	          if nonce else []),
+	        "\t\tsitu_sealing.aad = situ_out + situ_cover;",
+	        "\t\tsitu_sealing.aad_len = situ_sealed_at - situ_cover;",
+	        "\t\tsitu_sealing.text = situ_out + situ_sealed_at;",
+	        f"\t\tsitu_sealing.text_len = {local}_len;",
+	        f"\t\tsitu_sealing.tag = situ_out + {end};",
+	        f"\t\tsitu_sealing.tag_len = {part.bytes}u;",
+	        "\t\tif (situ_seal == nullptr "
+	        "|| situ_seal(situ_seal_ctx, &situ_sealing) != 0) {",
+	        *wipe,
+	        "\t\t\treturn ::situ::rt::err::tag;", "\t\t}",
+	        "\t}"]
 
 
 def _counted(parts: list[Part]) -> bool:

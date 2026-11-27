@@ -188,6 +188,28 @@ class TagError(SituError):
 	"""A sealed region was opened without a verified tag."""
 
 
+class Sealing:
+	"""What a builder hands the caller's seal (26.1192).
+
+	situ never sees a key or runs a cipher (14.6): the primitive and the
+	key are the caller's. What situ states is which bytes are which:
+	`aad` is the tag's coverage before the region, `text` the plaintext to
+	encrypt where it lies and `tag` the slot to write, both writable views
+	of the message; `key_id` is the value of the field the region's
+	`key =` names, or None. A seal that raises refuses the build with
+	`TagError`, and the region is zeroed."""
+
+	__slots__ = ("key_id", "nonce", "aad", "text", "tag")
+
+	def __init__(self, key_id: int | None, nonce: bytes | None, aad: bytes,
+			text: memoryview, tag: memoryview) -> None:
+		self.key_id = key_id
+		self.nonce = nonce
+		self.aad = aad
+		self.text = text
+		self.tag = tag
+
+
 class Message:
 	"""A buffer, and the generation that invalidates views of it."""
 

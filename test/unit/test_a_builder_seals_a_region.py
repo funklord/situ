@@ -23,6 +23,7 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -261,3 +262,243 @@ def test_a_nonce_inside_the_header_is_found(tmp_path: Path) -> None:
 	assert built[:len(head)] == head
 	opened = AESGCM(KEY).decrypt(NONCE, built[len(head):], head)
 	assert opened == BODY
+
+
+# All four, with one toy seal written in each language: the same bytes or
+# the same refusal, for a packet, a DTLS record under its epoch, and the
+# nonce inside a header. The toy is no cipher; it touches every input the
+# seal is handed, so a language handing different bytes says otherwise.
+
+def _toy(key_id: int, nonce: bytes, aad: bytes, text: bytes,
+		tag_len: int) -> tuple[bytes, bytes]:
+	out = bytes(byte ^ (nonce[i % len(nonce)] if nonce else 0)
+	            ^ (key_id & 0xFF) ^ (i & 0xFF) for i, byte in enumerate(text))
+	total = (sum(aad) + sum(out)) & 0xFFFFFFFF
+	return out, bytes((total + 7 * j) & 0xFF for j in range(tag_len))
+
+
+TOY_C = """
+static int toy(void *ctx, const situ_sealing_t *s)
+{
+	uint32_t total = 0;
+	if (ctx != NULL) return -1;
+	for (uint32_t i = 0; i < s->text_len; i++) {
+		s->text[i] ^= (uint8_t)((s->nonce_len ? s->nonce[i % s->nonce_len] : 0)
+		                        ^ (uint8_t)s->key_id ^ (uint8_t)i);
+		total += s->text[i];
+	}
+	for (uint32_t i = 0; i < s->aad_len; i++) total += s->aad[i];
+	for (uint32_t j = 0; j < s->tag_len; j++) s->tag[j] = (uint8_t)(total + 7u * j);
+	return 0;
+}
+"""
+
+FOUR: dict[str, dict[str, Any]] = {
+	"packet": dict(
+		args=lambda: [7, struct.pack(">BBHI", 1, 2, len(BODY), 41), NONCE,
+		              struct.pack(">HI", 5, 6) + bytes(range(16)) + BODY]),
+	"dtls": dict(
+		args=lambda: [23, 0xFEFD, 3, bytes([0, 0, 0, 0, 0, 9]),
+		              len(BODY) + 24, NONCE[:8], BODY]),
+	"headed": dict(
+		args=lambda: [bytes([9]) + struct.pack(">H", len(BODY)) + NONCE,
+		              BODY]),
+}
+
+
+def _c_list(data: bytes) -> str:
+	return "{" + ", ".join(str(one) for one in data) + "}"
+
+
+def _drivers(stem: str, args: list[int | bytes]) -> dict[str, str]:
+	"""One good case, one a byte short, one the seal refuses, per language."""
+	plain = args[-1]
+	assert isinstance(plain, bytes)
+	short = [*args[:-1], plain[:-1]]
+	struct_name = {"packet": "packet", "dtls": "record"}.get(stem, stem)
+
+	def c_args(given: list[int | bytes], cpp: bool) -> str:
+		out = []
+		for i, one in enumerate(given):
+			if isinstance(one, int):
+				out.append(str(one))
+			elif i == len(given) - 1 or (stem == "packet" and i == 1) \
+					or stem == "headed":
+				out.append(f"a{i}, {len(one)}u")
+			else:
+				out.append(f"a{i}")
+		return ", ".join(out)
+
+	decls = "\n".join(f"static const uint8_t a{i}[] = {_c_list(one)};"
+	                  for i, one in enumerate(args) if isinstance(one, bytes))
+	show = """
+static void show(int e, const uint8_t *out, uint32_t n)
+{
+	printf("%d", e);
+	for (uint32_t i = 0; e == 0 && i < n; i++) printf(" %02x", out[i]);
+	puts("");
+}
+"""
+	c = (f'#include <stdio.h>\n#include "{stem}_build.h"\n{TOY_C}\n{decls}\n'
+	     f"{show}\nstatic uint8_t out[256];\nint main(void)\n{{\n"
+	     "\tuint32_t n = 0;\n\tint e;\n"
+	     f"\te = situ_{struct_name}_build(out, sizeof out, "
+	     f"{c_args(args, False)}, toy, NULL, &n);\n\tshow(e, out, n);\n"
+	     f"\te = situ_{struct_name}_build(out, sizeof out, "
+	     f"{c_args(args, False).replace(f'{len(plain)}u', f'{len(plain) - 1}u')}"
+	     ", toy, NULL, &n);\n\tshow(e, out, 0);\n"
+	     f"\te = situ_{struct_name}_build(out, sizeof out, "
+	     f"{c_args(args, False)}, toy, out, &n);\n\tshow(e, out, 0);\n"
+	     "\treturn 0;\n}\n")
+	cpp = (f'#include <cstdio>\n#include "{stem}_build.hpp"\n'
+	       + TOY_C.replace("NULL", "nullptr") + f"\n{decls}\n{show}\n"
+	       "static uint8_t out[256];\nint main()\n{\n"
+	       "\tstd::uint32_t n = 0;\n"
+	       f"\tint e = static_cast<int>(situ_build::{struct_name}(out, sizeof out, "
+	       f"{c_args(args, True)}, toy, nullptr, n));\n\tshow(e, out, n);\n"
+	       f"\te = static_cast<int>(situ_build::{struct_name}(out, sizeof out, "
+	       f"{c_args(args, True).replace(f'{len(plain)}u', f'{len(plain) - 1}u')}"
+	       ", toy, nullptr, n));\n\tshow(e, out, 0);\n"
+	       f"\te = static_cast<int>(situ_build::{struct_name}(out, sizeof out, "
+	       f"{c_args(args, True)}, toy, out, n));\n\tshow(e, out, 0);\n"
+	       "\treturn 0;\n}\n")
+
+	def rust_args(given: list[int | bytes]) -> str:
+		out = []
+		for i, one in enumerate(given):
+			if isinstance(one, int):
+				out.append(str(one))
+			elif i == len(given) - 1 or (stem == "packet" and i == 1) \
+					or stem == "headed":
+				out.append(f"&{_c_list(one).replace('{', '[').replace('}', ']')}[..]")
+			else:
+				out.append(f"&{_c_list(one).replace('{', '[').replace('}', ']')}")
+		return ", ".join(out)
+
+	rust = (f"mod situ_rt;\n#[allow(dead_code)] mod {stem};\n"
+	        f"#[allow(dead_code)] mod {stem}_build;\n"
+	        "fn toy(s: &mut situ_rt::Sealing<'_>) -> bool {\n"
+	        "\tlet mut total: u32 = 0;\n"
+	        "\tlet k = s.key_id.unwrap_or(0) as u8;\n"
+	        "\tfor i in 0..s.text.len() {\n"
+	        "\t\tlet n = if s.nonce.is_empty() { 0 } else "
+	        "{ s.nonce[i % s.nonce.len()] };\n"
+	        "\t\ts.text[i] ^= n ^ k ^ (i as u8);\n"
+	        "\t\ttotal = total.wrapping_add(u32::from(s.text[i]));\n\t}\n"
+	        "\tfor b in s.aad { total = total.wrapping_add(u32::from(*b)); }\n"
+	        "\tfor j in 0..s.tag.len() { s.tag[j] = "
+	        "total.wrapping_add(7 * j as u32) as u8; }\n\ttrue\n}\n"
+	        "fn show(r: Result<usize, situ_rt::Error>, out: &[u8]) {\n"
+	        "\tmatch r {\n\t\tOk(n) => { print!(\"0\"); "
+	        "for b in &out[..n] { print!(\" {:02x}\", b); } println!(); }\n"
+	        "\t\tErr(situ_rt::Error::Constraint) => println!(\"2\"),\n"
+	        "\t\tErr(situ_rt::Error::Tag) => println!(\"4\"),\n"
+	        "\t\tErr(_) => println!(\"99\"),\n\t}\n}\n"
+	        "fn main() {\n\tlet mut out = [0u8; 256];\n"
+	        f"\tlet r = {stem}_build::build_{struct_name}(&mut out, "
+	        f"{rust_args(args)}, &mut toy);\n\tshow(r, &out);\n"
+	        f"\tlet r = {stem}_build::build_{struct_name}(&mut out, "
+	        f"{rust_args(short)}, &mut toy);\n\tshow(r, &out);\n"
+	        f"\tlet r = {stem}_build::build_{struct_name}(&mut out, "
+	        f"{rust_args(args)}, &mut |_s| false);\n\tshow(r, &out);\n"
+	        "}\n")
+	return {"c": c, "cpp": cpp, "rust": rust}
+
+
+def _python_says(directory: Path, stem: str,
+		args: list[int | bytes]) -> str:
+	sys.path[:0] = [str(directory), str(RUNTIME / "python")]
+	try:
+		import importlib
+		built = importlib.import_module(f"{stem}_build")
+		runtime = importlib.import_module("situ_runtime")
+	finally:
+		del sys.path[:2]
+
+	def toy(s: object) -> None:
+		text = bytes(s.text)				# type: ignore[attr-defined]
+		sealed, tag = _toy(s.key_id or 0, s.nonce or b"",	# type: ignore[attr-defined]
+		                   s.aad, text, len(s.tag))		# type: ignore[attr-defined]
+		s.text[:] = sealed				# type: ignore[attr-defined]
+		s.tag[:] = tag					# type: ignore[attr-defined]
+
+	def refuse(s: object) -> None:
+		raise RuntimeError("refused")
+
+	codes = {runtime.ConstraintError: 2, runtime.TagError: 4}
+	lines = []
+	name = {"packet": "packet", "dtls": "record"}.get(stem, stem)
+	plain = args[-1]
+	assert isinstance(plain, bytes)
+	for given, seal in ((args, toy), ([*args[:-1], plain[:-1]], toy),
+	                    (args, refuse)):
+		out = bytearray(256)
+		try:
+			n = getattr(built, f"build_{name}")(out, *given, seal)
+			lines.append("0" + "".join(f" {one:02x}" for one in out[:n]))
+		except runtime.SituError as refused:
+			lines.append(str(codes.get(type(refused), 99)))
+	return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize("stem", sorted(FOUR))
+def test_four_builders_seal_alike(stem: str, tmp_path: Path) -> None:
+	sys.path.insert(0, str(ROOT / "test" / "unit"))
+	import fourway
+	if not fourway.COMPLETE:
+		pytest.skip("needs gcc, g++ and rustc")
+	schema = ROOT / "example" / stem / f"{stem}.situ"
+	if stem == "headed":
+		schema = tmp_path / "headed.situ"
+		schema.write_text(HEADED, encoding="ascii")
+	args = FOUR[stem]["args"]()
+	said: dict[str, str] = {}
+	drivers = _drivers(stem, args)
+	for target in ("c", "cpp", "rust", "python"):
+		out = tmp_path / target
+		out.mkdir()
+		done = subprocess.run([sys.executable, "-m", "situc", "build",
+		                       "--target", target, "--layer", "edit",
+		                       str(schema), "--out", str(out)], cwd=ROOT,
+		                      capture_output=True, text=True, timeout=300)
+		assert done.returncode == 0, done.stderr[-2000:]
+		assert "no builder for" not in done.stderr, done.stderr
+	said["python"] = _python_says(tmp_path / "python", stem, args)
+	c, cpp, rust = (tmp_path / one for one in ("c", "cpp", "rust"))
+	(c / "main.c").write_text(drivers["c"])
+	(cpp / "main.cpp").write_text(drivers["cpp"])
+	shutil.copy(RUNTIME / "rust" / "situ_rt.rs", rust)
+	rt = rust / "situ_rt.rs"
+	rt.write_text(rt.read_text().replace("#![no_std]\n", ""))
+	(rust / "main.rs").write_text(drivers["rust"])
+	for argv, where in (
+			([fourway.HOST_CC or "cc", "-std=c11", "-Wall", "-Wextra",
+			  "-Werror", f"-I{RUNTIME / 'c'}", "-I.", "main.c", f"{stem}.c",
+			  str(RUNTIME / "c" / "situ.c"), "-o", "probe"], c),
+			([fourway.HOST_CXX or "c++", "-std=c++17", "-Wall", "-Wextra",
+			  "-Werror", f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", "-I.",
+			  "main.cpp", str(RUNTIME / "c" / "situ.c"), "-o", "probe"], cpp),
+			([fourway.RUSTC or "rustc", "--edition", "2021", "-D", "warnings",
+			  "-A", "dead_code", "main.rs", "-o", "probe"], rust)):
+		made = subprocess.run(argv, cwd=where, capture_output=True,
+		                      text=True, timeout=300)
+		assert made.returncode == 0, made.stderr[-3000:]
+		ran = subprocess.run(["./probe"], cwd=where, capture_output=True,
+		                     text=True, timeout=60)
+		assert ran.returncode == 0, ran.stderr
+		said[where.name] = ran.stdout
+	assert len(set(said.values())) == 1, said
+	lines = said["python"].splitlines()
+	assert [line.split()[0] for line in lines] == ["0", "2", "4"], lines
+	# And the toy as this file computes it, from the bytes the reader
+	# places: so four agreeing is not four wrong alike.
+	built = bytes(int(one, 16) for one in lines[0].split()[1:])
+	if stem == "packet":
+		aad, nonce, key, at = built[4:24], NONCE, 0, 24
+	elif stem == "headed":
+		aad, nonce, key, at = built[:15], NONCE, 0, 15
+	else:
+		aad, nonce, key, at = b"", NONCE[:8], 3, 21
+	plain = args[-1]
+	assert isinstance(plain, bytes)
+	assert built[at:] == b"".join(_toy(key, nonce, aad, plain, 16))
