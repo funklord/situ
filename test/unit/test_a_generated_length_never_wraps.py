@@ -148,6 +148,11 @@ RUST_CENSUS = {
 	# `body_as_empty` accessors, behind `len() < at` exactly as the three
 	# literal arms' are; the old schema through this emitter still gives 5.
 	"json.situ": 7,
+	# Read when they joined the corpus, 2026-11-26 (26.1177): `ident`'s and
+	# `end`'s bounds behind `len() < at`, and each located table's
+	# `msg.len() - n` behind `n > msg.len()` -- ELF has two tables, ZIP one.
+	"elf.situ": 3,
+	"zip.situ": 2,
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,

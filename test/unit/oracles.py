@@ -155,6 +155,108 @@ def cpio_situ(module: object, archive: bytes) -> list[dict[str, object]]:
 	return sorted(found, key=lambda row: str(row["name"]))
 
 
+# -- elf ----------------------------------------------------------------------
+#
+# GNU binutils lays the binary out and readelf reads it back: the tables sit
+# where the header says, so a section header read at the wrong offset, or
+# its fields read in the wrong order, shows in every row (26.1177).
+
+ELF_SOURCE = """\t.globl _start
+\t.text
+_start:
+\tmov $60, %eax
+\txor %edi, %edi
+\tsyscall
+\t.section .rodata
+\t.ascii "situ elf oracle\\n"
+\t.data
+\t.quad 1, 2, 3
+"""
+
+
+def elf_corpus(tmp: Path) -> bytes:
+	"""An executable with code, read-only data, data and a section table."""
+	(tmp / "tiny.s").write_text(ELF_SOURCE, encoding="ascii")
+	_run(["as", "--64", "-o", str(tmp / "tiny.o"), str(tmp / "tiny.s")])
+	_run(["ld", "-s", "-n", "-o", str(tmp / "tiny"), str(tmp / "tiny.o")])
+	return (tmp / "tiny").read_bytes()
+
+
+def elf_says(binary: bytes, tmp: Path) -> list[tuple[int, int, int]]:
+	"""Every section's type, offset and size, as `readelf -S -W` prints them."""
+	path = tmp / "oracle.elf"
+	path.write_bytes(binary)
+	shown = _run(["readelf", "-S", "-W", str(path)])
+	types = {"NULL": 0, "PROGBITS": 1, "SYMTAB": 2, "STRTAB": 3, "NOBITS": 8}
+	found = []
+	for line in shown.splitlines():
+		matched = re.match(r"\s*\[\s*(\d+)\]\s+(\S*)\s+([A-Z_]+)\s+[0-9a-f]+"
+		                   r"\s+([0-9a-f]+)\s+([0-9a-f]+)", line)
+		if matched:
+			found.append((types.get(matched.group(3), -1),
+			              int(matched.group(4), 16), int(matched.group(5), 16)))
+	return found
+
+
+def elf_situ(module: object, binary: bytes) -> list[tuple[int, int, int]]:
+	"""The same rows through situ's accessors: the header's `shoff` and
+	`shnum` place the table, and each entry says the rest."""
+	from situ_runtime import Message
+
+	head  = module.elf64.at(Message(bytearray(binary)), 0)   # type: ignore[attr-defined]
+	head.validate()
+	table = head.sections_view
+	types = {0, 1, 2, 3, 8}
+	return [(entry.type if entry.type in types else -1, entry.offset,
+	         entry.size)
+	        for entry in (table.entries(index)
+	                      for index in range(table.entries_count))]
+
+
+# -- zip ----------------------------------------------------------------------
+#
+# Info-ZIP writes the archive and CPython's `zipfile` reads it: the central
+# directory is where the end record says, handed the count the end record
+# states (26.1177, 26.1178). A deflated file makes the two sizes differ, so a
+# swap of them cannot agree by accident.
+
+def zip_corpus(tmp: Path) -> bytes:
+	"""Three files: one deflated, one stored, one empty."""
+	src = tmp / "zipsrc"
+	src.mkdir()
+	(src / "squeezed.txt").write_bytes(b"situ reads the bytes. " * 40)
+	(src / "tiny.bin").write_bytes(b"\x01\x02\x03")
+	(src / "empty").write_bytes(b"")
+	_run(["zip", "-X", "-q", str(tmp / "oracle.zip"), "squeezed.txt",
+	      "tiny.bin", "empty"], cwd=src)
+	return (tmp / "oracle.zip").read_bytes()
+
+
+def zip_says(archive: bytes, tmp: Path) -> list[tuple[str, int, int, int, int]]:
+	"""Name, compressed and plain size, CRC and local header, per entry."""
+	import io
+	import zipfile
+
+	with zipfile.ZipFile(io.BytesIO(archive)) as held:
+		return [(one.filename, one.compress_size, one.file_size, one.CRC,
+		         one.header_offset) for one in held.infolist()]
+
+
+def zip_situ(module: object, archive: bytes) -> list[tuple[str, int, int, int, int]]:
+	"""The same, through the end record and the directory it places."""
+	from situ_runtime import Message
+
+	whole = module.archive.at(Message(bytearray(archive)), 0, len(archive))   # type: ignore[attr-defined]
+	whole.validate()
+	table = whole.directory_view
+	found = []
+	for index in range(table.entries_count):
+		entry = table.entries(index)
+		found.append((bytes(entry.name).decode("ascii"), entry.compressed,
+		              entry.uncompressed, entry.crc, entry.local_offset))
+	return found
+
+
 # -- ustar ---------------------------------------------------------------------
 #
 # GNU tar writes the archive and Python's `tarfile` reads it back: two
@@ -1429,6 +1531,24 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "elf",
+		schema = ROOT / "example" / "elf" / "elf.situ",
+		tool   = "readelf",
+		why    = ("GNU as and ld lay the binary out and readelf lists its "
+		          "sections: the table is where `shoff` says and holds "
+		          "`shnum` entries, so a header read at the wrong place or "
+		          "a count handed wrong shows in every row."),
+	),
+	Oracle(
+		name   = "zip",
+		schema = ROOT / "example" / "zip" / "zip.situ",
+		tool   = "zip",
+		why    = ("Info-ZIP writes the archive and CPython's zipfile reads "
+		          "it. ZIP is read from its end: the directory is where the "
+		          "end record places it, with the count the end record "
+		          "states -- a field read after a run of unknown length."),
+	),
+	Oracle(
 		name   = "json",
 		schema = ROOT / "example" / "json" / "json.situ",
 		tool   = "json",
@@ -1625,6 +1745,15 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# Two u64s, so the section header keeps its size and only where each
+	# section is and how long trade places.
+	"elf": ("\tu64 offset;      // where its bytes start in the file\n"
+	        "\tu64 size;",
+	        "\tu64 size;\n"
+	        "\tu64 offset;      // where its bytes start in the file"),
+	# The two sizes, which a deflated entry makes differ.
+	"zip": ("\tu32 compressed;\n\tu32 uncompressed;",
+	        "\tu32 uncompressed;\n\tu32 compressed;"),
 	# The kept and the original length: equal for two records and not for
 	# the two editcap cut, so the swap reads 60 bytes where 40 are kept.
 	"pcap": ("\tu32  incl_len;\n\tu32  orig_len;",
@@ -1696,6 +1825,8 @@ DRIVERS = {
 	"ustar": (ustar_corpus, ustar_says, ustar_situ),
 	"bmp":  (bmp_corpus, bmp_says, bmp_situ),
 	"protobuf": (proto_corpus, proto_says, proto_situ),
+	"elf":  (elf_corpus, elf_says, elf_situ),
+	"zip":  (zip_corpus, zip_says, zip_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),
