@@ -9453,8 +9453,13 @@ class Emitter:
 		# times per element measured, a fifth of all the time `validate`
 		# spent. A conditional evaluates its condition before either branch,
 		# so the outermost comparison binds it before any other reads it.
-		self._disc_names = getattr(self, "_disc_names", 0) + 1
-		named = f"_situ_d{self._disc_names}"
+		# Named for the variant and nothing else, so the same chain is the
+		# same text wherever it is rendered: callers find an expression by
+		# its text to put the running cursor in its place, and a counter
+		# here made each rendering differ -- the replacement missed, every
+		# offset was re-derived from the start, and sixty levels of a
+		# recursion went past the call budget (the gate's polynomial test).
+		named = "_situ_d_" + re.sub(r"\W", "_", placement.path)
 		valued = [arm for arm, member in arm_members(struct, placement)
 		          if member is not None and arm.value is not None]
 		first = valued[0] if valued else None
