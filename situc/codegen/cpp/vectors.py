@@ -28,7 +28,7 @@ from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_only_arguments, refuse_parameters,
                            tally)
 from situc.codegen.c.names import c_name
-from situc.codegen.c.vectors import Case, _check, _symbol, vector_steps
+from situc.codegen.c.vectors import Case, _check, _symbol, an_arm, vector_steps
 from situc.codegen.cpp.emit import ctype
 from situc.resolve import ResolvedSchema
 
@@ -287,7 +287,9 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 		# compile (26.1181).
 		found = resolved.find(f"{case.struct}.{path}")
 		varint = None if found is None else found.placement.varint
-		if found is not None and (varint is not None
+		armed  = (an_arm(resolved, case.struct, path) and found is not None
+		          and found.placement.scalar is not None)
+		if found is not None and (varint is not None or armed
 		                          or (found.placement.radix is not None
 		                              and found.placement.scalar is not None)):
 			if not lines:

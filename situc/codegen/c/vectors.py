@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen import refuse_only_arguments, refuse_parameters
 from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
@@ -357,6 +357,16 @@ def _nested_of(resolved: ResolvedSchema, struct: str,
 	return head, inner, rest
 
 
+def an_arm(resolved: ResolvedSchema, struct: str, path: str) -> bool:
+	"""Whether a vector path names a variant's arm, whose getter refuses the
+	arm that is not there and so is fallible in C, C++ and Rust: gzip's
+	`header_crc.crc16` was the first vector to name a scalar one (26.1183)."""
+	if "." not in path:
+		return False
+	parent = resolved.find(f"{struct}.{path.rsplit('.', 1)[0]}")
+	return parent is not None and parent.placement.kind == "variant"
+
+
 def vector_steps(resolved: ResolvedSchema, struct: str,
 		path: str) -> list[str]:
 	"""A vector path as the accessor steps that reach it: each member, and
@@ -369,8 +379,12 @@ def vector_steps(resolved: ResolvedSchema, struct: str,
 	while at < len(parts):
 		step = parts[at]
 		found = resolved.find(f"{struct}.{step}")
+		# Whenever an arm follows, the arm's own field included: a SCALAR
+		# arm is the last step, `header_crc.crc16`, and is read through
+		# `header_crc_crc16` as a struct arm is through its view; left out,
+		# gzip's FHCRC asked for a `header_crc` nothing defines (26.1183).
 		if (found is not None and found.placement.kind == "variant"
-				and at + 2 < len(parts)):
+				and at + 1 < len(parts)):
 			step = f"{step}.{parts[at + 1]}"
 			found = resolved.find(f"{struct}.{step}")
 			at += 1
@@ -395,6 +409,13 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 	nested = _nested_of(resolved, case.struct, path)
 	if nested is not None:
 		member, inner, rest = nested
+		# A struct taking arguments: each of its accessors takes them as a
+		# trailing parameter, and the view the suite holds carries none, so
+		# HTTP/2's padded payloads did not compile (26.1183). Declined, as
+		# the run with no fixed count is.
+		taker = resolved.find_struct(inner)
+		if taker is not None and traverse.arguments(taker):
+			return []
 		# A name per level. Each level was `sub`, so two levels down --
 		# `packet.transmit.fraction` -- the inner declaration shadowed the
 		# outer and `transmit_view(sub, &sub)` read the uninitialised one:
@@ -416,6 +437,14 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 	local = c_name(path)
 	count = _byte_run(resolved, case.struct, path)
 
+	run = resolved.find(f"{case.struct}.{path}")
+	if count is None and run is not None and run.placement.radix is None \
+			and (run.placement.delimiters or run.placement.sized_by
+			     or run.placement.size_expr):
+		# A run with no fixed count is no number, and the other three
+		# targets compare none: gzip's file name, a run to its zero, was
+		# called as a getter nothing declares (26.1183).
+		return []
 	if count is None:
 		# A text number's getter is fallible -- the digits may not be digits --
 		# so it takes an out-parameter and returns a code, and calling it as a
@@ -426,9 +455,14 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 		# A varint's is the same shape: the bytes may end mid-value or hold
 		# a padded encoding a `minimal` type refuses. No vector asserted one
 		# until example/websocket's `length` (26.1181).
-		if found is not None and found.placement.varint is not None:
-			kind = ("int64_t" if found.placement.varint_signed
-			        else "uint64_t")
+		if found is not None and (found.placement.varint is not None
+		                          or (an_arm(resolved, case.struct, path)
+		                              and found.placement.scalar is not None
+		                              and found.placement.radix is None)):
+			scalar = found.placement.scalar
+			kind = (("int64_t" if found.placement.varint_signed
+			         else "uint64_t") if found.placement.varint is not None
+			        else _ctype(scalar))
 			return [
 				"\t{",
 				f"\t\t{kind} got = 0;",

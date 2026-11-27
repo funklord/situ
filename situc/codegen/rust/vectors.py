@@ -35,7 +35,7 @@ from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_only_arguments, refuse_parameters,
                            tally)
 from situc.codegen.c.names import c_name
-from situc.codegen.c.vectors import Case, _check, _symbol, vector_steps
+from situc.codegen.c.vectors import Case, _check, _symbol, an_arm, vector_steps
 from situc.codegen.rust.emit import _ident, _pascal
 from situc.resolve import ResolvedSchema
 
@@ -322,7 +322,8 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 		# one until example/websocket's `length`, and the comparison did not
 		# typecheck (26.1181).
 		found = resolved.find(f"{case.struct}.{path}")
-		if found is not None and found.placement.varint is not None:
+		if found is not None and (found.placement.varint is not None
+		                          or an_arm(resolved, case.struct, path)):
 			right = f"Ok({right})"
 
 		if not lines:
@@ -355,4 +356,4 @@ def _reach(resolved: ResolvedSchema, path: str, case: Case) -> str:
 	for step in parts[:-1]:
 		reached += (f".{_ident(c_name(step))}()"
 		            f".expect(\"`{case.struct}.{step}` must be reachable\")")
-	return f"{reached}.{_ident(parts[-1])}()"
+	return f"{reached}.{_ident(c_name(parts[-1]))}()"
