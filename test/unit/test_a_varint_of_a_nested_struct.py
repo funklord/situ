@@ -33,12 +33,22 @@ struct digits { u8 kind; decimal u32 n[2]; }
 struct text { u8 k; u8 s[k]; digits h; u8 tail[h.n]; u8 last; }
 struct moved { u8 x; head h; u8 tail[h.n]; u8 last; }
 struct negative { signed_head h; u8 last; }
+struct huge { u64 n; u8 d[max(n, 16) - 16]; u8 last; }
 when ruled.h.n != ruled.v refuse mismatch "the rule reads it";
 when negative.h.n >= 0 refuse positive "the rule reads its sign";
 """
 
 #: struct -> message -> what `validate` says: 0 whole, 1 short, 2 a rule.
 CASES = {
+	# A 64-bit size past 2^63, read through `max` and `-` (ISO-BMFF's
+	# largesize): the C walker kept only that nothing since the load had
+	# shrunk a value, so the size came back small and the struct whole
+	# (26.1179). It is past any frame.
+	"huge": {
+		"0000000000000011" "aa" "cc":                "0",
+		"bec0d7aa1abaca6a" "44531dfcff48cffb" "cc": "1",
+		"ffffffffffffffff" "aa" "cc":                "1",
+	},
 	"plain": {
 		"07" "02" "aabb" "cc":       "0",
 		"07" "4002" "aabb" "cc":     "0",	# the padded spelling of 2
@@ -115,9 +125,13 @@ def test_all_four_measure_by_it(tmp_path: Path) -> None:
 
 
 def test_both_walkers_measure_by_it_or_say_they_cannot(tmp_path: Path) -> None:
-	"""A walker's program reads a field by its offset, which behind a length
-	is `h`'s to know, so it declines there as for any field of `h` (26.916).
-	Declining is the only other answer it may give, and both give the same."""
+	"""A walker's program reads a field by its offset. Behind a length that
+	offset was `h`'s to know and both walkers declined (26.916); `FIELD_AT`
+	reads a struct placed after a run at its measured offset (26.1178), so
+	`behind`, `both` and `text` are answered now, and must be answered right.
+	`deep`'s `n` follows a run INSIDE `h` -- two measured steps, which the
+	image does not carry -- so declining is still its other answer, and both
+	walkers give the same."""
 	blob  = pack_text(SCHEMA)
 	drive = _build_driver(tmp_path, blob, VERDICT)
 	for struct, cases in CASES.items():
@@ -126,6 +140,5 @@ def test_both_walkers_measure_by_it_or_say_they_cannot(tmp_path: Path) -> None:
 			data = bytes.fromhex(message)
 			said = c_verdict(tmp_path, blob, data, shape, drive)
 			assert said == python_verdict(blob, data, shape), (struct, message)
-			wanted = {verdict} if struct in ("plain", "ruled", "moved", "negative") \
-				else {verdict, "cannot-say"}
+			wanted = {verdict, "cannot-say"} if struct == "deep" else {verdict}
 			assert said in wanted, (struct, message, said)

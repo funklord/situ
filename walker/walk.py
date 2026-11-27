@@ -835,23 +835,21 @@ def _value_in(view: View, index: int, base: int) -> int:
 	placement = view.image.placements[index]
 	if placement.offset_bits is None:
 		raise Refused(f"placement {index} has no static offset to base")
-
-	start = placement.offset_bits + base * BITS_PER_BYTE
-	# A varint is its own width, and zero where the frame cuts it short, as
-	# every length read of one is (26.920).
-	if index in view.image.varints:
-		try:
-			_, raw = decode_varint(view, view.at + start // BITS_PER_BYTE,
-			                       *view.image.varint_rules[index])
-		except Refused:
-			return 0
-		return _varint_transform(view, index, raw)
-	width = content_bits(view, index)
-	if width <= 0 or width > 64:
-		raise Refused(f"a {width}-bit scalar is not one to read")
-	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
-		raise Refused("the frame does not reach this member")
-	return _read_at(view, index, start, width)
+	if placement.parameter:
+		# A nested struct's argument is its parent's to hand, and a read
+		# from outside has none to give (0050): refused, as the C walker's.
+		raise Refused(f"placement {index} is an argument")
+	# Read as the struct the field belongs to, over its own bytes at `base`,
+	# so a text number is parsed, a varint decoded and a value held to its
+	# domain exactly as `_value_of` holds a field of the frame itself. This
+	# read the raw bits instead -- a `decimal` field's ASCII as a number --
+	# which nothing reached until `FIELD_AT` let a struct after a run be
+	# read at all (26.1178).
+	owner = next(number for number, shape in enumerate(view.image.structs)
+	             if shape.first_placement <= index
+	             < shape.first_placement + shape.placement_count)
+	return _value_of(View(view.image, view.buffer, owner, view.at + base,
+	                      view.limit), index)
 
 
 #: `report.DIGITS_VALID`, whose row carries a text number's ceiling; named

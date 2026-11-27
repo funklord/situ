@@ -1977,61 +1977,21 @@ static situ_walk_err child_binding(const situ_walk_image *image,
                                    uint32_t depth, uint32_t child,
                                    int64_t *values, situ_walk_image *out);
 
-/* A field of a struct nested `base` bytes into this frame.
- *
- * `read_deep` resolves a placement's offset within its own struct, which is
- * the right answer for a member of the struct being walked and the wrong one
- * for a member of a struct inside it. The packer emits this form only where
- * both the nesting offset and the target's own offset are static, so neither
- * has to be resolved here (26.184). */
-static situ_walk_err read_based(const situ_walk_image *image,
-                                const uint8_t *message, uint32_t len,
-                                uint32_t index, int32_t base, int64_t *out)
+/* The struct a placement belongs to: the one whose members hold it. */
+static situ_walk_err owner_of(const situ_walk_image *image, uint32_t index,
+                              uint32_t *shape)
 {
-	situ_walk_placement held;
-	situ_walk_err err = situ_walk_placement_at(image, index, &held);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u) {
-		return SITU_WALK_UNSUPPORTED;
-	}
-	/* A field of a NESTED struct, and a nested struct cannot take an
-	 * argument yet (decision 0050): the parent's accessor has none to pass,
-	 * so it would be built with whatever a missing one means. Refused by
-	 * name rather than read at the offset, which here would be the next
-	 * member of that nested struct. */
-	if ((held.text_flags & SITU_WALK_PARAMETER) != 0u) {
-		return SITU_WALK_UNSUPPORTED;
-	}
-	if (base < 0) {
-		return SITU_WALK_MALFORMED;
-	}
+	for (uint32_t one = 0u; one < image->struct_count; one++) {
+		uint32_t first = 0u;
+		uint32_t count = 0u;
 
-	uint64_t value = 0u;
-	/* A varint is its own width, and zero where the frame cuts it short, as
-	 * every length read of one is (26.920). */
-	if (varint_rules(image, index) != NULL) {
-		uint32_t used = 0u;
-
-		err = situ_walk_varint(image, message, len, index,
-		                       held.offset_bits / 8u + (uint32_t)base, &used,
-		                       &value);
-		if (err == SITU_WALK_BOUNDS) {
-			value = 0u;
-		} else if (err != SITU_WALK_OK) {
-			return err;
-		}
-	} else {
-		err = read_at(message, len, &held,
-		              held.offset_bits + (uint32_t)base * 8u,
-		              held.size_bits, &value);
-		if (err != SITU_WALK_OK) {
-			return err;
+		if (situ_walk_members(image, one, &first, &count) == SITU_WALK_OK
+		    && index >= first && index - first < count) {
+			*shape = one;
+			return SITU_WALK_OK;
 		}
 	}
-	*out = (int64_t)value;
-	return SITU_WALK_OK;
+	return SITU_WALK_MALFORMED;
 }
 
 static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
@@ -2253,15 +2213,46 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
 		return SITU_WALK_OK;
 	}
 
+	/* A field of a struct `base` bytes into the frame (FIELD_IN, FIELD_AT):
+	 * read as that struct over its own bytes, so a text number is parsed,
+	 * a varint decoded and the lax rules below apply as they do to a field
+	 * of the frame. This read the raw bits instead -- a `decimal` field's
+	 * ASCII as a number -- which nothing reached until FIELD_AT let a struct
+	 * after a run be read at all (26.1178). */
+	const uint8_t *message = ctx->message;
+	uint32_t       len     = ctx->len;
+	uint32_t       shape   = ctx->shape;
+
 	if (base != 0) {
-		return read_based(ctx->image, ctx->message, ctx->len, index, base,
-		                  out);
+		situ_walk_placement held;
+		situ_walk_err       found = situ_walk_placement_at(ctx->image, index,
+		                                                   &held);
+		if (found != SITU_WALK_OK) {
+			return found;
+		}
+		/* A nested struct's argument is its parent's to hand (0050), and
+		 * a read from outside has none to give. */
+		if ((held.flags & FLAG_OFFSET_KNOWN) == 0u
+		    || (held.text_flags & SITU_WALK_PARAMETER) != 0u) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		if (base < 0) {
+			return SITU_WALK_MALFORMED;
+		}
+		if ((uint32_t)base > len) {
+			return SITU_WALK_BOUNDS;
+		}
+		found = owner_of(ctx->image, index, &shape);
+		if (found != SITU_WALK_OK) {
+			return found;
+		}
+		message += (uint32_t)base;
+		len     -= (uint32_t)base;
 	}
 
 	uint64_t value = 0u;
-	const situ_walk_err err = read_deep(ctx->image, ctx->message, ctx->len,
-	                                    ctx->shape, index, ctx->depth,
-	                                    &value);
+	const situ_walk_err err = read_deep(ctx->image, message, len, shape,
+	                                    index, ctx->depth, &value);
 	if (err != SITU_WALK_OK) {
 		/* The lax half of a distinction every backend makes. C emits two
 		 * readers for a text number: `_get`, which returns an error when
@@ -9151,6 +9142,98 @@ static situ_walk_err remaining_from_member(void *raw, int64_t *out)
 }
 
 
+/* A value as walk.py holds it -- an integer -- within what a program can
+ * reach: a magnitude and a sign. An UNSIGNED field past INT64_MAX reads
+ * here as itself rather than as a negative number, and arithmetic over it
+ * stays exact, so `max(largesize, 16) - 16` over a 64-bit size past 2^63
+ * is that size less sixteen, past any frame, as walk.py and the four
+ * backends compute it -- where 26.1148's whole-program flag knew only
+ * that nothing since the load had shrunk a value, and `max` and `-` both
+ * may, so the bits came back and read as a small length (26.1179). A
+ * positive magnitude saturates at 2^64 - 1, which is past any frame too.
+ */
+typedef struct {
+	int      neg;
+	uint64_t mag;
+} exact_value;
+
+/* Whether a loaded value is an UNSIGNED field's past INT64_MAX: its bits
+ * read negative and its placement is not signed. */
+static int loaded_big(const situ_walk_image *image, uint32_t index,
+                      int64_t value)
+{
+	situ_walk_placement held;
+
+	return value < 0
+	    && situ_walk_placement_at(image, index, &held) == SITU_WALK_OK
+	    && (held.flags & FLAG_SIGNED) == 0u;
+}
+
+static exact_value exact_of(int64_t bits, int big)
+{
+	exact_value v;
+
+	if (big || bits >= 0) {
+		v.neg = 0;
+		v.mag = (uint64_t)bits;
+	} else {
+		v.neg = 1;
+		v.mag = 0u - (uint64_t)bits;
+	}
+	return v;
+}
+
+/* Back to a stack slot: `*big` where it is past INT64_MAX. A negative
+ * past INT64_MIN cannot be reached from these operands and is held at
+ * INT64_MIN. */
+static int64_t exact_slot(exact_value v, int *big)
+{
+	*big = 0;
+	if (v.neg) {
+		if (v.mag > (uint64_t)INT64_MAX + 1u) {
+			return INT64_MIN;
+		}
+		return (int64_t)(0u - v.mag);
+	}
+	if (v.mag > (uint64_t)INT64_MAX) {
+		*big = 1;
+	}
+	return (int64_t)v.mag;
+}
+
+static exact_value exact_add(exact_value a, exact_value b)
+{
+	exact_value r;
+
+	if (a.neg == b.neg) {
+		r.neg = a.neg;
+		r.mag = (a.mag > UINT64_MAX - b.mag) ? UINT64_MAX : a.mag + b.mag;
+		return r;
+	}
+	if (a.mag >= b.mag) {
+		r.neg = a.neg;
+		r.mag = a.mag - b.mag;
+	} else {
+		r.neg = b.neg;
+		r.mag = b.mag - a.mag;
+	}
+	if (r.mag == 0u) {
+		r.neg = 0;
+	}
+	return r;
+}
+
+static int exact_cmp(exact_value a, exact_value b)
+{
+	if (a.neg != b.neg) {
+		return a.neg ? -1 : 1;
+	}
+	if (a.mag == b.mag) {
+		return 0;
+	}
+	return ((a.mag < b.mag) != a.neg) ? -1 : 1;
+}
+
 static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
                                situ_walk_load load, void *ctx,
                                walk_remaining_fn remaining_of,
@@ -9158,14 +9241,12 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
                                uint64_t tag, int64_t *out)
 {
 	int64_t  stack[STACK_DEPTH];
+	/* Which slots hold an UNSIGNED value past INT64_MAX, whose bits read
+	 * as a negative number (26.1148, 26.1156, 26.1179). */
+	int      big[STACK_DEPTH];
 	unsigned depth = 0u;
 	uint32_t pc    = at;
 	int      wrapping = 0;
-	/* An UNSIGNED field past INT64_MAX was loaded (`huge`), and whether
-	 * anything since could have made a value smaller (`shrinks`): see
-	 * OP_END (26.1148, 26.1156). */
-	int      huge = 0;
-	int      shrinks = 0;
 
 	/* The loop terminates because the program counter only ever advances
 	 * and the program has a length: that is section 10 being total, and it
@@ -9179,20 +9260,15 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_MALFORMED;
 			}
 			*out = stack[0];
-			/* A program over an UNSIGNED field past INT64_MAX, through
-			 * nothing that can make a value smaller -- `+`, `|`, `<<`, a
-			 * `*` by no zero -- is at least that field, so past INT64_MAX
-			 * whatever its bits read as: saturated, it measures past any
-			 * frame, as `walk.py` and the four backends measure it. A
-			 * compact size of 2^63 read below zero and a length read that
-			 * as nothing, so bitcoin's `script[script_length]` was empty
-			 * and the message accepted (26.1148); `d[n + 1]` over an `n`
-			 * of 2^64 - 1 wrapped to exactly zero (26.1156, found by `make
-			 * fuzz-walker-c-differ`). Anything that can shrink a value
-			 * keeps the bits, which are what count there: `popcount
-			 * (present)` over bit 63 is 1, which saturating every load
-			 * made 63. */
-			if (huge && !shrinks && !wrapping) {
+			/* A value past INT64_MAX measures past any frame, as walk.py
+			 * and the four backends measure it: saturated. A compact size
+			 * of 2^63 read below zero and a length read that as nothing,
+			 * so bitcoin's `script[script_length]` was empty and the
+			 * message accepted (26.1148); `d[n + 1]` over an `n` of 2^64 -
+			 * 1 wrapped to exactly zero (26.1156); `max(largesize, 16) -
+			 * 16` came back small (26.1179). A named value's wrapping
+			 * arithmetic keeps its bits, which are what it means. */
+			if (big[0] && !wrapping) {
 				*out = INT64_MAX;
 			}
 			return SITU_WALK_OK;
@@ -9207,6 +9283,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (pc + 8u > image->code_len || depth >= STACK_DEPTH) {
 				return SITU_WALK_MALFORMED;
 			}
+			big[depth] = 0;
 			stack[depth++] = i64_at(image->code + pc);
 			pc += 8u;
 			continue;
@@ -9226,15 +9303,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
-			if (value < 0) {
-				situ_walk_placement held;
-
-				if (situ_walk_placement_at(image, u32_at(image->code + pc),
-				                           &held) == SITU_WALK_OK
-				    && (held.flags & FLAG_SIGNED) == 0u) {
-					huge = 1;
-				}
-			}
+			big[depth] = loaded_big(image, u32_at(image->code + pc), value);
 			stack[depth++] = value;
 			pc += 4u;
 			continue;
@@ -9250,6 +9319,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = 0;
 			stack[depth++] = word;
 			continue;
 		}
@@ -9262,6 +9332,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (!have_tag || depth >= STACK_DEPTH) {
 				return SITU_WALK_UNSUPPORTED;
 			}
+			big[depth] = 0;
 			stack[depth++] = (int64_t)tag;
 			continue;
 		}
@@ -9280,6 +9351,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (asked != SITU_WALK_OK) {
 				return asked;
 			}
+			big[depth] = 0;
 			stack[depth++] = word;
 			continue;
 		}
@@ -9302,6 +9374,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = loaded_big(image, u32_at(arg), value);
 			stack[depth++] = value;
 			pc += 8u;
 			continue;
@@ -9335,6 +9408,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = loaded_big(image, u32_at(arg + 4u), value);
 			stack[depth++] = value;
 			pc += 12u;
 			continue;
@@ -9372,6 +9446,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = 0;
 			stack[depth++] = value;
 			pc += 4u;
 			continue;
@@ -9393,6 +9468,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = 0;
 			stack[depth++] = value;
 			pc += 4u;
 			continue;
@@ -9413,6 +9489,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = 0;
 			stack[depth++] = value;
 			pc += 6u + width;
 			continue;
@@ -9446,6 +9523,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			big[depth] = 0;
 			stack[depth++] = value;
 			pc += 5u;
 			continue;
@@ -9455,7 +9533,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (depth < 1u) {
 				return SITU_WALK_MALFORMED;
 			}
-			shrinks = 1;
+			big[depth - 1u] = 0;
 			if (wrapping) {
 				const uint64_t bits = (uint64_t)stack[depth - 1u];
 				stack[depth - 1u] = (int64_t)((op == 0x1au) ? 0u - bits
@@ -9471,7 +9549,7 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			if (depth < 1u) {
 				return SITU_WALK_MALFORMED;
 			}
-			shrinks = 1;
+			big[depth - 1u] = 0;
 			uint64_t bits = (uint64_t)stack[depth - 1u];
 			int64_t  set  = 0;
 
@@ -9485,16 +9563,10 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 		if (depth < 2u) {
 			return SITU_WALK_MALFORMED;
 		}
-		const int64_t right = stack[--depth];
-		const int64_t left  = stack[depth - 1u];
-		int64_t answer      = 0;
-
-		/* Only `+`, `|` and `<<`, and `*` by no zero, keep a value at least
-		 * what it was; everything else may make it smaller. */
-		if (!(op == 0x10u || op == 0x16u || op == 0x18u
-		      || (op == 0x12u && left != 0 && right != 0))) {
-			shrinks = 1;
-		}
+		const int     right_big = big[--depth];
+		const int64_t right     = stack[depth];
+		const int     left_big  = big[depth - 1u];
+		const int64_t left      = stack[depth - 1u];
 
 		/* A named value's arithmetic, on the bits as the four backends'
 		 * getters compute it (26.1059). */
@@ -9518,63 +9590,128 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_UNSUPPORTED;
 			}
 			stack[depth - 1u] = (int64_t)r;
+			big[depth - 1u]   = 0;
 			continue;
 		}
 
+		/* Exactly, as walk.py's integers: an UNSIGNED value past INT64_MAX
+		 * is itself here, and no operation wraps (26.1179). Division
+		 * truncates as C's does, which is what this walker has always
+		 * answered. */
+		const exact_value a = exact_of(left, left_big);
+		const exact_value b = exact_of(right, right_big);
+		exact_value       r = { 0, 0u };
+		int               truth = -1;
+
 		switch (op) {
-		case 0x10u: answer = left + right; break;
-		case 0x11u: answer = left - right; break;
-		case 0x12u: answer = left * right; break;
+		case 0x10u: r = exact_add(a, b); break;
+		case 0x11u: {
+			exact_value minus = b;
+
+			minus.neg = (b.mag != 0u) && !b.neg;
+			r = exact_add(a, minus);
+			break;
+		}
+		case 0x12u:
+			r.neg = (a.neg != b.neg) && a.mag != 0u && b.mag != 0u;
+			r.mag = (b.mag != 0u && a.mag > UINT64_MAX / b.mag)
+			      ? UINT64_MAX : a.mag * b.mag;
+			break;
 		case 0x13u:
+		case 0x14u:
 			/* Division by zero raises rather than answering zero: a length
 			 * computed from an unchecked division is a buffer overrun in
 			 * whatever reads it next. */
-			if (right == 0) {
+			if (b.mag == 0u) {
 				return SITU_WALK_MALFORMED;
 			}
-			answer = left / right;
-			break;
-		case 0x14u:
-			if (right == 0) {
-				return SITU_WALK_MALFORMED;
+			if (op == 0x13u) {
+				r.neg = (a.neg != b.neg);
+				r.mag = a.mag / b.mag;
+			} else {
+				r.neg = a.neg;
+				r.mag = a.mag % b.mag;
 			}
-			answer = left % right;
+			if (r.mag == 0u) {
+				r.neg = 0;
+			}
 			break;
-		case 0x15u: answer = left & right; break;
-		case 0x16u: answer = left | right; break;
-		case 0x17u: answer = left ^ right; break;
+		case 0x15u:
+		case 0x16u:
+		case 0x17u: {
+			/* On the 64 bits, as before; read back unsigned where either
+			 * side was an unsigned value past INT64_MAX. */
+			const uint64_t x = (uint64_t)left;
+			const uint64_t y = (uint64_t)right;
+			const uint64_t z = op == 0x15u ? (x & y)
+			                 : op == 0x16u ? (x | y) : (x ^ y);
+
+			r = exact_of((int64_t)z, (left_big || right_big)
+			                         && z > (uint64_t)INT64_MAX);
+			break;
+		}
 		case 0x18u:
-			answer = (right >= 0 && right < 64) ? (int64_t)
-			    ((uint64_t)left << right) : 0;
+			if (b.neg || b.mag >= 64u) {
+				r.neg = 0;
+				r.mag = 0u;
+				break;
+			}
+			r.neg = a.neg;
+			r.mag = (a.mag > (UINT64_MAX >> b.mag)) ? UINT64_MAX
+			      : a.mag << b.mag;
 			break;
 		case 0x19u:
-			/* Arithmetic, as Python's and Rust's, and spelled so: a
-			 * right shift of a negative signed value is implementation-
-			 * defined in C (26.956). */
-			answer = !(right >= 0 && right < 64) ? 0
-			       : left < 0 ? ~(~left >> right) : (left >> right);
+			/* Arithmetic, as Python's and Rust's: a negative value floors
+			 * (26.956). */
+			if (b.neg || b.mag >= 64u) {
+				r.neg = 0;
+				r.mag = 0u;
+				break;
+			}
+			r.neg = a.neg;
+			r.mag = a.neg ? ((a.mag - 1u) >> b.mag) + 1u : a.mag >> b.mag;
 			break;
-		case 0x20u: answer = (left == right); break;
-		case 0x21u: answer = (left != right); break;
-		case 0x22u: answer = (left <  right); break;
-		case 0x23u: answer = (left <= right); break;
-		case 0x24u: answer = (left >  right); break;
-		case 0x25u: answer = (left >= right); break;
-		case 0x26u: answer = (left && right); break;
-		case 0x27u: answer = (left || right); break;
-		case 0x30u: answer = (left < right) ? left : right; break;
-		case 0x31u: answer = (left > right) ? left : right; break;
-		case 0x32u:
-			if (right <= 0) {
+		case 0x20u: truth = exact_cmp(a, b) == 0; break;
+		case 0x21u: truth = exact_cmp(a, b) != 0; break;
+		case 0x22u: truth = exact_cmp(a, b) <  0; break;
+		case 0x23u: truth = exact_cmp(a, b) <= 0; break;
+		case 0x24u: truth = exact_cmp(a, b) >  0; break;
+		case 0x25u: truth = exact_cmp(a, b) >= 0; break;
+		case 0x26u: truth = (a.mag != 0u) && (b.mag != 0u); break;
+		case 0x27u: truth = (a.mag != 0u) || (b.mag != 0u); break;
+		case 0x30u: r = exact_cmp(a, b) <= 0 ? a : b; break;
+		case 0x31u: r = exact_cmp(a, b) >= 0 ? a : b; break;
+		case 0x32u: {
+			if (b.neg || b.mag == 0u) {
 				return SITU_WALK_MALFORMED;
 			}
-			answer = ((left + right - 1) / right) * right;
+			exact_value up = b;
+
+			up.mag = b.mag - 1u;
+			up = exact_add(a, up);
+			r.neg = up.neg;
+			r.mag = (up.mag / b.mag);
+			r.mag = (r.mag > UINT64_MAX / b.mag) ? UINT64_MAX
+			      : r.mag * b.mag;
 			break;
+		}
 		default:
 			return SITU_WALK_UNSUPPORTED;
 		}
 
-		stack[depth - 1u] = answer;
+		if (truth >= 0) {
+			stack[depth - 1u] = truth;
+			big[depth - 1u]   = 0;
+			continue;
+		}
+		{
+			int     past = 0;
+			int64_t bits = exact_slot(r, &past);
+
+			stack[depth - 1u] = bits;
+			big[depth - 1u]   = past;
+			continue;
+		}
 	}
 
 	return SITU_WALK_MALFORMED;	/* ran off the end without END */

@@ -10100,6 +10100,28 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1179 The C walker's arithmetic is exact past INT64_MAX
+
+A program over an unsigned 64-bit field past 2^63 had a whole-program flag
+(26.1148): nothing since the load had made a value smaller, so the result
+was past any frame. ISO-BMFF's `max(largesize, 16) - 16` goes through two
+operations that may shrink a value, so the bits came back and read as a
+small length: the C walker accepted a box the C backend and `walk.py`
+refuse. Each stack slot now says whether it holds such a value, and every
+operation outside a named value's wrapping arithmetic is exact over a sign
+and a 64-bit magnitude, saturating high -- `walk.py`'s integers, within
+what a program can reach -- which also ends signed overflow in `+`, `-`
+and `*`. Found while writing ISO-BMFF (not yet in the corpus);
+`test_a_varint_of_a_nested_struct.py`'s `huge` holds it in four backends
+and both walkers.
+
+Beside it: a field read at a base -- `FIELD_IN`, `FIELD_AT` -- was read as
+raw bits in both walkers, so a `decimal` field's ASCII read as a number.
+Both now read it as the struct that owns it, over its own bytes, so digits
+are parsed and the lax and domain rules apply as for a field of the frame.
+`behind`, `both` and `text` in that test are answered exactly by both
+walkers now, where they declined before 26.1178.
+
 ### 26.1178 A walker reads a field of a struct placed after a run
 
 The packed image named a nested field with `FIELD_IN`, a placement and a
