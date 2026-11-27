@@ -1,0 +1,68 @@
+# situ wire signature v4
+# schema: gzip.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian little
+target buffer
+
+struct extra_field size=2..65537
+  @0x0000   2         u16        xlen  little
+  @0x0002   0..65535  u8         data  sized-by=xlen
+
+struct file_comment size=1..
+  @0x0000   until:00  u8         comment
+
+struct file_name size=1..
+  @0x0000   until:00  u8         name
+
+struct member size=18..
+  @0x0000   2         u8         magic  little must_eq="\x1F\x8B"
+  @0x0002   1         u8         method  must_eq=8
+  @0x0003   3bit      u3         <reserved0>  msb_first must_be_zero
+  @0x0003:3 1bit      bit        fcomment  msb_first
+  @0x0003:4 1bit      bit        fname  msb_first
+  @0x0003:5 1bit      bit        fextra  msb_first
+  @0x0003:6 1bit      bit        fhcrc  msb_first
+  @0x0003:7 1bit      bit        ftext  msb_first
+  @0x0004   4         u32        mtime  little
+  @0x0008   1         u8         xfl
+  @0x0009   1         u8         os
+  @0x000a   0..65537  variant    extra
+  ~         0..       variant    name
+  ~         0..       variant    comment
+  ~         0..       variant    header_crc
+  ~         0..       u8         deflated  sized-by=max(remaining,8)-8
+  ~         4         u32        crc32  little
+  ~         4         u32        isize  little
+  extra switch: fextra
+  extra case 0: no_extra nothing
+  extra case 1: extra_present extra_field
+  extra case default: error
+  name switch: fname
+  name case 0: no_name nothing
+  name case 1: name_present file_name
+  name case default: error
+  comment switch: fcomment
+  comment case 0: no_comment nothing
+  comment case 1: comment_present file_comment
+  comment case default: error
+  header_crc switch: fhcrc
+  header_crc case 0: no_header_crc nothing
+  header_crc case 1: crc16 u16
+  header_crc case default: error
+
+struct nothing size=0

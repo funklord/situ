@@ -10100,6 +10100,36 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1183 gzip joins the corpus, and the vector suites read an arm
+
+RFC 1952's member wraps the deflate stream under `.gz`, `.tgz` and HTTP's
+`Content-Encoding: gzip`: a ten-byte header whose flag bits announce an
+extra field, a name and a comment that end at a zero byte, and a header CRC,
+then a deflate stream with no length of its own and an eight-byte trailer.
+`example/gzip` holds GNU gzip's and CPython's members and one with every
+flag written from the RFC, which `gzip -t` accepts; the oracle has gzip
+write a named member and inflate it, and zlib inflate the stream situ
+places to the same bytes.
+
+What it found:
+
+- **A builder asserted on `max(remaining, 8) - 8`.** An expression over
+  `remaining` carries no tree to invert, and the first one in a
+  builder-served struct reached an assertion. It is written as the
+  caller's bytes and held to the reader's `_len` once the message is
+  whole, as RTP's padding is (26.1016).
+- **No vector had named a scalar arm.** `header_crc.crc16` was split into
+  a variant step and a field step where the arm is read through
+  `header_crc_crc16`, and that getter is fallible in C, C++ and Rust,
+  since the arm may be absent. `vector_steps` merges an arm whenever one
+  follows, and `an_arm` sends it down the fallible path.
+- **C compared a run with no fixed count as a number.** The other three
+  skip such a run; C called a getter nothing declares. It skips it too.
+- **C's vector suite descended into structs that take arguments** --
+  HTTP/2's padded payloads, gate g16 -- whose accessors take them as a
+  trailing parameter the suite has nothing to pass. Declined, as the run
+  is; Rust, C++ and Python carry the arguments in their views.
+
 ### 26.1182 HTTP/2 joins the corpus, and an argument may call `max`
 
 RFC 9113's frame is the layer under every browser and gRPC call: a nine-byte

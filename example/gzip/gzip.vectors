@@ -1,0 +1,38 @@
+# Golden vectors for the gzip worked example.
+#
+# `plain` and `named` are GNU gzip 1.13 (`gzip -n -9` and `gzip -c`) of the
+# twelve bytes "hello, situ\n"; `python` is CPython's `gzip` module with a
+# file name and a fixed mtime. gzip writes neither FEXTRA, FCOMMENT nor FHCRC,
+# so `every_flag` is written from RFC 1952 section 2.3 around a deflate stream
+# zlib made, and `gzip -t` and `gzip -dc` accept it.
+
+# No optional part: the name left out with -n.
+member plain 1F 8B 08 00 00 00 00 00 02 03 CB 48 CD C9 C9 D7 51 28 CE 2C 29 E5 02 00 D3 12 C7 1A 0C 00 00 00
+	fname = 0
+	os = 3
+	crc32 = 449254099
+	isize = 12
+
+# FNAME: "hello.txt" and its zero.
+member named 1F 8B 08 08 80 E8 08 6B 00 03 68 65 6C 6C 6F 2E 74 78 74 00 CB 48 CD C9 C9 D7 51 28 CE 2C 29 E5 02 00 D3 12 C7 1A 0C 00 00 00
+	fname = 1
+	name.name_present.name = 68 65 6C 6C 6F 2E 74 78 74
+	isize = 12
+
+# CPython's: FNAME, os 255 (unknown), xfl 2.
+member python 1F 8B 08 08 00 F1 53 65 02 FF 6E 6F 74 65 73 2E 74 78 74 00 2B CE 2C 29 2D 26 02 03 00 EB FB B0 75 28 00 00 00
+	fname = 1
+	mtime = 1700000000
+	os = 255
+	isize = 40
+
+# Every flag but FTEXT: a six-byte extra field, a name, a comment, the CRC16.
+member every_flag 1F 8B 08 1E 00 00 00 00 00 FF 06 00 53 49 02 00 74 75 61 6C 6C 2E 74 78 74 00 65 76 65 72 79 20 66 6C 61 67 00 6E 03 2B CE 2C 29 55 28 4A 4D 4C 29 56 48 AF CA 2C E0 02 00 C1 6D 19 91 10 00 00 00
+	fextra = 1
+	fname = 1
+	fcomment = 1
+	fhcrc = 1
+	extra.extra_present.xlen = 6
+	comment.comment_present.comment = 65 76 65 72 79 20 66 6C 61 67
+	header_crc.crc16 = 878
+	isize = 16

@@ -227,10 +227,12 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: And 92 -> 95 scalar, 89 -> 97 unmeasurable, the same day, when HTTP/2's
 #: frame joined (26.1182): its five payload arms, the padded and
 #: prioritized ones each a struct of its own, and three byte runs.
+#: And 95 -> 96, 130 -> 134, 97 -> 100 when gzip's member joined (26.1183):
+#: four flag-chosen parts, each beside a `nothing`, and the header CRC.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                95,
-	("no-scalar", "struct", "fixed"):            130,
-	("no-scalar", "struct", "unmeasurable"):     97,
+	("scalar", "not-struct", ""):                96,
+	("no-scalar", "struct", "fixed"):            134,
+	("no-scalar", "struct", "unmeasurable"):     100,
 	("no-scalar", "not-struct", ""):              1,
 }
 

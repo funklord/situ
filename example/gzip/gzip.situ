@@ -1,0 +1,81 @@
+// A gzip member, RFC 1952: what `.gz`, `.tgz`, HTTP's `Content-Encoding:
+// gzip` and every `zcat` carry around a deflate stream.
+//
+// What it demonstrates: optional parts chosen by flag bits, each one a
+// different shape -- a length-prefixed extra field, two strings that end at
+// a zero byte, a two-byte header CRC -- and a trailer read from the end. The
+// deflate stream has no length of its own; the member is everything up to
+// the last eight bytes, which hold the CRC-32 and the size of what it
+// inflates to.
+//
+// What it does not describe:
+//   - The deflate stream itself (RFC 1951), which is a bit stream with
+//     no byte boundaries: `deflated` is its bytes, for zlib to inflate.
+//   - A file of several members back to back, which `gzip` reads as one;
+//     this is one member, the deflate stream running to the trailer.
+//   - FHCRC's value: the low 16 bits of the header's CRC-32, read here and
+//     not recomputed.
+//   - The extra field's subfields (two letters, a length, data), which are
+//     its bytes here.
+
+target buffer;
+endian little;
+bit_order msb_first;
+
+struct nothing {
+}
+
+struct extra_field {
+	u16 xlen;
+	u8  data[xlen];
+}
+
+struct file_name {
+	u8 name[] until "\0";
+}
+
+struct file_comment {
+	u8 comment[] until "\0";
+}
+
+struct member {
+	u8   magic[2] [must_eq = "\x1f\x8b"];
+	u8   method   [must_eq = 8];
+	reserved u3 [must_be_zero];
+	bit  fcomment;
+	bit  fname;
+	bit  fextra;
+	bit  fhcrc;
+	bit  ftext;
+	u32  mtime;
+	u8   xfl;
+	u8   os;
+	variant extra switch (fextra) {
+		case 1:  extra_field extra_present;
+		case 0:  nothing     no_extra;
+		default: error;
+	}
+	variant name switch (fname) {
+		case 1:  file_name name_present;
+		case 0:  nothing   no_name;
+		default: error;
+	}
+	variant comment switch (fcomment) {
+		case 1:  file_comment comment_present;
+		case 0:  nothing      no_comment;
+		default: error;
+	}
+	variant header_crc switch (fhcrc) {
+		case 1:  u16     crc16;
+		case 0:  nothing no_header_crc;
+		default: error;
+	}
+	u8   deflated[max(remaining, 8) - 8];
+	u32  crc32;
+	u32  isize;
+}
+
+// What a reader relies on: the ten-byte header at constant offsets, read
+// first to learn which optional parts follow.
+require absolute_static(member.mtime);
+require absolute_static(member.os);

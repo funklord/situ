@@ -302,6 +302,42 @@ def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
 	return found
 
 
+# -- gzip ---------------------------------------------------------------------
+#
+# GNU gzip writes a member with the file's name in it and reads it back:
+# `gzip -dc` inflates it with its own deflate reader, and situ has to place
+# the deflate stream exactly, after the optional parts the flags announce
+# and before the trailer, for zlib to inflate it to the same bytes (26.1183).
+
+def gzip_corpus(tmp: Path) -> bytes:
+	"""A text compressed by `gzip`, its name stored."""
+	source = tmp / "oracle-notes.txt"
+	source.write_bytes(b"situ reads the header gzip wrote.\n" * 40)
+	_run(["gzip", "-f", "-9", str(source)])
+	return (tmp / "oracle-notes.txt.gz").read_bytes()
+
+
+def gzip_says(data: bytes, tmp: Path) -> tuple[bytes, int, int]:
+	"""What gzip inflates the member to, with the CRC and size of that."""
+	import zlib
+
+	path = tmp / "oracle-in.gz"
+	path.write_bytes(data)
+	body = subprocess.run(["gzip", "-dc", str(path)], capture_output=True,
+	                      check=True).stdout
+	return body, zlib.crc32(body), len(body)
+
+
+def gzip_situ(module: object, data: bytes) -> tuple[bytes, int, int]:
+	"""The deflate stream situ places, inflated, and the trailer situ reads."""
+	import zlib
+	from situ_runtime import Message
+
+	member = module.member.at(Message(bytearray(data)), 0, len(data))   # type: ignore[attr-defined]
+	member.validate()
+	return zlib.decompress(bytes(member.deflated), -15), member.crc32, member.isize
+
+
 # -- websocket ----------------------------------------------------------------
 #
 # The Python `websockets` library writes a stream of frames in every length
@@ -1646,6 +1682,15 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "gzip",
+		schema = ROOT / "example" / "gzip" / "gzip.situ",
+		tool   = "gzip",
+		why    = ("GNU gzip writes the member with its name stored and "
+		          "inflates it with its own reader. The deflate stream is "
+		          "placed after the parts the flags announce, so a flag read "
+		          "wrong moves it and zlib cannot inflate what situ hands it."),
+	),
+	Oracle(
 		name   = "websocket",
 		schema = ROOT / "example" / "websocket" / "websocket.situ",
 		tool   = "websockets",
@@ -1879,6 +1924,9 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# FNAME and FEXTRA: a named member's name is read as an extra field's
+	# length and bytes, and the deflate stream lands somewhere else.
+	"gzip": ("\tbit  fname;\n\tbit  fextra;", "\tbit  fextra;\n\tbit  fname;"),
 	# The final bit and the reserved ones: fin is read from rsv3, which is
 	# zero in every frame, and a set fin lands in a must-be-zero field.
 	"websocket": ("\tbit            fin;\n\treserved u3    [must_be_zero];",
@@ -1971,6 +2019,7 @@ DRIVERS = {
 	"zip":  (zip_corpus, zip_says, zip_situ),
 	"isobmff": (isobmff_corpus, isobmff_says, isobmff_situ),
 	"websocket": (websocket_corpus, websocket_says, websocket_situ),
+	"gzip": (gzip_corpus, gzip_says, gzip_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),

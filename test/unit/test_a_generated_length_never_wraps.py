@@ -159,6 +159,9 @@ RUST_CENSUS = {
 	# Read 2026-11-27 (26.1182): `headers`' and `fields`' bounds, each
 	# `len() - at` behind `len() < at`.
 	"http2.situ": 2,
+	# Read 2026-11-27 (26.1183): the four `nothing` arms' bounds, each
+	# `len() - at` behind `len() < at`.
+	"gzip.situ": 4,
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,
