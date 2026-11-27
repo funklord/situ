@@ -62,7 +62,7 @@ def have(tool: str) -> bool:
 	would report it missing on every machine and skip the oracle silently --
 	which is the failure this whole file is about.
 	"""
-	if tool in ("pymodbus", "json", "reedsolo", "websockets"):
+	if tool in ("pymodbus", "json", "reedsolo", "websockets", "mutagen"):
 		import importlib.util
 		return importlib.util.find_spec(tool) is not None
 	return shutil.which(tool) is not None
@@ -299,6 +299,49 @@ def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
 		header = 16 if one.size == 1 else 8
 		found.append((one.kind.to_bytes(4, "big").decode("ascii"),
 		              one._at + header))
+	return found
+
+
+# -- ogg ----------------------------------------------------------------------
+#
+# FFmpeg writes an Opus file and mutagen's OggPage reads every page: its
+# sequence, granule position, serial and the total of its packets. Each page
+# is placed by the lacing totals of the ones before it (26.1187).
+
+def ogg_corpus(tmp: Path) -> bytes:
+	"""Half a second of a sine, in Opus, in Ogg."""
+	made = tmp / "oracle.opus"
+	_run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+	      "sine=f=440:d=0.5", "-c:a", "libopus", "-b:a", "16k", str(made)])
+	return made.read_bytes()
+
+
+def ogg_says(data: bytes, tmp: Path) -> list[tuple[int, int, int, int]]:
+	"""Each page as mutagen reads it."""
+	import io
+
+	from mutagen.ogg import OggPage
+
+	stream = io.BytesIO(data)
+	found = []
+	while stream.tell() < len(data):
+		one = OggPage(stream)
+		found.append((one.sequence, one.position, one.serial,
+		              sum(len(packet) for packet in one.packets)))
+	return found
+
+
+def ogg_situ(module: object, data: bytes) -> list[tuple[int, int, int, int]]:
+	"""The same through situ's pages."""
+	from situ_runtime import Message
+
+	whole = module.stream.at(Message(bytearray(data)), 0, len(data))   # type: ignore[attr-defined]
+	whole.validate()
+	found = []
+	for index in range(whole.pages_count):
+		one = whole.pages(index)
+		found.append((one.sequence, one.granule_position, one.serial,
+		              len(bytes(one.body))))
 	return found
 
 
@@ -1782,6 +1825,14 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "ogg",
+		schema = ROOT / "example" / "ogg" / "ogg.situ",
+		tool   = "mutagen",
+		why    = ("FFmpeg writes the stream and mutagen's OggPage parses "
+		          "every page. A page's body is the sum of its lacing "
+		          "table, so a sum read wrong moves every page after it."),
+	),
+	Oracle(
 		name   = "mpegts",
 		schema = ROOT / "example" / "mpegts" / "mpegts.situ",
 		tool   = "tshark",
@@ -2041,6 +2092,9 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# The serial and the sequence number: each page keeps its place and
+	# reads the other's number.
+	"ogg": ("\tu32 serial;\n\tu32 sequence;", "\tu32 sequence;\n\tu32 serial;"),
 	# The scrambling and adaptation-control bits: every packet chooses its
 	# arm from the bits beside the right ones.
 	"mpegts": ("\tu2   scrambling;\n\tu2   adaptation_control;",
@@ -2147,6 +2201,7 @@ DRIVERS = {
 	"gzip": (gzip_corpus, gzip_says, gzip_situ),
 	"pcapng": (pcapng_corpus, pcapng_says, pcapng_situ),
 	"mpegts": (mpegts_corpus, mpegts_says, mpegts_situ),
+	"ogg": (ogg_corpus, ogg_says, ogg_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),

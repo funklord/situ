@@ -1,0 +1,43 @@
+// The Ogg page, RFC 3533 section 6: the container under Opus, Vorbis, FLAC
+// in `.oga`, and Theora -- what a browser plays from a `.ogg` or `.opus`.
+//
+// What it demonstrates: a body sized by the sum of a table. A page carries
+// up to 255 lacing values, each the length of one segment, and the body is
+// their total; a value below 255 ends a packet, so a reader finds packet
+// boundaries in the table without reading the body. `sum(lacing)` says it.
+//
+// What it does not describe:
+//   - The CRC. It is CRC-32 with polynomial 0x04C11DB7, init 0 and no
+//     reflection, over the whole page with its own four bytes read as zero;
+//     a checksum inside its own coverage names no codec here yet (README,
+//     `[self_as]`), so `checksum` is the bytes and not a check.
+//   - Packets that span pages, which `header_type`'s first bit marks and a
+//     reader joins across pages of one `serial`.
+//   - What the codec makes of the packets: an Opus stream's `OpusHead` and
+//     `OpusTags` are the first two pages' bodies.
+
+target buffer;
+endian little;
+
+struct page {
+	u8  capture[4] [must_eq = "OggS"];
+	u8  version    [must_eq = 0];
+	u8  header_type;              // 1 continued, 2 first, 4 last page
+	u64 granule_position;
+	u32 serial;
+	u32 sequence;
+	u32 checksum;
+	u8  segment_count;
+	u8  lacing[segment_count];
+	u8  body[sum(lacing)];
+}
+
+// A physical stream: pages back to back.
+struct stream {
+	page pages[remaining];
+}
+
+// What a reader relies on: the 27-byte header at constant offsets, read
+// before the lacing table it says the size of.
+require absolute_static(page.serial);
+require absolute_static(page.segment_count);

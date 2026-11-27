@@ -1,0 +1,34 @@
+# situ wire signature v4
+# schema: ogg.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian little
+target buffer
+
+struct page size=27..
+  @0x0000   4         u8         capture  little must_eq="OggS"
+  @0x0004   1         u8         version  must_eq=0
+  @0x0005   1         u8         header_type
+  @0x0006   8         u64        granule_position  little
+  @0x000e   4         u32        serial  little
+  @0x0012   4         u32        sequence  little
+  @0x0016   4         u32        checksum  little
+  @0x001a   1         u8         segment_count
+  @0x001b   0..255    u8         lacing  sized-by=segment_count
+  ~         0..       u8         body  sized-by=sum(lacing)
+
+struct stream size=0..
+  @0x0000   0..       page       pages  sized-by=remaining

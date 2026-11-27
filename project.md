@@ -10100,6 +10100,21 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1187 Ogg joins the corpus
+
+The page under Opus and Vorbis: a 27-byte header, a lacing table of up to
+255 segment lengths, and a body sized by their sum -- `sum(lacing)`, which
+until now only cpio's and ustar's checks used, never a size. FFmpeg's Opus
+file is oracled by mutagen's OggPage, page by page. It needed nothing new
+and the readers agreed from the first run.
+
+Its CRC is left as bytes: a checksum inside its own coverage, with its own
+four bytes read as zero, takes `[self_as]` and no codec, since a generated
+`compute` reads the span as it stands (example/png's comment). Ogg's is the
+first such CRC in the corpus with a polynomial situ already knows
+(`polynomial(width = 32, poly = 0x04C11DB7, init = 0)`), so it is where
+`is <codec>` with `[self_as]` would first be asked for.
+
 ### 26.1186 MPEG-TS joins the corpus, and a check selects an arm zero refuses
 
 The transport stream under DVB, ATSC, IPTV and HLS: 188-byte packets whose

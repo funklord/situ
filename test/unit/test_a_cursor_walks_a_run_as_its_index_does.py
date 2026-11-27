@@ -81,7 +81,7 @@ CURSORS = {
 	"example/ipv4/ipv4.situ": 1, "example/ipv6ext/ipv6ext.situ": 1,
 	"example/isobmff/isobmff.situ": 1, "example/websocket/websocket.situ": 1,
 	"example/http2/http2.situ": 1, "example/pcapng/pcapng.situ": 1,
-	"example/mpegts/mpegts.situ": 1,
+	"example/mpegts/mpegts.situ": 1, "example/ogg/ogg.situ": 1,
 	"example/json/json.situ": 2, "example/matroska/matroska.situ": 3,
 	"example/mqtt/mqtt.situ": 2, "example/netlink/netlink.situ": 1,
 	"example/pcap/pcap.situ": 1, "example/png/png.situ": 1,
