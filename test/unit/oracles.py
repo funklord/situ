@@ -326,7 +326,7 @@ def ogg_says(data: bytes, tmp: Path) -> list[tuple[int, int, int, int]]:
 	stream = io.BytesIO(data)
 	found = []
 	while stream.tell() < len(data):
-		one = OggPage(stream)
+		one = OggPage(stream)				# type: ignore[no-untyped-call]
 		found.append((one.sequence, one.position, one.serial,
 		              sum(len(packet) for packet in one.packets)))
 	return found
