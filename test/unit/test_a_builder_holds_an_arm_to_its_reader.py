@@ -121,6 +121,45 @@ def test_an_http2_frame_is_held_to_its_reader(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_an_http2_payload_is_held_to_its_reader(tmp_path: Path) -> None:
+	"""The payloads inside the frame, built on their own: a run sized by
+	`max` over the frame's length and a nested part handed arguments
+	were refused, having no field to solve for and no `_required` to
+	ask. Each is held to the extent its reader states instead."""
+	units = _units(HTTP2)
+	cases = [
+		# One pad-length byte, the field block, two bytes of padding.
+		_case(units["padded_headers."], length=5, priority=0,
+		      headers=b"hi", padding=bytes(2)),
+		# Told six, the reader takes three bytes of field block and is a
+		# byte short for the padding.
+		_case(units["padded_headers."], length=6, priority=0,
+		      headers=b"hi", padding=bytes(2)),
+		_case(units["goaway_payload."], length=10, last_stream_id=1,
+		      debug=b"xy"),
+		_case(units["goaway_payload."], length=11, last_stream_id=1,
+		      debug=b"xy"),
+		_case(units["padded_data."], length=5, data=b"hi",
+		      padding=bytes(2)),
+		_case(units["padded_data."], length=4, data=b"hi",
+		      padding=bytes(2)),
+		# A run of entries `length / 6` counts.
+		_case(units["settings_payload."], length=6, entries=SETTING),
+		_case(units["settings_payload."], length=12, entries=SETTING),
+	]
+	assert _said(HTTP2, tmp_path, cases) == [
+		"02" + b"hi".hex() + "0000",
+		"refused",
+		"00000001" + "00000000" + b"xy".hex(),
+		"refused",
+		"02" + b"hi".hex() + "0000",
+		"refused",
+		SETTING.hex(),
+		"refused",
+	]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
 def test_a_dns_label_is_as_long_as_its_text(tmp_path: Path) -> None:
 	label = _units(DNS)["label.text"]
 	cases = [_case(label, text=b"example"), _case(label, text=b"a" * 63),

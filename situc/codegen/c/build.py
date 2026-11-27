@@ -1161,8 +1161,16 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	# (26.1022).
 	argued = argued_bytes(struct, inner, shape)
 	tail = argued is None and _ends_the_message(struct, inner, shape)
-	why = None if tail or argued else _arm_refusal(inner, shape.header,
-	                                               shape.prefix, shape.structs)
+	# Handed arguments and not the message's end: pcapng's
+	# `enhanced_packet(body_length = ...)` before the trailing length. As a
+	# member handed them is, it is the closing validation's, with the
+	# message held to its extent (26.1189).
+	nested = (shape.structs or {}).get(inner.type_name or "")
+	handed = not tail and argued is None and nested is not None \
+		and bool(inner.arguments) \
+		and not ends_before_a_byte_it_does_not_own(nested)
+	why = None if tail or argued or handed else _arm_refusal(
+		inner, shape.header, shape.prefix, shape.structs)
 	if why:
 		# The LOCAL name, as every other member-level message uses: this
 		# quoted the full dotted path including the struct, so one reader
@@ -1170,12 +1178,12 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 		return None, f"`{traverse.local_name(struct, inner)}` {why}"
 	part = (Part(NESTED, inner, bare_name(inner.name or "body"),
 	             inner=ident(shape.prefix, inner.type_name or ""))
-	        if tail or argued else
+	        if tail or argued or handed else
 	        _arm_part(struct, inner, shape.header, shape.prefix, shape.structs))
 	part.tail = tail
 	held = (shape.structs or {}).get(inner.type_name or "")
-	part.deferred = tail and held is not None and bool(
-		traverse.arguments(held))
+	part.deferred = handed or (tail and held is not None and bool(
+		traverse.arguments(held)))
 	# Its content is the closing validation's, which descends with the
 	# arguments the reader derives -- and takes bytes past what the arm
 	# then reads as trailing. So the whole message is held to its extent
@@ -1296,9 +1304,10 @@ def _tail_check(part: Part, local: str, held: Placement) -> list[str]:
 	"""
 	if part.deferred:
 		return [
-			f"\t/* {local}: one whole `{held.type_name}`, which ends the",
-			"\t * message and takes arguments the message supplies, so its",
-			"\t * content is checked by the closing validation. */",
+			f"\t/* {local}: one whole `{held.type_name}`, which takes",
+			"\t * arguments the message supplies, so its content is checked",
+			"\t * by the closing validation, and where it does not end the",
+			"\t * message its extent by the message's (26.1189). */",
 			f"\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
@@ -2056,7 +2065,6 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				and (held.path in declined or held.size_ast is None) \
 				and held.element_bits == BITS_PER_BYTE \
 				and held.scalar is not None and held.since is None \
-				and not traverse.arguments(struct) \
 				and not any(one.name == held.size_expr for one in members):
 			# RTP's `padding[padded_flag * last]`: no field to solve for,
 			# and none needed -- nor gzip's deflate stream, whose length is
@@ -2064,9 +2072,19 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# message is whole, the reader's own `_len` says how long it
 			# takes them to be -- a disagreement is refused (26.1016).
 			parts.append(Part(SPAN, held, local))
-			parts[-1].verify = True
+			# Where the struct takes arguments its `_len` takes them too,
+			# and the check is the message's extent, which C asks with
+			# them: HTTP/2's GOAWAY, `debug[max(length, 8) - 8]` (26.1189).
+			if traverse.arguments(struct):
+				parts[-1].held = True
+			else:
+				parts[-1].verify = True
 			continue
-		if why:
+		# A run of structs an expression over the arguments counts goes on
+		# to the walk below, which holds it (26.1189).
+		if why and not (held.size_expr and held.path in declined
+		                and held.type_name in (structs or {})
+		                and traverse.arguments(struct)):
 			return [], f"`{traverse.local_name(struct, held)}` {why}"
 
 		if held.name in measures:
@@ -2190,6 +2208,21 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# verdict was right and the reason was about something else.
 			args = run_arguments(struct, held, parts, header, prefix,
 			                     structs) if repeats else None
+			nested = (structs or {}).get(held.type_name or "")
+			if not repeats and nested is not None and held.arguments \
+					and not ends_before_a_byte_it_does_not_own(nested):
+				# Handed arguments, so it has no `_required` the writer can
+				# call -- HTTP/2's `header_block(length = max(length - 1 -
+				# pad_length, 0), priority = priority)`. Its content is the
+				# closing validation's, which hands it what the reader does,
+				# and the message is held to the extent its reader states:
+				# bytes it reads short of shift everything after it, and
+				# the whole comes out another length (26.1189).
+				parts.append(Part(NESTED, held, local,
+				                  inner=struct_ident(prefix, held.type_name)))
+				parts[-1].deferred = True
+				parts[-1].held = True
+				continue
 			if held.type_name and (args is not None or hands_over(
 					header, held.type_name, prefix, structs)):
 				if not repeats:
@@ -2207,7 +2240,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					           "repeats while a condition holds and this " \
 					           "schema emits no count for it, so there is " \
 					           "nothing to check the writer's walk against"
-				if (held.size_expr
+				# A count an expression over the struct's arguments states
+				# -- HTTP/2's `setting entries[length / 6]` -- is walked
+				# as the rest of the bytes handed over are, and the
+				# message held to its reader's extent (26.1189).
+				counted = bool(held.size_expr) and not held.delimiters \
+					and held.repeat_while is None \
+					and bool(traverse.arguments(struct))
+				if ((held.size_expr and not counted)
 						or len(held.delimiters) > 1
 						or (held.delimiters
 						    and not held.delimiter_consumed)):
@@ -2223,6 +2263,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				                  else 0))
 				parts[-1].inner_count = counts
 				parts[-1].args = args or ()
+				parts[-1].held = counted
 				# A count that is an ARGUMENT -- `parameter u16 count;
 				# entry entries[count];`, ELF's tables -- is written by no
 				# member, so nothing ties the elements to it: four
@@ -4013,7 +4054,8 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 					"\t\treturn SITU_ERR_CONSTRAINT;",
 					"\t}",
 				]),
-				*(_tail_check(part, local, held) if part.tail else [
+				*(_tail_check(part, local, held)
+				  if part.tail or part.deferred else [
 				f"\t/* {local}: one whole `{held.type_name}`, as long as",
 				f"\t * `{part.equals}` says -- its argument, and so its",
 				"\t * extent (26.1012). Its content is validated with the",

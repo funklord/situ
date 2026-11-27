@@ -10142,6 +10142,19 @@ the third was the one a user would meet first.
   builder taking each arm as a value holds the argument to the tag of the
   arm it is handed (`edges.chain_link`, built unchecked until now).
 
+The same hold reaches the members, which is where HTTP/2's payloads were
+refused on their own. A nested struct handed arguments has no `_required`
+the writer can call -- `header_block(length = max(length - 1 -
+pad_length, 0), priority = priority)` in a padded HEADERS -- and a run a
+`max` or a division over an argument sizes has no field to solve for:
+GOAWAY's debug data, padded DATA, PRIORITY's field block, and SETTINGS'
+`setting entries[length / 6]`, walked as any run of structs is. Each is
+now written as handed, its content left to the closing validation and
+the message held to its reader's extent; an arm handed arguments before the
+end of the message (pcapng's enhanced packet, ahead of the trailing
+length) likewise. 26.1016's check against a run's `_len` stays where the
+struct takes no arguments, since C's `_len` takes them where it does.
+
 All four builders, and the agreement harness hands such an argument the
 case of the arm it builds -- the help 26.1182 gave it is now what a caller
 would do rather than what the builders fail to. `example/http2` gains RFC
