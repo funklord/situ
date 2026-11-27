@@ -10100,6 +10100,27 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1191 A builder checks a table the message already holds
+
+26.1190 left ZIP's archive refused: its central directory is `at
+end.cd_offset`, inside the body, at an offset the end record states and
+no caller field does. It is not a placement at all. The body takes
+`max(remaining, 22) - 22`, so once it and the end record are down the
+message is whole, and a located struct after a run that takes what the
+frame leaves can only lie in bytes already written. Such a member is no
+argument now: the caller's body holds it, nothing is written for it, and
+the closing validation -- which already reads a located member where the
+reader finds it -- refuses an offset that misses it, one past the body,
+or a count the directory does not hold. All four builders.
+
+The rejected reading: take the directory as a value too, and compare it
+with the bytes at the offset. Every byte would be handed twice and one
+copy could only be refused, so the signature would ask for a value it
+cannot use. A located member before the end of the message -- a run
+after it, as `edges.located_tail` -- is still refused, since it lands
+where no forward writer has reached. The test builds the archive Python's
+`zipfile` writes, byte for byte, and `zipfile` reads it back.
+
 ### 26.1190 A builder places a located table
 
 From the goal-gap walk after 26.1189: an ELF or TIFF file could not be
@@ -10122,10 +10143,8 @@ are zeros for the caller to fill.
 C first, and then the other three, each through its reader's own byte
 accessor for the located member, asked once the bytes are down; the
 agreement harness's check that `required` measures what was built takes
-the frame, which a located member lies past. ZIP stays refused: its directory sits inside the
-body before it, at an offset read from the end record, which no caller
-field states -- placing that needs the writer to check bytes already
-written rather than write them, a different operation.
+the frame, which a located member lies past. ZIP's directory, inside the body before it,
+was left for 26.1191.
 
 ### 26.1189 A builder holds an arm to what its reader reads
 

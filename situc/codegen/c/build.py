@@ -93,6 +93,9 @@ BETWEEN = "between"	# a pad whose length the reader's offset of the member
 			# after it says, once what it reads is down (26.1024)
 FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
 			# computes from what is already written (26.1004)
+INSIDE  = "inside"	# a located struct the message already holds, a run
+			# before it having taken the frame: no value, read by the
+			# closing validation (26.1191)
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
@@ -1415,6 +1418,14 @@ def _held_to_its_version(struct: ResolvedStruct, parts: list[Part]
 	return parts, None
 
 
+def _takes_the_rest(placement: Placement) -> bool:
+	"""Whether a run is as long as what the frame leaves it."""
+	return placement.sized_by == "remaining" \
+		or any(word == "remaining" for word in
+		       (placement.size_expr or "").replace("(", " ").replace(
+		           ")", " ").replace(",", " ").split())
+
+
 def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		arm: Choice | None = None) -> tuple[list[Part], str | None]:
 	"""What the writer does for each member, or the first reason it cannot.
@@ -2040,6 +2051,18 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# the field the caller handed says, and the reader asked
 			# afterwards, over what was written, where it finds it and how
 			# long it is (26.1190). Only an offset that is one such field.
+			# Where a run before it took what the frame leaves -- ZIP's
+			# `body[max(remaining, 22) - 22]` -- the message is whole
+			# without it, so it can only lie in bytes already written:
+			# the central directory, inside the body, at the offset the
+			# end record states. Nothing goes down for it, and the
+			# closing validation reads it where the reader does
+			# (26.1191).
+			if held.type_name in (structs or {}) \
+					and any(_takes_the_rest(one.placement)
+					        for one in parts):
+				parts.append(Part(INSIDE, held, local))
+				continue
 			offset = next((one for one in parts
 			               if one.placement.name == held.located
 			               and one.role == SCALAR), None)
@@ -4158,6 +4181,13 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				# Used, even where nothing in its scope is stored: a TLV
 				# region the caller hands encoded reads it in no store.
 				f"\t(void)situ_little_{held.name};",
+				"",
+			]
+		elif part.role == INSIDE:
+			lines += [
+				f"\t/* {local}: at `{held.located}`, inside what is already",
+				"\t * written; the closing validation reads it where the",
+				"\t * reader does (26.1191). */",
 				"",
 			]
 		elif part.role == LOCATED and part.equals:

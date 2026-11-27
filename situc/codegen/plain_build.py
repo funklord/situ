@@ -12,7 +12,7 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (ARG, BETWEEN, FRAMED, LOCATED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+from situc.codegen.c.build import (ARG, BETWEEN, FRAMED, INSIDE, LOCATED, MARKER, ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
                                    PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
                                    TAG, VARINT, WIDE, ZERO, ArmOf, Choice, Part,
                                    Shape, _supplies_a_value, arm_name, arms,
@@ -26,7 +26,7 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARG, ARMTAG, BETWEEN, LOCATED, BITS, CHOSEN, ENDED, FRAMED, LITERAL, MARKER, NESTED, PAD,
+SERVED = frozenset({ARG, ARMTAG, BETWEEN, INSIDE, LOCATED, BITS, CHOSEN, ENDED, FRAMED, LITERAL, MARKER, NESTED, PAD,
                     PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                     ZERO})
 
