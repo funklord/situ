@@ -1079,6 +1079,40 @@ class Extent:
 		return Extent(self.lo + size.lo, hi)
 
 
+def _complements_held(layout: StructLayout, hi: int | None) -> int | None:
+	"""The worst case where two adjacent runs share a fixed total.
+
+	`u8 field[length]; u8 payload[183 - length];` is 183 bytes whatever
+	`length` is, and an interval summed member by member says 366: each run
+	at its own maximum, which no message reaches. MPEG-TS's adaptation field
+	(26.1188) was reported at twice its size, and `advise` told the
+	transport stream to pad its arms to it. Only the upper bound is
+	corrected, where the second run's size is `K - E` for the first's `E`,
+	the element widths agree and `E` cannot pass `K`: the lower bound and
+	every offset stay as the walk found them.
+	"""
+	if hi is None:
+		return None
+	own = [held for held in layout.placements
+	       if held.path.count(".") == 1 and held.kind == "field"]
+	for first, second in zip(own, own[1:]):
+		taken = first.size_expr or first.sized_by
+		if not taken or not second.size_expr \
+				or first.element_bits is None \
+				or first.element_bits != second.element_bits \
+				or first.size_max_bits is None or second.size_max_bits is None:
+			continue
+		whole, minus, rest = second.size_expr.partition("-")
+		if not minus or not whole.strip().isdigit() \
+				or rest.strip().strip("()").strip() != taken.strip("() "):
+			continue
+		total = int(whole) * first.element_bits
+		if first.size_max_bits > total:
+			continue
+		hi -= first.size_max_bits + second.size_max_bits - total
+	return hi
+
+
 @dataclass
 class Walk:
 	"""Solver state threaded through one struct's members."""
@@ -1320,7 +1354,7 @@ class Solver:
 		self.resolve_invariants(decl, layout)
 
 		layout.size_bits     = state.cursor.lo
-		layout.size_max_bits = state.cursor.hi
+		layout.size_max_bits = _complements_held(layout, state.cursor.hi)
 
 		# A versioned struct is as small as its first version and as large as
 		# its last, so its extent is a range even though every member in it

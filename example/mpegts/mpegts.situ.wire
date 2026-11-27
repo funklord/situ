@@ -19,7 +19,7 @@ bit_order msb_first
 endian big
 target buffer
 
-struct adaptation_and_payload size=2..366
+struct adaptation_and_payload size=2..184
   @0x0000   1         u8         length  max=182
   @0x0001   0..182    u8         field  sized-by=length
   ~         1..183    u8         payload  sized-by=183-length
@@ -36,7 +36,7 @@ struct transport_stream size=0..
   packets[].body case 3: both adaptation_and_payload
   packets[].body case default: error
 
-struct ts_packet size=6..370
+struct ts_packet size=6..188
   @0x0000   1         u8         sync  must_eq=71
   @0x0001   1bit      bit        transport_error  msb_first
   @0x0001:1 1bit      bit        payload_unit_start  msb_first
@@ -45,7 +45,7 @@ struct ts_packet size=6..370
   @0x0003   2bit      u2         scrambling  msb_first
   @0x0003:2 2bit      u2         adaptation_control  msb_first
   @0x0003:4 4bit      u4         continuity  msb_first
-  @0x0004   2..366    variant    body
+  @0x0004   2..184    variant    body
   body switch: adaptation_control
   body case 1: payload u8
   body case 2: adaptation adaptation_only

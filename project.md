@@ -10100,6 +10100,20 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1188 Two runs that share a total, and the advice built on them
+
+Walking the aims after the corpus run: every `situc` command was asked of
+the nine formats the run added, and all answered. `advise` -- design
+feedback, one of the three things section 1 says sets situ apart -- told
+MPEG-TS to "pad every arm to the size of the largest", reporting the
+adaptation-and-payload arm at 366 bytes. It is 184 in every packet:
+`u8 field[length]; u8 payload[183 - length];` shares one total, and the
+solver summed each run at its own maximum. `layout._complements_held`
+corrects the worst case where the second run's size is `K - E` for the
+first's `E`, the widths agree and `E` cannot pass `K`; only the upper
+bound, so no offset and no fixed-size claim moves. MPEG-TS's map and wire
+change; no consumer schema has the shape (fuzznet's 73 and openmlx4's pass).
+
 ### 26.1187 Ogg joins the corpus
 
 The page under Opus and Vorbis: a 27-byte header, a lacing table of up to
