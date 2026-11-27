@@ -266,6 +266,9 @@ class Part:
 		#: A nonce inside a nested member: its view, its pointer, its
 		#: bytes (fuzznet's `head.nonce`).
 		self.nonce_inside: tuple[str, str, int] | None = None
+		#: The struct's arguments, where a SEALTAG's reader accessors
+		#: take them (26.1193).
+		self.passed = ""
 		#: The member a BETWEEN pad runs up to (26.1024, 26.1026).
 		self.reaches: Placement | None = None
 		#: What a run of an argued struct hands each element, as C values
@@ -1521,6 +1524,19 @@ def nonce_inside(struct: ResolvedStruct, region: Placement,
 	return view, pointer, size
 
 
+def _passed(header: str, accessor: str, struct: ResolvedStruct) -> str:
+	"""The struct's arguments, as a reader's accessor takes them after its
+	view and outputs -- read from its declaration, which is the witness to
+	what it takes."""
+	at = header.find(f" {accessor}(situ_view_t view")
+	if at < 0:
+		return ""
+	declared = header[at:header.find(")", at)]
+	return "".join(f", {traverse.argument_name(held)}"
+	               for held in traverse.arguments(struct)
+	               if traverse.argument_name(held) in declared)
+
+
 def _takes_the_rest(placement: Placement) -> bool:
 	"""Whether a run is as long as what the frame leaves it."""
 	return placement.sized_by == "remaining" \
@@ -1834,10 +1850,25 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			parts.append(Part(SEALTAG, held, local,
 			                  _whole_bytes(held) or 0))
 			parts[-1].region = parts[-2]
+			parts[-1].passed = _passed(
+				header, ident(prefix, struct.name,
+				              traverse.local_name(struct, held), "covered"),
+				struct)
 			continue
 		if held.kind in ("tag", "checksum") or held.tag_covers:
 			local_name = traverse.local_name(struct, held)
 			name = ident(prefix, struct.name, local_name)
+			if not computes_itself(header, name) \
+					and index + 1 == len(members) \
+					and _whole_bytes(held) is not None \
+					and f"{name}_covered(" in header \
+					and f"{name}_ptr(" in header:
+				# A MAC or a signature, ending the struct: the caller's
+				# seal is handed its coverage and writes it (26.1193).
+				parts.append(Part(SEALTAG, held, local,
+				                  _whole_bytes(held) or 0))
+				parts[-1].passed = _passed(header, f"{name}_covered", struct)
+				continue
 			if not computes_itself(header, name):
 				return [], f"`{local_name}` is a tag whose schema names " \
 				           "no codec, so there is nothing to compute it " \
@@ -2707,7 +2738,7 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 	# The caller's seal, where a region is sealed (26.1192): their AEAD
 	# and their key, behind a context situ never reads.
 	seals = ["situ_seal_fn situ_seal", "void *situ_seal_ctx"] \
-		if any(part.role == SEALED for part in parts) else []
+		if any(part.role == SEALTAG for part in parts) else []
 	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}",
 	        *_arguments(struct, parts, prefix, enums), *seals,
 	        f"uint32_t *{WROTE}"]
@@ -4563,17 +4594,26 @@ def _seal(struct: ResolvedStruct, part: Part, prefix: str) -> list[str]:
 	end the message, so it is whole once the slot is down, and the reader
 	is asked which bytes are which before the seal is (26.1192). Every
 	refusal past this point zeroes the region.
+
+	With no region it is a MAC or a signature: the whole coverage is the
+	additional data and there is nothing to encrypt (26.1193).
 	"""
 	region = part.region
-	assert region is not None
 	tag = ident(prefix, struct.name, part.local)
 	whole = ident(prefix, struct.name, "view")
-	nonce = region.nonce
-	key = region.key
-	inside = region.nonce_inside
-	wipe = [f"\t\t\tmemset({OUT} + situ_sealed_at, 0, {region.local}_len);",
-	        f"\t\t\tmemset({OUT} + situ_sealed_at + {region.local}_len, 0, "
-	        f"{part.bytes}u);"]
+	nonce = region.nonce if region is not None else None
+	key = region.key if region is not None else None
+	inside = region.nonce_inside if region is not None else None
+	text = f"{region.local}_len" if region is not None else "0u"
+	start = "situ_sealed_at" if region is not None \
+		else f"({AT} - {part.bytes}u)"
+	wipe = [*([f"\t\t\tmemset({OUT} + situ_sealed_at, 0, {text});"]
+	          if region is not None else []),
+	        f"\t\t\tmemset({OUT} + {start} + {text}, 0, {part.bytes}u);"]
+	where = ([f"\t\t    || {NEED}_at > situ_sealed_at",
+	          f"\t\t    || {NEED}_at + {NEED}_len != situ_sealed_at + {text}"]
+	         if region is not None else
+	         [f"\t\t    || {NEED}_at + {NEED}_len > {start}"])
 	return [
 		f"\t/* {part.local}: {part.bytes} byte(s) the seal writes. */",
 		*_room(f"{part.bytes}u"),
@@ -4592,16 +4632,14 @@ def _seal(struct: ResolvedStruct, part: Part, prefix: str) -> list[str]:
 		f"\t\tif ({whole}(&{NEED}_msg, 0, "
 		+ ("" if struct.layout.is_fixed_size else f"{AT}, ")
 		+ f"&{NEED}_view) != SITU_OK",
-		f"\t\t    || {tag}_covered({NEED}_view, &{NEED}_at, &{NEED}_len)"
-		" != SITU_OK",
-		f"\t\t    || {NEED}_at > situ_sealed_at",
-		f"\t\t    || {NEED}_at + {NEED}_len != situ_sealed_at + "
-		f"{region.local}_len",
-		f"\t\t    || {tag}_ptr({NEED}_view) != {OUT} + situ_sealed_at + "
-		f"{region.local}_len) {{",
+		f"\t\t    || {tag}_covered({NEED}_view, &{NEED}_at, &{NEED}_len"
+		f"{part.passed}) != SITU_OK",
+		*where,
+		f"\t\t    || {tag}_ptr({NEED}_view{part.passed}) != {OUT} + {start}"
+		f" + {text}) {{",
 		"\t\t\t/* The reader puts the region or its tag elsewhere than",
 		"\t\t\t * they were written: a length the caller stated",
-		"\t\t\t * disagrees with the plaintext. */",
+		"\t\t\t * disagrees with the bytes. */",
 		*wipe,
 		"\t\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t\t}",
@@ -4627,11 +4665,13 @@ def _seal(struct: ResolvedStruct, part: Part, prefix: str) -> list[str]:
 		  ["\t\tsitu_sealing.nonce = NULL;",
 		   "\t\tsitu_sealing.nonce_len = 0u;"]),
 		f"\t\tsitu_sealing.aad = {OUT} + {NEED}_at;",
-		f"\t\tsitu_sealing.aad_len = situ_sealed_at - {NEED}_at;",
-		f"\t\tsitu_sealing.text = {OUT} + situ_sealed_at;",
-		f"\t\tsitu_sealing.text_len = {region.local}_len;",
-		f"\t\tsitu_sealing.tag = {OUT} + situ_sealed_at + "
-		f"{region.local}_len;",
+		(f"\t\tsitu_sealing.aad_len = situ_sealed_at - {NEED}_at;"
+		 if region is not None else
+		 f"\t\tsitu_sealing.aad_len = {NEED}_len;"),
+		(f"\t\tsitu_sealing.text = {OUT} + situ_sealed_at;"
+		 if region is not None else "\t\tsitu_sealing.text = NULL;"),
+		f"\t\tsitu_sealing.text_len = {text};",
+		f"\t\tsitu_sealing.tag = {OUT} + {start} + {text};",
 		f"\t\tsitu_sealing.tag_len = {part.bytes}u;",
 		"\t\tif (situ_seal == NULL || situ_seal(situ_seal_ctx, "
 		"&situ_sealing) != 0) {",

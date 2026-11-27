@@ -945,7 +945,7 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 		elif part.role in plain_build.MEASURED:
 			found.extend([f"const std::uint8_t *{part.local}",
 			              f"std::uint32_t {part.local}_len"])
-	if any(part.role == SEALED for part in parts):
+	if any(part.role == SEALTAG for part in parts):
 		found.extend(["situ_seal_fn situ_seal", "void *situ_seal_ctx"])
 	return found
 
@@ -960,11 +960,40 @@ def _seal(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 	"""C's: the tag's slot, then the caller's seal over the region before
 	it, the reader asked which bytes are which (26.1192)."""
 	region = part.region
-	assert region is not None
-	local = region.local
 	held  = f"::situ::{class_name(struct)}"
 	tag   = _member(traverse.local_name(struct, part.placement))
 	size  = "" if struct.layout.is_fixed_size else " situ_at,"
+	if region is None:
+		# A MAC or a signature: the whole coverage, nothing to encrypt
+		# (26.1193).
+		wipe = [f"\t\t\tstd::memset(situ_out + situ_at - {part.bytes}u, 0, "
+		        f"{part.bytes}u);"]
+		return [*_room(f"{part.bytes}u"),
+		        f"\tstd::memset(situ_out + situ_at, 0, {part.bytes}u);",
+		        f"\tsitu_at += {part.bytes}u;",
+		        "\t{",
+		        "\t\t::situ::rt::message situ_backing(situ_out, situ_at);",
+		        f"\t\t{held} situ_whole;",
+		        "\t\tstd::uint32_t situ_cover = 0;",
+		        "\t\tstd::uint32_t situ_span = 0;",
+		        "\t\tsitu_sealing_t situ_sealing{};",
+		        f"\t\tif ({held}::at(situ_backing, 0,{size} situ_whole)"
+		        " != ::situ::rt::err::ok",
+		        f"\t\t    || situ_whole.{tag}_covered(situ_cover, situ_span)"
+		        " != ::situ::rt::err::ok",
+		        f"\t\t    || situ_cover + situ_span > situ_at - {part.bytes}u) {{",
+		        *wipe,
+		        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+		        "\t\tsitu_sealing.aad = situ_out + situ_cover;",
+		        "\t\tsitu_sealing.aad_len = situ_span;",
+		        f"\t\tsitu_sealing.tag = situ_out + situ_at - {part.bytes}u;",
+		        f"\t\tsitu_sealing.tag_len = {part.bytes}u;",
+		        "\t\tif (situ_seal == nullptr "
+		        "|| situ_seal(situ_seal_ctx, &situ_sealing) != 0) {",
+		        *wipe,
+		        "\t\t\treturn ::situ::rt::err::tag;", "\t\t}",
+		        "\t}"]
+	local = region.local
 	end   = f"situ_sealed_at + {local}_len"
 	wipe  = ["\t\t\tstd::memset(situ_out + situ_sealed_at, 0, "
 	         "situ_at - situ_sealed_at);"]

@@ -10100,6 +10100,39 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1193 A builder writes a MAC or a signature through the same seal
+
+A tag over authenticated bytes that names no codec -- a MAC, a
+signature, the shape of a signed firmware header or COSE_Mac0 -- had no
+builder ("a tag whose schema names no codec, so there is nothing to
+compute it from"): situ cannot compute it, and nothing let the caller.
+26.1192's seal is the answer with nothing to encrypt: the builder writes
+every member and the tag's slot, asks its reader for the tag's coverage,
+and hands the seal that coverage as additional data, an empty text and
+the tag. One interface rather than a second `situ_sign_fn`, because an
+AEAD over no plaintext is a MAC and a caller holding one primitive
+should not need two shapes.
+
+The tag must end the struct, as a sealed region's must, and its
+coverage must lie before it. All four builders; C++, Rust and Python
+decline it, by name, in a struct that takes arguments, where their
+readers are asked without them -- as a located member is there already.
+`edges` gains builders for seven structs this way; an eighth,
+`blocked_arg`, reaches its next refusal. Tested with OpenSSL's
+HMAC-SHA256 checked by Python's `hmac`, and four-way with the toy seal;
+shortening the additional data by a byte fails both.
+
+**Open: the receiving side.** `_open` still takes the caller's verdict,
+so a receiver works out by hand which bytes are the additional data and
+which the nonce -- the split the builder now gets right, and the one a
+hand-written receiver gets wrong (fuzznet's `fzn_seal_open` is one). An
+`_unseal` that hands the caller's open the same `situ_sealing_t` and
+returns the gate on success needs one thing no reader states yet: where
+a sealed region starts, which is reached only inside the interior
+accessors. So it is a reader accessor first (`<region>_span`, in every
+reader and the walkers, which moves consumers' generated headers), then
+the unseal in the four builders. Not started: the step is its own.
+
 ### 26.1192 A builder seals a region through the caller's AEAD
 
 Every struct with a `sealed` region had no builder ("that needs a key,

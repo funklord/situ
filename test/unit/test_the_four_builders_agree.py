@@ -32,7 +32,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (ARG, LOCATED, SEALED, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
+from situc.codegen.c.build import (ARG, LOCATED, SEALED, SEALTAG, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                                    Part, arm_name, arms)
 from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
@@ -338,8 +338,8 @@ def _label(unit: Unit) -> str:
 
 
 def _seals(cases: list[tuple[Unit, Given]]) -> bool:
-	"""Whether a builder here takes a seal (26.1192)."""
-	return any(part.role == SEALED for unit, _ in cases
+	"""Whether a builder here takes a seal (26.1192, 26.1193)."""
+	return any(part.role == SEALTAG for unit, _ in cases
 	           for part in unit.parts)
 
 
@@ -508,7 +508,7 @@ def _build_one(module: object, base: object, unit: Unit,
 		               py_name(arm.name))
 		values.append(made(*(held[id(one)] for one in (arm.tag, arm.part)
 		                     if one is not None)))
-	if any(part.role == SEALED for part in unit.parts):
+	if any(part.role == SEALTAG for part in unit.parts):
 		values.append(lambda sealing: None)
 	buf  = bytearray(ROOM)
 	name = py_name(unit.struct.name)

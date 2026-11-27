@@ -127,7 +127,11 @@ static inline situ_err_t situ_msg_transmittable(const situ_msg_t *msg)
  * seal encrypts `text` where it lies and writes the tag. `key_id` is the
  * value of the field the region's `key =` names, for a caller holding
  * more than one key. A nonzero return refuses the build with SITU_ERR_TAG
- * and the region is zeroed, so no plaintext is left in the buffer. */
+ * and the region is zeroed, so no plaintext is left in the buffer.
+ *
+ * A tag over authenticated bytes and no sealed region -- a MAC or a
+ * signature -- is the same call with nothing to encrypt: `aad` is its
+ * whole coverage, `text` is NULL and the seal writes `tag` (26.1193). */
 typedef struct situ_sealing {
 	uint64_t       key_id;
 	int            has_key_id;

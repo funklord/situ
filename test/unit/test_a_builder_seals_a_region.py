@@ -303,7 +303,24 @@ FOUR: dict[str, dict[str, Any]] = {
 	"headed": dict(
 		args=lambda: [bytes([9]) + struct.pack(">H", len(BODY)) + NONCE,
 		              BODY]),
+	# A MAC over authenticated bytes, no region: the length is computed,
+	# so a shorter payload is another message rather than a refusal.
+	"signed_record": dict(args=lambda: [9, BODY], codes=["0", "0", "4"]),
 }
+
+SIGNED = """target buffer;
+endian big;
+struct signed_record {
+	authenticated body {
+		u8   kind;
+		u16  length;
+		u8   payload[length];
+	}
+	tag u8  mac[32] covers(body);
+}
+"""
+
+WRITTEN = {"headed": HEADED, "signed_record": SIGNED}
 
 
 def _c_list(data: bytes) -> str:
@@ -323,7 +340,7 @@ def _drivers(stem: str, args: list[int | bytes]) -> dict[str, str]:
 			if isinstance(one, int):
 				out.append(str(one))
 			elif i == len(given) - 1 or (stem == "packet" and i == 1) \
-					or stem == "headed":
+					or stem in WRITTEN:
 				out.append(f"a{i}, {len(one)}u")
 			else:
 				out.append(f"a{i}")
@@ -346,7 +363,7 @@ static void show(int e, const uint8_t *out, uint32_t n)
 	     f"{c_args(args, False)}, toy, NULL, &n);\n\tshow(e, out, n);\n"
 	     f"\te = situ_{struct_name}_build(out, sizeof out, "
 	     f"{c_args(args, False).replace(f'{len(plain)}u', f'{len(plain) - 1}u')}"
-	     ", toy, NULL, &n);\n\tshow(e, out, 0);\n"
+	     ", toy, NULL, &n);\n\tshow(e, out, n);\n"
 	     f"\te = situ_{struct_name}_build(out, sizeof out, "
 	     f"{c_args(args, False)}, toy, out, &n);\n\tshow(e, out, 0);\n"
 	     "\treturn 0;\n}\n")
@@ -358,7 +375,7 @@ static void show(int e, const uint8_t *out, uint32_t n)
 	       f"{c_args(args, True)}, toy, nullptr, n));\n\tshow(e, out, n);\n"
 	       f"\te = static_cast<int>(situ_build::{struct_name}(out, sizeof out, "
 	       f"{c_args(args, True).replace(f'{len(plain)}u', f'{len(plain) - 1}u')}"
-	       ", toy, nullptr, n));\n\tshow(e, out, 0);\n"
+	       ", toy, nullptr, n));\n\tshow(e, out, n);\n"
 	       f"\te = static_cast<int>(situ_build::{struct_name}(out, sizeof out, "
 	       f"{c_args(args, True)}, toy, out, n));\n\tshow(e, out, 0);\n"
 	       "\treturn 0;\n}\n")
@@ -369,7 +386,7 @@ static void show(int e, const uint8_t *out, uint32_t n)
 			if isinstance(one, int):
 				out.append(str(one))
 			elif i == len(given) - 1 or (stem == "packet" and i == 1) \
-					or stem == "headed":
+					or stem in WRITTEN:
 				out.append(f"&{_c_list(one).replace('{', '[').replace('}', ']')}[..]")
 			else:
 				out.append(f"&{_c_list(one).replace('{', '[').replace('}', ']')}")
@@ -448,9 +465,9 @@ def test_four_builders_seal_alike(stem: str, tmp_path: Path) -> None:
 	if not fourway.COMPLETE:
 		pytest.skip("needs gcc, g++ and rustc")
 	schema = ROOT / "example" / stem / f"{stem}.situ"
-	if stem == "headed":
-		schema = tmp_path / "headed.situ"
-		schema.write_text(HEADED, encoding="ascii")
+	if stem in WRITTEN:
+		schema = tmp_path / f"{stem}.situ"
+		schema.write_text(WRITTEN[stem], encoding="ascii")
 	args = FOUR[stem]["args"]()
 	said: dict[str, str] = {}
 	drivers = _drivers(stem, args)
@@ -489,7 +506,8 @@ def test_four_builders_seal_alike(stem: str, tmp_path: Path) -> None:
 		said[where.name] = ran.stdout
 	assert len(set(said.values())) == 1, said
 	lines = said["python"].splitlines()
-	assert [line.split()[0] for line in lines] == ["0", "2", "4"], lines
+	assert [line.split()[0] for line in lines] == \
+		FOUR[stem].get("codes", ["0", "2", "4"]), lines
 	# And the toy as this file computes it, from the bytes the reader
 	# places: so four agreeing is not four wrong alike.
 	built = bytes(int(one, 16) for one in lines[0].split()[1:])
@@ -497,8 +515,53 @@ def test_four_builders_seal_alike(stem: str, tmp_path: Path) -> None:
 		aad, nonce, key, at = built[4:24], NONCE, 0, 24
 	elif stem == "headed":
 		aad, nonce, key, at = built[:15], NONCE, 0, 15
+	elif stem == "signed_record":
+		assert built[:3 + len(BODY)] == bytes([9, 0, len(BODY)]) + BODY
+		assert built[3 + len(BODY):] == _toy(0, b"", built[:-32], b"", 32)[1]
+		return
 	else:
 		aad, nonce, key, at = b"", NONCE[:8], 3, 21
 	plain = args[-1]
 	assert isinstance(plain, bytes)
 	assert built[at:] == b"".join(_toy(key, nonce, aad, plain, 16))
+
+
+HMAC_MAIN = """
+#include <openssl/hmac.h>
+static int mac(void *ctx, const situ_sealing_t *s)
+{
+	unsigned int n = 0;
+	(void)ctx;
+	if (s->text_len != 0 || s->nonce != NULL || s->tag_len != 32) return -1;
+	return HMAC(EVP_sha256(), key, sizeof key, s->aad, s->aad_len, s->tag,
+	            &n) != NULL && n == 32 ? 0 : -1;
+}
+static const uint8_t payload[] = {%s};
+int main(void)
+{
+	uint32_t n = 0;
+	situ_err_t e = situ_signed_record_build(out, sizeof out, 9, payload,
+	                                        sizeof payload, mac, NULL, &n);
+	show(e, n);
+	(void)seal;
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="needs a C compiler")
+def test_a_mac_is_written_by_the_callers_hmac(tmp_path: Path) -> None:
+	"""A tag over authenticated bytes and no sealed region: a MAC or a
+	signature, which names no codec, so it had no builder (26.1193). The
+	caller's seal is handed the coverage as additional data and nothing to
+	encrypt; here it is OpenSSL's HMAC-SHA256, checked by Python's."""
+	import hashlib
+	import hmac
+	schema = tmp_path / "signed_record.situ"
+	schema.write_text(SIGNED, encoding="ascii")
+	lines = _run("signed_record", HMAC_MAIN % _bytes(BODY), tmp_path, schema)
+	assert lines[0][0] == "0", lines
+	built = bytes(int(one, 16) for one in lines[0][4:])
+	body = bytes([9, 0, len(BODY)]) + BODY
+	assert built[:len(body)] == body
+	assert built[len(body):] == hmac.new(KEY, body, hashlib.sha256).digest()

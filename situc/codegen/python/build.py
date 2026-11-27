@@ -799,7 +799,7 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}_prefix: bytes")
 		elif part.role == WIDE:
 			found.append(f"{py_name(part.local)}: list[int]")
-	if any(part.role == SEALED for part in parts):
+	if any(part.role == SEALTAG for part in parts):
 		found.append("situ_seal: Callable[[Sealing], object]")
 	return found
 
@@ -808,11 +808,45 @@ def _seal(struct: ResolvedStruct, part: Part) -> list[str]:
 	"""C's: the tag's slot, then the caller's seal over the region before
 	it, the reader asked which bytes are which (26.1192)."""
 	region = part.region
-	assert region is not None
-	local = py_name(region.local)
-	path  = region.placement.path
 	held  = f"situ_schema.{py_name(struct.name)}"
 	tag   = py_name(traverse.local_name(struct, part.placement))
+	if region is None:
+		# A MAC or a signature: the whole coverage, nothing to encrypt
+		# (26.1193).
+		path = part.placement.path
+		wipe = [f"\t\tsitu_out[situ_at - {part.bytes}:situ_at] = "
+		        f"bytes({part.bytes})"]
+		return [*_room(str(part.bytes), path),
+		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = "
+		        f"bytes({part.bytes})",
+		        f"\tsitu_at += {part.bytes}",
+		        "\ttry:",
+		        f"\t\tsitu_whole = {held}.at(Message(memoryview(situ_out)"
+		        "[:situ_at]), 0"
+		        + ("" if struct.layout.is_fixed_size else ", situ_at") + ")",
+		        f"\t\tsitu_cover, situ_span = situ_whole.{tag}_covered()",
+		        "\texcept SituError:",
+		        "\t\tsitu_cover, situ_span = -1, 0",
+		        f"\tif situ_cover < 0 or situ_cover + situ_span > "
+		        f"situ_at - {part.bytes}:",
+		        *wipe,
+		        f'\t\traise ConstraintError("{path}: covers bytes it does '
+		        'not precede")',
+		        "\tsitu_window = memoryview(situ_out)",
+		        "\ttry:",
+		        "\t\tsitu_seal(Sealing(None, None,",
+		        "\t\t                  bytes(situ_window[situ_cover:"
+		        "situ_cover + situ_span]),",
+		        f"\t\t                  situ_window[situ_at - {part.bytes}:"
+		        f"situ_at - {part.bytes}],",
+		        f"\t\t                  situ_window[situ_at - {part.bytes}:"
+		        "situ_at]))",
+		        "\texcept Exception as situ_refused:",
+		        *wipe,
+		        f'\t\traise TagError("{path}: the seal refused") '
+		        "from situ_refused"]
+	local = py_name(region.local)
+	path  = region.placement.path
 	if region.nonce_inside is not None:
 		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
 		nonce = f"bytes(situ_whole.{py_name(outer)}.{py_name(inner)})"
@@ -1008,7 +1042,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			for unit in built for one in every_part(list(unit.parts))
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
 		*(["from collections.abc import Callable", ""] if any(
-			one.role == SEALED for unit in built for one in unit.parts)
+			one.role == SEALTAG for unit in built for one in unit.parts)
 		  else []),
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
 		"                          Sealing, TagError,",

@@ -839,7 +839,7 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			found.append(f"{name}: &[{_scalar(part.placement)}]")
 		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
-	if any(part.role == SEALED for part in parts):
+	if any(part.role == SEALTAG for part in parts):
 		found.append("situ_seal: &mut dyn FnMut(&mut situ_rt::Sealing<'_>) "
 		             "-> bool")
 	return found
@@ -851,10 +851,42 @@ def _seal(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
 	answers are offsets, taken while it borrows the buffer, so that the
 	seal can be handed the region and the tag mutably once it is gone."""
 	region = part.region
-	assert region is not None
-	local = _ident(region.local)
 	held  = _pascal(struct.name)
 	tag   = _ident(traverse.local_name(struct, part.placement))
+	if region is None:
+		# A MAC or a signature: the whole coverage, nothing to encrypt
+		# (26.1193).
+		wipe = f"\t\tsitu_out[situ_at - {part.bytes}..situ_at].fill(0);"
+		return [f"\tif situ_out.len() - situ_at < {part.bytes} {{",
+		        "\t\treturn Err(Error::Bounds);", "\t}",
+		        f"\tsitu_out[situ_at..situ_at + {part.bytes}].fill(0);",
+		        f"\tsitu_at += {part.bytes};",
+		        "\tlet situ_found = (|| -> Result<(usize, usize)> {",
+		        f"\t\t{held}::new(&situ_out[..situ_at])?.{tag}_covered()",
+		        "\t})();",
+		        "\tlet (situ_cover, situ_span) = match situ_found {",
+		        "\t\tOk((situ_cover, situ_span))",
+		        f"\t\t\tif situ_cover + situ_span <= situ_at - {part.bytes} =>",
+		        "\t\t\t(situ_cover, situ_span),",
+		        "\t\t_ => {",
+		        "\t" + wipe,
+		        "\t\t\treturn Err(Error::Constraint);",
+		        "\t\t}",
+		        "\t};",
+		        f"\tlet (situ_head, situ_tail) = situ_out.split_at_mut("
+		        f"situ_at - {part.bytes});",
+		        "\tlet mut situ_sealing = situ_rt::Sealing {",
+		        "\t\tkey_id: None,",
+		        "\t\tnonce: &[],",
+		        "\t\taad: &situ_head[situ_cover..situ_cover + situ_span],",
+		        "\t\ttext: &mut [],",
+		        f"\t\ttag: &mut situ_tail[..{part.bytes}],",
+		        "\t};",
+		        "\tif !situ_seal(&mut situ_sealing) {",
+		        wipe,
+		        "\t\treturn Err(Error::Tag);",
+		        "\t}"]
+	local = _ident(region.local)
 	if region.nonce_inside is not None:
 		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
 		nonce = [f"\t\tlet situ_inner = situ_whole.{_ident(outer)}()?;",
