@@ -1,0 +1,273 @@
+# situ capability map v1
+# schema: http2.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct connection size=24.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  connection.preface                     offset=AbsoluteStatic(0x00) size=Fixed(24) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  connection.frames                      offset=AbsoluteStatic(0x18) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  connection.frames[]                    offset=FrameStatic(0x00) size=Bounded(9, 4294967560) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  connection.frames[].length             offset=FrameStatic(0x00) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].type               offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  connection.frames[].unused_high        offset=FrameStatic(0x04) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].priority           offset=FrameStatic(0x04:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].unused_4           offset=FrameStatic(0x04:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].padded             offset=FrameStatic(0x04:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].end_headers        offset=FrameStatic(0x04:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].unused_1           offset=FrameStatic(0x04:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].end_stream         offset=FrameStatic(0x04:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].<reserved0>        offset=FrameStatic(0x05) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].stream_id          offset=FrameStatic(0x05:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload            offset=FrameStatic(0x09) size=Bounded(0, 4294967551) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.data       offset=FrameStatic(0x09) size=Bounded(0, 4294967550) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  connection.frames[].payload.data.length parameter
+  connection.frames[].payload.data.padded parameter
+  connection.frames[].payload.data.body  offset=FrameStatic(0x09) size=Bounded(0, 4294967550) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.data.body.with_padding offset=FrameStatic(0x09) size=Bounded(1, 4294967550) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  connection.frames[].payload.data.body.with_padding.length parameter
+  connection.frames[].payload.data.body.with_padding.pad_length offset=FrameStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  connection.frames[].payload.data.body.with_padding.data offset=FrameStatic(0x0A) size=Bounded(0, 4294967294) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.data.body.with_padding.padding offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  connection.frames[].payload.data.body.bytes offset=FrameStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.headers    offset=FrameStatic(0x09) size=Bounded(0, 4294967551) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  connection.frames[].payload.headers.length parameter
+  connection.frames[].payload.headers.padded parameter
+  connection.frames[].payload.headers.priority parameter
+  connection.frames[].payload.headers.body offset=FrameStatic(0x09) size=Bounded(0, 4294967551) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.with_padding offset=FrameStatic(0x09) size=Bounded(1, 4294967551) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  connection.frames[].payload.headers.body.with_padding.length parameter
+  connection.frames[].payload.headers.body.with_padding.priority parameter
+  connection.frames[].payload.headers.body.with_padding.pad_length offset=FrameStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  connection.frames[].payload.headers.body.with_padding.headers offset=FrameStatic(0x0A) size=Bounded(0, 4294967295) align=Aligned(2) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.with_padding.headers.length parameter
+  connection.frames[].payload.headers.body.with_padding.headers.priority parameter
+  connection.frames[].payload.headers.body.with_padding.headers.body offset=FrameStatic(0x0A) size=Bounded(0, 4294967295) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized offset=FrameStatic(0x0A) size=Bounded(5, 4294967295) align=Aligned(2) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized.length parameter
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized.fields offset=FrameStatic(0x0A) size=Fixed(5) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized.fields.exclusive offset=FrameStatic(0x0A) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized.fields.dependency offset=FrameStatic(0x0A:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized.fields.weight offset=FrameStatic(0x0E) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  connection.frames[].payload.headers.body.with_padding.headers.body.prioritized.block offset=FrameStatic(0x0F) size=Bounded(0, 4294967290) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.headers.body.with_padding.headers.body.block offset=FrameStatic(0x0A) size=Bounded(0, 4294967295) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.headers.body.with_padding.padding offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  connection.frames[].payload.headers.body.unpadded offset=FrameStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.unpadded.length parameter
+  connection.frames[].payload.headers.body.unpadded.priority parameter
+  connection.frames[].payload.headers.body.unpadded.body offset=FrameStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.unpadded.body.prioritized offset=FrameStatic(0x09) size=Bounded(5, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.headers.body.unpadded.body.prioritized.length parameter
+  connection.frames[].payload.headers.body.unpadded.body.prioritized.fields offset=FrameStatic(0x09) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.headers.body.unpadded.body.prioritized.fields.exclusive offset=FrameStatic(0x09) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.headers.body.unpadded.body.prioritized.fields.dependency offset=FrameStatic(0x09:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.headers.body.unpadded.body.prioritized.fields.weight offset=FrameStatic(0x0D) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  connection.frames[].payload.headers.body.unpadded.body.prioritized.block offset=FrameStatic(0x0E) size=Bounded(0, 4294967290) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.headers.body.unpadded.body.block offset=FrameStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.settings   offset=FrameStatic(0x09) size=Bounded(0, 4294967292) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.settings.length parameter
+  connection.frames[].payload.settings.entries offset=FrameStatic(0x09) size=Bounded(0, 4294967292) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.settings.entries[] offset=FrameStatic(0x09) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.settings.entries[].identifier offset=FrameStatic(0x09) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.settings.entries[].value offset=FrameStatic(0x0B) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.goaway     offset=FrameStatic(0x09) size=Bounded(8, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  connection.frames[].payload.goaway.length parameter
+  connection.frames[].payload.goaway.<reserved0> offset=FrameStatic(0x09) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.goaway.last_stream_id offset=FrameStatic(0x09:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.goaway.error_code offset=FrameStatic(0x0D) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  connection.frames[].payload.goaway.debug offset=FrameStatic(0x11) size=Bounded(0, 4294967287) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  connection.frames[].payload.other      offset=FrameStatic(0x09) size=Bounded(0, 16777215) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct data_payload size=0..4294967550 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  data_payload.length                    parameter
+  data_payload.padded                    parameter
+  data_payload.body                      offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967550) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  data_payload.body.with_padding         offset=AbsoluteStatic(0x00) size=Bounded(1, 4294967550) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  data_payload.body.with_padding.length  parameter
+  data_payload.body.with_padding.pad_length offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  data_payload.body.with_padding.data    offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967294) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  data_payload.body.with_padding.padding offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  data_payload.body.bytes                offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct frame size=9..4294967560 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  frame.length                           offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  frame.type                             offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  frame.unused_high                      offset=AbsoluteStatic(0x04) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.priority                         offset=AbsoluteStatic(0x04:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.unused_4                         offset=AbsoluteStatic(0x04:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.padded                           offset=AbsoluteStatic(0x04:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.end_headers                      offset=AbsoluteStatic(0x04:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.unused_1                         offset=AbsoluteStatic(0x04:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.end_stream                       offset=AbsoluteStatic(0x04:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.<reserved0>                      offset=AbsoluteStatic(0x05) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.stream_id                        offset=AbsoluteStatic(0x05:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload                          offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967551) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  frame.payload.data                     offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967550) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  frame.payload.data.length              parameter
+  frame.payload.data.padded              parameter
+  frame.payload.data.body                offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967550) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  frame.payload.data.body.with_padding   offset=AbsoluteStatic(0x09) size=Bounded(1, 4294967550) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  frame.payload.data.body.with_padding.length parameter
+  frame.payload.data.body.with_padding.pad_length offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  frame.payload.data.body.with_padding.data offset=AbsoluteStatic(0x0A) size=Bounded(0, 4294967294) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.data.body.with_padding.padding offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  frame.payload.data.body.bytes          offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.headers                  offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967551) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  frame.payload.headers.length           parameter
+  frame.payload.headers.padded           parameter
+  frame.payload.headers.priority         parameter
+  frame.payload.headers.body             offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967551) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.with_padding offset=AbsoluteStatic(0x09) size=Bounded(1, 4294967551) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  frame.payload.headers.body.with_padding.length parameter
+  frame.payload.headers.body.with_padding.priority parameter
+  frame.payload.headers.body.with_padding.pad_length offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  frame.payload.headers.body.with_padding.headers offset=AbsoluteStatic(0x0A) size=Bounded(0, 4294967295) align=Aligned(2) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.with_padding.headers.length parameter
+  frame.payload.headers.body.with_padding.headers.priority parameter
+  frame.payload.headers.body.with_padding.headers.body offset=AbsoluteStatic(0x0A) size=Bounded(0, 4294967295) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.with_padding.headers.body.prioritized offset=AbsoluteStatic(0x0A) size=Bounded(5, 4294967295) align=Aligned(2) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.with_padding.headers.body.prioritized.length parameter
+  frame.payload.headers.body.with_padding.headers.body.prioritized.fields offset=AbsoluteStatic(0x0A) size=Fixed(5) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  frame.payload.headers.body.with_padding.headers.body.prioritized.fields.exclusive offset=AbsoluteStatic(0x0A) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload.headers.body.with_padding.headers.body.prioritized.fields.dependency offset=AbsoluteStatic(0x0A:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload.headers.body.with_padding.headers.body.prioritized.fields.weight offset=AbsoluteStatic(0x0E) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  frame.payload.headers.body.with_padding.headers.body.prioritized.block offset=AbsoluteStatic(0x0F) size=Bounded(0, 4294967290) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.headers.body.with_padding.headers.body.block offset=AbsoluteStatic(0x0A) size=Bounded(0, 4294967295) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.headers.body.with_padding.padding offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  frame.payload.headers.body.unpadded    offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.unpadded.length parameter
+  frame.payload.headers.body.unpadded.priority parameter
+  frame.payload.headers.body.unpadded.body offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.unpadded.body.prioritized offset=AbsoluteStatic(0x09) size=Bounded(5, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  frame.payload.headers.body.unpadded.body.prioritized.length parameter
+  frame.payload.headers.body.unpadded.body.prioritized.fields offset=AbsoluteStatic(0x09) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  frame.payload.headers.body.unpadded.body.prioritized.fields.exclusive offset=AbsoluteStatic(0x09) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload.headers.body.unpadded.body.prioritized.fields.dependency offset=AbsoluteStatic(0x09:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload.headers.body.unpadded.body.prioritized.fields.weight offset=AbsoluteStatic(0x0D) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  frame.payload.headers.body.unpadded.body.prioritized.block offset=AbsoluteStatic(0x0E) size=Bounded(0, 4294967290) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.headers.body.unpadded.body.block offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.settings                 offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967292) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  frame.payload.settings.length          parameter
+  frame.payload.settings.entries         offset=AbsoluteStatic(0x09) size=Bounded(0, 4294967292) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  frame.payload.settings.entries[]       offset=FrameStatic(0x09) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  frame.payload.settings.entries[].identifier offset=FrameStatic(0x09) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  frame.payload.settings.entries[].value offset=FrameStatic(0x0B) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  frame.payload.goaway                   offset=AbsoluteStatic(0x09) size=Bounded(8, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  frame.payload.goaway.length            parameter
+  frame.payload.goaway.<reserved0>       offset=AbsoluteStatic(0x09) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload.goaway.last_stream_id    offset=AbsoluteStatic(0x09:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.payload.goaway.error_code        offset=AbsoluteStatic(0x0D) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  frame.payload.goaway.debug             offset=AbsoluteStatic(0x11) size=Bounded(0, 4294967287) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  frame.payload.other                    offset=AbsoluteStatic(0x09) size=Bounded(0, 16777215) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct goaway_payload size=8..4294967295 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  goaway_payload.length                  parameter
+  goaway_payload.<reserved0>             offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  goaway_payload.last_stream_id          offset=AbsoluteStatic(0x00:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  goaway_payload.error_code              offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  goaway_payload.debug                   offset=AbsoluteStatic(0x08) size=Bounded(0, 4294967287) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct header_block size=0..4294967295 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  header_block.length                    parameter
+  header_block.priority                  parameter
+  header_block.body                      offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  header_block.body.prioritized          offset=AbsoluteStatic(0x00) size=Bounded(5, 4294967295) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  header_block.body.prioritized.length   parameter
+  header_block.body.prioritized.fields   offset=AbsoluteStatic(0x00) size=Fixed(5) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  header_block.body.prioritized.fields.exclusive offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  header_block.body.prioritized.fields.dependency offset=AbsoluteStatic(0x00:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  header_block.body.prioritized.fields.weight offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  header_block.body.prioritized.block    offset=AbsoluteStatic(0x05) size=Bounded(0, 4294967290) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  header_block.body.block                offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct headers_payload size=0..4294967551 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  headers_payload.length                 parameter
+  headers_payload.padded                 parameter
+  headers_payload.priority               parameter
+  headers_payload.body                   offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967551) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  headers_payload.body.with_padding      offset=AbsoluteStatic(0x00) size=Bounded(1, 4294967551) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  headers_payload.body.with_padding.length parameter
+  headers_payload.body.with_padding.priority parameter
+  headers_payload.body.with_padding.pad_length offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  headers_payload.body.with_padding.headers offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  headers_payload.body.with_padding.headers.length parameter
+  headers_payload.body.with_padding.headers.priority parameter
+  headers_payload.body.with_padding.headers.body offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  headers_payload.body.with_padding.headers.body.prioritized offset=AbsoluteStatic(0x01) size=Bounded(5, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  headers_payload.body.with_padding.headers.body.prioritized.length parameter
+  headers_payload.body.with_padding.headers.body.prioritized.fields offset=AbsoluteStatic(0x01) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  headers_payload.body.with_padding.headers.body.prioritized.fields.exclusive offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  headers_payload.body.with_padding.headers.body.prioritized.fields.dependency offset=AbsoluteStatic(0x01:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  headers_payload.body.with_padding.headers.body.prioritized.fields.weight offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  headers_payload.body.with_padding.headers.body.prioritized.block offset=AbsoluteStatic(0x06) size=Bounded(0, 4294967290) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  headers_payload.body.with_padding.headers.body.block offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  headers_payload.body.with_padding.padding offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  headers_payload.body.unpadded          offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  headers_payload.body.unpadded.length   parameter
+  headers_payload.body.unpadded.priority parameter
+  headers_payload.body.unpadded.body     offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  headers_payload.body.unpadded.body.prioritized offset=AbsoluteStatic(0x00) size=Bounded(5, 4294967295) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  headers_payload.body.unpadded.body.prioritized.length parameter
+  headers_payload.body.unpadded.body.prioritized.fields offset=AbsoluteStatic(0x00) size=Fixed(5) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  headers_payload.body.unpadded.body.prioritized.fields.exclusive offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  headers_payload.body.unpadded.body.prioritized.fields.dependency offset=AbsoluteStatic(0x00:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  headers_payload.body.unpadded.body.prioritized.fields.weight offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  headers_payload.body.unpadded.body.prioritized.block offset=AbsoluteStatic(0x05) size=Bounded(0, 4294967290) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  headers_payload.body.unpadded.body.block offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967295) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct nothing size=0
+
+struct padded_data size=1..4294967550 mutate=Shifting address=Unstable repr=ValueConverted
+  padded_data.length                     parameter
+  padded_data.pad_length                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  padded_data.data                       offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967294) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  padded_data.padding                    offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct padded_headers size=1..4294967551 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  padded_headers.length                  parameter
+  padded_headers.priority                parameter
+  padded_headers.pad_length              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  padded_headers.headers                 offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  padded_headers.headers.length          parameter
+  padded_headers.headers.priority        parameter
+  padded_headers.headers.body            offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  padded_headers.headers.body.prioritized offset=AbsoluteStatic(0x01) size=Bounded(5, 4294967295) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  padded_headers.headers.body.prioritized.length parameter
+  padded_headers.headers.body.prioritized.fields offset=AbsoluteStatic(0x01) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  padded_headers.headers.body.prioritized.fields.exclusive offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  padded_headers.headers.body.prioritized.fields.dependency offset=AbsoluteStatic(0x01:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  padded_headers.headers.body.prioritized.fields.weight offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  padded_headers.headers.body.prioritized.block offset=AbsoluteStatic(0x06) size=Bounded(0, 4294967290) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  padded_headers.headers.body.block      offset=AbsoluteStatic(0x01) size=Bounded(0, 4294967295) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  padded_headers.padding                 offset=Dynamic size=Bounded(0, 255) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct prioritized_block size=5..4294967295 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  prioritized_block.length               parameter
+  prioritized_block.fields               offset=AbsoluteStatic(0x00) size=Fixed(5) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  prioritized_block.fields.exclusive     offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  prioritized_block.fields.dependency    offset=AbsoluteStatic(0x00:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  prioritized_block.fields.weight        offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+  prioritized_block.block                offset=AbsoluteStatic(0x05) size=Bounded(0, 4294967290) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct priority_fields size=5 repr=ValueConverted atomic=NonAtomic
+  priority_fields.exclusive              offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  priority_fields.dependency             offset=AbsoluteStatic(0x00:1) size=Fixed(31bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  priority_fields.weight                 offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
+
+struct setting size=6 repr=ValueConverted atomic=NonAtomic
+  setting.identifier                     offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  setting.value                          offset=AbsoluteStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+
+struct settings_payload size=0..4294967292 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  settings_payload.length                parameter
+  settings_payload.entries               offset=AbsoluteStatic(0x00) size=Bounded(0, 4294967292) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  settings_payload.entries[]             offset=FrameStatic(0x00) size=Fixed(6) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  settings_payload.entries[].identifier  offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  settings_payload.entries[].value       offset=FrameStatic(0x02) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic

@@ -1,0 +1,166 @@
+# situ wire signature v4
+# schema: http2.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct connection size=24..
+  @0x0000   24        u8         preface  big must_eq="PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+  @0x0018   0..       frame      frames  sized-by=remaining
+  frames[].payload switch: type
+  frames[].payload case 0: data data_payload
+  frames[].payload case 1: headers headers_payload
+  frames[].payload case 4: settings settings_payload
+  frames[].payload case 7: goaway goaway_payload
+  frames[].payload case default: other u8
+  frames[].payload.data.body switch: padded
+  frames[].payload.data.body case 0: bytes u8
+  frames[].payload.data.body case 1: with_padding padded_data
+  frames[].payload.data.body case default: error
+  frames[].payload.headers.body switch: padded
+  frames[].payload.headers.body case 0: unpadded header_block
+  frames[].payload.headers.body case 1: with_padding padded_headers
+  frames[].payload.headers.body case default: error
+  frames[].payload.headers.body.with_padding.headers.body switch: priority
+  frames[].payload.headers.body.with_padding.headers.body case 0: block u8
+  frames[].payload.headers.body.with_padding.headers.body case 1: prioritized prioritized_block
+  frames[].payload.headers.body.with_padding.headers.body case default: error
+  frames[].payload.headers.body.unpadded.body switch: priority
+  frames[].payload.headers.body.unpadded.body case 0: block u8
+  frames[].payload.headers.body.unpadded.body case 1: prioritized prioritized_block
+  frames[].payload.headers.body.unpadded.body case default: error
+
+struct data_payload size=0..4294967550
+  parameter -         u32        length [stream]
+  parameter -         u8         padded [stream]
+  @0x0000   0..4294967550 variant    body
+  body switch: padded
+  body case 0: bytes u8
+  body case 1: with_padding padded_data
+  body case default: error
+
+struct frame size=9..4294967560
+  @0x0000   3         u24        length  big
+  @0x0003   1         u8         type
+  @0x0004   2bit      u2         unused_high  msb_first
+  @0x0004:2 1bit      bit        priority  msb_first
+  @0x0004:3 1bit      bit        unused_4  msb_first
+  @0x0004:4 1bit      bit        padded  msb_first
+  @0x0004:5 1bit      bit        end_headers  msb_first
+  @0x0004:6 1bit      bit        unused_1  msb_first
+  @0x0004:7 1bit      bit        end_stream  msb_first
+  @0x0005   1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0005:1 31bit     u31        stream_id  big msb_first
+  @0x0009   0..4294967551 variant    payload
+  payload switch: type
+  payload case 0: data data_payload
+  payload case 1: headers headers_payload
+  payload case 4: settings settings_payload
+  payload case 7: goaway goaway_payload
+  payload case default: other u8
+  payload.data.body switch: padded
+  payload.data.body case 0: bytes u8
+  payload.data.body case 1: with_padding padded_data
+  payload.data.body case default: error
+  payload.headers.body switch: padded
+  payload.headers.body case 0: unpadded header_block
+  payload.headers.body case 1: with_padding padded_headers
+  payload.headers.body case default: error
+  payload.headers.body.with_padding.headers.body switch: priority
+  payload.headers.body.with_padding.headers.body case 0: block u8
+  payload.headers.body.with_padding.headers.body case 1: prioritized prioritized_block
+  payload.headers.body.with_padding.headers.body case default: error
+  payload.headers.body.unpadded.body switch: priority
+  payload.headers.body.unpadded.body case 0: block u8
+  payload.headers.body.unpadded.body case 1: prioritized prioritized_block
+  payload.headers.body.unpadded.body case default: error
+
+struct goaway_payload size=8..4294967295
+  parameter -         u32        length [stream]
+  @0x0000   1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0000:1 31bit     u31        last_stream_id  big msb_first
+  @0x0004   4         u32        error_code  big
+  @0x0008   0..4294967287 u8         debug  sized-by=max(length,8)-8
+  goaway_payload refuses: short_goaway when goaway_payload.length < 8
+
+struct header_block size=0..4294967295
+  parameter -         u32        length [stream]
+  parameter -         u8         priority [stream]
+  @0x0000   0..4294967295 variant    body
+  body switch: priority
+  body case 0: block u8
+  body case 1: prioritized prioritized_block
+  body case default: error
+
+struct headers_payload size=0..4294967551
+  parameter -         u32        length [stream]
+  parameter -         u8         padded [stream]
+  parameter -         u8         priority [stream]
+  @0x0000   0..4294967551 variant    body
+  body switch: padded
+  body case 0: unpadded header_block
+  body case 1: with_padding padded_headers
+  body case default: error
+  body.with_padding.headers.body switch: priority
+  body.with_padding.headers.body case 0: block u8
+  body.with_padding.headers.body case 1: prioritized prioritized_block
+  body.with_padding.headers.body case default: error
+  body.unpadded.body switch: priority
+  body.unpadded.body case 0: block u8
+  body.unpadded.body case 1: prioritized prioritized_block
+  body.unpadded.body case default: error
+
+struct nothing size=0
+
+struct padded_data size=1..4294967550
+  parameter -         u32        length [stream]
+  @0x0000   1         u8         pad_length
+  @0x0001   0..4294967294 u8         data  sized-by=max(length-1-pad_length,0)
+  ~         0..255    u8         padding  sized-by=pad_length
+  padded_data refuses: data_padding when padded_data.pad_length >= padded_data.length
+
+struct padded_headers size=1..4294967551
+  parameter -         u32        length [stream]
+  parameter -         u8         priority [stream]
+  @0x0000   1         u8         pad_length
+  @0x0001   0..4294967295 header_block headers  args length=max(length-1-pad_length,0) args priority=priority
+  ~         0..255    u8         padding  sized-by=pad_length
+  headers.body switch: priority
+  headers.body case 0: block u8
+  headers.body case 1: prioritized prioritized_block
+  headers.body case default: error
+  padded_headers refuses: headers_padding when padded_headers.pad_length >= padded_headers.length
+
+struct prioritized_block size=5..4294967295
+  parameter -         u32        length [stream]
+  @0x0000   5         priority_fields fields  big
+  @0x0005   0..4294967290 u8         block  sized-by=max(length,5)-5
+  prioritized_block refuses: short_priority when prioritized_block.length < 5
+
+struct priority_fields size=5
+  @0x0000   1bit      bit        exclusive  msb_first
+  @0x0000:1 31bit     u31        dependency  big msb_first
+  @0x0004   1         u8         weight
+
+struct setting size=6
+  @0x0000   2         u16        identifier  big
+  @0x0002   4         u32        value  big
+
+struct settings_payload size=0..4294967292
+  parameter -         u32        length [stream]
+  @0x0000   0..4294967292 setting    entries  sized-by=length/6

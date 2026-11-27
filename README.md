@@ -1118,6 +1118,10 @@ what it hands it, `entry(block = block) e;`, and a struct that can contain
 itself writes its own out, `node(b = n) kids[n];`, so each level can hand the
 next what it read. A member naming no arguments is refused by name: a nested
 view is built by the parent's accessor, which would have nothing to pass.
+An argument is arithmetic over the parent's fields and parameters, and may
+call `max` and `min`, so a layer can hand the next what it leaves:
+HTTP/2's padded HEADERS hands its field block
+`max(length - 1 - pad_length, 0)` (example/http2).
 
 `require` is a compile-time assertion about the capability vector; `invariant`
 names a field situ *maintains* rather than one it merely checks. Writing a

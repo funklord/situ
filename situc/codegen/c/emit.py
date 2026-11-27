@@ -4148,7 +4148,11 @@ class Emitter:
 				"}",
 				"",
 				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'ptr')}"
-				"(situ_view_t view, const uint8_t **out, uint32_t *len)",
+				"(situ_view_t view, const uint8_t **out, uint32_t *len"
+				# The scalar arm's tail, for its reason: the test above is
+				# the discriminant's, and a variant switched on a parameter
+				# asks it of the argument (26.1182).
+				f"{self._member_tail(struct, placement)})",
 				"{",
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
@@ -4211,7 +4215,11 @@ class Emitter:
 			return [
 				*head,
 				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'ptr')}"
-				"(situ_view_t view, const uint8_t **out, uint32_t *len)",
+				"(situ_view_t view, const uint8_t **out, uint32_t *len"
+				# The scalar arm's tail, for its reason: the test above is
+				# the discriminant's, and a variant switched on a parameter
+				# asks it of the argument (26.1182).
+				f"{self._member_tail(struct, placement)})",
 				"{",
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
@@ -4346,10 +4354,16 @@ class Emitter:
 		reach = self._reaching_tail(struct, placement)
 		taken = f"(situ_view_t view, uint32_t depth{reach})" if deep \
 		        else f"(situ_view_t view{reach})"
+		# Past the bytes, an empty view rather than 0, where the arm is not
+		# the recursion: its length may be its arguments' alone, read from
+		# bytes that have arrived -- HTTP/2's padded HEADERS before its
+		# payload -- as Python reads it (26.1182). A recursive arm keeps the
+		# 0, or an empty view would walk to its depth cap.
+		start = base if deep else f"situ_min_u32({base}, view.limit)"
 		body  = [
 			"\tsitu_view_t whole;",
 			"",
-			f"\tif (situ_view_sub(view, {base}, "
+			f"\tif (situ_view_sub(view, {start}, "
 			f"situ_remaining_u32(view.limit, {base}), &whole) != SITU_OK) {{",
 			"\t\treturn 0u;",
 			"\t}",
@@ -4370,8 +4384,9 @@ class Emitter:
 			"{",
 			"\tsitu_view_t whole;",
 			"",
-			"\tif (situ_view_sub(view, base, "
-			"situ_remaining_u32(view.limit, base), &whole) != SITU_OK) {",
+			("\tif (situ_view_sub(view, base, " if deep else
+			 "\tif (situ_view_sub(view, situ_min_u32(base, view.limit), ")
+			+ "situ_remaining_u32(view.limit, base), &whole) != SITU_OK) {",
 			"\t\treturn 0u;",
 			"\t}",
 			body[-2],
@@ -4385,6 +4400,11 @@ class Emitter:
 			" * that places whatever follows the variant. */",
 			f"static inline uint32_t {site}" + ("_at" if deep else "") + taken,
 			"{",
+			# The tail is the arm's, which reaches an argument through the
+			# discriminant its accessors test; the extent tests none, so a
+			# variant switched on a parameter -- HTTP/2's `padded` -- took
+			# `arg_padded` and never read it (26.1182).
+			*self._argument_unused(struct, taken, *body),
 			*body,
 		] + ([
 			"",
@@ -6172,8 +6192,14 @@ class Emitter:
 			# caller reads it as "not an element" and breaks. Refusing would
 			# need a second return channel in eleven callers to say what a
 			# short tail already means.
+			#
+			# Only where a term reads the bytes: a length that is the
+			# caller's argument alone -- HTTP/2's prioritized field block,
+			# five fixed bytes and the rest of the frame's length -- is
+			# readable with none of them here, and the guard answered 5
+			# where Rust and Python answered the length (26.1182).
 			body: list[str] = []
-			if constant and terms:
+			if constant and any(re.search(r"\bview\b", term) for term in terms):
 				body.extend([
 					f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
 					f"\t\treturn {constant}u;\t/* the lengths below are not"
@@ -6263,7 +6289,7 @@ class Emitter:
 		# this whatever remains of the frame, one byte of it included, and
 		# the lengths are read out of the fixed prefix. `validate` reached
 		# past a one-byte message through `all_fits` here (26.901).
-		if constant and deep:
+		if constant and any(re.search(r"\bview\b", term) for term in deep):
 			lines.extend([
 				f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
 				f"\t\treturn {constant}u;\t/* the lengths below are not"
@@ -7352,6 +7378,8 @@ class Emitter:
 		# four `required` call sites in this emitter have always passed and
 		# this one dropped: `situ_kid_required(data + pos, ..., &part)`
 		# against a definition taking a trailing argument (26.817).
+		chosen = traverse.discriminant_readable_from(
+			struct, placement, self.resolved.layout.env.named_constants)
 		plan: list[tuple[object, str | None, str, str, list[str]]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
@@ -7367,6 +7395,22 @@ class Emitter:
 			elif member.is_fixed_size:
 				plan.append((arm, None,
 				             f"{member.size_bits // BITS_PER_BYTE}u", "", []))
+			elif inner is None and not member.delimiters \
+					and not is_run(member, self.structs) \
+					and self._has_length(struct, member) \
+					and traverse.sized_arm_readable(
+						struct, member, self.structs, chosen,
+						self.resolved.layout.env.named_constants):
+				# An arm the data or the caller sizes -- `u8 bytes[length]`
+				# beside struct arms, HTTP/2's unpadded DATA -- as Python
+				# frames it (26.1052). Declining it sent the whole variant
+				# back to the extent, which shrinks when the bytes run out,
+				# and the four answered differently (26.1182). Only where
+				# its length reads nothing the guard has not established,
+				# since this backend's reads in `required` are not checked.
+				plan.append((arm, None,
+				             f"({self._length_expression(struct, member, leaf_bounded=False)})",
+				             "", []))
 			else:
 				return None	# an arm this cannot frame
 		if not any(call for _, call, _, _, _ in plan):
@@ -7382,8 +7426,11 @@ class Emitter:
 		# while C++, Rust and Python, whose reads check, answered 3.
 		found = self.resolved.find(f"{struct.name}.{placement.discriminant}")
 		held  = found.placement if found is not None else None
+		# Not a parameter, which is the caller's and in hand with no byte
+		# here: HTTP/2's `padded`, read as 0 at `have = 0`, chose the unpadded
+		# arm and measured a padded frame by it (26.1182).
 		if held is not None and held.offset_bits is not None \
-				and held.scalar is not None \
+				and held.scalar is not None and not held.parameter \
 				and held.offset_bits % BITS_PER_BYTE == 0:
 			reach = (held.offset_bits + held.scalar.bits + BITS_PER_BYTE - 1) \
 			        // BITS_PER_BYTE
@@ -7392,8 +7439,6 @@ class Emitter:
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
-		chosen = traverse.discriminant_readable_from(
-			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}u" if chosen is not None else cursor
 		# A peeked discriminant behind a lead is at the cursor and has to
 		# have ARRIVED, not merely its offset: guarded at `have < pos` it
@@ -13857,6 +13902,10 @@ class Emitter:
 		start = lines.index("	size_t held = 0;") + 1
 		lines[start:start] = self._argument_unused(struct, taken,
 		                                           *lines[start:])
+		# Nor does every rule read the bytes: HTTP/2's `prioritized_block`
+		# refuses on its parameter alone, and `view` was unused (26.1182).
+		if not any(re.search(r"\bview\b", line) for line in lines[start:]):
+			lines.insert(start, "	(void)view;")
 		lines.append("}")
 
 		if self.messages:
@@ -14585,7 +14634,8 @@ class Emitter:
 			"\t\tuint32_t held_len = 0u;",
 			"",
 			f"\t\tif ({ident(self.prefix, struct.name, local, 'ptr')}"
-			"(view, &held, &held_len) == SITU_OK",
+			f"(view, &held, &held_len{self._member_args(struct, placement)})"
+			" == SITU_OK",
 			f"\t\t\t\t&& held_len < ({self._length_expression(struct, placement)})) {{",
 			"\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t}",

@@ -1128,6 +1128,24 @@ def length_readable_from(struct: ResolvedStruct, placement: Placement,
 	return _fields_end(struct, str(source), constants)
 
 
+def sized_arm_readable(struct: ResolvedStruct, member: Placement,
+		structs: Container[str], chosen: int | None,
+		constants: Container[str] = ()) -> bool:
+	"""Whether a variant's framing may measure this arm by its length.
+
+	A byte run the data or the caller sizes, beside arms that frame
+	themselves (26.1182): its length is read once the discriminant is, so
+	it may read only bytes the discriminant's guard has established -- none
+	at all, or none past `chosen`. C's and C++'s reads in `required` are
+	not bounds-checked, and Rust holds to the same so the three agree.
+	"""
+	readable = length_readable_from(struct, member, structs,
+	                                constants=constants)
+	if readable is None:
+		return False
+	return readable == 0 or (chosen is not None and readable <= chosen)
+
+
 def discriminant_readable_from(struct: ResolvedStruct, placement: Placement,
 		constants: Container[str] = ()) -> int | None:
 	"""How many bytes `required` needs before it can choose a variant's arm.
@@ -1199,10 +1217,16 @@ def _fields_end(struct: ResolvedStruct, source: str,
 			return None
 	end = 0
 	for field in named:
+		# A parameter is the caller's, and in hand before any byte is:
+		# HTTP/2's prioritized field block is five fixed bytes and the rest
+		# of the length its parent hands it, and `required` waited for the
+		# five before reading a length that needed none of them (26.1182).
+		if field.parameter:
+			continue
 		if field.offset_bits is None or field.frame_relative \
 				or field.scalar is None or field.varint is not None \
 				or field.located is not None or field.since is not None \
-				or field.parameter or field.radix:
+				or field.radix:
 			return None
 		bits = field.offset_bits + field.size_bits
 		end = max(end, -(-bits // BITS_PER_BYTE))

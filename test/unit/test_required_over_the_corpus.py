@@ -576,6 +576,10 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# WebSocket's 64-bit length, the same: with its top seven bytes 0xFF it
 	# is past `max_bits = 63` and any frame, and the eighth is still asked.
 	("websocket.situ", "situ_frame_required"): "a 64-bit length settled by seven bytes",
+	# HTTP/2's frame: its variant is guarded on every byte any arm's
+	# arguments read, so the flags byte is awaited for a type whose arm
+	# reads only the length (26.1182).
+	("http2.situ", "situ_frame_required"): "guard over every arm's arguments",
 }
 
 

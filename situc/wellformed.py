@@ -4552,12 +4552,20 @@ def _check_arguments(struct: ast.StructDecl, member: ast.Field,
 	for arg in member.arguments:
 		assert arg.value is not None
 		for call in _calls_in(arg.value):
+			# `max` and `min`, which every reader evaluates in a size, so an
+			# argument can say "the parent's length less a field, held at
+			# zero" -- HTTP/2's padded HEADERS hands its field block what
+			# the pad length leaves (26.1182). The range check below bounds
+			# the result as it bounds a size.
+			if call.name in ("max", "min"):
+				continue
 			raise error(
 				f"`{call.name}` is not something an argument may call",
 				call.span,
 				"not a value here",
 				["an argument is arithmetic over the parent's fields, its "
-				 "parameters, a `const` or an enum member (decision 0068)"])
+				 "parameters, a `const` or an enum member, with `max` and "
+				 "`min` (decision 0068, 26.1182)"])
 		for path in paths_in(arg.value):
 			head = path.split(".")[0]
 			if head not in known:

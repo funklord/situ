@@ -220,10 +220,17 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: by a peeked byte between `closed`, one fixed byte, and the run it held
 #: before, now its own struct. Struct arms, so the declining branch below
 #: is unchanged.
+#: And 90 -> 92 scalar, 88 -> 89 unmeasurable, 128 -> 130 fixed on
+#: 2026-11-27: ISO-BMFF's box (26.1180) has two byte-run arms and a
+#: `large_body`, WebSocket's frame (26.1181) a masking key and `nothing`.
+#: Ordinary shapes, read that day.
+#: And 92 -> 95 scalar, 89 -> 97 unmeasurable, the same day, when HTTP/2's
+#: frame joined (26.1182): its five payload arms, the padded and
+#: prioritized ones each a struct of its own, and three byte runs.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                90,
-	("no-scalar", "struct", "fixed"):            128,
-	("no-scalar", "struct", "unmeasurable"):     88,
+	("scalar", "not-struct", ""):                95,
+	("no-scalar", "struct", "fixed"):            130,
+	("no-scalar", "struct", "unmeasurable"):     97,
 	("no-scalar", "not-struct", ""):              1,
 }
 

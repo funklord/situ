@@ -1358,6 +1358,8 @@ UNORACLED = {
 	             "test_a_number_can_say_its_own_form",
 	"riff":      "Python's `wave` reads the same file in "
 	             "test_a_pad_is_part_of_an_element",
+	"http2":     "tshark's reading of curl's frames is pinned in "
+	             "test_http2_frames_read_as_tshark_reads",
 	"bitcoin":   "no node here; the genesis coinbase's hash is recomputed in "
 	             "test_a_marked_integer_says_its_own_width",
 	# As edges, and for a construct rather than a format: `import` had no
@@ -1528,7 +1530,8 @@ def test_the_corpus_is_not_this_project_s_opinion() -> None:
 	# `_git(` for `_tiff(`'s reason: a helper that runs git with the names
 	# and dates fixed, so the corpus is the same bytes on every run.
 	elsewhere = ("subprocess", "_run(", "_randpkt(", "_pymodbus(",
-	             "_paho_packets(", "_tiff(", "_json_dumps(", "_git(")
+	             "_paho_packets(", "_tiff(", "_json_dumps(", "_git(",
+	             "_websocket_frames(")
 
 	for oracle in ORACLES:
 		corpus = DRIVERS[oracle.name][0]

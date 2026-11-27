@@ -4011,9 +4011,11 @@ class Emitter:
 					"\t/// (26.555).",
 					f"\tpub fn {_ident(base + '_extent_from')}(&self, at: usize)"
 					" -> usize {",
-					"\t\tif self.bytes.len() < at {",
-					"\t\t\treturn 0;",
-					"\t\t}",
+					# Past the bytes, an empty slice rather than 0: the arm's
+					# length may be its arguments' alone, read from bytes that
+					# have arrived -- HTTP/2's padded HEADERS before its
+					# payload -- as Python reads it (26.1182).
+					"\t\tlet at = at.min(self.bytes.len());",
 					f"\t\t{inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }}.extent()",
 					"\t}",
 					"",
@@ -4353,9 +4355,7 @@ class Emitter:
 		return self._marked_copy(struct, [
 			f"\tpub fn {_ident(base + '_extent_from')}(&self, at: usize)"
 			" -> usize {",
-			"\t\tif self.bytes.len() < at {",
-			"\t\t\treturn 0;",
-			"\t\t}",
+			"\t\tlet at = at.min(self.bytes.len());",
 			f"\t\t{inner} {{ bytes: &self.bytes[at..]"
 			f"{self._child_fields(struct, placement)} }}.extent()",
 			"\t}",
@@ -7544,6 +7544,8 @@ class Emitter:
 
 		# What the arm hands its type travels with the call, as in C's
 		# (26.904).
+		chosen = traverse.discriminant_readable_from(
+			struct, placement, self.resolved.layout.env.named_constants)
 		plan: list[tuple[object, str | None, str, str]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
@@ -7558,6 +7560,24 @@ class Emitter:
 			elif member.is_fixed_size:
 				plan.append((arm, None,
 				             str(member.size_bits // BITS_PER_BYTE), ""))
+			elif inner is None and not member.delimiters \
+					and not is_run(member, self.resolved.structs) \
+					and traverse.sized_arm_readable(
+						struct, member, self.resolved.structs, chosen,
+						self.resolved.layout.env.named_constants) \
+					and (sized := self._length_expression(
+						struct, member, leaf_bounded=False)) is not None:
+				# An arm the data or the caller sizes -- `u8 bytes[length]`
+				# beside struct arms, HTTP/2's unpadded DATA -- as Python
+				# frames it (26.1052). Declining it sent the whole variant
+				# back to the extent, which shrinks when the bytes run out,
+				# and the four answered differently (26.1182). Only where
+				# its length reads nothing the guard has not established,
+				# as C and C++ require: their reads in `required` are not
+				# checked, and the three answer alike.
+				plan.append((arm, None,
+				             self._unparen(sized).replace("self.", "probe."),
+				             ""))
 			else:
 				return None
 		if not any(call for _, call, _, _ in plan):
@@ -7568,8 +7588,6 @@ class Emitter:
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
-		chosen = traverse.discriminant_readable_from(
-			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}" if chosen is not None else cursor
 		# A peeked discriminant behind a lead has to have arrived, as in
 		# C's (`traverse.peeked_at_the_cursor`).

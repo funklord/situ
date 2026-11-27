@@ -1,0 +1,48 @@
+# Golden vectors for the HTTP/2 worked example.
+#
+# `curl` is curl 8.14.1 with nghttp2 1.64.0, sending one POST with prior
+# knowledge to a listener that answered nothing, so its client side is all
+# there is: the preface, SETTINGS, WINDOW_UPDATE, HEADERS, DATA, and the
+# RST_STREAM and GOAWAY it sent on giving up. curl neither pads nor
+# prioritizes, so the other two frames are written from RFC 9113 6.1 and
+# 6.2 around curl's own field block, and were read back by tshark 4.4:
+# HEADERS length 90, pad length 2, weight 15; DATA length 9, pad length 3,
+# data "hello".
+
+# The whole client side of the connection.
+connection curl 50 52 49 20 2A 20 48 54 54 50 2F 32 2E 30 0D 0A 0D 0A 53 4D 0D 0A 0D 0A 00 00 12 04 00 00 00 00 00 00 03 00 00 00 64 00 04 00 01 00 00 00 02 00 00 00 00 00 00 04 08 00 00 00 00 00 3E 7F 00 01 00 00 52 01 04 00 00 00 01 83 86 41 8B 08 9D 5C 0B 81 70 DC 65 F7 00 CF 04 85 62 DA E8 38 E4 7A 88 25 B6 50 C3 CB 85 A5 C3 53 03 2A 2F 2A 40 85 F2 B2 4A 84 FF 86 AC 72 48 59 3F CF 0F 0D 02 31 31 5F 98 1D 75 D0 62 0D 26 3D 4C 79 5B C7 8F 0B 4A 7B 29 5A DB 28 2D 44 3C 85 93 00 00 0B 00 01 00 00 00 01 68 65 6C 6C 6F 2C 20 73 69 74 75 00 00 04 03 00 00 00 00 01 00 00 00 05 00 00 11 07 00 00 00 00 00 00 00 00 00 00 00 00 00 73 68 75 74 64 6F 77 6E 00
+
+# curl's SETTINGS: three entries, eighteen bytes.
+frame settings 00 00 12 04 00 00 00 00 00 00 03 00 00 00 64 00 04 00 01 00 00 00 02 00 00 00 00
+	length = 18
+	type = 4
+	stream_id = 0
+
+# curl's DATA, unpadded, ending the stream.
+frame data 00 00 0B 00 01 00 00 00 01 68 65 6C 6C 6F 2C 20 73 69 74 75
+	length = 11
+	type = 0
+	padded = 0
+	end_stream = 1
+	stream_id = 1
+
+# HEADERS with PADDED and PRIORITY: pad length 2, then weight 15.
+frame padded_headers 00 00 5A 01 2C 00 00 00 03 02 00 00 00 00 0F 83 86 41 8B 08 9D 5C 0B 81 70 DC 65 F7 00 CF 04 85 62 DA E8 38 E4 7A 88 25 B6 50 C3 CB 85 A5 C3 53 03 2A 2F 2A 40 85 F2 B2 4A 84 FF 86 AC 72 48 59 3F CF 0F 0D 02 31 31 5F 98 1D 75 D0 62 0D 26 3D 4C 79 5B C7 8F 0B 4A 7B 29 5A DB 28 2D 44 3C 85 93 00 00
+	length = 90
+	type = 1
+	priority = 1
+	padded = 1
+	end_headers = 1
+	stream_id = 3
+	payload.headers.body.with_padding.pad_length = 2
+	payload.headers.body.with_padding.headers.body.prioritized.fields.weight = 15
+
+# DATA with PADDED: pad length 3, "hello", three zeros.
+frame padded_data 00 00 09 00 09 00 00 00 03 03 68 65 6C 6C 6F 00 00 00
+	length = 9
+	type = 0
+	padded = 1
+	end_stream = 1
+	stream_id = 3
+	payload.data.body.with_padding.pad_length = 3
+	payload.data.body.with_padding.data = 68 65 6C 6C 6F

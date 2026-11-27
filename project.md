@@ -10100,6 +10100,68 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1182 HTTP/2 joins the corpus, and an argument may call `max`
+
+RFC 9113's frame is the layer under every browser and gRPC call: a nine-byte
+header whose flags choose what wraps the payload -- PADDED a length byte in
+front and that many bytes after, PRIORITY five bytes in front of a HEADERS
+field block. Each payload struct takes the frame's length and flags as
+parameters (0068) and hands what they leave to the struct inside it.
+`example/http2` holds curl 8.14.1's client side of a connection (nghttp2
+1.64.0) and a padded DATA and a padded, prioritized HEADERS written from the
+RFC around curl's own field block, read back by tshark.
+
+What it took, and what it found:
+
+- **An argument may call `max` and `min`** (decision 0068 refused every
+  call). "The parent's length less a field, held at zero" --
+  `max(length - 1 - pad_length, 0)` -- is how a padded payload hands its
+  inner part a length, and sizes have always taken both in every reader.
+  A `let` still cannot read a parameter, and the range check is by
+  interval, so `max(length, 1 + p) - 1 - p` reads as possibly negative;
+  `max(x, 0)` is the spelling that says it.
+- **C's arm accessors over a parameter-switched variant did not compile.**
+  The byte-run arms' `_ptr` named `arg_padded` without taking it, the
+  validate fit check called them without it, and the extent helper took
+  it without reading it; a `when` reading only parameters left `view`
+  unused in `_messages`.
+- **An arm's extent past the bytes was 0 in C, C++ and Rust** and computed
+  in Python, which hands the arm an empty view: a padded HEADERS's length is
+  its arguments' alone, read from bytes that have arrived. The three now
+  hand the empty view too, except a recursive arm, which would walk to its
+  depth cap.
+- **C and C++ guarded an extent on bytes no term read.** A struct whose
+  lengths are all its arguments' answered its fixed prefix while the
+  prefix was missing, where Rust and Python answered the length. The guard
+  is kept only where a term reads the message.
+- **`required` waited for bytes a parameter does not need.**
+  `traverse._fields_end` answered None for any parameter, so a length
+  reading only the caller's argument was guarded on the fixed prefix in
+  all four; a parameter now ends at byte 0.
+- **C read a parameter discriminant as zero before byte 1.** The 26.753
+  guard on a discriminant's own bytes was applied to `padded`, which is
+  the caller's, so `required` chose the unpadded arm.
+- **The builders could write what the reader does not read back.** A
+  builder per arm writes its discriminant, and a variant switched on a
+  parameter has none to write, so the caller's argument could name
+  another arm; and a nested part handed a field the caller supplies, and
+  not measured by it alone (SETTINGS is `length / 6` entries), had
+  nothing holding the two together. Both are declined, by name.
+
+- **C, C++ and Rust framed no variant holding a sized byte-run arm.**
+  `default: u8 other[length]` beside struct arms sent `required` back to
+  the extent, where Python frames the arm by its length (26.1052), so the
+  four answered differently before the payload arrived. The three now do
+  as Python does where the arm's length reads nothing the discriminant's
+  guard has not established (`traverse.sized_arm_readable`): their reads
+  in `required` are not bounds-checked, and this is where they need none.
+
+`situ_frame_required` joins `READS_LATE`: the variant is guarded on every
+byte any arm's arguments read, so the flags byte is awaited for a type
+whose arm reads only the length. Open, as backlog rather than a decision:
+a builder could hold every nested part to the extent its reader states,
+which would replace the second refusal above.
+
 ### 26.1181 WebSocket's length is a marked integer, and the corpus has one
 
 RFC 6455's frame puts seven bits of length beside the mask flag: below 126

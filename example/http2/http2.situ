@@ -1,0 +1,154 @@
+// HTTP/2's frame layer, RFC 9113 section 4.1 and 6: what every browser,
+// every gRPC call and most API clients speak once a connection is up.
+//
+// What it demonstrates: optional parts chosen by flag bits, passed down as
+// arguments. A frame states its payload's length once, in its header, and
+// the PADDED and PRIORITY flags put a pad length, five priority bytes and
+// the padding around the part that matters. Each payload struct takes the
+// length and the flags as parameters (0068) and gives what they leave to
+// the struct inside it -- `max(length - 1 - pad_length, 0)`, an argument
+// calling `max` (26.1182) -- so every layer's length is the frame's, and a
+// pad length that lies is refused rather than read as a huge field block.
+//
+// What it does not describe:
+//   - The field block's HPACK coding (example/hpack), nor CONTINUATION
+//     frames' share of it: `block` is the bytes, as a receiver buffers them.
+//   - The frame types not listed below -- PRIORITY, RST_STREAM, PING,
+//     PUSH_PROMISE, WINDOW_UPDATE, CONTINUATION -- which are `other`, their
+//     length's bytes, and fixed records a reader can lay over them.
+//   - What a connection holds to: SETTINGS limits, flow control, stream
+//     states. A receiver does not have to check the padding is zero, so
+//     this does not.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct nothing {
+}
+
+struct priority_fields [allow_straddle] {
+	bit  exclusive;
+	u31  dependency;
+	u8   weight;
+}
+
+// DATA (6.1): with PADDED, a length byte first and that many zeros last.
+struct padded_data {
+	parameter u32 length [stream];
+	u8   pad_length;
+	u8   data[max(length - 1 - pad_length, 0)];
+	u8   padding[pad_length];
+}
+
+struct data_payload {
+	parameter u32 length [stream];
+	parameter u8  padded [stream];
+	variant body switch (padded) {
+		case 1:  padded_data(length = length) with_padding;
+		case 0:  u8 bytes[length];
+		default: error;
+	}
+}
+
+// HEADERS (6.2): PRIORITY puts five bytes in front of the field block, and
+// PADDED a length byte in front of both and that many bytes after.
+struct prioritized_block {
+	parameter u32 length [stream];
+	priority_fields fields;
+	u8   block[max(length, 5) - 5];
+}
+
+struct header_block {
+	parameter u32 length   [stream];
+	parameter u8  priority [stream];
+	variant body switch (priority) {
+		case 1:  prioritized_block(length = length) prioritized;
+		case 0:  u8 block[length];
+		default: error;
+	}
+}
+
+struct padded_headers {
+	parameter u32 length   [stream];
+	parameter u8  priority [stream];
+	u8   pad_length;
+	header_block(length = max(length - 1 - pad_length, 0),
+	             priority = priority) headers;
+	u8   padding[pad_length];
+}
+
+struct headers_payload {
+	parameter u32 length   [stream];
+	parameter u8  padded   [stream];
+	parameter u8  priority [stream];
+	variant body switch (padded) {
+		case 1:  padded_headers(length = length, priority = priority) with_padding;
+		case 0:  header_block(length = length, priority = priority) unpadded;
+		default: error;
+	}
+}
+
+struct setting {
+	u16  identifier;
+	u32  value;
+}
+
+struct settings_payload {
+	parameter u32 length [stream];
+	setting  entries[length / 6];
+}
+
+struct goaway_payload [allow_straddle] {
+	parameter u32 length [stream];
+	reserved u1 [must_be_zero];
+	u31  last_stream_id;
+	u32  error_code;
+	u8   debug[max(length, 8) - 8];
+}
+
+struct frame [allow_straddle] {
+	u24  length;
+	u8   type;
+	u2   unused_high;
+	bit  priority;
+	bit  unused_4;
+	bit  padded;
+	bit  end_headers;
+	bit  unused_1;
+	bit  end_stream;
+	reserved u1 [must_be_zero];
+	u31  stream_id;
+	variant payload switch (type) {
+		case 0:  data_payload(length = length, padded = padded) data;
+		case 1:  headers_payload(length = length, padded = padded,
+		                         priority = priority) headers;
+		case 4:  settings_payload(length = length) settings;
+		case 7:  goaway_payload(length = length) goaway;
+		default: u8 other[length];
+	}
+}
+
+// A client's side of a connection: the 24-byte preface, then frames.
+struct connection {
+	u8    preface[24] [must_eq = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"];
+	frame frames[remaining];
+}
+
+// Padding that takes the whole payload, or more, is a PROTOCOL_ERROR (6.1).
+when padded_data.pad_length >= padded_data.length
+	refuse data_padding "the padding is longer than the frame";
+when padded_headers.pad_length >= padded_headers.length
+	refuse headers_padding "the padding is longer than the frame";
+when prioritized_block.length < 5
+	refuse short_priority "PRIORITY needs its five bytes";
+when goaway_payload.length < 8
+	refuse short_goaway "GOAWAY is at least eight bytes";
+
+// What a receiver relies on: the nine-byte header at constant offsets, read
+// before anything else to know how much to buffer, and SETTINGS' six-byte
+// entries (6.5.1).
+require absolute_static(frame.length);
+require absolute_static(frame.type);
+require absolute_static(frame.stream_id);
+require size(setting) == 6;

@@ -269,6 +269,16 @@ def _int64_literal(value: int | None) -> str:
 	return f"INT64_C({value})"
 
 
+
+def _reads_bytes(term: str) -> bool:
+	"""Whether an extent term reads the message, rather than only the
+	caller's arguments and constants: what is left once the runtime's
+	helpers, the arguments and the casts are taken out names something."""
+	rest = re.sub(r"::situ::rt::\w+|\barg_\w+|static_cast<[^>]*>"
+	              r"|\bstd::u?int\d+_t\b|\b\d+u?\b", "", term)
+	return re.search(r"[A-Za-z_]", rest) is not None
+
+
 @dataclass
 class Generated:
 	"""What a schema compiles to. One file: C++ needs no second one here."""
@@ -3772,6 +3782,8 @@ class Emitter:
 
 		# What the arm hands its type travels with the call, as in C's: the
 		# four other `required` sites here pass it (26.904).
+		chosen = traverse.discriminant_readable_from(
+			struct, placement, self.resolved.layout.env.named_constants)
 		plan: list[tuple[object, str | None, str, str, str, list[str]]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
@@ -3788,6 +3800,22 @@ class Emitter:
 				plan.append((arm, None,
 				             f"{member.size_bits // BITS_PER_BYTE}u", "", "",
 				             []))
+			elif inner is None and not member.delimiters \
+					and not is_run(member, self.resolved.structs) \
+					and traverse.sized_arm_readable(
+						struct, member, self.resolved.structs, chosen,
+						self.resolved.layout.env.named_constants) \
+					and (sized := self._length_expression(
+						struct, member, leaf_bounded=False)) is not None:
+				# An arm the data or the caller sizes -- `u8 bytes[length]`
+				# beside struct arms, HTTP/2's unpadded DATA -- as Python
+				# frames it (26.1052). Declining it sent the whole variant
+				# back to the extent, which shrinks when the bytes run out,
+				# and the four answered differently (26.1182). Only where
+				# its length reads nothing the guard has not established,
+				# as C's own reads require: this backend's in `required` are not
+				# checked, and the three answer alike.
+				plan.append((arm, None, f"({sized})", "", "", []))
 			else:
 				return None
 		if not any(call for _, call, _, _, _, _ in plan):
@@ -3797,8 +3825,6 @@ class Emitter:
 		# Guarded where the discriminant ends rather than where the
 		# variant begins: the arm is chosen from it, and an arm with no
 		# bytes yet answers its floor (26.946).
-		chosen = traverse.discriminant_readable_from(
-			struct, placement, self.resolved.layout.env.named_constants)
 		opens = f"{chosen}u" if chosen is not None else cursor
 		# A peeked discriminant behind a lead has to have arrived, as in
 		# C's (`traverse.peeked_at_the_cursor`).
@@ -4220,11 +4246,16 @@ class Emitter:
 			# The struct's own minimum, not zero: a sentinel meaning "no
 			# element" cannot also be a length, which is the correction 26.322
 			# records. `view_sub` refuses it exactly as before.
+			#
+			# Only where a term reads the bytes, as in C: a length that is
+			# the caller's argument alone is readable with none of them here
+			# (26.1182).
 			floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {terms[0]}u)) {{",
 			          f"\t\t\treturn {terms[0]}u;",
 			          "\t\t}",
 			          ""]
-			         if len(terms) > 1 and terms[0] != "0" else [])
+			         if len(terms) > 1 and terms[0] != "0"
+			         and any(_reads_bytes(term) for term in terms[1:]) else [])
 			return [*head,
 			        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
 			        "\t{",
@@ -8308,6 +8339,10 @@ class Emitter:
 					"\t{",
 					"\t\tsitu_view_t whole;",
 					"",
+					# Past the bytes, an empty view rather than 0: the arm's
+					# length may be its arguments' alone, read from bytes that
+					# have arrived, as Python reads it (26.1182).
+					"\t\tat = at < raw_.limit ? at : raw_.limit;",
 					"\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 					"\t\t\t\tsitu_remaining_u32(raw_.limit, at),"
 					" &whole) != SITU_OK) {",
@@ -8714,6 +8749,7 @@ class Emitter:
 			"\t{",
 			"\t\tsitu_view_t whole;",
 			"",
+			"\t\tat = at < raw_.limit ? at : raw_.limit;",
 			"\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 			"\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
 			" != SITU_OK) {",

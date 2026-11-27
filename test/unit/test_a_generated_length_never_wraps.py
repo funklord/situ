@@ -153,6 +153,12 @@ RUST_CENSUS = {
 	# `msg.len() - n` behind `n > msg.len()` -- ELF has two tables, ZIP one.
 	"elf.situ": 3,
 	"zip.situ": 2,
+	# Read 2026-11-27 (26.1181): the masking key's `len() - at` behind
+	# `len() < at`, and the payload's the same.
+	"websocket.situ": 2,
+	# Read 2026-11-27 (26.1182): `headers`' and `fields`' bounds, each
+	# `len() - at` behind `len() < at`.
+	"http2.situ": 2,
 	"keystore.situ": 2,
 	"message.situ": 2,
 	"modbus.situ": 22,
