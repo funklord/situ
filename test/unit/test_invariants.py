@@ -229,10 +229,12 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: prioritized ones each a struct of its own, and three byte runs.
 #: And 95 -> 96, 130 -> 134, 97 -> 100 when gzip's member joined (26.1183):
 #: four flag-chosen parts, each beside a `nothing`, and the header CRC.
+#: And 96 -> 97, 100 -> 101 with pcapng's block (26.1184): an Enhanced
+#: Packet Block, and every other block's bytes.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                96,
+	("scalar", "not-struct", ""):                97,
 	("no-scalar", "struct", "fixed"):            134,
-	("no-scalar", "struct", "unmeasurable"):     100,
+	("no-scalar", "struct", "unmeasurable"):     101,
 	("no-scalar", "not-struct", ""):              1,
 }
 

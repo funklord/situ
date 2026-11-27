@@ -1,0 +1,23 @@
+# Golden vectors for the pcapng worked example.
+#
+# `editcap -F pcapng` from Wireshark 4.4.18 converted a classic capture of
+# two Ethernet frames, 42 and 61 bytes, never situ. Its blocks are a Section
+# Header (64 bytes), an Interface Description (20) and two Enhanced Packet
+# Blocks (76 and 96), each with its length at both ends.
+
+# The whole file.
+file editcap 0A 0D 0D 0A 40 00 00 00 4D 3C 2B 1A 01 00 00 00 FF FF FF FF FF FF FF FF 04 00 1A 00 45 64 69 74 63 61 70 20 28 57 69 72 65 73 68 61 72 6B 29 20 34 2E 34 2E 31 38 00 00 00 00 00 00 40 00 00 00 01 00 00 00 14 00 00 00 01 00 00 00 FF FF 00 00 14 00 00 00 06 00 00 00 4C 00 00 00 00 00 00 00 24 0A 06 00 00 40 1E 18 2A 00 00 00 2A 00 00 00 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21 22 23 24 25 26 27 28 29 00 00 4C 00 00 00 06 00 00 00 60 00 00 00 00 00 00 00 24 0A 06 00 40 82 2D 18 3D 00 00 00 3D 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 60 00 00 00
+
+# The first Enhanced Packet Block: 42 bytes captured, padded to 44.
+block packet 06 00 00 00 4C 00 00 00 00 00 00 00 24 0A 06 00 00 40 1E 18 2A 00 00 00 2A 00 00 00 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21 22 23 24 25 26 27 28 29 00 00 4C 00 00 00
+	type = 6
+	total_length = 76
+	trailing_length = 76
+	body.packet.captured_length = 42
+	body.packet.original_length = 42
+
+# The Interface Description Block, read as another block's bytes.
+block interface 01 00 00 00 14 00 00 00 01 00 00 00 FF FF 00 00 14 00 00 00
+	type = 1
+	total_length = 20
+	trailing_length = 20

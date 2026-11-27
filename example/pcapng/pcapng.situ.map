@@ -1,0 +1,65 @@
+# situ capability map v1
+# schema: pcapng.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct block size=12..8589934605 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  block.type                             offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  block.total_length                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  block.body                             offset=AbsoluteStatic(0x08) size=Bounded(0, 8589934593) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  block.body.packet                      offset=AbsoluteStatic(0x08) size=Bounded(20, 8589934593) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  block.body.packet.body_length          parameter
+  block.body.packet.interface_id         offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  block.body.packet.timestamp_high       offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  block.body.packet.timestamp_low        offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  block.body.packet.captured_length      offset=AbsoluteStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  block.body.packet.original_length      offset=AbsoluteStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  block.body.packet.packet               offset=AbsoluteStatic(0x1C) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  block.body.packet.<pad>                offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  block.body.packet.options              offset=Dynamic size=Bounded(0, 4294967275) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  block.body.other                       offset=AbsoluteStatic(0x08) size=Bounded(0, 4294967283) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  block.trailing_length                  offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct enhanced_packet size=20..8589934593 mutate=Shifting address=Unstable repr=ValueConverted
+  enhanced_packet.body_length            parameter
+  enhanced_packet.interface_id           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  enhanced_packet.timestamp_high         offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  enhanced_packet.timestamp_low          offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  enhanced_packet.captured_length        offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  enhanced_packet.original_length        offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  enhanced_packet.packet                 offset=AbsoluteStatic(0x14) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  enhanced_packet.<pad>                  offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  enhanced_packet.options                offset=Dynamic size=Bounded(0, 4294967275) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct file size=0.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  file.blocks                            offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  file.blocks[]                          offset=FrameStatic(0x00) size=Bounded(12, 8589934605) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  file.blocks[].type                     offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].total_length             offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].body                     offset=FrameStatic(0x08) size=Bounded(0, 8589934593) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  file.blocks[].body.packet              offset=FrameStatic(0x08) size=Bounded(20, 8589934593) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  file.blocks[].body.packet.body_length  parameter
+  file.blocks[].body.packet.interface_id offset=FrameStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].body.packet.timestamp_high offset=FrameStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].body.packet.timestamp_low offset=FrameStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].body.packet.captured_length offset=FrameStatic(0x14) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].body.packet.original_length offset=FrameStatic(0x18) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  file.blocks[].body.packet.packet       offset=FrameStatic(0x1C) size=Bounded(0, 4294967295) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  file.blocks[].body.packet.<pad>        offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  file.blocks[].body.packet.options      offset=Dynamic size=Bounded(0, 4294967275) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  file.blocks[].body.other               offset=FrameStatic(0x08) size=Bounded(0, 4294967283) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  file.blocks[].trailing_length          offset=Dynamic size=Fixed(4) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct option size=4..65542 mutate=Shifting address=Unstable repr=ValueConverted
+  option.code                            offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  option.length                          offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  option.value                           offset=AbsoluteStatic(0x04) size=Bounded(0, 65535) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  option.<pad>                           offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

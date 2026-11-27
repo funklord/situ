@@ -10100,6 +10100,22 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1184 pcapng joins the corpus
+
+pcapng is the capture file Wireshark and tcpdump write by default: blocks
+that state their length at both ends, so a file can be walked backwards,
+and an Enhanced Packet Block whose options fill what the block's length
+leaves after the padded packet. The trailing length is held to the leading
+one by a `when`, and the block hands its body the length it leaves as an
+argument. editcap's conversion of a classic capture is oracled by tshark,
+packet by packet. It needed nothing new, and the readers agreed on it from
+the first run: the sizes of 26.1182 and 26.1183 at work.
+
+The options' length is spelt `max(body_length - 20 - padded, 0)` where
+`max(body_length, 20 + padded) - 20 - padded` says the same thing: the
+range check reads an expression by interval and cannot see that the second
+is never negative (26.1182). Two protocols in a day spelt around it.
+
 ### 26.1183 gzip joins the corpus, and the vector suites read an arm
 
 RFC 1952's member wraps the deflate stream under `.gz`, `.tgz` and HTTP's

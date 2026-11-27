@@ -1,0 +1,65 @@
+// pcapng, the capture file Wireshark and tcpdump write by default
+// (draft-ietf-opsawg-pcapng, section 3 and 4).
+//
+// What it demonstrates: a length stated at both ends. Every block is its
+// type, its total length, a body and the total length again, so a reader
+// can walk a file backwards as well as forwards; the two are held equal by
+// a `when`. An Enhanced Packet Block's body is a fixed record, the packet
+// padded to four bytes, and options filling what the block's length leaves
+// -- a length the parent hands its body as an argument (0068), since only
+// the block knows it.
+//
+// What it does not describe:
+//   - A big-endian file. The Section Header Block's byte-order magic says
+//     which order the section is in; this reads the little-endian form,
+//     which is what every capture tool here writes.
+//   - What the other blocks hold -- the Section Header, the Interface
+//     Description, name resolution, statistics -- which are `other`, their
+//     bytes, and the options inside them.
+//   - The options as records. `option` is laid out below for a reader to
+//     walk `options` with; it is not wired in, as the options run is
+//     terminated by an end-of-options record as often as by the block.
+
+target buffer;
+endian little;
+
+struct option {
+	u16 code;
+	u16 length;
+	u8  value[length];
+	pad_to(4);
+}
+
+struct enhanced_packet {
+	parameter u32 body_length [stream];
+	u32 interface_id;
+	u32 timestamp_high;
+	u32 timestamp_low;
+	u32 captured_length;
+	u32 original_length;
+	u8  packet[captured_length];
+	pad_to(4);
+	u8  options[max(body_length - 20 - ((captured_length + 3) / 4) * 4, 0)];
+}
+
+struct block {
+	u32 type;
+	u32 total_length;
+	variant body switch (type) {
+		case 6:  enhanced_packet(body_length = max(total_length, 12) - 12) packet;
+		default: u8 other[max(total_length, 12) - 12];
+	}
+	u32 trailing_length;
+}
+
+struct file {
+	block blocks[remaining];
+}
+
+when block.trailing_length != block.total_length
+	refuse length_echo "a block's length is stated at both ends, and they differ";
+
+// What a reader relies on: the type and the length first, at constant
+// offsets, so a block it does not know is stepped over by its length.
+require absolute_static(block.type);
+require absolute_static(block.total_length);

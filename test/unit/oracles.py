@@ -302,6 +302,59 @@ def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
 	return found
 
 
+# -- pcapng -------------------------------------------------------------------
+#
+# editcap converts a classic capture to pcapng and tshark reads each packet
+# back: its captured and original lengths and its timestamp. Every block is
+# placed by the lengths of the ones before it, and a packet's fields by its
+# block's layout (26.1184).
+
+def pcapng_corpus(tmp: Path) -> bytes:
+	"""Three Ethernet frames of different lengths, converted by editcap."""
+	import struct
+
+	header = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
+	frames = [bytes(range(42)), bytes(61), bytes(range(255)) * 2]
+	records = b"".join(struct.pack("<IIII", 1700000000 + index, 250000 * index,
+	                               len(frame), len(frame)) + frame
+	                   for index, frame in enumerate(frames))
+	classic = tmp / "oracle-in.pcap"
+	classic.write_bytes(header + records)
+	_run(["editcap", "-F", "pcapng", str(classic), str(tmp / "oracle.pcapng")])
+	return (tmp / "oracle.pcapng").read_bytes()
+
+
+def pcapng_says(data: bytes, tmp: Path) -> list[tuple[int, int, str]]:
+	"""Each packet's captured length, original length and time, by tshark."""
+	path = tmp / "oracle-read.pcapng"
+	path.write_bytes(data)
+	said = _run(["tshark", "-r", str(path), "-T", "fields", "-e",
+	             "frame.cap_len", "-e", "frame.len", "-e", "frame.time_epoch"])
+	found = []
+	for line in said.splitlines():
+		captured, original, when = line.split("\t")
+		found.append((int(captured), int(original), f"{float(when):.6f}"))
+	return found
+
+
+def pcapng_situ(module: object, data: bytes) -> list[tuple[int, int, str]]:
+	"""The same from situ's Enhanced Packet Blocks, in microseconds."""
+	from situ_runtime import Message
+
+	whole = module.file.at(Message(bytearray(data)), 0, len(data))   # type: ignore[attr-defined]
+	whole.validate()
+	found = []
+	for index in range(whole.blocks_count):
+		one = whole.blocks(index)
+		if one.type != 6:
+			continue
+		packet = one.body_packet
+		micros = (packet.timestamp_high << 32) | packet.timestamp_low
+		found.append((packet.captured_length, packet.original_length,
+		              f"{micros / 1e6:.6f}"))
+	return found
+
+
 # -- gzip ---------------------------------------------------------------------
 #
 # GNU gzip writes a member with the file's name in it and reads it back:
@@ -1682,6 +1735,14 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "pcapng",
+		schema = ROOT / "example" / "pcapng" / "pcapng.situ",
+		tool   = "tshark",
+		why    = ("editcap writes the file and tshark reads every packet "
+		          "back. Each block is placed by the lengths before it, so "
+		          "one length read wrong moves every packet after it."),
+	),
+	Oracle(
 		name   = "gzip",
 		schema = ROOT / "example" / "gzip" / "gzip.situ",
 		tool   = "gzip",
@@ -1924,6 +1985,10 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# The timestamp's two halves: every packet keeps its place and its
+	# length, and every time moves by 2^32 microseconds.
+	"pcapng": ("\tu32 timestamp_high;\n\tu32 timestamp_low;",
+	           "\tu32 timestamp_low;\n\tu32 timestamp_high;"),
 	# FNAME and FEXTRA: a named member's name is read as an extra field's
 	# length and bytes, and the deflate stream lands somewhere else.
 	"gzip": ("\tbit  fname;\n\tbit  fextra;", "\tbit  fextra;\n\tbit  fname;"),
@@ -2020,6 +2085,7 @@ DRIVERS = {
 	"isobmff": (isobmff_corpus, isobmff_says, isobmff_situ),
 	"websocket": (websocket_corpus, websocket_says, websocket_situ),
 	"gzip": (gzip_corpus, gzip_says, gzip_situ),
+	"pcapng": (pcapng_corpus, pcapng_says, pcapng_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),
