@@ -79,6 +79,7 @@ CURSORS = {
 	"example/flac/flac.situ": 1, "example/hpack/hpack.situ": 1,
 	"example/http/http.situ": 2, "example/id3/id3.situ": 1,
 	"example/ipv4/ipv4.situ": 1, "example/ipv6ext/ipv6ext.situ": 1,
+	"example/isobmff/isobmff.situ": 1,
 	"example/json/json.situ": 2, "example/matroska/matroska.situ": 3,
 	"example/mqtt/mqtt.situ": 2, "example/netlink/netlink.situ": 1,
 	"example/pcap/pcap.situ": 1, "example/png/png.situ": 1,

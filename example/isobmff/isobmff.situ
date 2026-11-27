@@ -1,0 +1,57 @@
+// The ISO base media file format, ISO/IEC 14496-12 section 4.2: the box
+// structure under MP4, MOV, 3GP, HEIF, AVIF and CMAF.
+//
+// What it demonstrates: a length with two escapes, chosen by a variant
+// over the length itself. A box is `size` bytes including its own eight,
+// except that `size = 1` puts the real size after the type as 64 bits --
+// a box past 4 GiB, an `mdat` of a long recording -- and `size = 0` means
+// the box runs to the end of the file, which a writer streaming its last
+// box uses. Each case is an arm, and the default arm is the ordinary box.
+//
+// What it does not describe:
+//   - The boxes inside a container (`moov`, `trak`, `mdia`, ...), which
+//     are more boxes, chosen by the four-character type: here a container's
+//     children are its payload's bytes. `kind` is read as a number so a
+//     reader can switch on it -- 'moov' is 0x6D6F6F76.
+//   - `uuid` boxes' sixteen-byte extended type, which is the payload's
+//     first sixteen bytes here.
+//   - Full boxes' version and flags, the first four payload bytes of the
+//     types that are full boxes.
+//
+// A file is a run of boxes to the end of the frame. A size-0 box takes the
+// rest of it, so it is the last, and the run ends with it as a run ends at
+// its frame: an element that only SOMETIMES runs to the end is still an
+// element (26.1180), where one that always does would make a run of one.
+
+target buffer;
+endian big;
+
+// `size = 1`: the 64-bit size, which counts the sixteen bytes in front of
+// the payload.
+struct large_body {
+	u64 largesize;
+	u8  data[max(largesize, 16) - 16];
+}
+
+struct box {
+	u32 size;
+	u32 kind;                // a four-character code, 'ftyp' = 0x66747970
+	variant body switch (size) {
+		case 0:  u8 to_end[remaining];       // the last box, to the end
+		case 1:  large_body large;
+		default: u8 data[max(size, 8) - 8];
+	}
+}
+
+struct file {
+	box boxes[remaining];
+}
+
+// A sized box's header is read in one go at a constant offset, which is
+// what a demuxer seeking box to box does.
+require absolute_static(box.size);
+require absolute_static(box.kind);
+
+// Sizes 2 to 7 cannot hold the header they count.
+when box.size >= 2 && box.size < 8
+	refuse short_box "a box is at least its own eight bytes";

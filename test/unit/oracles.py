@@ -257,6 +257,51 @@ def zip_situ(module: object, archive: bytes) -> list[tuple[str, int, int, int, i
 	return found
 
 
+# -- isobmff ------------------------------------------------------------------
+#
+# FFmpeg writes an MP4 and ffprobe's trace names every top-level box it
+# reads: its type and where its payload starts. A 64-bit box, which a file
+# this small never needs, is appended from 14496-12 section 4.2, after
+# `mdat` so no sample offset moves (26.1180).
+
+def isobmff_corpus(tmp: Path) -> bytes:
+	"""One frame of video, and a `free` box in the 64-bit form."""
+	made = tmp / "oracle.mp4"
+	_run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+	      "color=c=black:s=16x16:d=0.04", "-frames:v", "1", "-c:v",
+	      "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+	      str(made)])
+	large = (1).to_bytes(4, "big") + b"free" + (24).to_bytes(8, "big") \
+		+ b"situ\0\0\0\0"
+	return made.read_bytes() + large
+
+
+def isobmff_says(data: bytes, tmp: Path) -> list[tuple[str, int]]:
+	"""Each top-level box's type and payload start, from ffprobe's trace."""
+	path = tmp / "oracle-in.mp4"
+	path.write_bytes(data)
+	traced = subprocess.run(["ffprobe", "-v", "trace", "-i", str(path)],
+	                        capture_output=True, text=True)
+	return [(kind, int(start)) for kind, start in
+	        re.findall(r"type:'(\w{4})' parent:'root' sz: \d+ (\d+)",
+	                   traced.stderr)]
+
+
+def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
+	"""The same through situ's walk of the file's boxes."""
+	from situ_runtime import Message
+
+	whole = module.file.at(Message(bytearray(data)), 0, len(data))   # type: ignore[attr-defined]
+	whole.validate()
+	found = []
+	for index in range(whole.boxes_count):
+		one = whole.boxes(index)
+		header = 16 if one.size == 1 else 8
+		found.append((one.kind.to_bytes(4, "big").decode("ascii"),
+		              one._at + header))
+	return found
+
+
 # -- ustar ---------------------------------------------------------------------
 #
 # GNU tar writes the archive and Python's `tarfile` reads it back: two
@@ -1531,6 +1576,15 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "isobmff",
+		schema = ROOT / "example" / "isobmff" / "isobmff.situ",
+		tool   = "ffprobe",
+		why    = ("FFmpeg writes the file and ffprobe's trace lists each "
+		          "top-level box it reads. Every box is placed by the sizes "
+		          "of the ones before it, so one size read wrong -- the "
+		          "64-bit escape above all -- moves every box after it."),
+	),
+	Oracle(
 		name   = "elf",
 		schema = ROOT / "example" / "elf" / "elf.situ",
 		tool   = "readelf",
@@ -1745,6 +1799,10 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# The size and the type: two u32s, so the header keeps its eight bytes
+	# and each box is measured by its type's four characters instead.
+	"isobmff": ("\tu32 size;\n\tu32 kind;",
+	            "\tu32 kind;\n\tu32 size;"),
 	# Two u64s, so the section header keeps its size and only where each
 	# section is and how long trade places.
 	"elf": ("\tu64 offset;      // where its bytes start in the file\n"
@@ -1827,6 +1885,7 @@ DRIVERS = {
 	"protobuf": (proto_corpus, proto_says, proto_situ),
 	"elf":  (elf_corpus, elf_says, elf_situ),
 	"zip":  (zip_corpus, zip_says, zip_situ),
+	"isobmff": (isobmff_corpus, isobmff_says, isobmff_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),

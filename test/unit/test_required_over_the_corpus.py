@@ -568,6 +568,11 @@ READS_LATE: dict[tuple[str, str], str] = {
 	("edges.situ", "situ_chains_required"): "nested struct's minimum",
 	("edges.situ", "situ_hands_on_required"): "nested struct's minimum",
 	("edges.situ", "situ_blocked_arg_required"): "nested struct in a region",
+	# ISO-BMFF's 64-bit size: seven bytes of 0xFF already put it past any
+	# frame, so the eighth tells `required` nothing it uses, and it asks for
+	# eight before answering. The same shape as a partial discriminant whose
+	# first byte settles the arm (26.1180).
+	("isobmff.situ", "situ_large_body_required"): "a 64-bit length settled by seven bytes",
 }
 
 

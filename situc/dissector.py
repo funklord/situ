@@ -293,6 +293,18 @@ READ_HELPER = [
 	"\treturn tvb(at, width):uint()",
 	"end",
 	"",
+	"-- Two words of a wide unsigned field: an exact integer below 2^63, and",
+	"-- past it a float -- inexact, and past any frame, which is all a length",
+	"-- or an offset needs. Lua 5.3's integers wrap there instead, so a 64-bit",
+	"-- size past 2^63 read negative and `max(size, 16) - 16` came out 0",
+	"-- (26.1180); in Lua 5.2 both branches are the same float.",
+	"local function situ_wide(high, low)",
+	"\tif high >= 2147483648 then",
+	"\t\treturn high * 4294967296.0 + low",
+	"\tend",
+	"\treturn high * 4294967296 + low",
+	"end",
+	"",
 	"-- `sum(run)`: the elements the frame holds, added (26.896).",
 	"local function situ_sum(tvb, at, count, width, little)",
 	"\tlocal total = 0",
@@ -3705,9 +3717,13 @@ def _read(placement: Placement, base: str) -> str | None:
 				return None
 			rest = count - 4
 			if little == "true":
-				return (f"(situ_uint(tvb, {_at(base, first + 4)}, {rest},"
-				        f" true) * 4294967296 + situ_uint(tvb,"
+				return (f"situ_wide(situ_uint(tvb, {_at(base, first + 4)},"
+				        f" {rest}, true), situ_uint(tvb,"
 				        f" {_at(base, first)}, 4, true))")
+			if rest == 4:
+				return (f"situ_wide(situ_uint(tvb, {_at(base, first)}, 4,"
+				        f" false), situ_uint(tvb, {_at(base, first + 4)}, 4,"
+				        f" false))")
 			return (f"(situ_uint(tvb, {_at(base, first)}, 4, false) *"
 			        f" {1 << (8 * rest)} + situ_uint(tvb,"
 			        f" {_at(base, first + 4)}, {rest}, false))")

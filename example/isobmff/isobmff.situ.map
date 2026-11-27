@@ -1,0 +1,38 @@
+# situ capability map v1
+# schema: isobmff.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct box size=8.. mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  box.size                               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  box.kind                               offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  box.body                               offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  box.body.to_end                        offset=AbsoluteStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  box.body.large                         offset=AbsoluteStatic(0x08) size=Bounded(8, 18446744073709551607) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  box.body.large.largesize               offset=AbsoluteStatic(0x08) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  box.body.large.data                    offset=AbsoluteStatic(0x10) size=Bounded(0, 18446744073709551599) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  box.body.data                          offset=AbsoluteStatic(0x08) size=Bounded(0, 4294967287) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct file size=0.. access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  file.boxes                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  file.boxes[]                           offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting
+  file.boxes[].size                      offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  file.boxes[].kind                      offset=FrameStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  file.boxes[].body                      offset=FrameStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  file.boxes[].body.to_end               offset=FrameStatic(0x08) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  file.boxes[].body.large                offset=FrameStatic(0x08) size=Bounded(8, 18446744073709551607) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  file.boxes[].body.large.largesize      offset=FrameStatic(0x08) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  file.boxes[].body.large.data           offset=FrameStatic(0x10) size=Bounded(0, 18446744073709551599) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  file.boxes[].body.data                 offset=FrameStatic(0x08) size=Bounded(0, 4294967287) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct large_body size=8..18446744073709551607 mutate=Shifting repr=ValueConverted
+  large_body.largesize                   offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  large_body.data                        offset=AbsoluteStatic(0x08) size=Bounded(0, 18446744073709551599) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

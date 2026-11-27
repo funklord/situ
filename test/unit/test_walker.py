@@ -1436,13 +1436,13 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	# with `example/elf` and `example/zip` (26.1177) at 65 and 1507, of 1564
 	# asked. Without those two it measured 1438 of 1495: the schemas had
 	# grown past both pins without a new file, so the floor had been ~200
-	# members loose.
-	assert len(SCHEMAS) == 65, (
+	# members loose. `example/isobmff` (26.1180) made 66 and 1514, of 1571.
+	assert len(SCHEMAS) == 66, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 65; re-measure and re-pin both")
+		f"measured over 66; re-measure and re-pin both")
 
-	assert both >= 1497, (
-		f"the differential compares {both} members, down from 1507; "
+	assert both >= 1504, (
+		f"the differential compares {both} members, down from 1514; "
 		f"C asks about {asked} and the walker renders {walked}")
 	assert both * 100 >= asked * 95, (
 		f"only {100 * both // asked}% of what C asks is compared, "

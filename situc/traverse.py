@@ -2644,9 +2644,19 @@ def _measured_by_view(structs: dict[str, ResolvedStruct], member: Placement,
 def has_element_extent(structs: dict[str, ResolvedStruct],
 		element: ResolvedStruct,
 		seen: frozenset[str] = frozenset()) -> bool:
-	"""`has_computable_extent`, for one element of a run."""
+	"""`has_computable_extent`, for one element of a run.
+
+	Not where EVERY instance runs to the end of the frame: the first such
+	element would take the rest, so a run of them is one element and no
+	run (26.907). Where only some arms do -- ISO-BMFF's box, whose `size
+	= 0` means "to the end of the file" -- an instance taking the rest is
+	the last, and the run ends with it as a run ends at its frame. Asked
+	of any arm, as this was, the box could not be an element at all, and
+	C++, Rust and Python declined MP4's top-level run that C walked
+	(26.1180).
+	"""
 	return has_computable_extent(structs, element, seen) \
-		and not ends_in_the_frame(structs, element)
+		and not ends_in_the_frame(structs, element, always=True)
 
 
 def has_computable_extent(structs: dict[str, ResolvedStruct],

@@ -4021,8 +4021,11 @@ class Emitter:
 		# before the scalar shape below, which it otherwise matches.
 		if placement.delimiters and scalar is not None:
 			return "memoryview"
+		# `data_sized` as `_scalar_arm` asks it: ISO-BMFF's `u8 data[max(size,
+		# 8) - 8]` names neither a count nor a size, and its accessor, which
+		# returns the bytes, was annotated `int` (26.1180).
 		if scalar is not None and placement.array_count is None \
-				and placement.sized_by is None:
+				and placement.sized_by is None and not data_sized(placement):
 			if placement.type_name in self.enums:
 				return f"{py_name(placement.type_name)} | int"
 			return "int"
@@ -9815,8 +9818,14 @@ class Emitter:
 				left = self._over_fields(struct, placement.tail_source, "self")
 				return (f"max(0, self._len - ({start}) - {placement.tail_bytes}"
 				        f" - ({left}))")
+			# Held at zero, as C's `situ_remaining_u32` and Rust's
+			# `situ_rt::remaining` hold it: a view shorter than the bytes in
+			# front of the run read a negative length, so a four-byte buffer
+			# held an eight-byte ISO-BMFF box that "fitted" in Python alone
+			# (26.1180).
 			return (f"max(0, self._len - ({start}) - {placement.tail_bytes})"
-			        if placement.tail_bytes else f"(self._len - ({start}))")
+			        if placement.tail_bytes
+			        else f"max(0, self._len - ({start}))")
 		if placement.sized_by is None:
 			return None
 

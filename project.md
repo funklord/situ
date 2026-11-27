@@ -10100,6 +10100,42 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1180 ISO-BMFF joins the corpus, and a box is an element
+
+MP4's box is the shape most container formats share: a length with two
+escapes, `size = 1` for a 64-bit size after the type and `size = 0` for
+"to the end of the file". `example/isobmff` holds a file FFmpeg wrote and
+the escapes written from ISO/IEC 14496-12, oracled against ffprobe's trace
+of the top-level boxes. Adding it found five faults:
+
+- **The four disagreed about the file's run.** `has_element_extent` asked
+  whether any arm of an element runs to the frame's end, so a box could
+  not be an element: C walked `box boxes[remaining]` and C++, Rust and
+  Python declined its count. An element that only sometimes takes the
+  rest is the last when it does, and the run ends with it as a run ends
+  at its frame; the predicate asks now whether every instance does, the
+  shape that makes a run of one (26.907), and that one is still declined.
+- **Python's `[remaining]` length went negative.** A view shorter than the
+  bytes before the run read `self._len - start` below zero, so a four-byte
+  buffer held one eight-byte box in Python alone. Held at zero, as C's
+  `situ_remaining_u32` and Rust's `remaining` hold it.
+- **The dissector read a 64-bit size past 2^63 negative.** Lua 5.3's
+  integers wrap, so `max(largesize, 16) - 16` came out 0 where the walker
+  read the rest. Two words over 2^63 now combine as a float
+  (`situ_wide`), inexact and past any frame, which is all a length needs.
+- **The C checks placed a located member.** ZIP's directory, `at
+  end.cd_offset`, was asserted to start where the end record stops, and
+  the call checking it did not compile -- a gate failure on 3b6b1b8a.
+  The instance checks walk only members placed after the one before.
+- **Python annotated an arm's run `int`.** `u8 data[max(size, 8) - 8]`
+  names neither a count nor a size, so `_arm_hint` took it for a scalar
+  while the accessor returned the bytes, and the module failed `mypy
+  --strict` in gate g14. The hint asks `data_sized`, as `_scalar_arm`
+  does: one dispatch spelled in two places.
+
+`required` for `large_body` stays in `READS_LATE`: seven bytes of 0xFF put
+its size past any frame, and it asks for the eighth before answering.
+
 ### 26.1179 The C walker's arithmetic is exact past INT64_MAX
 
 A program over an unsigned 64-bit field past 2^63 had a whole-program flag
