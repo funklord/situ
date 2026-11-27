@@ -6199,7 +6199,7 @@ class Emitter:
 			# readable with none of them here, and the guard answered 5
 			# where Rust and Python answered the length (26.1182).
 			body: list[str] = []
-			if constant and any(re.search(r"\bview\b", term) for term in terms):
+			if constant and any(re.search(r"\bview\b", str(term)) for term in terms):
 				body.extend([
 					f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
 					f"\t\treturn {constant}u;\t/* the lengths below are not"
