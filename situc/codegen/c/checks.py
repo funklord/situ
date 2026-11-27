@@ -696,7 +696,14 @@ def _instance_checks(suite: Suite, resolved: ResolvedSchema,
 		           " instance holds no message")
 		return
 
-	members = own_members(struct)
+	# Not a member placed by `at`: it is where the message says rather than
+	# after the member before it, so this frame's walk has no offset for it.
+	# ZIP's directory, after a run of unknown length, was asserted to start
+	# where the end record stops -- 22 in a zeroed archive -- and the call
+	# made to check it did not compile (26.1180). ELF's tables never reached
+	# here: its header is fixed, and a fixed struct gets other checks.
+	members = [placement for placement in own_members(struct)
+	           if placement.located is None]
 	# A member sized by *arithmetic* is driven too, and this counted only the
 	# bare references: `u8 value[length - 1]` has a `size_expr` and no
 	# `sized_by`, so `length` was left at zero and the span check came out as
