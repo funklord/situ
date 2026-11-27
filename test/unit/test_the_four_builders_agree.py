@@ -34,7 +34,7 @@ from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
 from situc.codegen.c.build import (ARG, LOCATED, ArmOf, BITS, CHOSEN, ENDED, MARKER, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
-                                   Part)
+                                   Part, arm_name, arms)
 from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
 from situc.codegen.cpp.build import _arm_type as cpp_arm_type	# noqa: E402
 from situc.codegen.python.build import _arm_type as py_arm_type	# noqa: E402
@@ -199,6 +199,30 @@ def _called(unit: Unit, values: list[tuple[Part, list[str]]],
 			line for one in (arm.tag, arm.part) if one is not None
 			for line in said.get(id(one), [])]))
 	return found
+
+
+def _for_the_arm(unit: Unit, given: Given) -> Given:
+	"""A parameter that chooses the unit's arm, handed that arm's case.
+
+	A builder per arm writes the discriminant it was called for, and a
+	parameter is not written: the caller hands it, and the reader told it
+	reads the arm it names. HTTP/2's `header_block` builders were handed
+	`priority = 0` for the prioritized arm, and the reader read the other
+	one (26.1182). The builders do not hold the two together -- MQTT's
+	`publish_body` is built that way on purpose (26.1022) and its closing
+	validation is the check -- so the harness hands what a caller would.
+	"""
+	if not unit.suffix:
+		return given
+	case = next((one for one in arms(unit.struct)
+	             if arm_name(one) == unit.suffix), None)
+	value = getattr(case, "value", None)
+	if not isinstance(value, int):
+		return given
+	chooses = {held.discriminant for held in unit.struct.layout.placements
+	           if held.kind == "variant" and held.discriminant}
+	return [(part, value if part.role == ARG and part.placement.name in chooses
+	         else held) for part, held in given]
 
 
 def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
@@ -481,7 +505,7 @@ def _cases(module: object, base: object,
 		for unit in units:
 			if _label(unit) in taken:
 				continue
-			given = _given(_flat(unit), inner)
+			given = _for_the_arm(unit, _given(_flat(unit), inner))
 			for _ in range(TRIES):
 				made = _build_one(module, base, unit, given)
 				if made != "refused":
@@ -489,10 +513,10 @@ def _cases(module: object, base: object,
 					inner.setdefault(unit.struct.name, []).append(
 						bytes.fromhex(made))
 					break
-				given = _varied(given, inner, rng)
+				given = _for_the_arm(unit, _varied(given, inner, rng))
 	found: list[tuple[Unit, Given, str]] = []
 	for unit in units:
-		given = _given(_flat(unit), inner)
+		given = _for_the_arm(unit, _given(_flat(unit), inner))
 		found.append((unit, given, _build_one(module, base, unit, given)))
 		if _label(unit) in taken:
 			given = taken[_label(unit)]

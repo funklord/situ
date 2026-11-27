@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -1116,7 +1117,17 @@ def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
 	# HTTP/2's SETTINGS is `length / 6` entries, and a builder handed
 	# `length = 3` and one byte wrote a frame the reader measures as nine
 	# (26.1182).
-	handed = [field for _name, source in inner.arguments
+	#
+	# Only where the argument reaches a SIZE in the arm's struct: one that
+	# chooses an arm there, MQTT's `qos`, is held by the closing validation
+	# the arm's bytes go through (26.1022), and declining it undid that.
+	child = (shape.structs or {}).get(inner.type_name or "")
+	sizing = {name for name, _source in inner.arguments
+	          if child is not None and any(
+	              re.search(rf"\b{re.escape(name)}\b",
+	                        str(held.size_expr or held.sized_by or ""))
+	              for held in child.layout.placements)}
+	handed = [field for name, source in inner.arguments if name in sizing
 	          for field in traverse.fields_named(struct, source)
 	          if not field.parameter]
 	if not why and argued is None and handed:
@@ -1545,20 +1556,6 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	# not consume, so those bytes belong to the arm that follows and
 	# writing them here would write them twice.
 	variants = [held for held in members if held.kind == "variant"]
-	# An arm the CALLER's argument chooses: a builder per arm writes the
-	# discriminant it was called for, and a parameter is not the builder's
-	# to write, so the argument handed beside it could name another arm and
-	# the reader, told it, read that one. HTTP/2's `header_block` switches
-	# on the `priority` flag its frame hands it (26.1182). Declined, with
-	# every reader's view of such a struct unaffected.
-	by_path = {held.path: held for held in struct.layout.placements}
-	for variant in variants:
-		named = by_path.get(f"{struct.name}.{variant.discriminant}")
-		if named is not None and named.parameter:
-			return [], f"`{traverse.local_name(struct, variant)}` chooses " \
-			           f"its arm by an argument the caller hands, " \
-			           f"`{variant.discriminant}`, which a builder per arm " \
-			           "cannot write"
 	chosen: dict[str, Arm] = {}
 	if isinstance(arm, Arm):
 		chosen = {one.path: arm for one in variants}

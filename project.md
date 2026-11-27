@@ -10172,11 +10172,18 @@ What it took, and what it found:
   guard on a discriminant's own bytes was applied to `padded`, which is
   the caller's, so `required` chose the unpadded arm.
 - **The builders could write what the reader does not read back.** A
-  builder per arm writes its discriminant, and a variant switched on a
-  parameter has none to write, so the caller's argument could name
-  another arm; and a nested part handed a field the caller supplies, and
-  not measured by it alone (SETTINGS is `length / 6` entries), had
-  nothing holding the two together. Both are declined, by name.
+  nested part handed a field the caller supplies, and not measured by it
+  alone (SETTINGS is `length / 6` entries), had nothing holding the two
+  together; it is declined, by name. A variant switched on a parameter is
+  the other half: a builder per arm writes its discriminant and a
+  parameter has none to write, so the caller's argument can name another
+  arm. Declining that undid MQTT's `publish_body` builders, built that way
+  on purpose with the closing validation as the check (26.1022), so it
+  stands; the four-builders harness hands the arm's own case.
+- **A located arm was framed as bytes in sequence.** Once a sized arm
+  could be framed, a variant beside a located arm (`t far at n`) added
+  `far`'s size to what follows it; a variant with a located arm keeps the
+  extent path in all four.
 
 - **C, C++ and Rust framed no variant holding a sized byte-run arm.**
   `default: u8 other[length]` beside struct arms sent `required` back to
@@ -10190,7 +10197,8 @@ What it took, and what it found:
 byte any arm's arguments read, so the flags byte is awaited for a type
 whose arm reads only the length. Open, as backlog rather than a decision:
 a builder could hold every nested part to the extent its reader states,
-which would replace the second refusal above.
+and a parameter that chooses an arm to that arm's case, which would replace
+the refusal above and the harness's help.
 
 ### 26.1181 WebSocket's length is a marked integer, and the corpus has one
 

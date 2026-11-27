@@ -3785,6 +3785,11 @@ class Emitter:
 		chosen = traverse.discriminant_readable_from(
 			struct, placement, self.resolved.layout.env.named_constants)
 		plan: list[tuple[object, str | None, str, str, str, list[str]]] = []
+		# A located arm is placed by `at` and holds no bytes of this
+		# chain; framed through its own `required`, its size was added to
+		# what follows the variant (test_a_located_chain, 26.1182).
+		if any(member.located is not None for _arm, member in pairs):
+			return None
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
 			if inner is not None and not member.delimiters \
