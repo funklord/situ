@@ -909,7 +909,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"                          varint_hpack_put, varint_lebprefix_put,",
 		"                          varint_lenenc_put, varint_quic_put,",
 		"                          varint_sleb_put, varint_utf8_put,",
-		"                          zigzag_encode)",
+		"                          varint_websocket_put, zigzag_encode)",
 		"",
 	]
 

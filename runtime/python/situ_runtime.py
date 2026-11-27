@@ -1371,6 +1371,7 @@ _DER         = (0x80, 0x81, (1, 2, 3, 4, 5, 6, 7, 8), True, 0xFF)
 _COMPACTSIZE = (0xFD, 0xFD, (2, 4, 8), False, 0xFF)
 _LENENC      = (0xFB, 0xFC, (2, 3, 8), False, 0xFF)
 _CBOR        = (24, 24, (1, 2, 4, 8), True, 0x1F)
+_WEBSOCKET   = (126, 126, (2, 8), True, 0x7F)
 
 
 def _marked_get(form: _Marked, data: Buffer,
@@ -1515,6 +1516,23 @@ def varint_cbor_len(value: int) -> int:
 def varint_cbor_put(out: bytearray, at: int, value: int) -> int:
 	"""Encode CBOR's head minimally, keeping the major type."""
 	return _marked_put(_CBOR, out, at, value)
+
+
+def varint_websocket_get(data: Buffer, at: int,
+		max_bytes: int) -> tuple[int, int] | None:
+	"""A WebSocket payload length (RFC 6455, 5.2): the low seven bits of
+	the first byte, beside the mask flag."""
+	return _marked_get(_WEBSOCKET, data, at, max_bytes)
+
+
+def varint_websocket_len(value: int) -> int:
+	"""The shortest encoding under `varint_websocket_get`."""
+	return _marked_len(_WEBSOCKET, value)
+
+
+def varint_websocket_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode a WebSocket payload length minimally, keeping the mask flag."""
+	return _marked_put(_WEBSOCKET, out, at, value)
 
 
 def varint_der_get(data: Buffer, at: int,

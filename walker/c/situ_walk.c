@@ -1042,7 +1042,13 @@ static const marked_form *marked_of(uint32_t code)
 		{ 0xFBu, 0xFCu, 3u, 0u, 0xFFu, { 2u, 3u, 8u, 0u, 0u, 0u, 0u, 0u } },
 		{ 24u, 24u, 4u, 1u, 0x1Fu, { 1u, 2u, 4u, 8u, 0u, 0u, 0u, 0u } },
 	};
+	/* WebSocket's, at 227: past the lebprefix codes. */
+	static const marked_form websocket =
+		{ 126u, 126u, 2u, 1u, 0x7Fu, { 2u, 8u, 0u, 0u, 0u, 0u, 0u, 0u } };
 
+	if (code == 227u) {
+		return &websocket;
+	}
 	return code >= 200u && code <= 203u ? &forms[code - 200u] : NULL;
 }
 

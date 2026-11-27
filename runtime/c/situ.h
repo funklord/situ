@@ -2244,6 +2244,7 @@ static inline uint32_t situ_varint_marked_put(uint8_t *p, uint32_t avail,
 #define SITU_COMPACTSIZE_FORM 0xFDu, 0xFDu, 3u, 0x842u, 0, 0xFFu
 #define SITU_LENENC_FORM      0xFBu, 0xFCu, 3u, 0x832u, 0, 0xFFu
 #define SITU_CBOR_FORM        24u, 24u, 4u, 0x8421u, 1, 0x1Fu
+#define SITU_WEBSOCKET_FORM   126u, 126u, 2u, 0x82u, 1, 0x7Fu
 
 static inline uint32_t situ_varint_der_get(const uint8_t *p, uint32_t avail,
         uint32_t max_bytes, uint64_t *out)
@@ -2314,6 +2315,26 @@ static inline uint32_t situ_varint_cbor_put(uint8_t *p, uint32_t avail,
         uint64_t value)
 {
 	return situ_varint_marked_put(p, avail, value, SITU_CBOR_FORM);
+}
+
+/* A WebSocket frame's payload length (RFC 6455, 5.2): the low seven bits of
+ * a byte whose top one is the mask flag. */
+static inline uint32_t situ_varint_websocket_get(const uint8_t *p,
+        uint32_t avail, uint32_t max_bytes, uint64_t *out)
+{
+	return situ_varint_marked_get(p, avail, max_bytes, SITU_WEBSOCKET_FORM,
+	                              out);
+}
+
+static inline uint32_t situ_varint_websocket_len(uint64_t value)
+{
+	return situ_varint_marked_len(value, 126u, 2u, 0x82u);
+}
+
+static inline uint32_t situ_varint_websocket_put(uint8_t *p, uint32_t avail,
+        uint64_t value)
+{
+	return situ_varint_marked_put(p, avail, value, SITU_WEBSOCKET_FORM);
 }
 
 /* An integer in the low `prefix` bits of a byte, where all of them set says

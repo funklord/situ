@@ -25,6 +25,7 @@ def varint_stem(declared: ast.VarintDecl | None) -> str:
 	        ast.VarintEncoding.COMPACTSIZE: "varint_compactsize",
 	        ast.VarintEncoding.LENENC: "varint_lenenc",
 	        ast.VarintEncoding.CBOR:   "varint_cbor",
+	        ast.VarintEncoding.WEBSOCKET: "varint_websocket",
 	        ast.VarintEncoding.HPACK:  "varint_hpack",
 	        ast.VarintEncoding.BERTAG: "varint_bertag",
 	        ast.VarintEncoding.SLEB128: "varint_sleb",

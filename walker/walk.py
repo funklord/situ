@@ -1847,6 +1847,7 @@ MARKED = {
 	201: (0xFD, 0xFD, (2, 4, 8), False, 0xFF),
 	202: (0xFB, 0xFC, (2, 3, 8), False, 0xFF),
 	203: (24, 24, (1, 2, 4, 8), True, 0x1F),
+	227: (126, 126, (2, 8), True, 0x7F),
 }
 
 #: The image's code for a BER tag number, and the base of HPACK's: the code

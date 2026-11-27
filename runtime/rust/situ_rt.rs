@@ -1508,6 +1508,8 @@ const LENENC: Marked = Marked { direct: 0xFB, first: 0xFC,
                                 widths: &[2, 3, 8], big: false, mask: 0xFF };
 const CBOR: Marked = Marked { direct: 24, first: 24, widths: &[1, 2, 4, 8],
                               big: true, mask: 0x1F };
+const WEBSOCKET: Marked = Marked { direct: 126, first: 126, widths: &[2, 8],
+                                   big: true, mask: 0x7F };
 
 fn marked_get(form: &Marked, bytes: &[u8], at: usize, max_bytes: usize)
 		-> Option<(u64, usize)> {
@@ -1700,6 +1702,25 @@ pub fn varint_cbor_len(value: u64) -> usize {
 #[inline]
 pub fn varint_cbor_put(out: &mut [u8], value: u64) -> usize {
 	marked_put(&CBOR, out, value)
+}
+
+/// A WebSocket payload length, RFC 6455 5.2: the low seven bits of the
+/// first byte, beside the mask flag.
+#[inline]
+pub fn varint_websocket_get(bytes: &[u8], at: usize, max_bytes: usize) -> Option<(u64, usize)> {
+	marked_get(&WEBSOCKET, bytes, at, max_bytes)
+}
+
+/// The shortest encoding under `varint_websocket_get`.
+#[inline]
+pub fn varint_websocket_len(value: u64) -> usize {
+	marked_len(&WEBSOCKET, value)
+}
+
+/// Encode a WebSocket payload length minimally, keeping the mask flag.
+#[inline]
+pub fn varint_websocket_put(out: &mut [u8], value: u64) -> usize {
+	marked_put(&WEBSOCKET, out, value)
 }
 
 /// A definite length, X.690 8.1.3.

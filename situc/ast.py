@@ -1388,6 +1388,11 @@ class VarintEncoding(Enum):
 	#: Base-128, low group first, whose first group is the low `prefix` bits of
 	#: a byte shared with fields. Git's pack entry.
 	LEBPREFIX   = "lebprefix"
+	#: The low seven bits of a byte whose top bit is a flag: below 126 the
+	#: value, 126 a 16-bit and 127 a 64-bit one after it, high byte first.
+	#: A WebSocket frame's payload length beside its mask bit (RFC 6455,
+	#: 5.2).
+	WEBSOCKET   = "websocket"
 
 
 @dataclass(frozen=True)
@@ -1419,6 +1424,8 @@ MARKED = {
 	VarintEncoding.LENENC: MarkedForm(202, 0xFB, 0xFC, (2, 3, 8), False),
 	#: CBOR's head, and it is 24 and up that are the markers.
 	VarintEncoding.CBOR: MarkedForm(203, 24, 24, (1, 2, 4, 8), True, 0x1F),
+	#: WebSocket's payload length. Past the LEBPREFIX codes, 221 to 226.
+	VarintEncoding.WEBSOCKET: MarkedForm(227, 126, 126, (2, 8), True, 0x7F),
 }
 
 
@@ -1470,6 +1477,8 @@ class VarintDecl(Decl):
 			return 8 - self.prefix
 		if self.encoding in (VarintEncoding.CBOR, VarintEncoding.BERTAG):
 			return 3
+		if self.encoding is VarintEncoding.WEBSOCKET:
+			return 1
 		return 0
 
 	@property

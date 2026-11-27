@@ -1883,7 +1883,7 @@ class Emitter:
 		           "varint_cbor", "varint_compactsize", "varint_der",
 		           "varint_ebml", "varint_ebml_id", "varint_hpack",
 		           "varint_lebprefix", "varint_lenenc", "varint_quic",
-		           "varint_sleb", "varint_utf8")
+		           "varint_sleb", "varint_utf8", "varint_websocket")
 		reads   = {varint_stem(decl) for decl in read}
 		lengths = {varint_stem(decl) for decl in members if decl.minimal}
 		needed  = [f"{stem}_get" for stem in order if stem in reads]
