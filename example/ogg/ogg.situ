@@ -5,12 +5,10 @@
 // up to 255 lacing values, each the length of one segment, and the body is
 // their total; a value below 255 ends a packet, so a reader finds packet
 // boundaries in the table without reading the body. `sum(lacing)` says it.
+// And a CRC over the whole page, its own four bytes read as zero, which is
+// a checksum inside the region it covers, `[self_as = 0]`.
 //
 // What it does not describe:
-//   - The CRC. It is CRC-32 with polynomial 0x04C11DB7, init 0 and no
-//     reflection, over the whole page with its own four bytes read as zero;
-//     a checksum inside its own coverage names no codec here yet (README,
-//     `[self_as]`), so `checksum` is the bytes and not a check.
 //   - Packets that span pages, which `header_type`'s first bit marks and a
 //     reader joins across pages of one `serial`.
 //   - What the codec makes of the packets: an Opus stream's `OpusHead` and
@@ -19,17 +17,27 @@
 target buffer;
 endian little;
 
+// RFC 3533 section 6: CRC-32 with the generator 0x04C11DB7, an initial
+// value of 0 and no reflection or final XOR -- not zlib's, whose input and
+// output are reflected and whose register starts at all ones.
+codec crc32_ogg {
+	kernel = polynomial(width = 32, poly = 0x04C11DB7, init = 0, xorout = 0);
+}
+impl crc32_ogg derived;
+
 struct page {
-	u8  capture[4] [must_eq = "OggS"];
-	u8  version    [must_eq = 0];
-	u8  header_type;              // 1 continued, 2 first, 4 last page
-	u64 granule_position;
-	u32 serial;
-	u32 sequence;
-	u32 checksum;
-	u8  segment_count;
-	u8  lacing[segment_count];
-	u8  body[sum(lacing)];
+	authenticated whole {
+		u8  capture[4] [must_eq = "OggS"];
+		u8  version    [must_eq = 0];
+		u8  header_type;          // 1 continued, 2 first, 4 last page
+		u64 granule_position;
+		u32 serial;
+		u32 sequence;
+		checksum u8 crc[4] covers(whole) is crc32_ogg [self_as = 0];
+		u8  segment_count;
+		u8  lacing[segment_count];
+		u8  body[sum(lacing)];
+	}
 }
 
 // A physical stream: pages back to back.

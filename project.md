@@ -10108,12 +10108,14 @@ until now only cpio's and ustar's checks used, never a size. FFmpeg's Opus
 file is oracled by mutagen's OggPage, page by page. It needed nothing new
 and the readers agreed from the first run.
 
-Its CRC is left as bytes: a checksum inside its own coverage, with its own
-four bytes read as zero, takes `[self_as]` and no codec, since a generated
-`compute` reads the span as it stands (example/png's comment). Ogg's is the
-first such CRC in the corpus with a polynomial situ already knows
-(`polynomial(width = 32, poly = 0x04C11DB7, init = 0)`), so it is where
-`is <codec>` with `[self_as]` would first be asked for.
+Its CRC is checked: the page is one `authenticated` region and the CRC
+sits inside it, `is crc32_ogg [self_as = 0]`, with the kernel declared in
+the schema (`polynomial(width = 32, poly = 0x04C11DB7, init = 0)`), and
+the oracle runs `crc_check` over every page FFmpeg wrote. The first draft
+left it as bytes on the word of example/png's comment, which said a
+checksum inside its own coverage could name no codec; IPv4 and UDP had
+done it for weeks (0b1a25ef). The comment is corrected: a stated limit is
+tried before it is repeated.
 
 ### 26.1186 MPEG-TS joins the corpus, and a check selects an arm zero refuses
 

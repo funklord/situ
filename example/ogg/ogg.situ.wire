@@ -18,6 +18,8 @@
 endian little
 target buffer
 
+kernel crc32_ogg : polynomial(width = 32, poly = 0x04C11DB7, init = 0, xorout = 0)
+
 struct page size=27..
   @0x0000   4         u8         capture  little must_eq="OggS"
   @0x0004   1         u8         version  must_eq=0
@@ -25,10 +27,12 @@ struct page size=27..
   @0x0006   8         u64        granule_position  little
   @0x000e   4         u32        serial  little
   @0x0012   4         u32        sequence  little
-  @0x0016   4         u32        checksum  little
+  @0x0016   4         u8         crc  codec=crc32_ogg self_as=0
   @0x001a   1         u8         segment_count
   @0x001b   0..255    u8         lacing  sized-by=segment_count
   ~         0..       u8         body  sized-by=sum(lacing)
+  crc covers: body capture granule_position header_type lacing segment_count sequence serial version whole
 
 struct stream size=0..
   @0x0000   0..       page       pages  sized-by=remaining
+  pages[].crc covers: pages[].body pages[].capture pages[].granule_position pages[].header_type pages[].lacing pages[].segment_count pages[].sequence pages[].serial pages[].version pages[].whole

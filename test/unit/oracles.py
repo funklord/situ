@@ -306,7 +306,8 @@ def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
 #
 # FFmpeg writes an Opus file and mutagen's OggPage reads every page: its
 # sequence, granule position, serial and the total of its packets. Each page
-# is placed by the lacing totals of the ones before it (26.1187).
+# is placed by the lacing totals of the ones before it, and its CRC is
+# checked by the kernel the schema declares (26.1187).
 
 def ogg_corpus(tmp: Path) -> bytes:
 	"""Half a second of a sine, in Opus, in Ogg."""
@@ -340,6 +341,9 @@ def ogg_situ(module: object, data: bytes) -> list[tuple[int, int, int, int]]:
 	found = []
 	for index in range(whole.pages_count):
 		one = whole.pages(index)
+		# FFmpeg's CRCs, which an Ogg reader refuses a page without: the
+		# kernel the schema declares has to reproduce every one.
+		one.crc_check()
 		found.append((one.sequence, one.granule_position, one.serial,
 		              len(bytes(one.body))))
 	return found
@@ -2094,7 +2098,8 @@ ORACLES: tuple[Oracle, ...] = (
 LIES = {
 	# The serial and the sequence number: each page keeps its place and
 	# reads the other's number.
-	"ogg": ("\tu32 serial;\n\tu32 sequence;", "\tu32 sequence;\n\tu32 serial;"),
+	"ogg": ("\t\tu32 serial;\n\t\tu32 sequence;",
+	        "\t\tu32 sequence;\n\t\tu32 serial;"),
 	# The scrambling and adaptation-control bits: every packet chooses its
 	# arm from the bits beside the right ones.
 	"mpegts": ("\tu2   scrambling;\n\tu2   adaptation_control;",

@@ -11,28 +11,34 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
-struct page size=27.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
-  page.capture                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
-  page.version                           offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
-  page.header_type                       offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  page.granule_position                  offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  page.serial                            offset=AbsoluteStatic(0x0E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  page.sequence                          offset=AbsoluteStatic(0x12) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  page.checksum                          offset=AbsoluteStatic(0x16) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  page.segment_count                     offset=AbsoluteStatic(0x1A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
-  page.lacing                            offset=AbsoluteStatic(0x1B) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  page.body                              offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec crc32_ogg derived expansion=+4 seekable=linear granularity=block systematic deterministic
 
-struct stream size=0.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+struct page size=27.. mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  page.whole                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(crc)
+  page.capture                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)
+  page.version                           offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord auth=Covered(crc)
+  page.header_type                       offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(crc)
+  page.granule_position                  offset=AbsoluteStatic(0x06) size=Fixed(8) align=Aligned(2) repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  page.serial                            offset=AbsoluteStatic(0x0E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  page.sequence                          offset=AbsoluteStatic(0x12) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  page.crc                               offset=AbsoluteStatic(0x16) size=Fixed(4) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  page.segment_count                     offset=AbsoluteStatic(0x1A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord auth=Covered(crc)
+  page.lacing                            offset=AbsoluteStatic(0x1B) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(crc)
+  page.body                              offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(crc)
+
+struct stream size=0.. access=Sequential mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic
   stream.pages                           offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
-  stream.pages[]                         offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
-  stream.pages[].capture                 offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
-  stream.pages[].version                 offset=FrameStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord
-  stream.pages[].header_type             offset=FrameStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
-  stream.pages[].granule_position        offset=FrameStatic(0x06) size=Fixed(8) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  stream.pages[].serial                  offset=FrameStatic(0x0E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  stream.pages[].sequence                offset=FrameStatic(0x12) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  stream.pages[].checksum                offset=FrameStatic(0x16) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
-  stream.pages[].segment_count           offset=FrameStatic(0x1A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
-  stream.pages[].lacing                  offset=FrameStatic(0x1B) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  stream.pages[].body                    offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  stream.pages[]                         offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable auth=Covered(pages[].crc)
+  stream.pages[].whole                   offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(pages[].crc)
+  stream.pages[].capture                 offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(pages[].crc)
+  stream.pages[].version                 offset=FrameStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord auth=Covered(pages[].crc)
+  stream.pages[].header_type             offset=FrameStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(pages[].crc)
+  stream.pages[].granule_position        offset=FrameStatic(0x06) size=Fixed(8) align=Aligned(2) repr=ValueConverted atomic=NonAtomic auth=Covered(pages[].crc)
+  stream.pages[].serial                  offset=FrameStatic(0x0E) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic auth=Covered(pages[].crc)
+  stream.pages[].sequence                offset=FrameStatic(0x12) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic auth=Covered(pages[].crc)
+  stream.pages[].crc                     offset=FrameStatic(0x16) size=Fixed(4) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  stream.pages[].segment_count           offset=FrameStatic(0x1A) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord auth=Covered(pages[].crc)
+  stream.pages[].lacing                  offset=FrameStatic(0x1B) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(pages[].crc)
+  stream.pages[].body                    offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(pages[].crc)
