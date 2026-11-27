@@ -565,3 +565,76 @@ def test_a_mac_is_written_by_the_callers_hmac(tmp_path: Path) -> None:
 	body = bytes([9, 0, len(BODY)]) + BODY
 	assert built[:len(body)] == body
 	assert built[len(body):] == hmac.new(KEY, body, hashlib.sha256).digest()
+
+
+UNSEAL_MAIN = """
+static int open_gcm(void *ctx, const situ_sealing_t *s)
+{
+	EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new();
+	int n = 0, ok;
+	(void)ctx;
+	if (c == NULL) return -1;
+	ok = EVP_DecryptInit_ex(c, EVP_aes_128_gcm(), NULL, NULL, NULL)
+	     && EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_IVLEN,
+	                            (int)s->nonce_len, NULL)
+	     && EVP_DecryptInit_ex(c, NULL, NULL, key, s->nonce)
+	     && (s->aad_len == 0
+	         || EVP_DecryptUpdate(c, NULL, &n, s->aad, (int)s->aad_len))
+	     && EVP_DecryptUpdate(c, s->text, &n, s->text, (int)s->text_len)
+	     && EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_TAG, (int)s->tag_len,
+	                            s->tag)
+	     && EVP_DecryptFinal_ex(c, s->text + n, &n) > 0;
+	EVP_CIPHER_CTX_free(c);
+	return ok ? 0 : -1;
+}
+static const uint8_t hdr[] = {%s};
+static const uint8_t nonce[12] = {%s};
+static const uint8_t plain[] = {%s};
+int main(void)
+{
+	uint32_t n = 0;
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_packet_sealed_t gate;
+	situ_err_t e = situ_packet_build(out, sizeof out, 7, hdr, sizeof hdr,
+	                                 nonce, plain, sizeof plain, seal, NULL,
+	                                 &n);
+	uint8_t again[256];
+
+	(void)show;
+	memcpy(again, out, n);
+	situ_msg_init(&msg, out, n);
+	e = situ_packet_view(&msg, 0, n, &view);
+	e = e ? e : situ_packet_sealed_unseal(view, open_gcm, NULL, &gate);
+	printf("%%d %%u %%d\\n", (int)e,
+	       e ? 0u : (unsigned)situ_packet_sealed_inner_seq_get(gate),
+	       e ? 0 : memcmp(situ_packet_sealed_body_ptr(gate), "attack", 6));
+	/* The header under the tag, flipped: refused, and nothing decrypted
+	 * is left behind. */
+	again[5] ^= 1;
+	situ_msg_init(&msg, again, n);
+	e = situ_packet_view(&msg, 0, n, &view);
+	e = e ? e : situ_packet_sealed_unseal(view, open_gcm, NULL, &gate);
+	printf("%%d", (int)e);
+	for (uint32_t i = 0; i < n; i++) {
+		if (memcmp(again + i, "attack", 6) == 0) printf(" plaintext");
+	}
+	puts("");
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None or AESGCM is None,
+                    reason="needs a C compiler and `cryptography`")
+def test_a_packet_is_unsealed_by_the_callers_open(tmp_path: Path) -> None:
+	"""The receiving half (26.1194): the caller's open is handed the same
+	split the seal was -- nonce, additional data, ciphertext, tag -- from
+	the reader's own answers, and the gate comes out only if it verified.
+	A flipped header byte is refused, and the region it decrypted into
+	is zeroed rather than left as unauthenticated plaintext."""
+	hdr = struct.pack(">BBHI", 1, 2, len(BODY), 41)
+	plain = struct.pack(">HI", 5, 6) + bytes(range(16)) + BODY
+	lines = _run("packet", UNSEAL_MAIN % (_bytes(hdr), _bytes(NONCE),
+	                                      _bytes(plain)), tmp_path)
+	assert lines == [["0", "6", "0"], ["4"]], lines

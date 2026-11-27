@@ -1838,6 +1838,48 @@ class Emitter:
 			"}",
 		]
 
+	def _sealed_range(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Where a sealed region's bytes are, for whoever opens them.
+
+		`_open` takes the caller's verdict, so the caller decrypts first --
+		and needs the region's place to do it, which only the interior
+		accessors knew, each adding its own constant. A receiver had to
+		restate it by hand; the builder's unseal asks this (26.1194).
+		`_range` because a delimited member's `_span` is another thing.
+		None where the region's extent has no closed form or a delimiter
+		ends it: then the place is a scan, not an expression.
+		"""
+		if placement.delimiters:
+			return []
+		length = (f"{placement.size_bits // 8}u"
+		          if placement.is_fixed_size and placement.size_bits
+		          else self._region_length(struct, placement))
+		base = self._base_expression(struct, placement)
+		if length is None or base is None:
+			return []
+		local = c_name(self._local(struct, placement))
+		return [
+			f"/** Where `{placement.name}` lies: its offset in the frame and",
+			" * its length, the ciphertext a caller opens before",
+			f" * {ident(self.prefix, struct.name, local, 'open')}(). */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, local, 'range')}"
+			f"(situ_view_t view, uint32_t *offset, uint32_t *len"
+			f"{self._argument_tail(struct)})",
+			"{",
+			f"\tconst uint32_t at = {base};",
+			f"\tconst uint32_t n  = {length};",
+			"",
+			"\tif (situ_remaining_u32(view.limit, at) < n) {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			"\t*offset = at;",
+			"\t*len    = n;",
+			"\treturn SITU_OK;",
+			"}",
+		]
+
 	def _gate_type(self, struct: ResolvedStruct, placement: Placement) -> str | None:
 		"""The gated view type an interior field's accessors take, if gated."""
 		if placement.sealed_by is None or placement.unverified_ok:
@@ -2754,6 +2796,7 @@ class Emitter:
 					and self._offset_blocker(struct, placement) is None:
 				lines.extend(self._offset_function(struct, placement))
 			lines.extend(self._sealed_gate(struct, entry))
+			lines.extend(self._sealed_range(struct, placement))
 			# A sealed region that ends at a delimiter is framed like any
 			# other delimited member: the scan is over the ENCODED bytes,
 			# which is the order 13.6 specifies. The gate is in ADDITION

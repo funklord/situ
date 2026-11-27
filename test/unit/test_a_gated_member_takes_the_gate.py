@@ -100,6 +100,11 @@ INTERIORS = {
 #: `_open` is the factory and is the one function that must take the view,
 #: since it is what turns one into a gate.
 FACTORY = "open"
+#: And `_range`, where the region's ciphertext lies, which a receiver needs
+#: before there is a gate to hold (26.1194). It reads the frame and never
+#: the interior: a region whose extent an interior field states has no
+#: `_range` at all, its length then being a gated read.
+PLACE = "range"
 
 
 def _schema(interior: str) -> str:
@@ -128,7 +133,8 @@ def test_no_c_accessor_for_a_sealed_interior_takes_a_view(label: str,
 	"""The population assertion, and `_open` is the named exception."""
 	taking_view = [
 		name for name, first in DEFINED.findall(_c_header(interior))
-		if "situ_view_t" in first and not name.endswith(f"_{FACTORY}")]
+		if "situ_view_t" in first and not name.endswith(f"_{FACTORY}")
+		and not name.endswith(f"_{PLACE}")]
 	assert not taking_view, (
 		f"{taking_view} reach the sealed interior without the gate type, so "
 		f"section 14.3's token is decoration for them")
@@ -140,4 +146,5 @@ def test_the_sweep_finds_the_factory_it_excludes() -> None:
 	regex that matches nothing at all."""
 	found = {name for name, _ in DEFINED.findall(_c_header("u16 w;"))}
 	assert "situ_m_sealed_open" in found, found
+	assert "situ_m_sealed_range" in found, found
 	assert "situ_m_sealed_w_get" in found, found

@@ -10100,6 +10100,38 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1194 A reader opens a sealed region through the caller's open
+
+The receiving half of 26.1192, left open in 26.1193. `_open` takes the
+caller's verdict, so a receiver decrypted first and worked out by hand
+which bytes were the additional data, which the nonce and where the
+ciphertext began -- the split the builder now gets right on the way out,
+restated where it is easiest to get wrong and hardest to see go wrong: a
+receiver that authenticates the wrong span still verifies its own
+sender's messages.
+
+Two pieces. The C reader states where a sealed region lies,
+`<region>_range(view, &offset, &len)`, from the offset and the extent its
+codec gives the interior that `validate` already checks (`_span` is a
+delimited member's, so the name is another). And the builder header gains
+`<region>_unseal(view, open, ctx, &gate)`: it asks the reader for the
+tag's coverage, the region's range, the nonce and the key field, hands the
+caller's `open` the same `situ_sealing_t` the seal was handed, and returns
+the gate only if `open` said it verified. A refusal zeroes the region:
+an AEAD that decrypts before it checks the tag -- OpenSSL's EVP does --
+would otherwise leave plaintext nobody authenticated in the buffer.
+
+The gate stays the only way to the interior; `_unseal` is one more way to
+earn it, not a way round it, and `_open(view, verified)` stays for a
+caller whose primitive is not a callback. It is in the builder header
+because it writes the buffer, which is rung 2's permission.
+
+C first, and only for a struct built whole: a variant's arms are built
+one function each, so the keystore has no `_unseal` yet. The test seals
+with OpenSSL, unseals with OpenSSL, reads `inner_seq` through the gate,
+and flips a header byte under the tag: refused, and no plaintext left;
+removing the zeroing fails it.
+
 ### 26.1193 A builder writes a MAC or a signature through the same seal
 
 A tag over authenticated bytes that names no codec -- a MAC, a
@@ -10122,16 +10154,7 @@ readers are asked without them -- as a located member is there already.
 HMAC-SHA256 checked by Python's `hmac`, and four-way with the toy seal;
 shortening the additional data by a byte fails both.
 
-**Open: the receiving side.** `_open` still takes the caller's verdict,
-so a receiver works out by hand which bytes are the additional data and
-which the nonce -- the split the builder now gets right, and the one a
-hand-written receiver gets wrong (fuzznet's `fzn_seal_open` is one). An
-`_unseal` that hands the caller's open the same `situ_sealing_t` and
-returns the gate on success needs one thing no reader states yet: where
-a sealed region starts, which is reached only inside the interior
-accessors. So it is a reader accessor first (`<region>_span`, in every
-reader and the walkers, which moves consumers' generated headers), then
-the unseal in the four builders. Not started: the step is its own.
+The receiving side, open when this was written, is 26.1194.
 
 ### 26.1192 A builder seals a region through the caller's AEAD
 

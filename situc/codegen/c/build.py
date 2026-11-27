@@ -4683,6 +4683,107 @@ def _seal(struct: ResolvedStruct, part: Part, prefix: str) -> list[str]:
 	]
 
 
+def _unseal(struct: ResolvedStruct, shape: Shape) -> list[str]:
+	"""The receiving half of the seal: open the region in place.
+
+	`_open` takes the caller's verdict, so a receiver decrypted first and
+	worked out by hand which bytes were the additional data and which the
+	nonce -- the split `_seal` gets right on the way out, restated where it
+	is easiest to get wrong. This hands the caller's open the same
+	`situ_sealing_t`, from the reader's own answers, and the gate only if
+	it verified; a refused open zeroes the region, so no unverified
+	plaintext is left behind (26.1194).
+	"""
+	parts, _ = plan(struct, shape)
+	region = next((one for one in parts if one.role == SEALED), None)
+	sealer = next((one for one in parts if one.role == SEALTAG), None)
+	if region is None or sealer is None:
+		return []
+	prefix = shape.prefix
+	local = traverse.local_name(struct, region.placement)
+	span = ident(prefix, struct.name, local, "range")
+	gate = ident(prefix, struct.name, local, "t")
+	opens = ident(prefix, struct.name, local, "open")
+	tag = ident(prefix, struct.name, sealer.local)
+	if f"{span}(situ_view_t view" not in shape.header \
+			or f"{opens}(situ_view_t view, int verified" not in shape.header:
+		return []
+	passed = sealer.passed
+	nonce, key, inside = region.nonce, region.key, region.nonce_inside
+	name = ident(prefix, struct.name, local, "unseal")
+	return [
+		f"/** Open `{region.placement.name}` in place through the caller's "
+		"`open`, and",
+		" *  hand out the gate only once it has verified.",
+		" *",
+		" * `open` gets what the builder's seal got, from the reader: the",
+		" * nonce, the tag's coverage before the region as additional data,",
+		" * the ciphertext to decrypt where it lies, and the tag to check.",
+		" * Zero means verified. Anything else is SITU_ERR_TAG and the region",
+		" * is zeroed, so plaintext nobody authenticated is not left behind. */",
+		f"static inline situ_err_t {name}(situ_view_t view, situ_seal_fn open,",
+		f"\t\tvoid *ctx, {gate} *out{passed and ', ' + _arguments_of(struct, shape)})",
+		"{",
+		"\tsitu_sealing_t situ_sealing;",
+		*([f"\tsitu_view_t    {NEED}_nonce;"] if inside is not None else []),
+		"\tuint32_t       situ_cover = 0;",
+		"\tuint32_t       situ_span = 0;",
+		"\tuint32_t       situ_at = 0;",
+		"\tuint32_t       situ_len = 0;",
+		"",
+		f"\tif ({tag}_covered(view, &situ_cover, &situ_span{passed}) != SITU_OK",
+		f"\t    || {span}(view, &situ_at, &situ_len{passed}) != SITU_OK",
+		"\t    || situ_cover > situ_at",
+		"\t    || situ_cover + situ_span != situ_at + situ_len",
+		f"\t    || {tag}_ptr(view{passed}) != situ_base(view) + situ_at "
+		"+ situ_len) {",
+		"\t\treturn SITU_ERR_BOUNDS;",
+		"\t}",
+		*([f"\tsitu_sealing.key_id = (uint64_t)"
+		   f"{ident(prefix, struct.name, key.placement.name, 'get')}(view);",
+		   "\tsitu_sealing.has_key_id = 1;"] if key is not None else
+		  ["\tsitu_sealing.key_id = 0u;",
+		   "\tsitu_sealing.has_key_id = 0;"]),
+		*([f"\tif ({inside[0]}(view, &{NEED}_nonce) != SITU_OK) {{",
+		   "\t\treturn SITU_ERR_BOUNDS;",
+		   "\t}",
+		   f"\tsitu_sealing.nonce = {inside[1]}({NEED}_nonce);",
+		   f"\tsitu_sealing.nonce_len = {inside[2]}u;"]
+		  if inside is not None else
+		  [f"\tsitu_sealing.nonce = "
+		   f"{ident(prefix, struct.name, nonce.placement.name, 'ptr')}(view);",
+		   "\tsitu_sealing.nonce_len = "
+		   + (f"{nonce.bytes}u;" if nonce.role == RUN else
+		      f"(uint32_t){ident(prefix, struct.name, nonce.placement.name, 'len')}(view);")]
+		  if nonce is not None else
+		  ["\tsitu_sealing.nonce = NULL;",
+		   "\tsitu_sealing.nonce_len = 0u;"]),
+		"\tsitu_sealing.aad = situ_base(view) + situ_cover;",
+		"\tsitu_sealing.aad_len = situ_at - situ_cover;",
+		"\tsitu_sealing.text = situ_base(view) + situ_at;",
+		"\tsitu_sealing.text_len = situ_len;",
+		"\tsitu_sealing.tag = situ_base(view) + situ_at + situ_len;",
+		f"\tsitu_sealing.tag_len = {sealer.bytes}u;",
+		"\tif (open == NULL || open(ctx, &situ_sealing) != 0) {",
+		"\t\tif (situ_len != 0u) {",
+		"\t\t\tmemset(situ_base(view) + situ_at, 0, situ_len);",
+		"\t\t}",
+		"\t\treturn SITU_ERR_TAG;",
+		"\t}",
+		f"\treturn {opens}(view, 1, out);",
+		"}",
+		"",
+	]
+
+
+def _arguments_of(struct: ResolvedStruct, shape: Shape) -> str:
+	"""The struct's arguments as trailing parameters, as its reader takes
+	them."""
+	return ", ".join(
+		f"{_ctype(held, shape.prefix, {})} {traverse.argument_name(held)}"
+		for held in traverse.arguments(struct))
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ", header: str = "") -> dict[str, str]:
 	"""The build header, or nothing where no layout qualifies.
@@ -4754,6 +4855,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		cases = arms(struct)
 		if not cases:
 			lines.extend(_one(struct, shape, enums))
+			lines.extend(_unseal(struct, shape))
 			continue
 		for case in cases:
 			if plan(struct, shape, case)[0]:
