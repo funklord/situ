@@ -573,6 +573,9 @@ READS_LATE: dict[tuple[str, str], str] = {
 	# eight before answering. The same shape as a partial discriminant whose
 	# first byte settles the arm (26.1180).
 	("isobmff.situ", "situ_large_body_required"): "a 64-bit length settled by seven bytes",
+	# WebSocket's 64-bit length, the same: with its top seven bytes 0xFF it
+	# is past `max_bits = 63` and any frame, and the eighth is still asked.
+	("websocket.situ", "situ_frame_required"): "a 64-bit length settled by seven bytes",
 }
 
 

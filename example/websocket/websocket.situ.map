@@ -1,0 +1,43 @@
+# situ capability map v1
+# schema: websocket.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct frame size=2..18446744073709551629 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  frame.fin                              offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.<reserved0>                      offset=AbsoluteStatic(0x00:1) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.opcode                           offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.masked                           offset=AbsoluteStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  frame.length                           offset=AbsoluteStatic(0x01) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  frame.mask                             offset=Dynamic size=Bounded(0, 4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  frame.mask.key                         offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  frame.mask.key.key                     offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  frame.mask.unmasked                    offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  frame.payload                          offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct masking_key size=4 atomic=NonAtomic
+  masking_key.key                        offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
+struct nothing size=0
+
+struct stream size=0.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  stream.frames                          offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  stream.frames[]                        offset=FrameStatic(0x00) size=Bounded(2, 18446744073709551629) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
+  stream.frames[].fin                    offset=FrameStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream.frames[].<reserved0>            offset=FrameStatic(0x00:1) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream.frames[].opcode                 offset=FrameStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream.frames[].masked                 offset=FrameStatic(0x01) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  stream.frames[].length                 offset=FrameStatic(0x01) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  stream.frames[].mask                   offset=Dynamic size=Bounded(0, 4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  stream.frames[].mask.key               offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  stream.frames[].mask.key.key           offset=FrameStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
+  stream.frames[].mask.unmasked          offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  stream.frames[].payload                offset=Dynamic size=Bounded(0, 18446744073709551615) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

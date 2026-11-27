@@ -33,7 +33,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,7 +62,7 @@ def have(tool: str) -> bool:
 	would report it missing on every machine and skip the oracle silently --
 	which is the failure this whole file is about.
 	"""
-	if tool in ("pymodbus", "json", "reedsolo"):
+	if tool in ("pymodbus", "json", "reedsolo", "websockets"):
 		import importlib.util
 		return importlib.util.find_spec(tool) is not None
 	return shutil.which(tool) is not None
@@ -299,6 +299,76 @@ def isobmff_situ(module: object, data: bytes) -> list[tuple[str, int]]:
 		header = 16 if one.size == 1 else 8
 		found.append((one.kind.to_bytes(4, "big").decode("ascii"),
 		              one._at + header))
+	return found
+
+
+# -- websocket ----------------------------------------------------------------
+#
+# The Python `websockets` library writes a stream of frames in every length
+# form and parses it back with its own reader, which knows nothing of situ.
+# The 64-bit form needs a payload past 65535 bytes, which is why this is an
+# oracle rather than a vector (26.1181).
+
+def _websocket_frames() -> list[object]:
+	from websockets.frames import Close, Frame, Opcode
+
+	return [
+		Frame(Opcode.TEXT, b"Hello"),
+		Frame(Opcode.BINARY, bytes(range(256)) * 300),       # 64-bit
+		Frame(Opcode.PING, b"are you there"),
+		Frame(Opcode.BINARY, bytes(range(200))),             # 16-bit
+		Frame(Opcode.TEXT, b"frag", fin=False),
+		Frame(Opcode.CONT, b"ment"),
+		Frame(Opcode.CLOSE, Close(1000, "bye").serialize()),
+	]
+
+
+def websocket_corpus(tmp: Path) -> bytes:
+	"""The frames above, a client's (masked) and a server's in turn."""
+	return b"".join(frame.serialize(mask=index % 2 == 0)   # type: ignore[attr-defined]
+	                for index, frame in enumerate(_websocket_frames()))
+
+
+def websocket_says(data: bytes, tmp: Path) -> list[tuple[int, bool, bytes]]:
+	"""Each frame's opcode, fin and unmasked payload, by websockets' parser."""
+	from websockets.frames import Frame
+
+	at = 0
+
+	def read_exact(count: int) -> Generator[None, None, bytes]:
+		"""`parse`'s reader, a generator that never has to wait."""
+		nonlocal at
+		got = data[at:at + count]
+		at += count
+		yield from ()
+		return got
+
+	found = []
+	while at < len(data):
+		parser = Frame.parse(read_exact, mask=data[at + 1] & 0x80 != 0)
+		try:
+			while True:
+				next(parser)
+		except StopIteration as done:
+			frame = done.value
+		found.append((int(frame.opcode), frame.fin, bytes(frame.data)))
+	return found
+
+
+def websocket_situ(module: object, data: bytes) -> list[tuple[int, bool, bytes]]:
+	"""The same through situ's frames, unmasked with the key situ found."""
+	from situ_runtime import Message
+
+	whole = module.stream.at(Message(bytearray(data)), 0, len(data))   # type: ignore[attr-defined]
+	whole.validate()
+	found = []
+	for index in range(whole.frames_count):
+		one = whole.frames(index)
+		payload = bytes(one.payload)
+		if one.masked:
+			key = bytes(one.mask_key.key)
+			payload = bytes(byte ^ key[i % 4] for i, byte in enumerate(payload))
+		found.append((one.opcode, bool(one.fin), payload))
 	return found
 
 
@@ -1576,6 +1646,16 @@ def json_situ(module: object, corpus: bytes) -> list[dict[str, int]]:
 
 ORACLES: tuple[Oracle, ...] = (
 	Oracle(
+		name   = "websocket",
+		schema = ROOT / "example" / "websocket" / "websocket.situ",
+		tool   = "websockets",
+		why    = ("The websockets library serializes frames in all three "
+		          "length forms, masked and not, and parses the stream back "
+		          "with its own reader. Every frame is placed by the lengths "
+		          "before it, so the 64-bit form read wrong moves every frame "
+		          "after it."),
+	),
+	Oracle(
 		name   = "isobmff",
 		schema = ROOT / "example" / "isobmff" / "isobmff.situ",
 		tool   = "ffprobe",
@@ -1799,6 +1879,10 @@ ORACLES: tuple[Oracle, ...] = (
 #: bytes must notice. An oracle with no entry here is one nobody has shown can
 #: fail.
 LIES = {
+	# The final bit and the reserved ones: fin is read from rsv3, which is
+	# zero in every frame, and a set fin lands in a must-be-zero field.
+	"websocket": ("\tbit            fin;\n\treserved u3    [must_be_zero];",
+	              "\treserved u3    [must_be_zero];\n\tbit            fin;"),
 	# The size and the type: two u32s, so the header keeps its eight bytes
 	# and each box is measured by its type's four characters instead.
 	"isobmff": ("\tu32 size;\n\tu32 kind;",
@@ -1886,6 +1970,7 @@ DRIVERS = {
 	"elf":  (elf_corpus, elf_says, elf_situ),
 	"zip":  (zip_corpus, zip_says, zip_situ),
 	"isobmff": (isobmff_corpus, isobmff_says, isobmff_situ),
+	"websocket": (websocket_corpus, websocket_says, websocket_situ),
 	"sqlite":   (sqlite_corpus, sqlite_says, sqlite_situ),
 	"bmp-file": (bmp_corpus, file_says, file_situ),
 	"pcap":     (pcap_corpus, pcap_says, pcap_situ),

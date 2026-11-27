@@ -82,7 +82,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/git/git.situ \
 		   example/riff/riff.situ \
 		   example/elf/elf.situ example/zip/zip.situ \
-		   example/isobmff/isobmff.situ \
+		   example/isobmff/isobmff.situ example/websocket/websocket.situ \
 		   example/mqtt/mqtt.situ \
 		   example/quic/quic.situ \
 		   example/x509/x509.situ \

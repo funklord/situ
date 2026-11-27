@@ -10100,6 +10100,31 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1181 WebSocket's length is a marked integer, and the corpus has one
+
+RFC 6455's frame puts seven bits of length beside the mask flag: below 126
+the length, 126 a 16-bit one after it, 127 a 64-bit one, shortest form
+required. A `let` choosing between arm fields cannot say it -- a variant's
+arm is not something an expression reads -- and it needs none: it is
+CBOR's head with another table, so `encoding = websocket` is one row in
+`ast.MARKED` and in each reader's copy (image code 227, past lebprefix's
+221-226). `example/websocket` holds frames the Python `websockets` library
+serialized and is oracled against its parser over a stream with all three
+forms, masked and not.
+
+- **A marked form's `max_bits` bounds bytes, not bits.** The RFC's "top
+  bit MUST be 0" is not refused by `max_bits = 63`, which still allows
+  eight bytes; a length with it set is past any frame, so the payload it
+  measures is refused instead, which
+  `test_a_websocket_length_says_its_own_width` pins. The example says 64.
+- **No vector had asserted a varint field.** Rust's vector suite compared
+  a `Result` with a number and C++'s called an out-parameter getter with
+  none; neither compiled. Both read a varint as the text number's fallible
+  getter is read now.
+- `situ_frame_required` joins `READS_LATE` beside ISO-BMFF's: seven bytes
+  of 0xFF settle a 64-bit length past any frame, and it asks for the
+  eighth.
+
 ### 26.1180 ISO-BMFF joins the corpus, and a box is an element
 
 MP4's box is the shape most container formats share: a length with two

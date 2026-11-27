@@ -1,0 +1,78 @@
+// The WebSocket frame, RFC 6455 section 5.2: what a browser and a server
+// exchange once an HTTP request has been upgraded, under chat, trading
+// feeds, GraphQL subscriptions and most of what a page pushes live.
+//
+// What it demonstrates: a length that shares its byte with a flag and has
+// two escapes. The second byte is the mask bit and seven bits of length:
+// below 126 they are the length, 126 says a 16-bit one follows, 127 a
+// 64-bit one, high byte first, and the RFC requires the shortest form. That
+// is a marked integer like CBOR's head (example/cbor), so it is one
+// `varint_type` and the frame reads it as any other number.
+//
+// What it does not describe:
+//   - Unmasking. A client's payload is XORed with the four-byte key, byte
+//     `i` with `key[i % 4]`; `payload` is the bytes as sent, and the key is
+//     beside it for the reader to apply.
+//   - What the opcodes mean, fragmentation across frames, and the rules a
+//     connection holds (control frames at most 125 bytes, unfragmented;
+//     a client always masks). Those are about a conversation, not a frame,
+//     except the one below.
+//   - Extensions' use of the three reserved bits: permessage-deflate sets
+//     the first, which is refused here, as a peer that negotiated nothing
+//     must.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+// The length in the low seven bits of the second byte, in its shortest
+// form, as the RFC requires. Its top bit MUST be 0 in the 64-bit form, and
+// a length with it set is past any frame, so `payload` is refused by its
+// bounds and the frame with it.
+varint_type payload_length {
+	encoding = websocket;
+	max_bits = 64;
+	minimal;
+}
+
+struct nothing {
+}
+
+struct masking_key {
+	u8 key[4];
+}
+
+struct frame {
+	bit            fin;
+	reserved u3    [must_be_zero];
+	u4             opcode;           // 0 continuation, 1 text, 2 binary,
+	                                 // 8 close, 9 ping, 10 pong
+	bit            masked;
+	payload_length length;
+	variant mask switch (masked) {
+		case 1:  masking_key key;
+		case 0:  nothing     unmasked;
+		default: error;
+	}
+	u8             payload[length];
+}
+
+// A connection's bytes in one direction: frames back to back.
+struct stream {
+	frame frames[remaining];
+}
+
+// What a reader relies on: the flags, the opcode and the mask bit are at
+// constant offsets in the first two bytes, so a server routes a frame --
+// answers a ping, sees a close -- before it has read the length.
+require absolute_static(frame.fin);
+require absolute_static(frame.opcode);
+require absolute_static(frame.masked);
+
+// A control frame has a payload of at most 125 bytes and is never
+// fragmented (5.5): it must fit in the second byte, so a reader can answer
+// a ping without buffering.
+when frame.opcode >= 8 && frame.length > 125
+	refuse long_control "a control frame's payload is at most 125 bytes";
+when frame.opcode >= 8 && frame.fin == 0
+	refuse fragmented_control "a control frame is never fragmented";
