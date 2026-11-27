@@ -950,6 +950,94 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	return found
 
 
+def _unseal(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
+		parts: list[Part]) -> list[str]:
+	"""C's `<region>_unseal`: open the region in place through the caller's
+	open, then run `fn` over the gate, and only if it verified (26.1194).
+	The gate has no public constructor, so it is handed to a function
+	rather than returned, as the reader's own `with_<region>` does."""
+	region = next((one for one in parts if one.role == SEALED), None)
+	sealer = next((one for one in parts if one.role == SEALTAG), None)
+	if region is None or sealer is None or not region.ranged \
+			or any(one.role == ARG for one in parts):
+		return []
+	held = f"::situ::{class_name(struct)}"
+	name = bare_name(traverse.local_name(struct, region.placement))
+	tag = _member(traverse.local_name(struct, sealer.placement))
+	size = "" if struct.layout.is_fixed_size else " situ_len,"
+	nonce: list[str] = []
+	if region.nonce_inside is not None:
+		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
+		nested = next(one for one in parts
+		              if one.placement.name == outer).placement
+		within = structs[nested.type_name or ""]
+		nonce = [f"\t::situ::{class_name(within)} situ_inner;",
+		         f"\tif (situ_view.{_member(outer)}(situ_inner)"
+		         " != ::situ::rt::err::ok) {",
+		         "\t\treturn ::situ::rt::err::bounds;", "\t}",
+		         "\tconst ::situ::rt::bytes situ_nonce = "
+		         f"situ_inner.{_member(inner)}();"]
+	elif region.nonce is not None:
+		nonce = ["\tconst ::situ::rt::bytes situ_nonce = "
+		         f"situ_view.{_member(region.nonce.placement.name)}();"]
+	key = region.key
+	return [
+		"",
+		f"/** Open `{region.placement.name}` in place through the caller's "
+		"`open`, and run",
+		" *  `fn` over the gate only once it has verified (26.1194).",
+		" *",
+		" * `open` gets what the builder's seal got: the nonce, the tag's",
+		" * coverage before the region, the ciphertext to decrypt where it",
+		" * lies, the tag to check. Zero means verified; anything else is",
+		" * `tag`, and the region is zeroed. */",
+		"template <typename F>",
+		f"[[nodiscard]] inline ::situ::rt::err {class_name(struct)}_{name}_unseal(",
+		"\t\tstd::uint8_t *situ_buf, std::uint32_t situ_len,",
+		"\t\tsitu_seal_fn situ_open, void *situ_ctx, F &&fn)",
+		"{",
+		"\t::situ::rt::message situ_msg(situ_buf, situ_len);",
+		f"\t{held} situ_view;",
+		"\tstd::uint32_t situ_cover = 0;",
+		"\tstd::uint32_t situ_span = 0;",
+		"\tstd::uint32_t situ_at = 0;",
+		"\tstd::uint32_t situ_n = 0;",
+		"\tsitu_sealing_t situ_sealing{};",
+		f"\tif ({held}::at(situ_msg, 0,{size} situ_view) != ::situ::rt::err::ok",
+		f"\t    || situ_view.{tag}_covered(situ_cover, situ_span)"
+		" != ::situ::rt::err::ok",
+		f"\t    || situ_view.{name}_range(situ_at, situ_n)"
+		" != ::situ::rt::err::ok",
+		"\t    || situ_cover > situ_at",
+		"\t    || situ_cover + situ_span != situ_at + situ_n) {",
+		"\t\treturn ::situ::rt::err::bounds;",
+		"\t}",
+		*nonce,
+		*([f"\tsitu_sealing.key_id = static_cast<std::uint64_t>("
+		   f"situ_view.{_member(key.placement.name)}());",
+		   "\tsitu_sealing.has_key_id = 1;"] if key is not None else []),
+		*(["\tsitu_sealing.nonce = situ_nonce.data();",
+		   "\tsitu_sealing.nonce_len = "
+		   "static_cast<std::uint32_t>(situ_nonce.size());"]
+		  if nonce else []),
+		"\tsitu_sealing.aad = situ_buf + situ_cover;",
+		"\tsitu_sealing.aad_len = situ_at - situ_cover;",
+		"\tsitu_sealing.text = situ_buf + situ_at;",
+		"\tsitu_sealing.text_len = situ_n;",
+		"\tsitu_sealing.tag = situ_buf + situ_at + situ_n;",
+		f"\tsitu_sealing.tag_len = {sealer.bytes}u;",
+		"\tif (situ_open == nullptr "
+		"|| situ_open(situ_ctx, &situ_sealing) != 0) {",
+		"\t\tif (situ_n != 0u) {",
+		"\t\t\tstd::memset(situ_buf + situ_at, 0, situ_n);",
+		"\t\t}",
+		"\t\treturn ::situ::rt::err::tag;",
+		"\t}",
+		f"\treturn situ_view.with_{name}(true, static_cast<F &&>(fn));",
+		"}",
+	]
+
+
 def _member(name: str) -> str:
 	"""The reader's accessor for a member: a keyword takes an underscore."""
 	return f"{name}_" if name in KEYWORDS else name
@@ -1233,6 +1321,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\treturn situ_e;",
 			"}",
 		])
+		if not unit.suffix:
+			lines.extend(_unseal(struct, resolved.structs, parts))
 
 	lines.extend(["", "}  /* namespace situ_build */", "",
 	              f"#endif /* {guard} */"])

@@ -10110,7 +10110,7 @@ restated where it is easiest to get wrong and hardest to see go wrong: a
 receiver that authenticates the wrong span still verifies its own
 sender's messages.
 
-Two pieces. The C reader states where a sealed region lies,
+Two pieces. The reader states where a sealed region lies,
 `<region>_range(view, &offset, &len)`, from the offset and the extent its
 codec gives the interior that `validate` already checks (`_span` is a
 delimited member's, so the name is another). And the builder header gains
@@ -10126,11 +10126,22 @@ earn it, not a way round it, and `_open(view, verified)` stays for a
 caller whose primitive is not a callback. It is in the builder header
 because it writes the buffer, which is rung 2's permission.
 
-C first, and only for a struct built whole: a variant's arms are built
-one function each, so the keystore has no `_unseal` yet. The test seals
-with OpenSSL, unseals with OpenSSL, reads `inner_seq` through the gate,
-and flips a header byte under the tag: refused, and no plaintext left;
-removing the zeroing fails it.
+In all four. C++ and Rust cannot return the gate -- its constructor is
+private to the reader, which is what makes 14.3 a type and not a rule --
+so their unseal takes a function and runs it over the gate, as C++'s own
+`with_<region>` does; Python returns it, and C fills the caller's. Each
+reader gained `<region>_range`, so the unseal asks the reader in its own
+language. Only for a struct built whole: a variant's arms are built one
+function each, so the keystore has no unseal yet; and not in a struct
+that takes arguments, nor where a delimiter ends the region or the gate
+is waived, where no reader states a range.
+
+The test seals and unseals with OpenSSL, reads `inner_seq` through the
+gate, and flips a header byte under the tag: refused, no plaintext left.
+All four then unseal one toy-sealed message alike, intact and with a
+covered byte flipped, with a toy open that decrypts before it checks --
+the order that leaves plaintext unless the unseal zeroes it; removing
+C's zeroing, or Rust's, fails it.
 
 ### 26.1193 A builder writes a MAC or a signature through the same seal
 

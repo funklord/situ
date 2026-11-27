@@ -965,6 +965,67 @@ def _held_to_the_reader(struct: ResolvedStruct,
 	return found
 
 
+def _unseal(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
+	"""C's `<region>_unseal`: open the region in place through the caller's
+	open, and hand out the gate only if it verified (26.1194)."""
+	region = next((one for one in parts if one.role == SEALED), None)
+	sealer = next((one for one in parts if one.role == SEALTAG), None)
+	if region is None or sealer is None or not region.ranged \
+			or any(one.role == ARG for one in parts):
+		return []
+	held = py_name(struct.name)
+	name = py_name(traverse.local_name(struct, region.placement))
+	tag = py_name(traverse.local_name(struct, sealer.placement))
+	if region.nonce_inside is not None:
+		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
+		nonce = f"bytes(situ_view.{py_name(outer)}.{py_name(inner)})"
+	elif region.nonce is not None:
+		nonce = f"bytes(situ_view.{py_name(region.nonce.placement.name)})"
+	else:
+		nonce = "None"
+	key = (f"int(situ_view.{py_name(region.key.placement.name)})"
+	       if region.key is not None else "None")
+	path = region.placement.path
+	return [
+		"",
+		"",
+		f"def unseal_{held}_{name}(situ_view: situ_schema.{held},",
+		"\t\tsitu_open: Callable[[Sealing], object]"
+		f") -> \"situ_schema.{held}._{name}_gate\":",
+		f'\t"""Open `{region.placement.name}` in place through `situ_open`,',
+		"\tand hand out the gate only if it verified.",
+		"",
+		"\t`situ_open` is handed what the builder's seal was: the nonce, the",
+		"\ttag's coverage before the region, the ciphertext to decrypt where",
+		"\tit lies and the tag to check. Raising refuses with TagError, and",
+		'\tthe region is zeroed so no unauthenticated plaintext is left."""',
+		f"\tsitu_cover, situ_span = situ_view.{tag}_covered()",
+		f"\tsitu_at, situ_len = situ_view.{name}_range()",
+		"\tif situ_cover > situ_at or situ_cover + situ_span != "
+		"situ_at + situ_len:",
+		f'\t\traise BoundsError("{path}: not where its tag\'s coverage '
+		'ends")',
+		f"\tsitu_nonce = {nonce}",
+		f"\tsitu_key = {key}",
+		"\tsitu_window = situ_view._msg.buffer",
+		"\tsitu_base = situ_view._at",
+		"\tsitu_text = situ_window[situ_base + situ_at:"
+		"situ_base + situ_at + situ_len]",
+		"\ttry:",
+		"\t\tsitu_open(Sealing(situ_key, situ_nonce,",
+		"\t\t                  bytes(situ_window[situ_base + situ_cover:"
+		"situ_base + situ_at]),",
+		"\t\t                  situ_text,",
+		"\t\t                  situ_window[situ_base + situ_at + situ_len:",
+		f"\t\t                              situ_base + situ_at + situ_len + "
+		f"{sealer.bytes}]))",
+		"\texcept Exception as situ_refused:",
+		"\t\tsitu_text[:] = bytes(situ_len)",
+		f'\t\traise TagError("{path}: the open refused") from situ_refused',
+		f"\treturn situ_view.open_{name}(True)",
+	]
+
+
 def _past_parameters(text: str, units: list[plain_build.Unit]) -> str:
 	"""Point a call that means a builtin past a parameter of its name.
 
@@ -1101,6 +1162,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*_closing(struct, parts),
 			"\treturn situ_at",
 		])
+		if not unit.suffix:
+			lines.extend(_unseal(struct, parts))
 
 	return {f"{basename}_build.py": _past_parameters(
 		"\n".join(lines).rstrip("\n") + "\n", built)}

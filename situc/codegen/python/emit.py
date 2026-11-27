@@ -11693,7 +11693,31 @@ class Emitter:
 		lines: list[str] = []
 		for region in regions:
 			lines.extend(self._gate(struct, region))
+			lines.extend(self._sealed_range(struct, region))
 		return lines
+
+	def _sealed_range(self, struct: ResolvedStruct,
+			region: Placement) -> list[str]:
+		"""C's `<region>_range`: where the ciphertext lies (26.1194)."""
+		if region.delimiters:
+			return []
+		length = (f"{region.size_bits // 8}"
+		          if region.is_fixed_size and region.size_bits
+		          else self._region_length(struct, region))
+		base = self._offset_expression(struct, region)
+		if length is None or base is None:
+			return []
+		name = py_name(local_name(struct, region))
+		return ["",
+		        f"\tdef {name}_range(self) -> tuple[int, int]:",
+		        f'\t\t"""Where {region.path} lies: its offset and length."""',
+		        "\t\tself._check()",
+		        f"\t\tat = {base}",
+		        f"\t\tn = {length}",
+		        "\t\tif self._len - at < n:",
+		        f'\t\t\traise BoundsError("{region.path}: its region does '
+		        'not fit")',
+		        "\t\treturn at, n"]
 
 	def _interior(self, struct: ResolvedStruct, region: Placement
 			) -> tuple[list[Resolved], list[str], list[str]]:

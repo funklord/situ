@@ -5025,7 +5025,32 @@ class Emitter:
 				f"\t\tOk({gate} {{ bytes: self.bytes }})",
 				"\t}",
 			])
+			lines.extend(self._sealed_range(struct, region))
 		return lines
+
+	def _sealed_range(self, struct: ResolvedStruct,
+			region: Placement) -> list[str]:
+		"""C's `<region>_range`: where the ciphertext lies (26.1194)."""
+		if region.delimiters:
+			return []
+		length = (f"{region.size_bits // 8}"
+		          if region.is_fixed_size and region.size_bits
+		          else self._region_length(struct, region))
+		base = self._offset_expression(struct, region)
+		if length is None or base is None:
+			return []
+		name = c_name(local_name(struct, region))
+		return ["",
+		        f"\t/// Where {region.path} lies: its offset and length.",
+		        f"\tpub fn {_ident(name + '_range')}(&self) "
+		        "-> Result<(usize, usize)> {",
+		        f"\t\tlet at: usize = {base};",
+		        f"\t\tlet n: usize = {length};",
+		        "\t\tif self.bytes.len().saturating_sub(at) < n {",
+		        "\t\t\treturn Err(Error::Bounds);",
+		        "\t\t}",
+		        "\t\tOk((at, n))",
+		        "\t}"]
 
 	def _region_runs(self, struct: ResolvedStruct) -> list[str]:
 		"""A run of records inside a region, walked from out here.

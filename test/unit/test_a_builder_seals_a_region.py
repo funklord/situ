@@ -432,14 +432,14 @@ def _python_says(directory: Path, stem: str,
 	finally:
 		del sys.path[:2]
 
-	def toy(s: object) -> None:
-		text = bytes(s.text)				# type: ignore[attr-defined]
-		sealed, tag = _toy(s.key_id or 0, s.nonce or b"",	# type: ignore[attr-defined]
-		                   s.aad, text, len(s.tag))		# type: ignore[attr-defined]
-		s.text[:] = sealed				# type: ignore[attr-defined]
-		s.tag[:] = tag					# type: ignore[attr-defined]
+	def toy(s: Any) -> None:
+		text = bytes(s.text)
+		sealed, tag = _toy(s.key_id or 0, s.nonce or b"",
+		                   s.aad, text, len(s.tag))
+		s.text[:] = sealed
+		s.tag[:] = tag
 
-	def refuse(s: object) -> None:
+	def refuse(s: Any) -> None:
 		raise RuntimeError("refused")
 
 	codes = {runtime.ConstraintError: 2, runtime.TagError: 4}
@@ -638,3 +638,201 @@ def test_a_packet_is_unsealed_by_the_callers_open(tmp_path: Path) -> None:
 	lines = _run("packet", UNSEAL_MAIN % (_bytes(hdr), _bytes(NONCE),
 	                                      _bytes(plain)), tmp_path)
 	assert lines == [["0", "6", "0"], ["4"]], lines
+
+
+# Unsealed alike: the message the toy sealed, opened by a toy open written in
+# each language -- which decrypts BEFORE it checks the tag, as OpenSSL's
+# EVP does, so a refusal leaves plaintext unless the unseal zeroes it --
+# intact and with a covered byte flipped. Each prints its buffer after.
+
+TOY_OPEN_C = """
+static int toy_open(void *ctx, const situ_sealing_t *s)
+{
+	uint32_t total = 0;
+	int ok = 1;
+	(void)ctx;
+	for (uint32_t i = 0; i < s->aad_len; i++) total += s->aad[i];
+	for (uint32_t i = 0; i < s->text_len; i++) {
+		total += s->text[i];
+		s->text[i] ^= (uint8_t)((s->nonce_len ? s->nonce[i % s->nonce_len] : 0)
+		                        ^ (uint8_t)s->key_id ^ (uint8_t)i);
+	}
+	for (uint32_t j = 0; j < s->tag_len; j++)
+		if (s->tag[j] != (uint8_t)(total + 7u * j)) ok = 0;
+	return ok ? 0 : -1;
+}
+"""
+
+VIEWED = {"packet": "packet", "dtls": "record", "headed": "headed"}
+
+
+def _sealed_bytes(stem: str, args: list[int | bytes]) -> bytes:
+	"""The message as the toy sealed it, computed here."""
+	plain = args[-1]
+	assert isinstance(plain, bytes)
+	if stem == "packet":
+		head = bytes([7, 0, 0, 0]) + args[1] + NONCE	# type: ignore[operator]
+		body, tag = _toy(0, NONCE, head[4:], plain, 16)
+	elif stem == "headed":
+		head = args[0]
+		assert isinstance(head, bytes)
+		body, tag = _toy(0, NONCE, head, plain, 16)
+	else:
+		head = bytes([23, 0xFE, 0xFD, 0, 3]) + bytes([0, 0, 0, 0, 0, 9]) \
+			+ struct.pack(">H", len(plain) + 24) + NONCE[:8]
+		body, tag = _toy(3, NONCE[:8], b"", plain, 16)
+	return head + body + tag
+
+
+def _unseal_drivers(stem: str, message: bytes) -> dict[str, str]:
+	name = VIEWED[stem]
+	flipped = bytearray(message)
+	flipped[len(message) - 17] ^= 1		# the region's last byte
+	lists = (f"static uint8_t one[] = {_c_list(message)};\n"
+	         f"static uint8_t two[] = {_c_list(bytes(flipped))};\n")
+	show = """
+static void dump(int e, const uint8_t *b, uint32_t n)
+{
+	printf("%d", e);
+	for (uint32_t i = 0; i < n; i++) printf(" %02x", b[i]);
+	puts("");
+}
+"""
+	c = (f'#include <stdio.h>\n#include "{stem}_build.h"\n{TOY_OPEN_C}\n'
+	     f"{lists}{show}\nstatic int go(uint8_t *b, uint32_t n)\n{{\n"
+	     "\tsitu_msg_t m;\n\tsitu_view_t v;\n"
+	     f"\tsitu_{name}_sealed_t g;\n"
+	     "\tsitu_msg_init(&m, b, n);\n"
+	     f"\tsitu_err_t e = situ_{name}_view(&m, 0, n, &v);\n"
+	     f"\tif (e == SITU_OK) e = situ_{name}_sealed_unseal(v, toy_open, "
+	     "NULL, &g);\n\tdump((int)e, b, n);\n\treturn 0;\n}\n"
+	     "int main(void)\n{\n\tgo(one, sizeof one);\n"
+	     "\tgo(two, sizeof two);\n\treturn 0;\n}\n")
+	cpp = (f'#include <cstdio>\n#include "{stem}_build.hpp"\n'
+	       + TOY_OPEN_C.replace("NULL", "nullptr") + f"\n{lists}{show}\n"
+	       "int main()\n{\n"
+	       f"\tint e = static_cast<int>(situ_build::{name}_sealed_unseal("
+	       "one, sizeof one, toy_open, nullptr, [](auto) {}));\n"
+	       "\tdump(e, one, sizeof one);\n"
+	       f"\te = static_cast<int>(situ_build::{name}_sealed_unseal("
+	       "two, sizeof two, toy_open, nullptr, [](auto) {}));\n"
+	       "\tdump(e, two, sizeof two);\n\treturn 0;\n}\n")
+	rust = (f"mod situ_rt;\n#[allow(dead_code)] mod {stem};\n"
+	        f"#[allow(dead_code)] mod {stem}_build;\n"
+	        "fn toy_open(s: &mut situ_rt::Sealing<'_>) -> bool {\n"
+	        "\tlet mut total: u32 = 0;\n"
+	        "\tlet k = s.key_id.unwrap_or(0) as u8;\n"
+	        "\tfor b in s.aad { total = total.wrapping_add(u32::from(*b)); }\n"
+	        "\tfor i in 0..s.text.len() {\n"
+	        "\t\ttotal = total.wrapping_add(u32::from(s.text[i]));\n"
+	        "\t\tlet n = if s.nonce.is_empty() { 0 } else "
+	        "{ s.nonce[i % s.nonce.len()] };\n"
+	        "\t\ts.text[i] ^= n ^ k ^ (i as u8);\n\t}\n"
+	        "\t(0..s.tag.len()).all(|j| s.tag[j] == "
+	        "total.wrapping_add(7 * j as u32) as u8)\n}\n"
+	        "fn dump(e: i32, b: &[u8]) {\n\tprint!(\"{}\", e);\n"
+	        "\tfor x in b { print!(\" {:02x}\", x); }\n\tprintln!();\n}\n"
+	        "fn code(r: Result<(), situ_rt::Error>) -> i32 {\n"
+	        "\tmatch r { Ok(()) => 0, Err(situ_rt::Error::Tag) => 4, "
+	        "Err(situ_rt::Error::Bounds) => 1, Err(_) => 99 }\n}\n"
+	        "fn main() {\n"
+	        f"\tlet mut one = {_c_list(message).replace('{', '[').replace('}', ']')};\n"
+	        f"\tlet mut two = {_c_list(bytes(flipped)).replace('{', '[').replace('}', ']')};\n"
+	        f"\tlet r = {stem}_build::unseal_{name}_sealed(&mut one, "
+	        "&mut toy_open, |_g| ());\n\tdump(code(r), &one);\n"
+	        f"\tlet r = {stem}_build::unseal_{name}_sealed(&mut two, "
+	        "&mut toy_open, |_g| ());\n\tdump(code(r), &two);\n}\n")
+	return {"c": c, "cpp": cpp, "rust": rust}
+
+
+def _python_unseals(directory: Path, stem: str, message: bytes) -> str:
+	sys.path[:0] = [str(directory), str(RUNTIME / "python")]
+	try:
+		import importlib
+		built = importlib.import_module(f"{stem}_build")
+		reader = importlib.import_module(stem)
+		runtime = importlib.import_module("situ_runtime")
+	finally:
+		del sys.path[:2]
+	name = VIEWED[stem]
+
+	def toy_open(s: Any) -> None:
+		total = (sum(s.aad) + sum(bytes(s.text))) & 0xFFFFFFFF
+		nonce = s.nonce or b""
+		key = (s.key_id or 0) & 0xFF
+		for i in range(len(s.text)):
+			s.text[i] ^= (nonce[i % len(nonce)] if nonce else 0) ^ key \
+				^ (i & 0xFF)
+		if bytes(s.tag) != bytes((total + 7 * j) & 0xFF
+		                         for j in range(len(s.tag))):
+			raise ValueError("tag")
+
+	flipped = bytearray(message)
+	flipped[len(message) - 17] ^= 1
+	lines = []
+	for given in (bytearray(message), flipped):
+		view = getattr(reader, name).at(runtime.Message(memoryview(given)), 0,
+		                                len(given))
+		try:
+			getattr(built, f"unseal_{name}_sealed")(view, toy_open)
+			code = 0
+		except runtime.TagError:
+			code = 4
+		lines.append(str(code) + "".join(f" {one:02x}" for one in given))
+	return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize("stem", ["dtls", "headed", "packet"])
+def test_four_readers_unseal_alike(stem: str, tmp_path: Path) -> None:
+	sys.path.insert(0, str(ROOT / "test" / "unit"))
+	import fourway
+	if not fourway.COMPLETE:
+		pytest.skip("needs gcc, g++ and rustc")
+	schema = ROOT / "example" / stem / f"{stem}.situ"
+	if stem in WRITTEN:
+		schema = tmp_path / f"{stem}.situ"
+		schema.write_text(WRITTEN[stem], encoding="ascii")
+	message = _sealed_bytes(stem, FOUR[stem]["args"]())
+	said: dict[str, str] = {}
+	for target in ("c", "cpp", "rust", "python"):
+		out = tmp_path / target
+		out.mkdir()
+		done = subprocess.run([sys.executable, "-m", "situc", "build",
+		                       "--target", target, "--layer", "edit",
+		                       str(schema), "--out", str(out)], cwd=ROOT,
+		                      capture_output=True, text=True, timeout=300)
+		assert done.returncode == 0, done.stderr[-2000:]
+	said["python"] = _python_unseals(tmp_path / "python", stem, message)
+	drivers = _unseal_drivers(stem, message)
+	c, cpp, rust = (tmp_path / one for one in ("c", "cpp", "rust"))
+	(c / "main.c").write_text(drivers["c"])
+	(cpp / "main.cpp").write_text(drivers["cpp"])
+	shutil.copy(RUNTIME / "rust" / "situ_rt.rs", rust)
+	rt = rust / "situ_rt.rs"
+	rt.write_text(rt.read_text().replace("#![no_std]\n", ""))
+	(rust / "main.rs").write_text(drivers["rust"])
+	for argv, where in (
+			([fourway.HOST_CC or "cc", "-std=c11", "-Wall", "-Wextra",
+			  "-Werror", f"-I{RUNTIME / 'c'}", "-I.", "main.c", f"{stem}.c",
+			  str(RUNTIME / "c" / "situ.c"), "-o", "probe"], c),
+			([fourway.HOST_CXX or "c++", "-std=c++17", "-Wall", "-Wextra",
+			  "-Werror", f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", "-I.",
+			  "main.cpp", str(RUNTIME / "c" / "situ.c"), "-o", "probe"], cpp),
+			([fourway.RUSTC or "rustc", "--edition", "2021", "-D", "warnings",
+			  "-A", "dead_code", "main.rs", "-o", "probe"], rust)):
+		made = subprocess.run(argv, cwd=where, capture_output=True,
+		                      text=True, timeout=300)
+		assert made.returncode == 0, made.stderr[-3000:]
+		ran = subprocess.run(["./probe"], cwd=where, capture_output=True,
+		                     text=True, timeout=60)
+		assert ran.returncode == 0, ran.stderr
+		said[where.name] = ran.stdout
+	assert len(set(said.values())) == 1, said
+	first, second = said["python"].splitlines()
+	opened = bytes(int(one, 16) for one in first.split()[1:])
+	plain = FOUR[stem]["args"]()[-1]
+	assert isinstance(plain, bytes)
+	assert first.split()[0] == "0" and opened[-16 - len(plain):-16] == plain
+	refused = bytes(int(one, 16) for one in second.split()[1:])
+	assert second.split()[0] == "4"
+	assert refused[-16 - len(plain):-16] == bytes(len(plain))

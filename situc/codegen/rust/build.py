@@ -30,6 +30,7 @@ from situc.codegen.c.build import peeked_byte, wide_peek, every_part as _every
 from situc.codegen.varint import varint_put_tail, varint_stem
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
+from situc.codegen.c.names import c_name
 from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
@@ -845,6 +846,87 @@ def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	return found
 
 
+def _unseal(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
+	"""C's `<region>_unseal`: open the region in place through the caller's
+	open, then run `then` over the gate, and only if it verified
+	(26.1194). The gate has a field private to the reader's module, so it
+	is handed to a closure here rather than returned: the reader's
+	`open_<region>` makes it, over the bytes once they are plaintext."""
+	region = next((one for one in parts if one.role == SEALED), None)
+	sealer = next((one for one in parts if one.role == SEALTAG), None)
+	if region is None or sealer is None or not region.ranged \
+			or any(one.role == ARG for one in parts):
+		return []
+	held = _pascal(struct.name)
+	name = c_name(traverse.local_name(struct, region.placement))
+	gate = _pascal(f"{struct.name}_{name}_gate")
+	tag = _ident(traverse.local_name(struct, sealer.placement))
+	if region.nonce_inside is not None:
+		outer, _, inner = (region.placement.sealed_nonce or "").partition(".")
+		nonce = [f"\t\tlet situ_inner = situ_view.{_ident(outer)}()?;",
+		         f"\t\tlet situ_nonce = situ_inner.{_ident(inner)}();"]
+	elif region.nonce is not None:
+		nonce = [f"\t\tlet situ_nonce = "
+		         f"situ_view.{_ident(region.nonce.placement.name)}();"]
+	else:
+		nonce = ["\t\tlet situ_nonce = &situ_buf[..0];"]
+	key = (f"Some(u64::from(situ_view.{_ident(region.key.placement.name)}()))"
+	       if region.key is not None else "None")
+	return [
+		"",
+		f"/// Open `{region.placement.name}` in place through `situ_open`, "
+		"and run",
+		"/// `situ_then` over the gate only once it has verified (26.1194).",
+		"///",
+		"/// `situ_open` is handed what the builder's seal was: the nonce, the",
+		"/// tag's coverage before the region, the ciphertext to decrypt where",
+		"/// it lies and the tag to check. `false` is `Error::Tag`, and the",
+		"/// region is zeroed so no unauthenticated plaintext is left.",
+		f"pub fn unseal_{c_name(struct.name)}_{name}<R>(",
+		"\tsitu_buf: &mut [u8],",
+		"\tsitu_open: &mut dyn FnMut(&mut situ_rt::Sealing<'_>) -> bool,",
+		f"\tsitu_then: impl FnOnce({gate}<'_>) -> R,",
+		") -> Result<R> {",
+		"\tlet (situ_cover, situ_at, situ_n, situ_nonce_at, situ_nonce_len, "
+		"situ_key) = {",
+		f"\t\tlet situ_view = {held}::new(&situ_buf[..])?;",
+		f"\t\tlet (situ_cover, situ_span) = situ_view.{tag}_covered()?;",
+		f"\t\tlet (situ_at, situ_n) = situ_view.{_ident(name + '_range')}()?;",
+		"\t\tif situ_cover > situ_at || situ_cover + situ_span != "
+		"situ_at + situ_n {",
+		"\t\t\treturn Err(Error::Bounds);",
+		"\t\t}",
+		*nonce,
+		"\t\t(situ_cover, situ_at, situ_n,",
+		"\t\t situ_nonce.as_ptr() as usize - situ_buf.as_ptr() as usize,",
+		f"\t\t situ_nonce.len(), {key})",
+		"\t};",
+		"\tif situ_nonce_at + situ_nonce_len > situ_at",
+		f"\t\t|| situ_buf.len() - situ_at - situ_n < {sealer.bytes} {{",
+		"\t\treturn Err(Error::Bounds);",
+		"\t}",
+		"\t{",
+		"\t\tlet (situ_head, situ_rest) = situ_buf.split_at_mut(situ_at);",
+		"\t\tlet (situ_text, situ_tail) = situ_rest.split_at_mut(situ_n);",
+		"\t\tlet mut situ_sealing = situ_rt::Sealing {",
+		"\t\t\tkey_id: situ_key,",
+		"\t\t\tnonce: &situ_head[situ_nonce_at..situ_nonce_at + "
+		"situ_nonce_len],",
+		"\t\t\taad: &situ_head[situ_cover..],",
+		"\t\t\ttext: situ_text,",
+		f"\t\t\ttag: &mut situ_tail[..{sealer.bytes}],",
+		"\t\t};",
+		"\t\tif !situ_open(&mut situ_sealing) {",
+		"\t\t\tsitu_sealing.text.fill(0);",
+		"\t\t\treturn Err(Error::Tag);",
+		"\t\t}",
+		"\t}",
+		f"\tlet situ_view = {held}::new(&situ_buf[..])?;",
+		f"\tOk(situ_then(situ_view.{_ident('open_' + name)}(true)?))",
+		"}",
+	]
+
+
 def _seal(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
 	"""C's: the tag's slot, then the caller's seal over the region before
 	it, the reader asked which bytes are which (26.1192). The reader's
@@ -1075,6 +1157,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tOk(situ_at)",
 			"}",
 		])
+		if not unit.suffix:
+			lines.extend(_unseal(struct, parts))
 
 	text = "\n".join(lines) + "\n"
 	# `self` only where something here names `situ_rt::`: a builder of

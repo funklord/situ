@@ -1848,9 +1848,11 @@ class Emitter:
 		restate it by hand; the builder's unseal asks this (26.1194).
 		`_range` because a delimited member's `_span` is another thing.
 		None where the region's extent has no closed form or a delimiter
-		ends it: then the place is a scan, not an expression.
+		ends it: then the place is a scan, not an expression. Nor where the
+		gate is waived, as in the other three: there is no gate for an
+		unseal to hand out.
 		"""
-		if placement.delimiters:
+		if placement.delimiters or placement.unverified_ok:
 			return []
 		length = (f"{placement.size_bits // 8}u"
 		          if placement.is_fixed_size and placement.size_bits

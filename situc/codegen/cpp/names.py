@@ -93,6 +93,9 @@ SUFFIXES = frozenset({
 	# enclosing extent, so a value meaning "does not fit" wraps when added
 	# (26.676).
 	"fits", "from", "gate",
+	# `range`: where a sealed region's ciphertext lies, which its unseal
+	# asks before the gate exists (26.1194).
+	"range",
 	"host", "index",
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",
 	"next", "of_host", "offset",

@@ -269,6 +269,10 @@ class Part:
 		#: The struct's arguments, where a SEALTAG's reader accessors
 		#: take them (26.1193).
 		self.passed = ""
+		#: Whether the reader states where a SEALED region lies, which an
+		#: unseal needs: not where a delimiter ends it, the gate is waived,
+		#: or its extent has no closed form (26.1194).
+		self.ranged = False
 		#: The member a BETWEEN pad runs up to (26.1024, 26.1026).
 		self.reaches: Placement | None = None
 		#: What a run of an argued struct hands each element, as C values
@@ -1837,6 +1841,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			                  None)
 			part.key = next((one for one in parts
 			                 if one.placement.name == held.sealed_key), None)
+			ranges = ident(prefix, struct.name,
+			               traverse.local_name(struct, held), "range")
+			part.ranged = f"{ranges}(situ_view_t view" in header
 			if held.sealed_nonce and "." in held.sealed_nonce:
 				reach = nonce_inside(struct, held, parts, header, prefix)
 				assert not isinstance(reach, str)	# refused above

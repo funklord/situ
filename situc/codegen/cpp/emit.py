@@ -1474,7 +1474,36 @@ class Emitter:
 		lines: list[str] = []
 		for region in regions:
 			lines.extend(self._gate(struct, region))
+			lines.extend(self._sealed_range(struct, region))
 		return lines
+
+	def _sealed_range(self, struct: ResolvedStruct,
+			region: Placement) -> list[str]:
+		"""C's `<region>_range`: where the ciphertext lies (26.1194)."""
+		if region.delimiters:
+			return []
+		length = (f"{region.size_bits // 8}u"
+		          if region.is_fixed_size and region.size_bits
+		          else self._region_length(struct, region))
+		base = self._offset_expression(struct, region)
+		if length is None or base is None:
+			return []
+		name = bare_name(local_name(struct, region))
+		return ["",
+		        f"\t/** Where {region.path} lies: its offset and length. */",
+		        f"\t[[nodiscard]] ::situ::rt::err {name}_range("
+		        "std::uint32_t &offset,",
+		        "\t\t\tstd::uint32_t &len) const noexcept",
+		        "\t{",
+		        f"\t\tconst std::uint32_t at = {base};",
+		        f"\t\tconst std::uint32_t n  = {length};",
+		        "\t\tif (situ_remaining_u32(raw_.limit, at) < n) {",
+		        "\t\t\treturn ::situ::rt::err::bounds;",
+		        "\t\t}",
+		        "\t\toffset = at;",
+		        "\t\tlen    = n;",
+		        "\t\treturn ::situ::rt::err::ok;",
+		        "\t}"]
 
 	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
 		name    = bare_name(local_name(struct, region))
