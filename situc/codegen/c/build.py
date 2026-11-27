@@ -766,6 +766,13 @@ def _member_refusal(placement: Placement,
 	# the view, so it is held there rather than stated twice (26.1119).
 	if placement.remaining_cap and placement.element_bits != BITS_PER_BYTE:
 		return "takes whatever is left, so its length is the frame's"
+	# An expression over `remaining` carries no tree to invert -- gzip's
+	# `max(remaining, 8) - 8`, the deflate stream before the trailer -- and
+	# reached the assertion below, the first to get this far (26.1183).
+	# `plan` writes it as the caller's bytes, held to the reader.
+	if placement.size_expr is not None and placement.size_ast is None \
+			and inverse is None and not stated:
+		return "takes what the frame leaves, which only the reader can say"
 	if placement.size_expr is not None and inverse is None and not stated:
 		# `inverse` says the caller has already run the expression
 		# backwards, `stated` that a struct argument gives the length so
@@ -1971,13 +1978,15 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		why = _member_refusal(held, accounted.get(held.path),
 		                      declined.get(held.path),
 		                      held.path in stated)
-		if why and held.size_expr is not None and held.path in declined \
+		if why and held.size_expr is not None \
+				and (held.path in declined or held.size_ast is None) \
 				and held.element_bits == BITS_PER_BYTE \
 				and held.scalar is not None and held.since is None \
 				and not traverse.arguments(struct) \
 				and not any(one.name == held.size_expr for one in members):
 			# RTP's `padding[padded_flag * last]`: no field to solve for,
-			# and none needed. The caller's bytes go down and, once the
+			# and none needed -- nor gzip's deflate stream, whose length is
+			# what the frame leaves before the trailer (26.1183). The caller's bytes go down and, once the
 			# message is whole, the reader's own `_len` says how long it
 			# takes them to be -- a disagreement is refused (26.1016).
 			parts.append(Part(SPAN, held, local))
