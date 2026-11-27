@@ -1121,6 +1121,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	unsealed: set[str] = set()
 	for unit in built:
 		struct = unit.struct
 		held   = py_name(struct.name)
@@ -1162,8 +1163,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			*_closing(struct, parts),
 			"\treturn situ_at",
 		])
-		if not unit.suffix:
-			lines.extend(_unseal(struct, parts))
+		# Once per struct, from its first unit that seals: a reader opens
+		# the region whatever arm wrote it (26.1194).
+		if struct.name not in unsealed:
+			opened = _unseal(struct, parts)
+			if opened:
+				unsealed.add(struct.name)
+				lines.extend(opened)
 
 	return {f"{basename}_build.py": _past_parameters(
 		"\n".join(lines).rstrip("\n") + "\n", built)}

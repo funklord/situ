@@ -4690,7 +4690,8 @@ def _seal(struct: ResolvedStruct, part: Part, prefix: str) -> list[str]:
 	]
 
 
-def _unseal(struct: ResolvedStruct, shape: Shape) -> list[str]:
+def _unseal(struct: ResolvedStruct, shape: Shape,
+		arm: Choice | None = None) -> list[str]:
 	"""The receiving half of the seal: open the region in place.
 
 	`_open` takes the caller's verdict, so a receiver decrypted first and
@@ -4701,7 +4702,7 @@ def _unseal(struct: ResolvedStruct, shape: Shape) -> list[str]:
 	it verified; a refused open zeroes the region, so no unverified
 	plaintext is left behind (26.1194).
 	"""
-	parts, _ = plan(struct, shape)
+	parts, _ = plan(struct, shape, arm)
 	region = next((one for one in parts if one.role == SEALED), None)
 	sealer = next((one for one in parts if one.role == SEALTAG), None)
 	if region is None or sealer is None:
@@ -4867,6 +4868,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		for case in cases:
 			if plan(struct, shape, case)[0]:
 				lines.extend(_one(struct, shape, enums, case))
+		# One unseal for the struct: a reader opens the region whatever
+		# arm wrote it, and every arm's region and tag are the same
+		# members (26.1194).
+		lines.extend(next((made for case in cases
+		                   if (made := _unseal(struct, shape, case))), []))
 
 	lines += ["#ifdef __cplusplus", "}", "#endif", "",
 	          f"#endif /* {guard} */"]

@@ -663,7 +663,35 @@ static int toy_open(void *ctx, const situ_sealing_t *s)
 }
 """
 
-VIEWED = {"packet": "packet", "dtls": "record", "headed": "headed"}
+VIEWED = {"packet": "packet", "dtls": "record", "headed": "headed",
+          "keystore": "keystore"}
+
+#: The keystore's plaintext: its 32-byte key and four bytes of record.
+KEYSTORE_PLAIN = bytes(range(0x80, 0xA0)) + b"data"
+
+
+def _keystore_message(directory: Path) -> bytes:
+	"""A keystore, as Python's builder seals it with the toy: a variant
+	struct, built one arm at a time, opened by one unseal (26.1194)."""
+	sys.path[:0] = [str(directory), str(RUNTIME / "python")]
+	try:
+		import importlib
+		built = importlib.import_module("keystore_build")
+	finally:
+		del sys.path[:2]
+
+	def toy(s: Any) -> None:
+		sealed, tag = _toy(s.key_id or 0, s.nonce or b"", s.aad,
+		                   bytes(s.text), len(s.tag))
+		s.text[:] = sealed
+		s.tag[:] = tag
+
+	out = bytearray(256)
+	params = struct.pack(">I", 600000)		# PBKDF2's iteration count
+	n = built.build_keystore_pbkdf2(out, bytes(16), NONCE, params,
+	                                len(KEYSTORE_PLAIN) - 32,
+	                                KEYSTORE_PLAIN, toy)
+	return bytes(out[:n])
 
 
 def _sealed_bytes(stem: str, args: list[int | bytes]) -> bytes:
@@ -782,7 +810,7 @@ def _python_unseals(directory: Path, stem: str, message: bytes) -> str:
 	return "\n".join(lines) + "\n"
 
 
-@pytest.mark.parametrize("stem", ["dtls", "headed", "packet"])
+@pytest.mark.parametrize("stem", ["dtls", "headed", "keystore", "packet"])
 def test_four_readers_unseal_alike(stem: str, tmp_path: Path) -> None:
 	sys.path.insert(0, str(ROOT / "test" / "unit"))
 	import fourway
@@ -792,7 +820,6 @@ def test_four_readers_unseal_alike(stem: str, tmp_path: Path) -> None:
 	if stem in WRITTEN:
 		schema = tmp_path / f"{stem}.situ"
 		schema.write_text(WRITTEN[stem], encoding="ascii")
-	message = _sealed_bytes(stem, FOUR[stem]["args"]())
 	said: dict[str, str] = {}
 	for target in ("c", "cpp", "rust", "python"):
 		out = tmp_path / target
@@ -802,6 +829,8 @@ def test_four_readers_unseal_alike(stem: str, tmp_path: Path) -> None:
 		                       str(schema), "--out", str(out)], cwd=ROOT,
 		                      capture_output=True, text=True, timeout=300)
 		assert done.returncode == 0, done.stderr[-2000:]
+	message = (_keystore_message(tmp_path / "python") if stem == "keystore"
+	           else _sealed_bytes(stem, FOUR[stem]["args"]()))
 	said["python"] = _python_unseals(tmp_path / "python", stem, message)
 	drivers = _unseal_drivers(stem, message)
 	c, cpp, rust = (tmp_path / one for one in ("c", "cpp", "rust"))
@@ -830,7 +859,7 @@ def test_four_readers_unseal_alike(stem: str, tmp_path: Path) -> None:
 	assert len(set(said.values())) == 1, said
 	first, second = said["python"].splitlines()
 	opened = bytes(int(one, 16) for one in first.split()[1:])
-	plain = FOUR[stem]["args"]()[-1]
+	plain = KEYSTORE_PLAIN if stem == "keystore" else FOUR[stem]["args"]()[-1]
 	assert isinstance(plain, bytes)
 	assert first.split()[0] == "0" and opened[-16 - len(plain):-16] == plain
 	refused = bytes(int(one, 16) for one in second.split()[1:])

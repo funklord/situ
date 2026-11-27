@@ -10131,10 +10131,12 @@ private to the reader, which is what makes 14.3 a type and not a rule --
 so their unseal takes a function and runs it over the gate, as C++'s own
 `with_<region>` does; Python returns it, and C fills the caller's. Each
 reader gained `<region>_range`, so the unseal asks the reader in its own
-language. Only for a struct built whole: a variant's arms are built one
-function each, so the keystore has no unseal yet; and not in a struct
-that takes arguments, nor where a delimiter ends the region or the gate
-is waived, where no reader states a range.
+language. One per struct, though a variant's arms are built one function
+each: a reader opens the region whatever arm wrote it, and every arm's
+region and tag are the same members, so the keystore's comes from its
+first arm that seals. Not in a struct that takes arguments, nor where a
+delimiter ends the region or the gate is waived, where no reader states a
+range.
 
 The test seals and unseals with OpenSSL, reads `inner_seq` through the
 gate, and flips a header byte under the tag: refused, no plaintext left.

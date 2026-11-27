@@ -1253,6 +1253,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"namespace situ_build {",
 	]
 
+	unsealed: set[str] = set()
 	for unit in built:
 		struct = unit.struct
 		held   = class_name(struct)
@@ -1321,8 +1322,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\treturn situ_e;",
 			"}",
 		])
-		if not unit.suffix:
-			lines.extend(_unseal(struct, resolved.structs, parts))
+		# Once per struct, from its first unit that seals: a reader opens
+		# the region whatever arm wrote it (26.1194).
+		if struct.name not in unsealed:
+			opened = _unseal(struct, resolved.structs, parts)
+			if opened:
+				unsealed.add(struct.name)
+				lines.extend(opened)
 
 	lines.extend(["", "}  /* namespace situ_build */", "",
 	              f"#endif /* {guard} */"])

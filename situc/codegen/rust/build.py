@@ -1110,6 +1110,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"use crate::situ_rt::{self, Error, Result};",
 	]
 
+	unsealed: set[str] = set()
 	for unit in built:
 		struct = unit.struct
 		held   = _pascal(struct.name)
@@ -1157,8 +1158,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tOk(situ_at)",
 			"}",
 		])
-		if not unit.suffix:
-			lines.extend(_unseal(struct, parts))
+		# Once per struct, from its first unit that seals: a reader opens
+		# the region whatever arm wrote it (26.1194).
+		if struct.name not in unsealed:
+			opened = _unseal(struct, parts)
+			if opened:
+				unsealed.add(struct.name)
+				lines.extend(opened)
 
 	text = "\n".join(lines) + "\n"
 	# `self` only where something here names `situ_rt::`: a builder of
