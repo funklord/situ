@@ -60,7 +60,8 @@ NEED, COUNT, TAGV = "situ_need", "situ_count", "situ_tag"
 USED, PADLEN, SOLVED = "situ_used", "situ_pad", "situ_solved"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
                       SCAN, NEED, COUNT, TAGV, USED, PADLEN, SOLVED,
-                      "situ_fixed"})
+                      "situ_fixed", "situ_seal", "situ_seal_ctx",
+                      "situ_sealed_at", "situ_sealing"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -96,6 +97,9 @@ FRAMED  = "framed"	# a trailing pad whose length the struct's own framing
 INSIDE  = "inside"	# a located struct the message already holds, a run
 			# before it having taken the frame: no value, read by the
 			# closing validation (26.1191)
+SEALED  = "sealed"	# a sealed region's plaintext, from the caller (26.1192)
+SEALTAG = "sealtag"	# its tag: the caller's seal writes it, and encrypts
+			# the region in place, once the slot is down
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
@@ -103,13 +107,14 @@ INSIDE  = "inside"	# a located struct the message already holds, a run
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
                              BITS, WIDE, OPAQUE, HIDDEN, VARINT, VARRUN,
-                             ARG, CHOSEN, MARKER, LOCATED})
+                             ARG, CHOSEN, MARKER, LOCATED, SEALED})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
 #: pad is measured and may have no pointer at all, which is why the signature
 #: asks `_supplies_bytes` rather than reading this set twice.
-MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT, HIDDEN, LOCATED})
+MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT, HIDDEN, LOCATED,
+                      SEALED})
 ZERO    = "zero"	# reserved bytes, which no caller names
 
 
@@ -253,6 +258,14 @@ class Part:
 		#: `_store`: written as zeros with its group, then computed over
 		#: the whole message and stored (26.1027).
 		self.tagged = ""
+		#: A SEALED region's nonce and key selector, the parts that
+		#: write them; and a SEALTAG's region, which it seals (26.1192).
+		self.nonce: Part | None = None
+		self.key: Part | None = None
+		self.region: Part | None = None
+		#: A nonce inside a nested member: its view, its pointer, its
+		#: bytes (fuzznet's `head.nonce`).
+		self.nonce_inside: tuple[str, str, int] | None = None
 		#: The member a BETWEEN pad runs up to (26.1024, 26.1026).
 		self.reaches: Placement | None = None
 		#: What a run of an argued struct hands each element, as C values
@@ -749,9 +762,10 @@ def _member_refusal(placement: Placement,
 		# is the builder's only interface for what it cannot do, so each
 		# says what the construct is and why it is not written.
 		return {
-			"sealed": "is a sealed region, whose interior is written "
-			          "through the seal: that needs a key, which is rung "
-			          "3's and not a writer's",
+			# Written by `plan`, through the caller's seal (26.1192);
+			# this is what is left for a region `plan` did not reach.
+			"sealed": "is a sealed region, written only where it is the "
+			          "struct's own member",
 			"coded": "is a coded region, so the bytes on the wire are the "
 			         "codec's output and not the ones a caller would hand "
 			         "over",
@@ -1418,6 +1432,95 @@ def _held_to_its_version(struct: ResolvedStruct, parts: list[Part]
 	return parts, None
 
 
+def _sealed_refusal(struct: ResolvedStruct, region: Placement,
+		members: list[Placement], parts: list["Part"], header: str,
+		prefix: str) -> str | None:
+	"""Why a sealed region cannot be written and sealed, by name.
+
+	The caller hands the plaintext and a seal -- their AEAD, their key --
+	and the writer puts the plaintext down, the tag's slot after it, and
+	calls the seal over the bytes the reader says are which (26.1192). So
+	the reader has to be able to say: the tag directly after the region,
+	the two ending the struct, where `<tag>_covered()` and `_ptr()`
+	answer once the message is whole.
+	"""
+	at = members.index(region)
+	after = members[at + 1] if at + 1 < len(members) else None
+	name = traverse.local_name(struct, region)
+	if sum(one.kind == "sealed" for one in members) > 1:
+		return "is a sealed region, one of several, and a builder calls " \
+		       "one seal per message"
+	if after is None or name not in after.tag_covers:
+		return "is a sealed region its tag does not directly follow, so " \
+		       "where the ciphertext ends is not where the tag says"
+	if at + 2 != len(members):
+		return "is a sealed region with members after its tag, which " \
+		       "the seal would have to run before they are down"
+	if _whole_bytes(after) is None:
+		return "is a sealed region under a tag that is not whole bytes"
+	tag = ident(prefix, struct.name, traverse.local_name(struct, after))
+	if f"{tag}_covered(" not in header or f"{tag}_ptr(" not in header:
+		return "is a sealed region under a tag whose reader states no " \
+		       "coverage to seal over"
+	if region.sealed_nonce and "." in region.sealed_nonce:
+		reach = nonce_inside(struct, region, parts, header, prefix)
+		return reach if isinstance(reach, str) else None
+	for word, field in (("nonce", region.sealed_nonce),
+	                    ("key", region.sealed_key)):
+		if field is None:
+			continue
+		held = next((one for one in parts
+		             if one.placement.name == field), None)
+		if held is None:
+			return f"is a sealed region whose {word} `{field}` is not a " \
+			       "member this struct writes before it"
+		if word == "nonce" and (held.role not in (RUN, SPAN)
+		                        or held.placement.element_bits
+		                        != BITS_PER_BYTE):
+			return f"is a sealed region whose nonce `{field}` is not a " \
+			       "run of bytes"
+		if word == "key" and held.role not in (SCALAR, SIZE):
+			return f"is a sealed region whose key `{field}` is not a " \
+			       "number"
+		accessor = ident(prefix, struct.name, field,
+		                 "ptr" if word == "nonce" else "get")
+		if f"{accessor}(" not in header:
+			return f"is a sealed region whose {word} `{field}` its " \
+			       "reader has no accessor for"
+	return None
+
+
+def nonce_inside(struct: ResolvedStruct, region: Placement,
+		parts: list["Part"], header: str,
+		prefix: str) -> tuple[str, str, int] | str:
+	"""How the seal reaches a nonce inside a nested member, or why not.
+
+	fuzznet's frame: `nonce = head.nonce`, the 24 bytes inside the
+	authenticated `fzn_head` the caller builds. The nested member's view,
+	then its field's pointer, and the field's whole bytes.
+	"""
+	field = region.sealed_nonce or ""
+	outer, _, inner = field.partition(".")
+	held = next((one for one in parts if one.placement.name == outer), None)
+	found = next((entry.placement for entry in struct.entries
+	              if traverse.local_name(struct, entry.placement) == field),
+	             None)
+	if held is None or held.role != NESTED or found is None \
+			or "." in inner or region.sealed_key:
+		return f"is a sealed region whose nonce `{field}` is not a " \
+		       "member this struct writes before it"
+	size = _whole_bytes(found)
+	if found.element_bits != BITS_PER_BYTE or size is None:
+		return f"is a sealed region whose nonce `{field}` is not a run " \
+		       "of bytes"
+	view = ident(prefix, struct.name, outer, "view")
+	pointer = ident(prefix, held.placement.type_name or "", inner, "ptr")
+	if f"{view}(" not in header or f"{pointer}(" not in header:
+		return f"is a sealed region whose nonce `{field}` its reader has " \
+		       "no accessor for"
+	return view, pointer, size
+
+
 def _takes_the_rest(placement: Placement) -> bool:
 	"""Whether a run is as long as what the frame leaves it."""
 	return placement.sized_by == "remaining" \
@@ -1707,6 +1810,31 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				parts[-1].solved = solved.get(held.name)
 			continue
 
+		if held.kind == "sealed":
+			why = _sealed_refusal(struct, held, members, parts, header,
+			                      prefix)
+			if why:
+				return [], f"`{traverse.local_name(struct, held)}` {why}"
+			part = Part(SEALED, held, local)
+			part.nonce = next((one for one in parts
+			                   if one.placement.name == held.sealed_nonce),
+			                  None)
+			part.key = next((one for one in parts
+			                 if one.placement.name == held.sealed_key), None)
+			if held.sealed_nonce and "." in held.sealed_nonce:
+				reach = nonce_inside(struct, held, parts, header, prefix)
+				assert not isinstance(reach, str)	# refused above
+				part.nonce_inside = reach
+			parts.append(part)
+			continue
+		if parts and parts[-1].role == SEALED \
+				and parts[-1].placement.name in held.tag_covers:
+			# `_sealed_refusal` has checked it is this region's tag, whole
+			# bytes and the last member.
+			parts.append(Part(SEALTAG, held, local,
+			                  _whole_bytes(held) or 0))
+			parts[-1].region = parts[-2]
+			continue
 		if held.kind in ("tag", "checksum") or held.tag_covers:
 			local_name = traverse.local_name(struct, held)
 			name = ident(prefix, struct.name, local_name)
@@ -2576,8 +2704,13 @@ def _arguments(struct: ResolvedStruct, parts: list[Part], prefix: str,
 def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 		enums: Mapping[str, object], suffix: str = "") -> list[str]:
 	name = ident(prefix, struct.name, "build", suffix)
+	# The caller's seal, where a region is sealed (26.1192): their AEAD
+	# and their key, behind a context situ never reads.
+	seals = ["situ_seal_fn situ_seal", "void *situ_seal_ctx"] \
+		if any(part.role == SEALED for part in parts) else []
 	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}",
-	        *_arguments(struct, parts, prefix, enums), f"uint32_t *{WROTE}"]
+	        *_arguments(struct, parts, prefix, enums), *seals,
+	        f"uint32_t *{WROTE}"]
 
 	lines = [f"static inline situ_err_t {name}("]
 	for i, arg in enumerate(args):
@@ -3322,6 +3455,8 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# walked without being counted.
 		*([f"\tuint32_t    {PADLEN};"]
 		  if any(part.role == PAD for part in every_part(parts)) else []),
+		*(["\tuint32_t    situ_sealed_at = 0;"]
+		  if any(part.role == SEALED for part in parts) else []),
 		*([f"\tint64_t     {SOLVED};"]
 		  if any(part.solved is not None for part in parts) else []),
 		# And wherever a count field is found by walking its run: the
@@ -4183,6 +4318,23 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				f"\t(void)situ_little_{held.name};",
 				"",
 			]
+		elif part.role == SEALED:
+			lines += [
+				f"\t/* {local}: the plaintext, sealed in place by the",
+				"\t * caller's seal once the tag's slot is down (26.1192). */",
+				*_room(f"{part.local}_len"),
+				f"\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				f"\tsitu_sealed_at = {AT};",
+				f"\tif ({part.local}_len != 0u) {{",
+				f"\t\tsitu_put({OUT} + {AT}, {part.local}, {part.local}_len);",
+				"\t}",
+				f"\t{AT} += {part.local}_len;",
+				"",
+			]
+		elif part.role == SEALTAG:
+			lines += _seal(struct, part, prefix)
 		elif part.role == INSIDE:
 			lines += [
 				f"\t/* {local}: at `{held.located}`, inside what is already",
@@ -4401,6 +4553,94 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 			]
 
 	return lines
+
+
+def _seal(struct: ResolvedStruct, part: Part, prefix: str) -> list[str]:
+	"""The tag's slot, then the caller's seal over the region before it.
+
+	Sealed here rather than after the closing validation, so that no
+	refusal leaves plaintext in the caller's buffer: the region and its tag
+	end the message, so it is whole once the slot is down, and the reader
+	is asked which bytes are which before the seal is (26.1192). Every
+	refusal past this point zeroes the region.
+	"""
+	region = part.region
+	assert region is not None
+	tag = ident(prefix, struct.name, part.local)
+	whole = ident(prefix, struct.name, "view")
+	nonce = region.nonce
+	key = region.key
+	inside = region.nonce_inside
+	wipe = [f"\t\t\tmemset({OUT} + situ_sealed_at, 0, {region.local}_len);",
+	        f"\t\t\tmemset({OUT} + situ_sealed_at + {region.local}_len, 0, "
+	        f"{part.bytes}u);"]
+	return [
+		f"\t/* {part.local}: {part.bytes} byte(s) the seal writes. */",
+		*_room(f"{part.bytes}u"),
+		f"\tmemset({OUT} + {AT}, 0, {part.bytes}u);",
+		f"\t{AT} += {part.bytes}u;",
+		"\t{",
+		f"\t\tsitu_msg_t     {NEED}_msg;",
+		f"\t\tsitu_view_t    {NEED}_view;",
+		*([f"\t\tsitu_view_t    {NEED}_nonce;"] if inside is not None
+		  else []),
+		"\t\tsitu_sealing_t situ_sealing;",
+		f"\t\tuint32_t       {NEED}_at = 0;",
+		f"\t\tuint32_t       {NEED}_len = 0;",
+		"",
+		f"\t\tsitu_msg_init(&{NEED}_msg, {OUT}, {AT});",
+		f"\t\tif ({whole}(&{NEED}_msg, 0, "
+		+ ("" if struct.layout.is_fixed_size else f"{AT}, ")
+		+ f"&{NEED}_view) != SITU_OK",
+		f"\t\t    || {tag}_covered({NEED}_view, &{NEED}_at, &{NEED}_len)"
+		" != SITU_OK",
+		f"\t\t    || {NEED}_at > situ_sealed_at",
+		f"\t\t    || {NEED}_at + {NEED}_len != situ_sealed_at + "
+		f"{region.local}_len",
+		f"\t\t    || {tag}_ptr({NEED}_view) != {OUT} + situ_sealed_at + "
+		f"{region.local}_len) {{",
+		"\t\t\t/* The reader puts the region or its tag elsewhere than",
+		"\t\t\t * they were written: a length the caller stated",
+		"\t\t\t * disagrees with the plaintext. */",
+		*wipe,
+		"\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t}",
+		*([f"\t\tsitu_sealing.key_id = (uint64_t)"
+		   f"{ident(prefix, struct.name, key.placement.name, 'get')}"
+		   f"({NEED}_view);",
+		   "\t\tsitu_sealing.has_key_id = 1;"] if key is not None else
+		  ["\t\tsitu_sealing.key_id = 0u;",
+		   "\t\tsitu_sealing.has_key_id = 0;"]),
+		*([f"\t\tif ({inside[0]}({NEED}_view, &{NEED}_nonce) != SITU_OK) {{",
+		   *wipe,
+		   "\t\t\treturn SITU_ERR_CONSTRAINT;",
+		   "\t\t}",
+		   f"\t\tsitu_sealing.nonce = {inside[1]}({NEED}_nonce);",
+		   f"\t\tsitu_sealing.nonce_len = {inside[2]}u;"]
+		  if inside is not None else
+		  [f"\t\tsitu_sealing.nonce = "
+		   f"{ident(prefix, struct.name, nonce.placement.name, 'ptr')}"
+		   f"({NEED}_view);",
+		   f"\t\tsitu_sealing.nonce_len = "
+		   + (f"{nonce.bytes}u;" if nonce.role == RUN
+		      else f"{nonce.local}_len;")] if nonce is not None else
+		  ["\t\tsitu_sealing.nonce = NULL;",
+		   "\t\tsitu_sealing.nonce_len = 0u;"]),
+		f"\t\tsitu_sealing.aad = {OUT} + {NEED}_at;",
+		f"\t\tsitu_sealing.aad_len = situ_sealed_at - {NEED}_at;",
+		f"\t\tsitu_sealing.text = {OUT} + situ_sealed_at;",
+		f"\t\tsitu_sealing.text_len = {region.local}_len;",
+		f"\t\tsitu_sealing.tag = {OUT} + situ_sealed_at + "
+		f"{region.local}_len;",
+		f"\t\tsitu_sealing.tag_len = {part.bytes}u;",
+		"\t\tif (situ_seal == NULL || situ_seal(situ_seal_ctx, "
+		"&situ_sealing) != 0) {",
+		*wipe,
+		"\t\t\treturn SITU_ERR_TAG;",
+		"\t\t}",
+		"\t}",
+		"",
+	]
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,

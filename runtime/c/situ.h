@@ -119,6 +119,30 @@ static inline situ_err_t situ_msg_transmittable(const situ_msg_t *msg)
 	return msg->dirty == 0u ? SITU_OK : SITU_ERR_TAG;
 }
 
+/* What a builder hands the caller's AEAD to seal a region in place
+ * (26.1192). situ never sees a key or runs a cipher (14.6): the primitive
+ * and the key are the caller's, behind `ctx`; what situ states is which
+ * bytes are which. `aad` is the tag's coverage before the region -- the
+ * same span `<tag>_covered()` hands a reader, less the region -- and the
+ * seal encrypts `text` where it lies and writes the tag. `key_id` is the
+ * value of the field the region's `key =` names, for a caller holding
+ * more than one key. A nonzero return refuses the build with SITU_ERR_TAG
+ * and the region is zeroed, so no plaintext is left in the buffer. */
+typedef struct situ_sealing {
+	uint64_t       key_id;
+	int            has_key_id;
+	const uint8_t *nonce;           /* NULL where the region names none */
+	uint32_t       nonce_len;
+	const uint8_t *aad;
+	uint32_t       aad_len;
+	uint8_t       *text;            /* plaintext in, ciphertext out */
+	uint32_t       text_len;
+	uint8_t       *tag;
+	uint32_t       tag_len;
+} situ_sealing_t;
+
+typedef int (*situ_seal_fn)(void *ctx, const situ_sealing_t *sealing);
+
 /* A view: a resolved frame base plus a bounds limit, passed by value. Field
  * access inside a view is a constant offset from base, with the bounds check
  * amortized at acquisition. The generation is the one the owning message had

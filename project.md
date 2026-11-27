@@ -10100,6 +10100,60 @@ the central directory and states its count. It found a third fault, C's
 walk of a run of variable structs counted by an argument declaring no
 argument, and a limit the next entry lifts.
 
+### 26.1192 A builder seals a region through the caller's AEAD
+
+Every struct with a `sealed` region had no builder ("that needs a key,
+which is rung 3's and not a writer's" -- rung 3 is `relate`, which has
+nothing to do with keys). So a sender wrote an encrypted message by hand
+while its receiver had a generated reader: fuzznet's `fzn_seal_build` is
+that hand-written half, and DTLS, the keystore and `example/packet` had
+no sending side at all.
+
+The reader's division already answered it. `_open` takes the caller's
+verdict, and 14.6 says the primitive and its key are the caller's while
+the bytes it runs over are the schema's. The builder takes the same
+division the other way: the plaintext, and a seal -- `situ_seal_fn` and
+a context situ never reads, the shape fuzznet's `fzn_aead_ops_t.seal`
+already has. situ writes every member, the plaintext, and the tag's slot,
+then asks its reader which bytes are which and hands the seal a
+`situ_sealing_t`: the nonce the region names, the tag's coverage before
+the region as additional data (`<tag>_covered()`, less the region), the
+region to encrypt in place, the tag to write, and the value of the field
+`key =` names for a caller holding several keys. A seal that fails is
+`SITU_ERR_TAG`.
+
+Decided with it, each for a reason a reader could otherwise reverse:
+
+- **The seal runs before the closing validation, not after it.** A
+  refusal after the plaintext is down would otherwise leave it in the
+  caller's buffer; so the region and its tag must end the struct (they do
+  in all three schemas), the message is whole once the slot is down, and
+  every refusal past that point zeroes the region and the tag.
+- **The caller hands the interior as bytes,** as a coded region's
+  content is handed (26.998): the interior's fields are no struct of
+  their own, and a builder composing them is a further step. A length
+  the caller stated that disagrees with the plaintext -- `hdr.length`
+  against the bytes -- is refused by asking the reader where the region
+  ends.
+- **A callback, not a two-step build-then-seal.** A builder that wrote
+  plaintext and left the caller to encrypt the span it reported would
+  make an unsealed message one forgotten call away; this one cannot
+  return a message whose region was not sealed.
+- **Not `impl ... extern "symbol"`.** The schema's extern names are free
+  text -- `dtls_record_open`, `app_aead_open` -- with no calling
+  convention behind them, and a builder linking a symbol by that name
+  would fix one for every consumer. A function pointer fixes nothing.
+
+C first. Refused by name: several sealed regions in one struct, a tag
+not directly after its region or members after the tag, a nonce or key
+that is a struct argument rather than a member written before
+(`edges.held_material`), and a region whose reader states no coverage
+(`edges.sealed_self_sized`). `test_a_builder_seals_a_region` seals with
+OpenSSL's AES-128-GCM and opens what was built with Python's
+`cryptography`, using the additional data and nonce where the reader puts
+them; a flipped header byte fails the tag, and no refused build leaves
+plaintext behind.
+
 ### 26.1191 A builder checks a table the message already holds
 
 26.1190 left ZIP's archive refused: its central directory is `at
