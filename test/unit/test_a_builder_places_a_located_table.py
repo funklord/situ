@@ -8,7 +8,7 @@ last byte run (26.1015). Now the table goes where the caller's offset
 says, zeros before it, and the reader is asked afterwards, over what was
 written, where it finds it and how long it is.
 
-C alone for now; the other three decline it by name. Asked of a minimal
+Asked of C, then of all four alike, with a minimal
 executable -- one PT_LOAD, one null section, a gap between the tables --
 which `readelf` takes, and of three refusals: a table longer than its
 count, an offset behind what is written, and an offset past the buffer.
@@ -159,3 +159,34 @@ def test_c_places_a_tiff_directory(tmp_path: Path) -> None:
 	                     text=True, timeout=60)
 	assert ran.stdout.splitlines() == [
 		"0 49 49 2a 00 08 00 00 00 00 00 00 00 00 00", "2"], ran.stdout
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_four_builders_place_the_tables_alike(tmp_path: Path) -> None:
+	"""All four, handed the same ELF and TIFF, write the same bytes and
+	refuse the same table longer than its count."""
+	sys.path.insert(0, str(ROOT / "test" / "unit"))
+	import fourway
+	from test_a_builder_holds_an_arm_to_its_reader import _case, _said, _units
+	if not fourway.COMPLETE:
+		pytest.skip("needs gcc, g++ and rustc")
+	elf = _units(SCHEMA)["elf64."]
+	given: dict[str, int | bytes] = dict(
+		ident=IDENT, type=2, machine=62, version=1, entry=0x400000,
+		phoff=64, shoff=128, ehsize=64, phentsize=56, phnum=1,
+		shentsize=64, shnum=1, sections=SECTION)
+	header = (IDENT + struct.pack("<HHIQQQIHHHHHH", 2, 62, 1, 0x400000, 64,
+	                              128, 0, 64, 56, 1, 64, 1, 0))
+	assert _said(SCHEMA, tmp_path, [
+		_case(elf, programs=PROGRAM, **given),
+		_case(elf, programs=PROGRAM * 2, **{**given, "shoff": 184}),
+	]) == [(header + PROGRAM + bytes(8) + SECTION).hex(), "refused"]
+
+	tiff_schema = ROOT / "example" / "tiff" / "tiff.situ"
+	tiff = _units(tiff_schema)["tiff_file."]
+	assert _said(tiff_schema, tmp_path, [
+		_case(tiff, byte_order=0x4949, magic=42, ifd_offset=8,
+		      first=bytes(6)),
+		_case(tiff, byte_order=0x4949, magic=42, ifd_offset=8,
+		      first=b"\x01" + bytes(5)),
+	]) == ["49492a0008000000" + "00" * 6, "refused"]

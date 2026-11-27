@@ -611,6 +611,34 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        *_room("situ_to - situ_at", path),
 		        "\tsitu_out[situ_at:situ_to] = bytes(situ_to - situ_at)",
 		        "\tsitu_at = situ_to"]
+	if part.role == LOCATED and part.equals:
+		# C's: a located struct at the offset the caller handed, its
+		# bytes down first and the reader asked after where it finds them
+		# and how long they are (26.1190).
+		local = py_name(part.local)
+		to    = py_name(part.equals)
+		path  = part.placement.path
+		name  = py_name(traverse.local_name(struct, part.placement))
+		held  = f"situ_schema.{py_name(struct.name)}"
+		refuse = (f'\t\traise ConstraintError("{path}: not where, or not as '
+		          'long as, the message puts it")')
+		return [f"\tif {to} < situ_at:", refuse,
+		        f"\tif {to} > len(situ_out) or len(situ_out) - {to} < "
+		        f"len({local}):",
+		        f'\t\traise BoundsError("{path}: past the buffer")',
+		        f"\tsitu_out[situ_at:{to}] = bytes({to} - situ_at)",
+		        f"\tsitu_out[{to}:{to} + len({local})] = {local}",
+		        f"\tsitu_at = {to} + len({local})",
+		        "\ttry:",
+		        "\t\tsitu_whole = "
+		        f"{held}.at(Message(memoryview(situ_out)[:situ_at]), 0"
+		        + ("" if struct.layout.is_fixed_size else ", situ_at")
+		        + ")",
+		        f"\t\tsitu_placed = situ_whole.{name}_offset == {to} and "
+		        f"len(situ_whole.{name}) == len({local})",
+		        "\texcept SituError:",
+		        "\t\tsitu_placed = False",
+		        "\tif not situ_placed:", refuse]
 	if part.role == LOCATED:
 		# C's: where the offset already written puts it, as the reader
 		# finds it over the whole backing; zeros up to there, and an offset

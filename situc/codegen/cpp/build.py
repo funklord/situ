@@ -715,6 +715,41 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		        "\t\tstd::memset(situ_out + situ_at, 0, situ_to - situ_at);",
 		        "\t\tsitu_at = situ_to;",
 		        "\t}"]
+	if part.role == LOCATED and part.equals:
+		# C's: a located struct at the offset the caller handed, its
+		# bytes down first and the reader asked after where it finds them
+		# and how long they are (26.1190).
+		local = part.local
+		held  = f"::situ::{class_name(struct)}"
+		name  = traverse.local_name(struct, part.placement)
+		size  = "" if struct.layout.is_fixed_size else " situ_at,"
+		return ["\t{",
+		        "\t\tconst std::uint64_t situ_to = "
+		        f"static_cast<std::uint64_t>({part.equals});",
+		        "\t\tif (situ_to < situ_at) {",
+		        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+		        f"\t\tif (situ_to > situ_cap || situ_cap - situ_to < {local}_len) {{",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        f"\t\tif ({local}_len != 0u && {local} == nullptr) {{",
+		        "\t\t\treturn ::situ::rt::err::bounds;", "\t\t}",
+		        "\t\tstd::memset(situ_out + situ_at, 0, "
+		        "static_cast<std::size_t>(situ_to - situ_at));",
+		        f"\t\tif ({local}_len != 0u) {{",
+		        f"\t\t\tstd::memcpy(situ_out + situ_to, {local}, {local}_len);",
+		        "\t\t}",
+		        f"\t\tsitu_at = static_cast<std::uint32_t>(situ_to) + {local}_len;",
+		        "\t\t::situ::rt::message situ_backing(situ_out, situ_at);",
+		        f"\t\t{held} situ_whole;",
+		        "\t\t::situ::rt::bytes situ_run;",
+		        f"\t\tif ({held}::at(situ_backing, 0,{size} situ_whole)"
+		        " != ::situ::rt::err::ok",
+		        f"\t\t    || situ_whole.{name}(situ_backing.raw(), situ_run)"
+		        " != ::situ::rt::err::ok",
+		        "\t\t    || static_cast<std::uint64_t>(situ_run.data() - situ_out)"
+		        " != situ_to",
+		        f"\t\t    || situ_run.size() != {local}_len) {{",
+		        "\t\t\treturn ::situ::rt::err::constraint;", "\t\t}",
+		        "\t}"]
 	if part.role == LOCATED:
 		# C's: where the offset already written puts it, as the reader
 		# finds it over the whole backing; zeros up to there (26.1015,

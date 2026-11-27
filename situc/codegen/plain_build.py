@@ -49,8 +49,6 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.tagged:
 		return False		# a tag in bits, stored by C's reader (26.1027)
-	if part.role == LOCATED and part.equals:
-		return False		# a located struct, placed by C (26.1190)
 	if part.role in (BETWEEN, LOCATED) and any(one.role == ARG
 	                                           for one in parts):
 		return False		# its reader is asked without the arguments

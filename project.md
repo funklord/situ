@@ -10119,9 +10119,10 @@ one past the buffer is refused. An ELF built so is read by `readelf`. The
 bytes between ELF's tables, section contents the schema does not model,
 are zeros for the caller to fill.
 
-C alone: the other three read a located member as bytes, and a struct's
-accessor differs in each, so they decline it by name, as they do other
-parts C writes first. ZIP stays refused: its directory sits inside the
+C first, and then the other three, each through its reader's own byte
+accessor for the located member, asked once the bytes are down; the
+agreement harness's check that `required` measures what was built takes
+the frame, which a located member lies past. ZIP stays refused: its directory sits inside the
 body before it, at an offset read from the end record, which no caller
 field states -- placing that needs the writer to check bytes already
 written rather than write them, a different operation.

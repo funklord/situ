@@ -636,6 +636,32 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        *_room("situ_to - situ_at"),
 		        "\tsitu_out[situ_at..situ_to].fill(0);",
 		        "\tsitu_at = situ_to;"]
+	if part.role == LOCATED and part.equals:
+		# C's: a located struct at the offset the caller handed, its
+		# bytes down first and the reader asked after where it finds them
+		# and how long they are (26.1190).
+		local = _ident(part.local)
+		held  = _pascal(struct.name)
+		name  = traverse.local_name(struct, part.placement)
+		return [f"\tlet situ_to = usize::try_from({_ident(part.equals)})"
+		        ".map_err(|_| Error::Bounds)?;",
+		        "\tif situ_to < situ_at {",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        f"\tif situ_to > situ_out.len() || situ_out.len() - situ_to < {local}.len() {{",
+		        "\t\treturn Err(Error::Bounds);", "\t}",
+		        "\tsitu_out[situ_at..situ_to].fill(0);",
+		        f"\tsitu_out[situ_to..situ_to + {local}.len()]"
+		        f".copy_from_slice({local});",
+		        f"\tsitu_at = situ_to + {local}.len();",
+		        "\t{",
+		        f"\t\tlet situ_whole = {held}::new(&situ_out[..situ_at])"
+		        ".map_err(|_| Error::Constraint)?;",
+		        f"\t\tlet situ_run = situ_whole.{name}(&situ_out[..situ_at])"
+		        ".map_err(|_| Error::Constraint)?;",
+		        "\t\tif situ_run.as_ptr() as usize - situ_out.as_ptr() as usize"
+		        f" != situ_to || situ_run.len() != {local}.len() {{",
+		        "\t\t\treturn Err(Error::Constraint);", "\t\t}",
+		        "\t}"]
 	if part.role == LOCATED:
 		# C's: where the offset already written puts it, as the reader
 		# finds it over the whole backing; zeros up to there (26.1015,

@@ -556,6 +556,12 @@ def _reads_back(plain: object, base: object, unit: Unit, given: Given,
 		           and not plain_build.walked_at_size(part, _flat(unit))
 		           for part in _flat(unit)), (_label(unit), made)
 		return
+	# A located member is the MESSAGE's, not the frame's: ELF's tables lie
+	# past the 64 bytes `required` states, where the header's offsets put
+	# them (26.1190). The frame must still fit what was written.
+	if any(part.role == LOCATED for part in _flat(unit)):
+		assert said <= len(message), (_label(unit), made)
+		return
 	assert said == len(message), (_label(unit), made)
 
 
