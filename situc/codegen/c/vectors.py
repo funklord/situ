@@ -423,6 +423,21 @@ def _expectation_lines(resolved: ResolvedSchema, case: Case, path: str,
 		# schemas with text numbers, `http` and `smtp`, have no `.vectors`
 		# file, and `example/cpio` is thirteen of them in a row.
 		found = resolved.find(f"{case.struct}.{path}")
+		# A varint's is the same shape: the bytes may end mid-value or hold
+		# a padded encoding a `minimal` type refuses. No vector asserted one
+		# until example/websocket's `length` (26.1181).
+		if found is not None and found.placement.varint is not None:
+			kind = ("int64_t" if found.placement.varint_signed
+			        else "uint64_t")
+			return [
+				"\t{",
+				f"\t\t{kind} got = 0;",
+				"",
+				f"\t\tsitu_check_eq({ident(prefix, case.struct, local, 'get')}"
+				f"({held}, &got), SITU_OK);",
+				f"\t\tsitu_check_eq(got, {value});",
+				"\t}",
+			]
 		if found is not None and found.placement.radix is not None:
 			scalar = found.placement.scalar
 			assert scalar is not None
