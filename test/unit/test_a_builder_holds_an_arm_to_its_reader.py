@@ -195,3 +195,18 @@ def test_a_delimited_arm_is_written_with_its_delimiter(tmp_path: Path) -> None:
 	         _case(line, line=b"a,b", after=7)]
 	assert _said(schema, tmp_path, cases) == [
 		"016162" + "2c" + "07", "01" + "2c" + "07", "refused"]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_a_run_of_boxes_to_the_end_is_built(tmp_path: Path) -> None:
+	"""`box boxes[remaining]`, an MP4 file: no `_required` splits a box,
+	whose last may run to the end, so the run was refused. It ends the
+	message, and the reader walks it over every byte, so the caller's
+	bytes are taken where the closing validation takes them."""
+	schema = ROOT / "example" / "isobmff" / "isobmff.situ"
+	file = _units(schema)["file."]
+	ftyp = bytes.fromhex("00000010" "66747970" "69736f6d" "00000200")
+	free = bytes.fromhex("00000008" "66726565")
+	cases = [_case(file, boxes=ftyp + free), _case(file, boxes=ftyp[:12])]
+	assert _said(schema, tmp_path, cases) == [(ftyp + free).hex(),
+	                                          "refused"]

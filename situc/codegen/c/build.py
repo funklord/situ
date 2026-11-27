@@ -2287,6 +2287,20 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "`before` a byte it does not own, so its own " \
 				           "`_required` can never answer the length a " \
 				           "caller passes"
+			if repeats and held is members[-1] \
+					and held.sized_by == "remaining" \
+					and not held.remaining_cap \
+					and not traverse.arguments(struct) \
+					and nested is not None \
+					and not ends_before_a_byte_it_does_not_own(nested):
+				# Elements to the end of the message, which no `_required`
+				# splits -- an MP4 file's boxes, whose last may run to the
+				# end: the reader walks them over every byte there is, so
+				# the caller's bytes are a run of them exactly when the
+				# closing validation, which walks them, takes them. The
+				# argument of a tail arm (26.973), for a run (26.1189).
+				parts.append(Part(SPAN, held, local))
+				continue
 			spelt = (f"a run of {element}-bit elements" if element
 			         else f"a run of `{held.type_name}`")
 			return [], f"`{traverse.local_name(struct, held)}` is {spelt}, " \

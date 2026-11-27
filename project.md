@@ -10155,6 +10155,13 @@ end of the message (pcapng's enhanced packet, ahead of the trailing
 length) likewise. 26.1016's check against a run's `_len` stays where the
 struct takes no arguments, since C's `_len` takes them where it does.
 
+And a run of structs to the end of the message that no `_required`
+splits -- an MP4 file's `box boxes[remaining]`, whose last box may run to
+the end, and a Matroska document's children -- is the caller's bytes,
+taken where the closing validation, which walks every element, takes
+them: 26.973's argument for an arm that ends the message, for a run. Both
+formats' top-level builders were refused.
+
 All four builders, and the agreement harness hands such an argument the
 case of the arm it builds -- the help 26.1182 gave it is now what a caller
 would do rather than what the builders fail to. `example/http2` gains RFC
