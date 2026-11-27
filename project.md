@@ -10160,7 +10160,14 @@ splits -- an MP4 file's `box boxes[remaining]`, whose last box may run to
 the end, and a Matroska document's children -- is the caller's bytes,
 taken where the closing validation, which walks every element, takes
 them: 26.973's argument for an arm that ends the message, for a run. Both
-formats' top-level builders were refused.
+formats' top-level builders were refused. So is a TLV region at the end
+of the message -- CoAP's options, a protobuf message's fields, QUIC's
+transport parameters: which items are present is the caller's, so the
+caller hands the region encoded and the closing validation walks every
+item. No CoAP message could be built before. Taking one encoded left a
+byte-order marker's flag unread in a scope with nothing else in it,
+which C++ and Rust refuse under their warnings; each marker flag is used
+explicitly now.
 
 All four builders, and the agreement harness hands such an argument the
 case of the arm it builds -- the help 26.1182 gave it is now what a caller

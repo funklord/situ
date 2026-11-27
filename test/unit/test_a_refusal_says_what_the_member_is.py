@@ -254,6 +254,10 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"has no byte order for its codec's output",
 		"holds something this writer cannot place",
 		"is the discriminant of a variant", "is quoted", "is a variant",
+		# A TLV region at the end of the message is taken encoded
+		# (26.1189); one with members after it is the population, and
+		# no schema here has one.
+		"is a TLV region",
 		# A sized variant whose size is arithmetic: MQTT's is a field and is
 		# computed, so 26.1040's test reaches the refusal inline.
 		"states its size, which is the arm's length and computed only",

@@ -58,7 +58,8 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 					# an arm is not (26.1016, 26.1019)
 	if part.others and part.role not in (ARG, BITS, NESTED, SCALAR, VARINT):
 		return False
-	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field" \
+	if part.role in (ENDED, RUN, SPAN, WIDE) \
+			and held.kind not in ("field", "tlv") \
 			and not (part.role == ENDED and part.code):
 		return False		# a coded region is ENDED with its code
 	# In a marker's scope where the marker is a member written here, or

@@ -2058,6 +2058,15 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			parts.append(part)
 			continue
 
+		if held.kind == "tlv" and held is members[-1] \
+				and not held.sized_by and not held.size_expr:
+			# A TLV region to the end of the message -- CoAP's options, a
+			# protobuf message's fields: which items are present is the
+			# caller's, so the caller hands the region encoded, and the
+			# closing validation walks every item as the reader does. The
+			# argument of a tail arm (26.973), for a region (26.1189).
+			parts.append(Part(SPAN, held, local))
+			continue
 		why = _member_refusal(held, accounted.get(held.path),
 		                      declined.get(held.path),
 		                      held.path in stated)
@@ -4128,6 +4137,9 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				   f"(uint{bits}_t){part.local});"]),
 				f"\t{AT} += {part.bytes}u;",
 				f"\tconst int situ_little_{held.name} = ({little});",
+				# Used, even where nothing in its scope is stored: a TLV
+				# region the caller hands encoded reads it in no store.
+				f"\t(void)situ_little_{held.name};",
 				"",
 			]
 		elif part.role == LOCATED:
@@ -4273,7 +4285,8 @@ def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
 				"\t * accessors take it. */",
 				*([f"\tconst int situ_little_{held.name} = ("
 				   + " || ".join(f"{traverse.argument_name(held)} == {v:#x}u"
-				                 for v in part.little) + ");"]
+				                 for v in part.little) + ");",
+				   f"\t(void)situ_little_{held.name};"]
 				  if part.little else []),
 				*_chooses(part, traverse.argument_name(held)),
 				"",

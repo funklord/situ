@@ -619,7 +619,10 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		        f"\tsitu_rt::write_be(situ_out, situ_at, {part.bytes},"
 		        f" {local} as u64);",
 		        f"\tsitu_at += {part.bytes};",
-		        f"\tlet situ_little_{part.placement.name} = {little};"]
+		        f"\tlet situ_little_{part.placement.name} = {little};",
+		        # Used, even where nothing in its scope is stored: a TLV
+		        # region the caller hands encoded reads it in no store.
+		        f"\tlet _ = situ_little_{part.placement.name};"]
 	if part.role == BETWEEN:
 		# C's: zeros to where the reader puts the member after it, every
 		# field that offset reads being down (26.1024, 26.1026).
@@ -672,7 +675,8 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]
 		          if test else []),
 		        *([f"\tlet situ_little_{part.placement.name} = "
 		           + " || ".join(f"{name} == {v:#x}" for v in part.little)
-		           + ";"] if part.little else [])]
+		           + ";", f"\tlet _ = situ_little_{part.placement.name};"]
+		          if part.little else [])]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return [f"\tlet situ_end = match {_pascal(struct.name)}::required("

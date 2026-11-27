@@ -689,7 +689,10 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		         f"\tsitu_put_be{bits}(situ_out + situ_at, "
 		         f"static_cast<std::uint{bits}_t>({part.local}));"),
 		        f"\tsitu_at += {part.bytes}u;",
-		        f"\tconst bool situ_little_{part.placement.name} = ({little});"]
+		        f"\tconst bool situ_little_{part.placement.name} = ({little});",
+		        # Used, even where nothing in its scope is stored: a TLV
+		        # region the caller hands encoded reads it in no store.
+		        f"\tstatic_cast<void>(situ_little_{part.placement.name});"]
 	if part.role == BETWEEN:
 		# C's: zeros to where the reader puts the member after it, every
 		# field that offset reads being down (26.1024, 26.1026).
@@ -759,7 +762,9 @@ def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
 		           "\t}"] if test else []),
 		        *([f"\tconst bool situ_little_{part.placement.name} = ("
 		           + " || ".join(f"{name} == {v:#x}u" for v in part.little)
-		           + ");"] if part.little else [])]
+		           + ");",
+		           f"\tstatic_cast<void>(situ_little_{part.placement.name});"]
+		          if part.little else [])]
 	if part.role == FRAMED:
 		# C's: zeros to where the struct's own framing ends it (26.1004).
 		return ["\t{",

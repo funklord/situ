@@ -210,3 +210,23 @@ def test_a_run_of_boxes_to_the_end_is_built(tmp_path: Path) -> None:
 	cases = [_case(file, boxes=ftyp + free), _case(file, boxes=ftyp[:12])]
 	assert _said(schema, tmp_path, cases) == [(ftyp + free).hex(),
 	                                          "refused"]
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_a_coap_message_is_built_around_its_options(tmp_path: Path) -> None:
+	"""A TLV region to the end of the message was refused, which items
+	are present being the caller's choice: so no CoAP message could be
+	built at all. The caller hands the region encoded, the header is
+	written around it, and the closing validation walks each option as
+	the reader does -- an extended delta (13), which this schema cannot
+	read, is refused."""
+	schema = ROOT / "example" / "coap" / "coap.situ"
+	coap = _units(schema)["coap."]
+	observe = bytes.fromhex("6100")		# option 6, one byte, zero
+	cases = [_case(coap, version=1, code=1, message_id=0x1234, token=b"\xab",
+	               options=observe),
+	         _case(coap, version=1, code=1, message_id=0x1234,
+	               token=b"\xab",
+	               options=bytes.fromhex("d00500"))]
+	assert _said(schema, tmp_path, cases) == ["41011234ab" + observe.hex(),
+	                                          "refused"]
